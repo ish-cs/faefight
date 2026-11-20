@@ -56,4 +56,25 @@ describe('HostSession', () => {
     expect(warn.mock.calls.length).toBeLessThanOrEqual(2);
     warn.mockRestore();
   });
+
+  test('the host picks the map; joiners see it in the lobby message', async () => {
+    const { host, got } = await hostWithFriend();
+    host.setMap('yard');
+    await flush(); await flush();
+    expect(got.filter((m) => m.t === 'lobby').at(-1)).toMatchObject({ map: 'yard' });
+    expect(host.nextMap()).toBe('yard');
+  });
+
+  test('Random never plays the same map twice in a row across matches (rematches) of one host session', async () => {
+    const { host } = await hostWithFriend();
+    host.setMap('harbor');
+    expect(host.nextMap()).toBe('harbor');
+    host.setMap('random');
+    let last = host.lastPlayedMap;
+    for (let i = 0; i < 30; i++) {
+      const m = host.nextMap();
+      expect(m).not.toBe(last);
+      last = m;
+    }
+  });
 });
