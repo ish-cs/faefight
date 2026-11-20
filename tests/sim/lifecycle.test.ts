@@ -205,3 +205,38 @@ describe('respawn spot', () => {
     expect(hits).toEqual([]);
   });
 });
+
+describe('trapped inside a sealed bunker at any time', () => {
+  test('alive inside your bunker when it gets sealed → 10 s to escape, then eliminated', async () => {
+    const { s, b, run } = await setup();
+    // b is standing at its spawn (inside the bunker) and the doors get plugged.
+    sealIsland(s, 1);
+    let evs = run(0, 0.2);
+    expect(b.breakoutUntil).not.toBeNull();
+    expect(evs.some((e) => e.type === 'trapped')).toBe(true);
+    run(0.2, 9.8);
+    expect(b.eliminated).toBe(false);
+    evs = run(9.8, 10.4);
+    expect(b.eliminated).toBe(true);
+    expect(s.winner).toBe(1);
+  });
+  test('escaping before the countdown ends keeps you in', async () => {
+    const { s, b, run } = await setup();
+    sealIsland(s, 1);
+    run(0, 3);
+    b.pos = spot(1, 8);
+    run(3, 12);
+    expect(b.eliminated).toBe(false);
+    expect(b.breakoutUntil).toBeNull();
+  });
+  test('walking back into your still-sealed bunker restarts the countdown', async () => {
+    const { s, b, run } = await setup();
+    b.pos = spot(1, 8);
+    sealIsland(s, 1);
+    run(0, 2);
+    expect(b.breakoutUntil).toBeNull();
+    b.pos = { ...map[1].spawn };
+    run(2, 2.2);
+    expect(b.breakoutUntil).not.toBeNull();
+  });
+});
