@@ -1,4 +1,5 @@
 import { PIECES, WEAPONS } from '../sim/constants';
+import { validSlot } from '../sim/hotbar';
 import type { BuildRequest, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
 import { CHAT_MAX_LEN, type ClientMsg } from './protocol';
 
@@ -13,7 +14,7 @@ const count = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x 
 
 const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 const WEAPON_KINDS = Object.keys(WEAPONS) as WeaponKind[];
-const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge'];
+const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge', 'medkit'];
 const oneOf = <T extends string>(list: readonly T[], x: unknown): T | null => (list.includes(x as T) ? (x as T) : null);
 
 function vec(x: unknown): Vec3 | null {
@@ -33,7 +34,7 @@ function buildReq(x: unknown): BuildRequest | null {
 function partialInv(x: unknown): Partial<Inventory> | null {
   if (!isObj(x)) return null;
   const out: Partial<Inventory> = {};
-  for (const k of ['cash', 'grenades', 'charges'] as const) {
+  for (const k of ['cash', 'grenades', 'charges', 'medkits'] as const) {
     if (x[k] === undefined) continue;
     const n = count(x[k]);
     if (n === null) return null;
@@ -68,6 +69,11 @@ function vaultAction(x: unknown): VaultAction | null {
   return out.deposit || out.withdraw ? out : null;
 }
 
+function moveSlot(x: unknown): PlayerInput['moveSlot'] {
+  if (!isObj(x) || !validSlot(x.from) || !validSlot(x.to)) return null;
+  return { from: x.from, to: x.to };
+}
+
 export function sanitizeInput(x: unknown): PlayerInput | null {
   if (!isObj(x)) return null;
   const shopItem = isObj(x.shop) ? oneOf(SHOP_ITEMS, x.shop.buy) : null;
@@ -87,6 +93,10 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     placeCharge: bool(x.placeCharge),
     shop: shopItem ? { buy: shopItem } : null,
     vault: x.vault == null ? null : vaultAction(x.vault),
+    select: validSlot(x.select) ? x.select : null,
+    drop: oneOf(['one', 'stack'] as const, x.drop),
+    moveSlot: moveSlot(x.moveSlot),
+    useMedkit: bool(x.useMedkit),
   };
 }
 
