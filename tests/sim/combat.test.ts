@@ -105,6 +105,20 @@ describe('combat', () => {
     expect(a.hp).toBeLessThan(100 - 50);
     expect(b.hp).toBe(100); // 8 m away
   });
+  test('grenade stops at a wall instead of flying through it', async () => {
+    const { ctx, a } = await setup();
+    const wall: PieceState = { id: 9, kind: 'steel', owner: 2, pos: spot(6), rotY: yaw(), hp: 1200 };
+    ctx.pieces.set(9, wall);
+    ctx.physics.addPiece(wall);
+    a.inv.grenades = 1;
+    a.pitch = 0.1;
+    throwGrenade(ctx, a, 0);
+    const events = [];
+    for (let t = 0; t <= GRENADE.fuseSec + 0.1; t += 1 / 30) events.push(...tickExplosives(ctx, t));
+    const boom = events.find((e) => e.type === 'explosion')!;
+    const p = boom.data.pos as Vec3;
+    expect(Math.hypot(p.x - a.pos.x, p.z - a.pos.z)).toBeLessThan(2.3);
+  });
   test('breach charge destroys steel', async () => {
     const { ctx, a, destroyed } = await setup();
     const steel: PieceState = { id: 9, kind: 'steel', owner: 2, pos: spot(5.5), rotY: yaw(), hp: 1200 };

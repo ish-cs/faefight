@@ -149,7 +149,16 @@ export function tickExplosives(ctx: CombatCtx, now: number): MatchEvent[] {
   for (const e of ctx.explosives) {
     if (e.kind !== 'grenade' || (e.vel.x === 0 && e.vel.y === 0 && e.vel.z === 0)) continue;
     e.vel.y -= PLAYER.gravity * DT;
-    const next = add(e.pos, scale(e.vel, DT));
+    const step = scale(e.vel, DT);
+    const stepLen = Math.hypot(step.x, step.y, step.z);
+    const wall = stepLen > 0 ? ctx.physics.raycast(e.pos, scale(step, 1 / stepLen), stepLen, e.owner) : null;
+    if (wall) {
+      // Hit something on the way: stop just short of it (no bounce).
+      e.pos = add(e.pos, scale(step, Math.max(0, wall.dist - 0.1) / stepLen));
+      e.vel = v3();
+      continue;
+    }
+    const next = add(e.pos, step);
     const floor = ctx.physics.surfaceBelow(next.x, e.pos.y + 0.05, next.z, e.pos.y - next.y + 0.1);
     if (floor !== null && next.y <= floor) {
       e.pos = v3(next.x, floor + 0.05, next.z);
