@@ -1,4 +1,5 @@
 import { PIECES, WEAPONS } from '../sim/constants';
+import { validSlot } from '../sim/hotbar';
 import type { BuildRequest, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
 import { CHAT_MAX_LEN, type ClientMsg } from './protocol';
 
@@ -68,6 +69,11 @@ function vaultAction(x: unknown): VaultAction | null {
   return out.deposit || out.withdraw ? out : null;
 }
 
+function moveSlot(x: unknown): PlayerInput['moveSlot'] {
+  if (!isObj(x) || !validSlot(x.from) || !validSlot(x.to)) return null;
+  return { from: x.from, to: x.to };
+}
+
 export function sanitizeInput(x: unknown): PlayerInput | null {
   if (!isObj(x)) return null;
   const shopItem = isObj(x.shop) ? oneOf(SHOP_ITEMS, x.shop.buy) : null;
@@ -87,6 +93,9 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     placeCharge: bool(x.placeCharge),
     shop: shopItem ? { buy: shopItem } : null,
     vault: x.vault == null ? null : vaultAction(x.vault),
+    select: validSlot(x.select) ? x.select : null,
+    drop: oneOf(['one', 'stack'] as const, x.drop),
+    moveSlot: moveSlot(x.moveSlot),
   };
 }
 

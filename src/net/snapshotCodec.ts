@@ -1,10 +1,11 @@
 import { emptyInventory } from '../sim/economy';
+import { emptyHotbar } from '../sim/hotbar';
 import type { MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
 
 /**
  * What the host sends a remote client. Same as Snapshot except: pieces are omitted when unchanged
- * since that client's last update, events cover every tick since then, other players' inventories
- * and vaults are blanked, and floats are rounded.
+ * since that client's last update, events cover every tick since then, other players' inventories,
+ * vaults and hotbars are blanked (`equipped` is still sent so their gun renders), and floats are rounded.
  */
 export type NetSnapshot = Omit<Snapshot, 'pieces'> & { pieces?: PieceState[] };
 
@@ -63,6 +64,7 @@ export class SnapshotEncoder {
       pos: rv(p.pos), vel: rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp),
       inv: own ? p.inv : emptyInventory(),
       vault: own ? p.vault : emptyInventory(),
+      hotbar: own ? p.hotbar : emptyHotbar(),
     };
   }
 }

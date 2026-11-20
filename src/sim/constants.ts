@@ -74,6 +74,10 @@ export const LIFECYCLE = {
   suddenDeathAt: 900,
   tideRate: 0.05,
   lootPickupRadius: 1.5,
+  /** Dropped items land this far in front of you (just past pickup reach)... */
+  dropAhead: 1.8,
+  /** ...and you can't pick your own drop back up for this long. */
+  dropPickupDelaySec: 1.5,
 };
 
 export const SEAL = { cell: 0.25, half: 8, blockHeight: 1.3, exitRadius: 4 };

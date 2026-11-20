@@ -1,5 +1,6 @@
 import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, PIECES, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
-import type { Inventory, PieceKind, PlayerState, ShopAction, VaultAction, WeaponKind } from './types';
+import { addKind, canAdd, countOf, isHotbarItem, removeIfEmpty, syncFromInventory } from './hotbar';
+import type { HotbarItem, Inventory, PieceKind, PlayerState, ShopAction, VaultAction, WeaponKind } from './types';
 
 export type Result = { ok: true } | { ok: false; reason: string };
 const fail = (reason: string): Result => ({ ok: false, reason });
@@ -37,6 +38,9 @@ export function buy(player: PlayerState, action: ShopAction): Result {
   const price = priceOf(item);
   if (player.inv.cash < price) return fail(`need $${price}, carrying $${player.inv.cash}`);
   const inv = player.inv;
+  // A new kind needs a free hotbar slot; more of a kind you hold (or ammo) doesn't.
+  const slotKind = isHotbarItem(item) ? item : null;
+  if (slotKind && countOf(inv, slotKind) === 0 && !canAdd(player.hotbar, slotKind)) return fail('Hotbar full');
   if (isGun(item)) {
     if (inv.weapons[item]) return fail(`already own ${item}`);
     const mag = WEAPONS[item].mag;
@@ -55,6 +59,7 @@ export function buy(player: PlayerState, action: ShopAction): Result {
     inv.charges += 1;
   }
   inv.cash -= price;
+  if (slotKind) addKind(player.hotbar, slotKind);
   return { ok: true };
 }
 
@@ -98,10 +103,33 @@ export function vaultTransfer(player: PlayerState, action: VaultAction): Result 
   if (depErr) return fail(depErr);
   const wdErr = wd ? holds(player.vault, wd) : null;
   if (wdErr) return fail(wdErr);
+  if (wd && !withdrawFits(player, dep, wd)) return fail('Hotbar full');
   if (dep) move(player.inv, player.vault, dep);
+  removeIfEmpty(player.hotbar, player.inv);
   if (wd) move(player.vault, player.inv, wd);
+  syncFromInventory(player.hotbar, player.inv);
   if (!player.inv.weapons[player.equipped] && player.equipped !== 'fists') player.equipped = 'fists';
   return { ok: true };
+}
+
+/** Kinds a vault request names with a nonzero amount. */
+function kindsIn(req: Partial<Inventory>): HotbarItem[] {
+  const out: HotbarItem[] = [];
+  for (const k of Object.keys(req.weapons ?? {})) if (isHotbarItem(k)) out.push(k);
+  for (const [k, n] of Object.entries(req.pieces ?? {})) if (n && isHotbarItem(k)) out.push(k);
+  if (req.grenades) out.push('grenade');
+  if (req.charges) out.push('charge');
+  return out;
+}
+
+/** Whether every new kind a withdrawal brings in gets a hotbar slot (after the deposit frees any). */
+function withdrawFits(player: PlayerState, dep: Partial<Inventory> | undefined, wd: Partial<Inventory>): boolean {
+  const inv = structuredClone(player.inv);
+  const bar = [...player.hotbar];
+  if (dep) move(inv, emptyInventory(), dep);
+  removeIfEmpty(bar, inv);
+  const fresh = kindsIn(wd).filter((k) => countOf(inv, k) === 0 && !bar.includes(k));
+  return fresh.length <= bar.filter((k) => k === null).length;
 }
 
 export function mergeInventory(into: Inventory, from: Inventory): void {

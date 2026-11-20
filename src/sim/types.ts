@@ -14,6 +14,9 @@ export type Inventory = {
   charges: number;
 };
 
+/** Something that occupies a hotbar slot (amounts live in the inventory). */
+export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge';
+
 export type ShopItem = PieceKind | Exclude<WeaponKind, 'fists'> | 'ammo' | 'grenade' | 'charge';
 export type ShopAction = { buy: ShopItem };
 export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> };
@@ -36,6 +39,12 @@ export type PlayerInput = {
   placeCharge: boolean;
   shop: ShopAction | null;
   vault: VaultAction | null;
+  /** Hotbar slot to hold (0-8); held state, sent every input by the client. */
+  select: number | null;
+  /** Drop from the selected slot: one unit (a gun with its ammo) or the whole stack. */
+  drop: 'one' | 'stack' | null;
+  /** Swap two hotbar slots. */
+  moveSlot: { from: number; to: number } | null;
 };
 
 export type PlayerState = {
@@ -56,6 +65,11 @@ export type PlayerState = {
   invulnUntil: number;
   inv: Inventory;
   vault: Inventory;
+  /** Nine slots of item kinds held; counts are in `inv`. */
+  hotbar: (HotbarItem | null)[];
+  /** Selected hotbar slot (0-8). */
+  selected: number;
+  /** Derived from the selected slot: its gun, else fists. */
   equipped: WeaponKind;
   reloadUntil: number;
   nextFireAt: number;
@@ -63,7 +77,8 @@ export type PlayerState = {
 };
 
 export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number };
-export type LootBag = { id: number; pos: Vec3; inv: Inventory };
+/** `noPickup`: a dropped bag its dropper can't grab back until `until`. */
+export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number } };
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
@@ -87,4 +102,5 @@ export type Snapshot = {
 export const NO_INPUT: PlayerInput = {
   moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, fire: false, reload: false,
   interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
+  select: null, drop: null, moveSlot: null,
 };

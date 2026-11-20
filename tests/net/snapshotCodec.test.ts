@@ -67,6 +67,16 @@ describe('snapshot codec', () => {
     const forB = enc.take(2);
     expect(forB.players[1].vault.cash).toBe(999);
   });
+  test("other players' hotbars are hidden but their equipped gun is sent", () => {
+    const enc = new SnapshotEncoder();
+    const s = snap(1, []);
+    for (const p of s.players) { p.hotbar[2] = 'rifle'; p.selected = 2; p.equipped = 'rifle'; }
+    enc.push(s);
+    const forA = enc.take(1);
+    expect(forA.players[0].hotbar[2]).toBe('rifle');
+    expect(forA.players[1].hotbar).toEqual(Array(9).fill(null));
+    expect(forA.players[1].equipped).toBe('rifle');
+  });
   test('an 8-player mid-match update fits the 60 KB/s budget at 15 Hz', () => {
     const enc = new SnapshotEncoder();
     const s = snap(1, Array.from({ length: 60 }, (_, i) => ({ ...steel(), id: i })));
