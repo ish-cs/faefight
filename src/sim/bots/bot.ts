@@ -1,4 +1,4 @@
-import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, SEAL, WEAPONS } from '../constants';
+import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import type { Doorway, IslandLayout } from '../map';
 import { NO_INPUT } from '../types';
@@ -104,6 +104,8 @@ type Act = {
   raw?: boolean;
   /** Stay put on purpose (hiding behind cover): no dodging. */
   hold?: boolean;
+  /** Hold this weapon for `shootAt` (e.g. a rocket at a steel plug). */
+  weapon?: WeaponKind;
 };
 const IDLE: Act = { dir: null };
 
@@ -260,7 +262,10 @@ export class Bot {
     let look: Angles = cur;
     let fire = false;
     const enemy = ctx.enemy;
-    const best = bestGun(me.inv, enemy ? ctx.enemyDist : 30);
+    // Rockets: for a rival dug in behind cover or up on a structure (splash at their feet), and for hard plugs.
+    const rocketAtEnemy = !!enemy && this.rocketTarget(ctx);
+    const best = act.weapon && hasAmmo(me.inv, act.weapon) ? act.weapon
+      : rocketAtEnemy ? 'rocket' : bestGun(me.inv, enemy ? ctx.enemyDist : 30);
     const gunReady = (range: number) => {
       const w = me.equipped;
       const ammo = w === 'fists' ? null : me.inv.weapons[w];
@@ -272,7 +277,7 @@ export class Bot {
       look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
     } else if (enemy) {
-      const r = this.aim.track(now, dt, eye, add(enemy.pos, v3(0, CHEST, 0)), enemy.id, cur);
+      const r = this.aim.track(now, dt, eye, add(enemy.pos, v3(0, rocketAtEnemy ? 0.15 : CHEST, 0)), enemy.id, cur);
       look = r;
       fire = r.ready && r.onTarget && gunReady(ctx.enemyDist);
     } else if (nade) {
@@ -350,6 +355,36 @@ export class Bot {
     if (act.raw || act.hold || this.retreat || this.goal === 'fleeTide' || this.trapped(c) || insideBunker(c.home.bunker, c.me.pos)) return false;
     const busy = !!(act.build || act.placeCharge || act.shop || act.vault) || this.goal === 'seal' || this.goal === 'bridge' || this.goal === 'defend';
     return !busy || c.me.hp < 100 * this.params.breakLosHp * 0.6;
+  }
+
+  /**
+   * My target just respawned (seen spawn-protected, or died under 15 s ago and seen at/inside their bunker):
+   * they're stuck at home with a pistol, so their doorways are the play, not their head.
+   */
+  private sealWindow(c: Ctx): boolean {
+    const r = c.rival;
+    if (!r || !r.alive || !c.rivalIsl) return false;
+    const now = c.view.now;
+    const seen = c.view.enemies.find((e) => e.id === r.id);
+    if (seen && seen.invulnUntil > now) return true;
+    const died = this.mem.diedAt.get(r.id);
+    if (died === undefined || now - died > 15) return false;
+    const s = this.mem.recent(r.id, now, 5);
+    return !s || dist2D(s.pos, c.rivalIsl.bunker.center) < 8;
+  }
+
+  /** Two or fewer rivals left: only eliminations matter now. */
+  private endgame(c: Ctx): boolean {
+    return c.view.others.filter((o) => !o.eliminated && o.id !== c.me.id).length <= 2;
+  }
+
+  /** A visible rival worth a rocket: 10–45 m away (clear of my own blast) and behind cover or up on a structure. */
+  private rocketTarget(c: Ctx): boolean {
+    const e = c.enemy;
+    if (!e || !hasAmmo(c.me.inv, 'rocket') || c.enemyDist < 10 || c.enemyDist > 45) return false;
+    const isl = islandAt(c.view.map, e.pos);
+    const high = isl >= 0 && e.pos.y - c.view.map[isl].groundY > 1.2;
+    return high || c.view.pieces.some((p) => COVER_KINDS.has(p.kind) && dist2D(p.pos, e.pos) < 2.5);
   }
 
   /** Did the last purchase go through? A buy that keeps failing (e.g. nowhere to carry it) is left alone a while. */
@@ -446,7 +481,7 @@ export class Bot {
       intruder: !!this.intruder(c), homeSealed: view.sealed[home.index], homePlugged: this.blockers(c).length > 0,
       incomingBridge: !!this.incomingDeck(c),
       killedBy: killed ? { id: killed.id, ago: now - killed.t } : null,
-      seller: this.nearestSeller(c) !== null, wantShields: this.wantShields(me),
+      seller: this.nearestSeller(c) !== null, wantShields: this.wantShields(me), endgame: this.endgame(c),
     };
   }
 
@@ -477,7 +512,8 @@ export class Bot {
     let enemy: PlayerState | null = null, enemyDist = Infinity, bestScore = -Infinity, armedNear = 0;
     const shooter = this.mem.shotAtMe && now - this.mem.shotAtMe.t < 2 ? this.mem.shotAtMe.by : now - this.mem.lastHurtAt < 2 ? this.mem.lastHurtBy : null;
     for (const e of view.enemies) {
-      if (!e.alive) continue;
+      // Spawn-protected players can't be hurt (visible on screen): don't waste shots, use the window to seal.
+      if (!e.alive || e.invulnUntil > now) continue;
       const d = dist2D(e.pos, me.pos);
       if (e.equipped !== 'fists' && d < 35) armedNear++;
       const s = -d * P.tgtDist + (1 - e.hp / 100) * P.tgtLowHp + (e.id === shooter ? P.tgtShootingMe : 0) +
@@ -713,6 +749,10 @@ export class Bot {
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
         if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return 0.9;
+        // No kit while the rival is down / protected, or in the endgame: kills don't win, seals do.
+        const kitShort = sealKit(me.inv) < Math.max(1, c.openDoors.length) && !view.suddenDeath;
+        if (kitShort && (rivalDown || this.sealWindow(c) || this.endgame(c)) && plan.items.some((i) => i === 'wood' || i === 'metal' || i === 'steel'))
+          return 0.95 - away;
         const urgent = plan.items.includes('pistol') || plan.items.includes('charge');
         return (urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0) - away;
       }
@@ -722,14 +762,15 @@ export class Bot {
         // Bridges are one-way (see Nav.bridge): don't finish one before carrying a full seal kit.
         const need = this.scaffoldsNeeded(c);
         if (need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
-        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0);
+        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0) + (this.endgame(c) && sealKit(me.inv) > 0 ? 0.2 : 0);
       }
       case 'attack': {
         if (!c.reach || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
-        // Respawn window with no kit to seal: wait at their door for the unarmed respawn.
-        if (rivalDown) return gun && sealKit(me.inv) === 0 ? 0.35 + 0.3 * t.opportunism : 0.3;
+        // Respawn window with no kit: a kill that can't be followed by a seal is wasted (and respawns are
+        // protected), so go get a kit rather than camp the door.
+        if (rivalDown || this.sealWindow(c)) return sealKit(me.inv) === 0 && c.homeReach ? 0.1 : 0.3;
         if (!gun) return 0.1;
         const upgraded = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
         return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution));
@@ -740,8 +781,10 @@ export class Bot {
         const near = c.on === c.rivalIsl.index && dist2D(me.pos, c.rivalIsl.bunker.center) < 15;
         const ownerAway = !!c.rival && c.rival.alive && this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)?.island !== c.rival.island &&
           !!this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC);
-        return (kit >= c.openDoors.length ? 0.6 : 0.3) + (rivalDown ? 0.5 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
-          (ownerAway ? 0.2 * t.opportunism : 0);
+        // Dead, respawning or spawn-protected rival: sealing now is an elimination; it beats every fight.
+        const window = rivalDown || this.sealWindow(c);
+        return (kit >= c.openDoors.length ? 0.6 : 0.3) + (window ? 1.0 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
+          (ownerAway ? 0.2 * t.opportunism : 0) + (this.endgame(c) ? 0.25 : 0);
       }
       case 'cut': {
         if (!gun || c.on !== home.index || view.suddenDeath) return 0;
@@ -950,6 +993,12 @@ export class Bot {
     const door = b.doorways.find((d) => doorPieces(c.view.pieces, d).includes(target));
     if (!door) throw new Error(`Bot ${this.id}: blocker ${target.id} matches no doorway`);
     if (isHard(target.kind) && me.inv.charges > 0) return this.blast(c, door, target, inside);
+    if (isHard(target.kind) && hasAmmo(me.inv, 'rocket') && !inside) {
+      // A rocket breaks even steel: fire from well outside its blast (and the escape-countdown radius).
+      const center = v3(target.pos.x, target.pos.y + PIECES[target.kind].h / 2, target.pos.z);
+      const walk = this.goTo(add(door.center, scale(forward(door.yaw), ROCKET.radius + 2.5)), 1.0);
+      return walk.dir ? walk : { dir: null, shootAt: center, shootFirst: true, weapon: 'rocket' };
+    }
     const fists = !ownsGun(me.inv);
     // Punching from outside means standing within the countdown radius: only while it isn't sealed.
     if (fists && !inside && c.view.sealed[home.index]) { this.nextScoreAt = c.view.now; return IDLE; }
@@ -963,7 +1012,7 @@ export class Bot {
    */
   private canClear(c: Ctx, p: PieceState): boolean {
     const inv = c.me.inv;
-    if (inv.charges > 0) return true;
+    if (inv.charges > 0 || hasAmmo(inv, 'rocket')) return true;
     if (p.kind === 'metal') return hasAmmo(inv, 'rifle');
     if (isHard(p.kind)) return false;
     return ownsGun(inv) || !c.view.sealed[c.home.index] || insideBunker(c.home.bunker, c.me.pos);

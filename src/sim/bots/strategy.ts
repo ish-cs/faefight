@@ -54,6 +54,8 @@ export type PlanInput = {
   /** A potion seller I can walk to, and whether I'd buy there. */
   seller: boolean;
   wantShields: boolean;
+  /** Two or fewer rivals left: only eliminations matter. */
+  endgame: boolean;
 };
 
 const STEP_GOALS: Record<Step, Partial<Record<Goal, number>>> = {
@@ -149,7 +151,7 @@ export class Strategist {
 
     // Bank and build up early; strike late with better gear.
     const early = Math.max(0, 1 - inp.now / p.turtleUntil);
-    mk('turtle', p.planTurtle * early * (inp.upgraded ? 0.4 : 1) * (inp.suddenDeath ? 0 : 1) + 0.05,
+    mk('turtle', p.planTurtle * early * (inp.upgraded ? 0.4 : 1) * (inp.suddenDeath ? 0 : 1) * (inp.endgame ? 0.2 : 1) + 0.05,
       inp.upgraded ? 'bank and build up for a late push' : 'gear up before going anywhere');
 
     const threat = (inp.intruder ? 1 : 0) + (inp.homeSealed ? 1.2 : inp.homePlugged ? 0.6 : 0) + (inp.incomingBridge ? 0.3 : 0);
@@ -160,7 +162,7 @@ export class Strategist {
       const base = rivalScore(r, p);
       if (!r.sealed && r.openDoors > 0 && !inp.suddenDeath) {
         const why = r.respawning ? 'respawning' : r.away ? 'out of position' : r.seenHp !== null && r.seenHp < 50 ? 'hurt' : r.busy ? 'busy fighting' : 'weakest reachable';
-        mk('seal', p.planSeal * base, `seal #${r.id}'s bunker (${why})`, r.id, r.island);
+        mk('seal', p.planSeal * base * (inp.endgame ? 1.4 : 1) + (r.respawning ? 0.4 : 0), `seal #${r.id}'s bunker (${why})`, r.id, r.island);
       }
       if (r.sealed || (r.respawning && inp.kit >= r.openDoors))
         mk('eliminate', p.planElim * (base + 0.3), r.sealed ? `#${r.id} is sealed: one kill eliminates them` : `#${r.id} respawning: seal and finish`, r.id, r.island);

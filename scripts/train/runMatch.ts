@@ -20,6 +20,8 @@ export type SeatResult = {
   deaths: number;
   /** Bunkers this player sealed (before sudden death). */
   seals: number;
+  /** Rivals eliminated whose bunker I sealed (the seal is what makes a death final). */
+  elims: number;
   /** Seconds until eliminated (match length if never). */
   survived: number;
 };
@@ -45,8 +47,10 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
     { players: spec.seats.map((s) => ({ name: '', isBot: true, difficulty: s.difficulty })), seed: spec.seed },
     { makeBot: (id, _d, rng) => makeBrain(spec.seats[id - 1], id, rng) },
   );
-  const seats: SeatResult[] = spec.seats.map(() => ({ place: 0, kills: 0, deaths: 0, seals: 0, survived: 0 }));
+  const seats: SeatResult[] = spec.seats.map(() => ({ place: 0, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 0 }));
   const outOrder: number[] = [];
+  /** Who sealed each island's bunker last (player i+1 lives on island i). */
+  const sealedBy = new Map<number, number>();
   const maxTicks = Math.round(spec.maxSec * TICK_HZ);
   let snap: Snapshot = m.tick(new Map());
   const t0 = performance.now();
@@ -60,10 +64,15 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
         if (k != null && k !== v) seats[k - 1].kills++;
       } else if (e.type === 'sealed' && e.t < LIFECYCLE.suddenDeathAt) {
         const by = e.data.by as number | null | undefined;
-        if (by != null && by !== e.data.owner) seats[by - 1].seals++;
+        if (by != null && by !== e.data.owner) { seats[by - 1].seals++; sealedBy.set(e.data.island as number, by); }
       } else if (e.type === 'eliminated') {
         const id = e.data.player as number;
-        if (!outOrder.includes(id)) { outOrder.push(id); seats[id - 1].survived = e.t; }
+        if (!outOrder.includes(id)) {
+          outOrder.push(id);
+          seats[id - 1].survived = e.t;
+          const by = sealedBy.get(id - 1);
+          if (by !== undefined && by !== id) seats[by - 1].elims++;
+        }
       }
     }
   }
@@ -92,13 +101,15 @@ function freePhysics(m: Match) {
 }
 
 /**
- * Fitness of one seat in [~0, ~1.5]: placement dominates (winning is the point), plus a little for
- * kills and seals (what sets up eliminations), survival time, and winning before sudden death.
+ * Fitness of one seat: placement dominates (winning is the point); eliminations I set up with a seal and seals
+ * themselves are worth far more than kills (a kill without a seal changes nothing); a little for survival;
+ * a winner gets more the sooner they win (so camping/killing forever is never the optimum).
  */
-export function seatFitness(r: MatchResult, seat: number): number {
+export function seatFitness(r: MatchResult, seat: number, maxSec = 18 * 60): number {
   const s = r.seats[seat];
   const n = r.seats.length;
   const placement = (n - s.place) / (n - 1);
   const won = r.winner === seat + 1;
-  return placement + 0.02 * s.kills + 0.06 * s.seals + 0.15 * (s.survived / Math.max(1, r.time)) + (won && r.decisive ? 0.2 : 0);
+  return placement + 0.35 * s.elims + 0.12 * s.seals + 0.005 * s.kills + 0.05 * (s.survived / Math.max(1, r.time)) +
+    (won ? 0.4 * Math.max(0, 1 - r.time / maxSec) : 0);
 }

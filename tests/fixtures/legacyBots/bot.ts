@@ -7,7 +7,7 @@ import type {
   BuildRequest, Difficulty, PieceState, PlayerInput, PlayerState, ShopItem, VaultAction, Vec3, WeaponKind,
 } from '../../../src/sim/types';
 import { add, clone, dist2D, forward, norm, right, scale, sub, v3, yawOf } from '../../../src/sim/vec';
-import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
+import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from '../../../src/sim/bots/aim'; // aim is execution skill: shared with the current bots
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, lane, laneAt, laneS, type Lane } from './nav';
@@ -49,7 +49,7 @@ const ENGAGE_RANGE = 25;
 const CHEST = 1.2;
 /** Net forward progress of one scaffold laid end-to-end. */
 const SCAFFOLD_STEP = 3.8;
-const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, smg: 12, pistol: 16, rifle: 25 };
+const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, smg: 12, pistol: 16, rifle: 25, rocket: 20 };
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
@@ -270,6 +270,8 @@ export class Bot {
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage'),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
+      // (from main's gunplay change, so the baseline plays the same game) aim down sights past close range.
+      ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
     // Shields: stock up at a potion seller, drink out of combat (see potionAction).
     if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge) {
