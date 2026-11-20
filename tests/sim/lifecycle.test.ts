@@ -240,3 +240,35 @@ describe('trapped inside a sealed bunker at any time', () => {
     expect(b.breakoutUntil).not.toBeNull();
   });
 });
+
+describe('anti spawn-camping', () => {
+  test('respawn with a pistol and one spare mag', async () => {
+    const { s, physics, b, run } = await setup();
+    killPlayer(s, physics, 2, 0, false);
+    run(0, 3.2);
+    expect(b.inv.weapons.pistol).toEqual({ mag: 12, spare: 12 });
+    expect(b.hotbar).toContain('pistol');
+  });
+  test('protected while inside the bunker, even long after the old 3 s window', async () => {
+    const { s, physics, b, run } = await setup();
+    killPlayer(s, physics, 2, 0, false);
+    run(0, 10);
+    expect(b.pos).toEqual(map[1].spawn); // still inside
+    expect(b.invulnUntil).toBeGreaterThan(10);
+  });
+  test('protection ends 3 s after leaving the bunker', async () => {
+    const { s, physics, b, run } = await setup();
+    killPlayer(s, physics, 2, 0, false);
+    run(0, 5);
+    b.pos = spot(1, 8);
+    run(5, 5.2);
+    expect(b.invulnUntil).toBeLessThanOrEqual(5.2 + 3.05);
+    expect(b.invulnUntil).toBeGreaterThan(7.9);
+  });
+  test('protection is capped at 15 s even if you hide inside', async () => {
+    const { s, physics, b, run } = await setup();
+    killPlayer(s, physics, 2, 0, false);
+    run(0, 4);
+    expect(b.invulnUntil).toBeLessThanOrEqual(3 + 15 + 0.1);
+  });
+});
