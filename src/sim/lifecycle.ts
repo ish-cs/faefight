@@ -1,4 +1,4 @@
-import { LIFECYCLE, MAP, PLAYER, SEAL } from './constants';
+import { LIFECYCLE, MAP, PLAYER, SEAL, WEAPONS } from './constants';
 import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
 import { addKind, countOf, emptyHotbar, heldKinds, takeOut } from './hotbar';
 import type { IslandLayout } from './map';
@@ -192,13 +192,21 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
     p.shield = 0;
     p.alive = true;
     grantLockedGuns(p);
-    p.invulnUntil = now + LIFECYCLE.invulnSec;
+    // Come back with a pistol + one spare mag so a camper with a rifle isn't a guaranteed kill.
+    if (!p.inv.weapons.pistol && addKind(p.hotbar, 'pistol') >= 0) p.inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag };
+    p.invulnUntil = now + LIFECYCLE.spawnProtectMaxSec;
+    p.spawnProtected = true;
     physics.setPlayerPos(p.id, spawn);
   }
 
   for (const p of s.players.values()) {
     if (!p.alive) continue;
     const bunker = map[p.island].bunker.center;
+    // Spawn protection runs out invulnSec after you step out of your bunker.
+    if (p.spawnProtected && dist2D(p.pos, bunker) > SEAL.exitRadius) {
+      p.invulnUntil = Math.min(p.invulnUntil, now + LIFECYCLE.invulnSec);
+      p.spawnProtected = false;
+    }
     // Inside your own bunker while it's sealed (however you got there): the escape clock starts.
     if (p.breakoutUntil === null && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
       p.breakoutUntil = now + LIFECYCLE.breakoutSec;
