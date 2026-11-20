@@ -125,13 +125,35 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .hud .killfeed { position: absolute; top: 56px; right: 18px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
 .hud .feed-item { font-size: 13px; padding: 5px 10px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; backdrop-filter: blur(12px); }
 .hud .feed-item.alert { border-color: rgba(255, 77, 77, 0.7); color: #ffd0d0; }
-.hud .crosshair { position: absolute; top: 50%; left: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); }
-.hud .crosshair::before, .hud .crosshair::after { content: ""; position: absolute; background: rgba(255, 255, 255, 0.92); box-shadow: 0 0 2px rgba(0, 0, 0, 0.8); }
-.hud .crosshair::before { left: 10px; top: 3px; width: 2px; height: 16px; }
-.hud .crosshair::after { top: 10px; left: 3px; height: 2px; width: 16px; }
-.hud .crosshair.build::before, .hud .crosshair.build::after { background: var(--accent); }
-.hud .crosshair.hit::before, .hud .crosshair.hit::after { animation: hit 0.25s; }
-@keyframes hit { from { background: #ff4d4d; transform: scale(1.6); } }
+.hud .crosshair { position: absolute; top: 50%; left: 50%; width: 0; height: 0; --gap: 4px; }
+.hud .crosshair i { position: absolute; background: rgba(255, 255, 255, 0.92); box-shadow: 0 0 2px rgba(0, 0, 0, 0.8); transition: transform 60ms linear; }
+/* Ticks sit `--gap` from the centre: the gap is the current spread cone (bloom, movement, sights). */
+.hud .crosshair .t, .hud .crosshair .b { left: -1px; width: 2px; height: 7px; }
+.hud .crosshair .l, .hud .crosshair .r { top: -1px; height: 2px; width: 7px; }
+.hud .crosshair .t { top: calc(-7px - var(--gap)); }
+.hud .crosshair .b { top: var(--gap); }
+.hud .crosshair .l { left: calc(-7px - var(--gap)); }
+.hud .crosshair .r { left: var(--gap); }
+.hud .crosshair .hm { left: -8px; top: -1px; width: 16px; height: 2px; background: transparent; box-shadow: none; opacity: 0; }
+.hud .crosshair .hm::before, .hud .crosshair .hm::after { content: ""; position: absolute; inset: 0; background: #fff; box-shadow: 0 0 2px rgba(0, 0, 0, 0.9); }
+.hud .crosshair .hm::before { transform: rotate(45deg) scaleX(0.9); }
+.hud .crosshair .hm::after { transform: rotate(-45deg) scaleX(0.9); }
+.hud .crosshair.build i:not(.hm) { background: var(--accent); }
+.hud .crosshair.scoped i:not(.hm) { opacity: 0; }
+.hud .crosshair.hit .hm { animation: hitmark 0.28s ease-out; }
+.hud .crosshair.hit.head .hm::before, .hud .crosshair.hit.head .hm::after { background: #ff4040; }
+@keyframes hitmark { from { opacity: 1; transform: scale(1.5); } 40% { opacity: 1; } to { opacity: 0; transform: scale(1); } }
+/* Reload progress: a thin ring around the crosshair, filled with a conic gradient. */
+.hud .reload-ring { position: absolute; top: 50%; left: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%;
+  background: conic-gradient(rgba(255, 255, 255, 0.9) var(--p, 0deg), rgba(255, 255, 255, 0.15) 0);
+  -webkit-mask: radial-gradient(circle, transparent 13px, #000 14px); mask: radial-gradient(circle, transparent 13px, #000 14px); }
+/* Rifle scope: dark vignette outside a lens circle and a fine reticle. */
+.hud .scope { position: absolute; inset: 0; opacity: 0; transition: opacity 90ms; pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, transparent 0, transparent 33vmin, rgba(0, 0, 0, 0.6) 33.5vmin, #05070a 35vmin); }
+.hud .scope.on { opacity: 1; }
+.hud .scope::before, .hud .scope::after { content: ""; position: absolute; top: 50%; left: 50%; background: rgba(10, 10, 10, 0.85); }
+.hud .scope::before { width: 66vmin; height: 1px; transform: translate(-50%, -50%); }
+.hud .scope::after { width: 1px; height: 66vmin; transform: translate(-50%, -50%); }
 .hud .center-msg { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); font-size: 26px; font-weight: 700; padding: 12px 22px; background: var(--glass-strong); border-radius: 12px; display: none; }
 .hud .center-msg.small { top: auto; bottom: 110px; transform: translateX(-50%); font-size: 14px; font-weight: 500; padding: 6px 12px; }
 .hud .damage-flash { position: absolute; inset: 0; box-shadow: inset 0 0 120px rgba(255, 0, 0, 0); }
@@ -218,7 +240,9 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .invite-code { font-size: 46px; font-weight: 800; letter-spacing: 8px; font-variant-numeric: tabular-nums; color: var(--gold); user-select: all; }
 .lobby-hint { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
 .seats { display: flex; flex-direction: column; gap: 6px; text-align: left; }
-.seat { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, 0.04); min-height: 44px; }
+/* Reserve room for all 8 seats so the card (and its buttons) never move when seats are added or removed. */
+.lobby-card .seats { min-height: calc(8 * 46px + 7 * 6px); }
+.seat { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, 0.04); height: 46px; box-sizing: border-box; flex: none; }
 .seat .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
 .seat-name { flex: 1; font-weight: 600; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .seat-name.open { color: var(--muted); font-weight: 400; font-style: italic; }
@@ -277,3 +301,33 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .scoreboard tr.dead .sb-status, .scoreboard tr.trapped .sb-status { color: var(--gold); }
 .scoreboard tr.eliminated, .scoreboard tr.spectating { opacity: 0.6; }
 .scoreboard .sb-seal.sealed { color: var(--danger); font-weight: 700; }
+
+/* "X sealed Y's bunker": big centre headline + a short screen shake. */
+.seal-announce {
+  position: fixed; left: 50%; top: 26%; transform: translate(-50%, -50%) scale(0.6); opacity: 0; pointer-events: none; z-index: 20;
+  font: 900 44px 'Helvetica Neue', system-ui, sans-serif; letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap;
+  color: #ffd84a; text-shadow: 0 4px 0 rgba(0,0,0,.55), 0 0 28px rgba(255,140,40,.65);
+}
+.seal-announce.mine { color: #ff4a3d; text-shadow: 0 4px 0 rgba(0,0,0,.6), 0 0 32px rgba(255,40,30,.75); }
+.seal-announce.show { animation: seal-pop 3.2s cubic-bezier(.2,1.4,.4,1) forwards; }
+@keyframes seal-pop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(1.8); }
+  8% { opacity: 1; transform: translate(-50%, -50%) scale(0.95); }
+  14% { transform: translate(-50%, -50%) scale(1); }
+  82% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -60%) scale(1); }
+}
+canvas.shake { animation: screen-shake 0.55s ease-out; }
+@keyframes screen-shake {
+  0% { transform: translate(0, 0); }
+  15% { transform: translate(var(--shake), calc(var(--shake) * -0.6)); }
+  30% { transform: translate(calc(var(--shake) * -0.8), calc(var(--shake) * 0.5)); }
+  45% { transform: translate(calc(var(--shake) * 0.5), calc(var(--shake) * 0.4)); }
+  65% { transform: translate(calc(var(--shake) * -0.3), calc(var(--shake) * -0.2)); }
+  100% { transform: translate(0, 0); }
+}
+
+/* Eliminated player's bunker chip: greyed out, struck through. */
+.seal-chip.out { opacity: 0.55; }
+.seal-chip.out .state { color: #9aa3ad; }
+.seal-chip.out .name { text-decoration: line-through; }

@@ -28,9 +28,24 @@ export function collect(player: PlayerState, gen: { stored: number }): number {
   return amount;
 }
 
-const GUNS = ['pistol', 'smg', 'shotgun', 'rifle'] as const;
+const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
 const isGun = (k: string): k is (typeof GUNS)[number] => (GUNS as readonly string[]).includes(k);
 const isPiece = (k: string): k is PieceKind => k in PIECES;
+
+/** The gun an ammo box would fill: the one in hand, else the first gun owned. */
+export function ammoTarget(player: PlayerState): Exclude<WeaponKind, 'fists'> | undefined {
+  return player.equipped !== 'fists' ? player.equipped : GUNS.find((g) => player.inv.weapons[g]);
+}
+
+/** Ammo box price for that gun (rockets cost more than a box of rounds). */
+export function ammoPrice(gun: WeaponKind | undefined): number {
+  return gun === 'rocket' ? AMMO_BOX.rocketPrice : AMMO_BOX.price;
+}
+
+/** Rounds one ammo box adds for that gun. */
+export function ammoPerBox(gun: Exclude<WeaponKind, 'fists'>): number {
+  return gun === 'rocket' ? AMMO_BOX.rockets : WEAPONS[gun].mag * AMMO_BOX.mags;
+}
 
 /** The gun a `lock:<gun>` shop item locks, or null for any other item. */
 export function lockedGunOf(item: ShopItem): GunKind | null {
@@ -48,13 +63,14 @@ export function genUpgradePrice(level: number): number | null {
   return level >= GENERATOR_MAX_LEVEL ? null : GENERATOR_LEVELS[Math.max(1, level)].price;
 }
 
-export function priceOf(item: ShopAction['buy']): number {
+/** Shop price; an ammo box costs what the gun it would fill takes (pass the buyer). */
+export function priceOf(item: ShopAction['buy'], player?: PlayerState): number {
   const locked = lockedGunOf(item);
   if (locked) return lockPrice(locked);
   if (isPotionItem(item)) return POTIONS[item].price;
   if (isGun(item)) return WEAPONS[item].price;
   if (isPiece(item)) return PIECES[item].price;
-  if (item === 'ammo') return AMMO_BOX.price;
+  if (item === 'ammo') return ammoPrice(player ? ammoTarget(player) : undefined);
   if (item === 'grenade') return GRENADE.price;
   if (item === 'medkit') return MEDKIT.price;
   return CHARGE.price;
@@ -69,7 +85,7 @@ export function buy(player: PlayerState, action: ShopAction, genLevels?: number[
   if (item === 'genUpgrade') return upgradeGenerator(player, genLevels);
   const lockGun = lockedGunOf(item);
   if (lockGun) return lock(player, lockGun);
-  const price = priceOf(item);
+  const price = priceOf(item, player);
   if (player.inv.cash < price) return fail(`need $${price}, carrying $${player.inv.cash}`);
   const inv = player.inv;
   // A new kind needs a free hotbar slot; more of a kind you hold (or ammo) doesn't.
@@ -83,10 +99,10 @@ export function buy(player: PlayerState, action: ShopAction, genLevels?: number[
     inv.pieces[item] = (inv.pieces[item] ?? 0) + 1;
   } else if (item === 'ammo') {
     // Ammo for the gun in hand; with fists out, for the first gun you own.
-    const gun = player.equipped !== 'fists' ? player.equipped : GUNS.find((g) => inv.weapons[g]);
+    const gun = ammoTarget(player);
     const ammo = gun ? inv.weapons[gun] : undefined;
     if (!gun || !ammo) return fail('you need a gun to buy ammo');
-    ammo.spare += WEAPONS[gun].mag * AMMO_BOX.mags;
+    ammo.spare += ammoPerBox(gun);
   } else if (item === 'grenade') {
     inv.grenades += 1;
   } else if (item === 'medkit') {

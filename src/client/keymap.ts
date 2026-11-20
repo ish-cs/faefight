@@ -8,7 +8,7 @@
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump'
-  | 'reload' | 'interact' | 'drop'
+  | 'aim' | 'reload' | 'interact' | 'drop'
   | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8' | 'slot9'
   | 'rotateLeft' | 'rotateRight' | 'freePlace'
   | 'inventory' | 'scoreboard' | 'chat' | 'camera' | 'mute' | 'quality';
@@ -24,6 +24,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'right', label: 'Move right', group: 'Movement', defaults: ['KeyD'] },
   { id: 'sprint', label: 'Sprint', group: 'Movement', defaults: ['ShiftLeft', 'ShiftRight'] },
   { id: 'jump', label: 'Jump', group: 'Movement', defaults: ['Space'] },
+  { id: 'aim', label: 'Aim down sights (hold)', group: 'Actions', defaults: ['Mouse2'] },
   { id: 'reload', label: 'Reload', group: 'Actions', defaults: ['KeyR'] },
   { id: 'interact', label: 'Interact / shop / vault', group: 'Actions', defaults: ['KeyE'] },
   { id: 'drop', label: 'Drop item (+Ctrl/Shift: stack)', group: 'Actions', defaults: ['KeyQ'] },
@@ -116,6 +117,8 @@ export function keyLabel(code: string): string {
   if (m) return m[1];
   m = /^Digit(\d)$/.exec(code);
   if (m) return m[1];
+  m = /^Mouse(\d)$/.exec(code); // mouse buttons are bound as 'Mouse<button>'
+  if (m) return m[1] === '0' ? 'LMB' : m[1] === '2' ? 'RMB' : m[1] === '1' ? 'MMB' : `Mouse ${m[1]}`;
   m = /^Numpad(\w+)$/.exec(code);
   if (m) return `Num ${m[1]}`;
   return code;

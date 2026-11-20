@@ -1,7 +1,7 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
-import { applyPlayerDamage, placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX } from './constants';
+import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
+import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, SEAL } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMap, type IslandLayout } from './map';
@@ -9,6 +9,7 @@ import { defaultPotionShops, potionShopsAt, speedMult, startDrink, tickPotions }
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics } from './physics';
 import { newMoveState, stepMove, type MoveCmd } from './movement';
+import { adsMoveCmd, adsSpeed } from './gunplay';
 import { unsupportedPieces } from './support';
 import { newPlayer } from './player';
 import { isPlaceholderBotName, nickname } from './names';
@@ -43,6 +44,7 @@ export class Match implements MatchApi {
   private tickNo = 0;
   private events: MatchEvent[] = [];
   private explosives: Explosive[] = [];
+
   private bots = new Map<number, BotBrain>();
   private rng: () => number;
   private makeBot?: MatchOptions['makeBot'];
@@ -90,6 +92,16 @@ export class Match implements MatchApi {
         physics.removePiece(id);
         this.sealDirty = true;
         this.supportDirty = true;
+      },
+      grounded: (id) => this.s.players.get(id)?.mv?.grounded ?? false,
+      onKnockback: (id, dv) => {
+        // The movement model keeps momentum (fully in the air, braking on the ground), so a blast is just a
+        // velocity change; an upward one lifts you off the ground (rocket jump).
+        const p = this.s.players.get(id);
+        if (!p) return;
+        p.vel.x += dv.x; p.vel.z += dv.z;
+        p.vel.y = Math.max(p.vel.y, 0) + dv.y;
+        if (dv.y > 0 && p.mv) { p.mv.grounded = false; p.mv.airTime = 1; }
       },
       onKill: (victim, killer) => {
         this.kills.push({ victim, killer });
@@ -250,6 +262,8 @@ export class Match implements MatchApi {
     if (validSlot(input.select)) p.selected = input.select;
     if (input.slot) this.selectWeapon(p, input.slot);
     this.syncHand(p);
+    // Sights need a gun in hand and no reload; aiming rules out sprinting (see move).
+    p.ads = input.ads && p.alive && p.equipped !== 'fists' && p.reloadUntil === 0;
 
     if (cmds) {
       for (const c of cmds) {
@@ -305,6 +319,11 @@ export class Match implements MatchApi {
     if (e !== p.equipped) {
       p.equipped = e;
       p.reloadUntil = 0;
+      p.reloadSec = 0;
+      p.reloadMag = 0;
+      p.ads = false;
+      p.burst = 0;
+      p.bloom = 0;
     }
   }
 
@@ -325,7 +344,9 @@ export class Match implements MatchApi {
 
   private move(p: PlayerState, cmd: MoveCmd) {
     const mv = (p.mv ??= newMoveState());
-    const { landingSpeed } = stepMove(p as PlayerState & { mv: typeof mv }, cmd, DT, { movePlayer: (d) => this.physics.movePlayer(p.id, d) }, speedMult(p, this.s.time));
+    // Sights up: slower, and no sprinting (the client's prediction applies the same rule: adsMoveCmd).
+    const { landingSpeed } = stepMove(p as PlayerState & { mv: typeof mv }, adsMoveCmd(p, cmd), DT, { movePlayer: (d) => this.physics.movePlayer(p.id, d) },
+      speedMult(p, this.s.time) * adsSpeed(p));
     mv.ack = cmd.seq;
     if (landingSpeed > LIFECYCLE.safeFallSpeed)
       this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time, { bypassShield: true }));
@@ -352,8 +373,15 @@ export class Match implements MatchApi {
     this.sealDirty = false;
     this.map.forEach((isl, i) => {
       const sealed = islandSealed(this.s, this.map, i);
-      if (sealed !== this.sealed[i])
-        this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i } });
+      if (sealed !== this.sealed[i]) {
+        const owner = [...this.s.players.values()].find((p) => p.island === i)?.id ?? null;
+        // Credit the seal to whoever placed the newest piece around that bunker (null in sudden death).
+        let by: number | null = null, newest = -1;
+        if (sealed && !this.s.forcedSeal)
+          for (const pc of this.s.pieces.values())
+            if (pc.id > newest && dist2D(pc.pos, isl.bunker.center) <= SEAL.half) { newest = pc.id; by = pc.owner; }
+        this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i, owner, by } });
+      }
       this.sealed[i] = sealed;
     });
   }
@@ -415,6 +443,7 @@ export class Match implements MatchApi {
       players: [...this.s.players.values()],
       pieces: [...this.s.pieces.values()],
       loot: [...this.s.loot.values()],
+      projectiles: projectiles(this.explosives),
       generators: this.s.generators,
       genLevels: this.s.genLevels,
       sealed: this.sealed,

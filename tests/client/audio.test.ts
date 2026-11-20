@@ -14,14 +14,14 @@ function player(id: number, pos: Vec3, extra: Partial<PlayerState> = {}): Player
   return {
     id, name: `p${id}`, isBot: id !== ME, island: id - 1, pos, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, hp: 100, shield: 0,
     alive: true, eliminated: false, kills: 0, deaths: 0, respawnAt: null, breakoutUntil: null, invulnUntil: 0, lastDamagedAt: 0,
-    inv: { ...emptyInventory(), cash: 50 }, vault: emptyInventory(), locked: [], hotbar: Array(9).fill(null), selected: 0, equipped: 'fists', healAt: null, drinking: null, healLeft: 0, speedUntil: 0, reloadUntil: 0, nextFireAt: 0, busyUntil: 0,
+    inv: { ...emptyInventory(), cash: 50 }, vault: emptyInventory(), locked: [], hotbar: Array(9).fill(null), selected: 0, equipped: 'fists', healAt: null, drinking: null, healLeft: 0, speedUntil: 0, reloadUntil: 0, reloadSec: 0, reloadMag: 0, nextFireAt: 0, busyUntil: 0, ads: false, bloom: 0, lastShotAt: -1e9, burst: 0,
     ...extra,
   };
 }
 
 function snap(time: number, players: PlayerState[], events: [MatchEventType, Record<string, unknown>][] = [], extra: Partial<Snapshot> = {}): Snapshot {
   return {
-    time, tick: Math.round(time * 30), players, pieces: [], loot: [], generators: [], genLevels: [1, 1], sealed: [false, false], waterY: 0,
+    time, tick: Math.round(time * 30), players, pieces: [], loot: [], projectiles: [], generators: [], genLevels: [1, 1], sealed: [false, false], waterY: 0,
     suddenDeath: false, winner: null, potionShops: [], events: events.map(([type, data]): MatchEvent => ({ t: time, type, data })), ...extra,
   };
 }
@@ -162,11 +162,11 @@ describe('SoundDirector: events → cues', () => {
     expect(sounds(d.update(snap(2, ps, [['kill', { victim: ME, killer: BOT, inWater: true }]])))).toEqual(['death', 'splash']);
   });
 
-  it('alarm only for YOUR island sealing; stingers for win/lose/draw/eliminated; horn; escape', () => {
+  it('every seal booms for everyone, alarm only for YOUR island; stingers for win/lose/draw/eliminated; horn; escape', () => {
     const d = director();
     const ps = [player(ME, at(0)), player(BOT, at(5))];
-    expect(sounds(d.update(snap(1, ps, [['sealed', { island: 1 }]])))).toEqual([]);
-    expect(sounds(d.update(snap(1.1, ps, [['sealed', { island: 0 }]])))).toEqual(['alarm']);
+    expect(sounds(d.update(snap(1, ps, [['sealed', { island: 1 }]])))).toEqual(['explosion:charge']);
+    expect(sounds(d.update(snap(1.1, ps, [['sealed', { island: 0 }]])))).toEqual(['explosion:charge', 'alarm']);
     expect(sounds(d.update(snap(1.2, ps, [['eliminated', { player: ME }], ['eliminated', { player: BOT }]])))).toEqual(['eliminated']);
     expect(sounds(d.update(snap(1.3, ps, [['win', { winner: ME }]])))).toEqual(['win']);
     expect(sounds(d.update(snap(1.4, ps, [['win', { winner: BOT }]])))).toEqual(['lose']);

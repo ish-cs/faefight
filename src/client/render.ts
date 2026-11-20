@@ -4,6 +4,7 @@ import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout } from '../sim/map';
 import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
 import { CharacterSystem, type Motion } from './characters/avatar';
+import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
 import { PotionSellers } from './world/potionSeller';
@@ -48,7 +49,6 @@ export class Renderer {
   private ghost: THREE.Mesh | null = null;
   private ghostKind: PieceKind | null = null;
   private ghostMat = new THREE.MeshBasicNodeMaterial({ color: 0x3ddc84, transparent: true, opacity: 0.6, depthWrite: false });
-  private tracerGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
   private lootGeo = new THREE.SphereGeometry(0.28, 16, 10).scale(1, 0.8, 1);
   private lootMat = new THREE.MeshStandardNodeMaterial({ color: 0x8b5a2b, roughness: 0.9 });
@@ -58,6 +58,12 @@ export class Renderer {
   private pipOn = new THREE.MeshBasicNodeMaterial({ color: boosted(0xffd23d) });
   private pipOff = new THREE.MeshBasicNodeMaterial({ color: 0x4a525c });
 
+  /** Tracers, muzzle light/smoke, shell casings, hit sparks, projectiles, explosion flashes. */
+  gunFx!: GunFx;
+  private snapArrived = performance.now();
+  /** First-person gun points for the local player (set by main); others use their avatar's gun. */
+  localGunPoint: ((which: 'muzzle' | 'eject', out: THREE.Vector3) => THREE.Vector3 | null) | null = null;
+
   private constructor(canvas: HTMLCanvasElement) {
     this.gpu = new THREE.WebGPURenderer({ canvas, antialias: true });
   }
@@ -66,6 +72,9 @@ export class Renderer {
     const r = new Renderer(canvas);
     await r.gpu.init();
     r.world = new World(r.gpu, r.scene, r.camera, r.collidables); // tone mapping, pixel ratio, shadows, sky
+    r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
+      (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
+    r.scene.add(r.gunFx.root);
     r.resize();
     return r;
   }
@@ -86,6 +95,7 @@ export class Renderer {
     this.map = map;
     this.humanId = humanId;
     this.world.setMap(map, ISLAND_COLORS);
+    this.gunFx.warmUp([this.boomMat]);
     for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);
     const h = PROP_HALF.generator;
     this.genPips = map.map((isl) => {
@@ -133,6 +143,8 @@ export class Renderer {
     this.waterY = snap.waterY;
     this.world.syncPieces(snap.pieces);
     this.syncLoot(snap);
+    this.gunFx.syncProjectiles(snap.projectiles ?? []);
+    this.snapArrived = performance.now();
     this.genPips.forEach((pips, island) => {
       const level = snap.genLevels?.[island] ?? 1;
       pips.forEach((m, i) => { m.material = i < level ? this.pipOn : this.pipOff; });
@@ -144,34 +156,20 @@ export class Renderer {
 
   private onEvent(e: MatchEvent) {
     if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
-    if (e.type === 'shot') {
-      const from = e.data.from as Vec3 | undefined, to = e.data.to as Vec3 | undefined;
-      if (from && to) this.addTracer(from, to, e.data.by === this.humanId);
-    } else if (e.type === 'pieceHit' || e.type === 'destroyed') {
+    if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
+    if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
-      if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : 4);
+      if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : e.data.kind === 'rocket' ? 3.6 : 4);
     }
   }
 
-  private addTracer(from: Vec3, to: Vec3, mine: boolean) {
-    const mat = new THREE.MeshBasicNodeMaterial({ color: boosted(mine ? 0xfff2a8 : 0xffb070), transparent: true, opacity: 0.9, depthWrite: false });
-    const m = new THREE.Mesh(this.tracerGeo, mat);
-    const a = new THREE.Vector3(from.x, from.y, from.z), b = new THREE.Vector3(to.x, to.y, to.z);
-    // Start the visible tracer ahead of the eye (outside the shooter's own head) so it reads as leaving the gun.
-    const total = a.distanceTo(b);
-    const skip = Math.min(0.8, total * 0.5);
-    a.lerp(b, skip / total || 0);
-    m.position.copy(a);
-    m.lookAt(b);
-    m.scale.set(0.04, 0.04, Math.max(0.01, total - skip));
-    this.scene.add(m);
-    this.fx.push({ mesh: m, mat, born: performance.now(), life: 140 });
-  }
+  /** Template for explosion fireballs (each boom clones it: same shader, its own opacity). */
+  private boomMat = new THREE.MeshBasicNodeMaterial({ color: boosted(0xffa040), transparent: true, opacity: 0.85, depthWrite: false });
 
   private addBoom(pos: Vec3, radius: number) {
-    const mat = new THREE.MeshBasicNodeMaterial({ color: boosted(0xffa040), transparent: true, opacity: 0.85, depthWrite: false });
+    const mat = this.boomMat.clone();
     const m = new THREE.Mesh(this.boomGeo, mat);
     m.position.set(pos.x, pos.y, pos.z);
     m.scale.setScalar(0.2);
@@ -267,6 +265,7 @@ export class Renderer {
       if (f.grow) f.mesh.scale.setScalar(0.2 + (f.grow - 0.2) * Math.sqrt(k));
     }
 
+    this.gunFx.update((now - this.snapArrived) / 1000);
     let nf = 0;
     if (snap) for (const p of snap.players) {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
