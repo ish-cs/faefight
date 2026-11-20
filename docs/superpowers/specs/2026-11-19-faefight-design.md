@@ -107,7 +107,7 @@ Run inside the host sim using the same inputs a player sends (no cheating on vis
 - **Hardware target:** players use **MacBooks** (Apple Silicon). Support Chrome and Safari. Target 60 fps at 1080p-ish on a base M1 MacBook Air; quality presets (low/high) so post effects can be turned down.
 
 ### 8.7 Controls
-WASD move, mouse/trackpad aim (adjustable sensitivity, pointer lock), click shoot, right-click aim, R reload, E interact (NPC shop), B build mode (scroll/Q-E rotate, Alt free-place), Space jump, Shift sprint, Enter chat, V camera toggle (stage 4).
+WASD move, mouse/trackpad aim (adjustable sensitivity, pointer lock), click shoot, right-click aim, R reload, E interact (NPC shop), Minecraft-style 9-slot hotbar (1–9/wheel select; holding a piece = build mode, Z/X rotate, Alt free-place; Q drop one, Ctrl/Shift+Q drop stack; Tab releases the mouse to drag slots), Space jump, Shift sprint, Enter chat, V camera toggle (stage 4).
 
 ## 9. Stages (each one playable)
 
