@@ -1,5 +1,7 @@
 import * as THREE from 'three/webgpu';
-import { cameraPosition, color, dot, exp, float, fog, luminance, max, mix, normalize, positionView, positionWorld, pow, uniform, vec3, vec4 } from 'three/tsl';
+import { cameraPosition, color, cos, dot, exp, float, fog, luminance, max, min, mix, normalize, positionView, positionWorld, pow, sin, smoothstep, step, uniform, vec3, vec4 } from 'three/tsl';
+import { MAP } from '../../sim/constants';
+import type { IslandLayout } from '../../sim/map';
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { buildPipeline, grade, type PostOptions } from './post';
@@ -31,7 +33,7 @@ type Preset = {
 const PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, cascades: 2, shadowMap: 1024, shadowFar: 110, post: { samples: 4, bloom: false, ao: false } },
   high: { pixelRatio: 1.5, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 } } },
-  ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.75, samples: 16 } } },
+  ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 } } },
 };
 
 const SKY = { turbidity: 3, rayleigh: 1.5, mieCoefficient: 0.002, mieDirectionalG: 0.9 };
@@ -76,6 +78,9 @@ export class SkyLighting {
   /** main sky dome brightness / saturation (the env map uses its own hazier copy) */
   readonly skyGain = uniform(0.7);
   readonly skySaturation = uniform(1.12);
+  /** bunker interiors (x, groundY, z, yaw) — up to 8; parked far away until setMap */
+  private interiors = Array.from({ length: 8 }, () => uniform(new THREE.Vector4(1e6, 0, 1e6, 0)));
+  private interiorAO = this.buildInteriorAO();
   quality: Quality;
   private pipeline: THREE.RenderPipeline | null = null;
   private csm: CSMShadowNode | null = null;
@@ -145,6 +150,29 @@ export class SkyLighting {
     }
   }
 
+  /**
+   * Ambient occlusion for the roofed bunkers: the environment map has no idea a point is under a concrete slab, so
+   * without this the interior glows with full sky light. Fades in across the wall thickness to 30 % ambient.
+   */
+  private buildInteriorAO(): THREE.Node<'float'> {
+    const half = MAP.bunker.interior / 2, roof = MAP.bunker.height + 0.05;
+    let inside: THREE.Node<'float'> = float(0);
+    for (const u of this.interiors) {
+      const d = positionWorld.sub(u.xyz);
+      const c = cos(u.w), s = sin(u.w);
+      const lx = d.x.mul(c).sub(d.z.mul(s)).abs(), lz = d.x.mul(s).add(d.z.mul(c)).abs();
+      const edge = min(float(half).sub(lx), float(half).sub(lz));
+      const k = smoothstep(-0.2, 0.35, edge).mul(step(d.y, roof)).mul(step(-0.5, d.y));
+      inside = max(inside, k);
+    }
+    return mix(float(1), float(0.3), inside);
+  }
+
+  setInteriors(map: IslandLayout[]) {
+    if (map.length > this.interiors.length) console.warn(`[world/sky] ${map.length} bunkers, interior AO covers only ${this.interiors.length}`);
+    map.slice(0, this.interiors.length).forEach((isl, i) => this.interiors[i].value.set(isl.bunker.center.x, isl.groundY, isl.bunker.center.z, isl.bunker.facingYaw));
+  }
+
   setQuality(q: Quality) {
     if (q === this.quality) return;
     this.quality = q;
@@ -182,7 +210,7 @@ export class SkyLighting {
     }
 
     this.pipeline?.dispose();
-    this.pipeline = buildPipeline(this.gpu, this.scene, this.camera, p.post);
+    this.pipeline = buildPipeline(this.gpu, this.scene, this.camera, p.post, this.interiorAO);
   }
 
   /** Draw the frame (cascades follow the camera on their own). */

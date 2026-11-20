@@ -37,6 +37,7 @@ export class World {
     this.collidables.push(...collidables);
     this.water = buildWater(map);
     this.scene.add(this.water);
+    this.sky.setInteriors(map);
     console.info(`[world] built ${map.length} islands in ${Math.round(performance.now() - t0)} ms`);
   }
 

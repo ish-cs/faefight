@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  dot, emissive, float, luminance, mix, mrt, normalView, output, pass, renderOutput, screenUV, smoothstep, uniform, vec3, vec4,
+  builtinAOContext, dot, emissive, float, luminance, mix, mrt, normalView, output, pass, renderOutput, screenUV, smoothstep, uniform, vec3, vec4,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
@@ -26,11 +26,15 @@ export const grade = {
  * frame for ~600 draws, so normals come out of the main pass as an extra MRT target instead.)
  *   lit scene (MSAA; MRT output/emissive/normal) → [GTAO] → [bloom of emissive] → ACES → grade.
  */
-export function buildPipeline(gpu: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera, o: PostOptions): THREE.RenderPipeline {
+export function buildPipeline(
+  gpu: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera, o: PostOptions, ambientOcclusion?: THREE.Node<'float'>,
+): THREE.RenderPipeline {
   const pipe = new THREE.RenderPipeline(gpu);
   pipe.outputColorTransform = false; // tone map + sRGB ourselves so the grade runs in display space
 
   const scenePass = pass(scene, camera, { samples: o.samples });
+  // analytic ambient-only occlusion (bunker interiors), every preset: sky light must not flood enclosed rooms
+  if (ambientOcclusion) scenePass.contextNode = builtinAOContext(ambientOcclusion);
   const targets: Record<string, THREE.Node> = { output };
   if (o.bloom) targets.emissive = emissive;
   if (o.ao) targets.normal = normalView;
