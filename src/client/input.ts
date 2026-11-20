@@ -1,5 +1,5 @@
 import { BUILD } from '../sim/constants';
-import { HOTBAR_SIZE, isPieceItem } from '../sim/hotbar';
+import { HOTBAR_SIZE, isPieceItem, isPotionItem } from '../sim/hotbar';
 import type { HotbarItem, PieceKind, PlayerInput } from '../sim/types';
 
 export const PIECE_ORDER: PieceKind[] = ['sandbags', 'wood', 'metal', 'steel', 'scaffold', 'ramp', 'container'];
@@ -132,6 +132,7 @@ export class InputController {
     if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
     if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }
     if (this.held === 'medkit') { this.oneShot.useMedkit = true; return; }
+    if (isPotionItem(this.held)) { this.oneShot.drink = true; return; }
     this.fireHeld = true;
     this.oneShot.fire = true; // a click shorter than a frame still fires once
   }
@@ -181,7 +182,7 @@ export class InputController {
       sprint: on('ShiftLeft') === 1 || on('ShiftRight') === 1,
       fire: this.enabled && this.fireHeld && !this.buildMode,
       reload: false, interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
-      select: this.selected, drop: null, moveSlot: null, useMedkit: false,
+      select: this.selected, drop: null, moveSlot: null, useMedkit: false, drink: false,
       ...this.oneShot,
     };
     this.oneShot = {};

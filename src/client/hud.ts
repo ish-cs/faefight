@@ -1,6 +1,6 @@
-import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, LIFECYCLE, MEDKIT, PIECES, WEAPONS } from '../sim/constants';
+import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, WEAPONS } from '../sim/constants';
 import type { IslandLayout } from '../sim/map';
-import { HOTBAR_SIZE, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem } from '../sim/hotbar';
+import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem, isPotionItem } from '../sim/hotbar';
 import type { HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
 import { dist2D } from '../sim/vec';
 import { PIECE_ORDER } from './input';
@@ -13,6 +13,7 @@ const LABEL: Record<string, string> = {
   fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
   ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit',
+  shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
 };
 
 function priceOf(item: ShopItem): number {
@@ -21,6 +22,7 @@ function priceOf(item: ShopItem): number {
   if (item === 'ammo') return AMMO_BOX.price;
   if (item === 'grenade') return GRENADE.price;
   if (item === 'medkit') return MEDKIT.price;
+  if (isPotionItem(item)) return POTIONS[item].price;
   return CHARGE.price;
 }
 
@@ -44,6 +46,7 @@ const SHORT: Record<HotbarItem, string> = {
   pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
   grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit',
+  shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed',
 };
 
 export type HudContext = {
@@ -75,6 +78,14 @@ export class Hud {
   private hp = el('div', 'hp');
   private hpFill = el('div', 'hp-fill');
   private hpText = el('div', 'hp-text');
+  private shield = el('div', 'shield');
+  private shieldFill = el('div', 'shield-fill');
+  private shieldText = el('div', 'shield-text');
+  private lastShield = 0;
+  private buffs = el('div', 'buffs');
+  private speedBuff = el('div', 'buff speed');
+  private drinkBox = el('div', 'heal drink');
+  private drinkFill = el('div', 'heal-fill');
   private cash = el('div', 'cash');
   private gen = el('div', 'gen');
   private prompt = el('div', 'prompt');
@@ -96,15 +107,21 @@ export class Hud {
   private endScreen = el('div', 'end-screen');
   private fps = el('div', 'fps');
   private panel = el('div', 'panel');
-  private panelKind: 'shop' | 'vault' | null = null;
+  private panelKind: 'shop' | 'potions' | 'vault' | null = null;
   private vaultCash!: HTMLInputElement;
 
   constructor(parent: HTMLElement, private act: HudActions) {
     this.hp.append(this.hpFill, this.hpText);
     const tl = el('div', 'tl');
     tl.append(this.cash, this.gen);
+    this.shield.append(this.shieldFill, el('div', 'shield-segs'), this.shieldText);
+    this.shield.dataset.testid = 'shield';
+    this.speedBuff.innerHTML = ICONS.speedPotion;
+    this.speedBuff.append(el('span', 'buff-time'));
+    this.speedBuff.dataset.testid = 'speed-buff';
+    this.buffs.append(this.speedBuff);
     const bl = el('div', 'bl');
-    bl.append(this.hp);
+    bl.append(this.buffs, this.shield, this.hp);
     const br = el('div', 'br');
     br.append(this.weapon, this.extras);
     const tc = el('div', 'tc');
@@ -115,9 +132,12 @@ export class Hud {
     this.heal.dataset.testid = 'healing';
     this.heal.append(el('div', 'heal-label', 'Healing…'), el('div', 'heal-bar'));
     (this.heal.lastChild as HTMLElement).append(this.healFill);
+    this.drinkBox.dataset.testid = 'drinking';
+    this.drinkBox.append(el('div', 'heal-label', 'Drinking…'), el('div', 'heal-bar'));
+    (this.drinkBox.lastChild as HTMLElement).append(this.drinkFill);
     this.panel.dataset.testid = 'panel';
     this.buildHotbar();
-    this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.prompt, this.killfeed, this.crosshair, this.center,
+    this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.crosshair, this.center,
       this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
     parent.append(this.root);
   }
@@ -204,6 +224,19 @@ export class Hud {
     });
   }
 
+  /** Blue shield bar over the health bar (4 × 25 segments), plus the speed-buff timer. */
+  private updateShield(me: PlayerState, snap: Snapshot) {
+    const sh = Math.max(0, Math.min(SHIELD_MAX, me.shield ?? 0));
+    this.shieldFill.style.width = `${(100 * sh) / SHIELD_MAX}%`;
+    setText(this.shieldText, sh > 0 ? `${Math.ceil(sh)}` : '');
+    this.shield.classList.toggle('empty', sh <= 0);
+    if (this.lastShield > 0 && sh <= 0 && me.alive) this.flash(this.shield, 'broke');
+    this.lastShield = sh;
+    const speedLeft = me.alive ? (me.speedUntil ?? 0) - snap.time : 0;
+    this.speedBuff.style.display = speedLeft > 0 ? '' : 'none';
+    if (speedLeft > 0) setText(this.speedBuff.querySelector('.buff-time') as HTMLElement, `${Math.ceil(speedLeft)}s`);
+  }
+
   setFps(n: number) {
     setText(this.fps, `${Math.round(n)} fps`);
   }
@@ -213,13 +246,14 @@ export class Hud {
   }
 
   /** Prompt/near-station state is computed here from the snapshot so main stays thin. */
-  nearStation(): 'shop' | 'vault' | 'generator' | null {
+  nearStation(): 'shop' | 'potions' | 'vault' | 'generator' | null {
     const me = this.me;
     if (!me || !me.alive) return null;
     const own = this.map[me.island];
     const r = ECONOMY.interactRadius;
     if (this.map.some((m) => dist2D(m.shop, me.pos) <= r)) return 'shop'; // any island's shop NPC
     if (own && dist2D(own.vault, me.pos) <= r) return 'vault';
+    if (this.snap?.potionShops?.some((sh) => dist2D(sh.pos, me.pos) <= r && Math.abs(sh.pos.y - me.pos.y) < 2)) return 'potions';
     if (this.map.some((m) => dist2D(m.generator, me.pos) <= r)) return 'generator';
     return null;
   }
@@ -234,6 +268,7 @@ export class Hud {
     this.hpFill.style.width = `${Math.max(0, me.hp)}%`;
     this.hpFill.classList.toggle('low', me.hp <= 30);
     setText(this.hpText, `${Math.ceil(me.hp)}`);
+    this.updateShield(me, snap);
     setText(this.cash, `$${inv.cash}`);
 
     // Generator stored: shown for whichever generator you're near (yours, or theirs to steal).
@@ -245,7 +280,7 @@ export class Hud {
 
     const station = this.nearStation();
     const promptText = isPieceItem(me.hotbar[ctx.selected]) ? '' :
-      station === 'shop' ? 'E  Shop' : station === 'vault' ? 'E  Vault' :
+      station === 'shop' ? 'E  Shop' : station === 'potions' ? 'E  Potion seller' : station === 'vault' ? 'E  Vault' :
       station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` : '';
     setText(this.prompt, promptText);
     this.prompt.style.display = promptText && !this.panelKind ? '' : 'none';
@@ -265,6 +300,12 @@ export class Hud {
     const healing = me.alive && me.healAt != null;
     this.heal.style.display = healing ? '' : 'none';
     if (healing) this.healFill.style.width = `${Math.round(100 * Math.min(1, Math.max(0, 1 - (me.healAt! - snap.time) / MEDKIT.useSec)))}%`;
+    const drink = me.alive ? me.drinking : null;
+    this.drinkBox.style.display = drink ? '' : 'none';
+    if (drink) {
+      this.drinkBox.dataset.kind = drink.kind;
+      this.drinkFill.style.width = `${Math.round(100 * Math.min(1, Math.max(0, 1 - (drink.doneAt - snap.time) / POTIONS[drink.kind].useSec)))}%`;
+    }
     this.crosshair.classList.toggle('build', !!buildKind);
 
     const left = LIFECYCLE.suddenDeathAt - snap.time;
@@ -318,7 +359,7 @@ export class Hud {
       }
     }
 
-    if (this.panelKind === 'shop') this.renderShop();
+    if (this.panelKind === 'shop' || this.panelKind === 'potions') this.renderShop();
     else if (this.panelKind === 'vault') this.refreshVault();
     this.tickFeed();
   }
@@ -380,10 +421,11 @@ export class Hud {
 
   // ---- panels ---------------------------------------------------------------------------------
 
-  openShop() {
-    this.panelKind = 'shop';
+  /** The home shop, or a potion seller's counter (`potions`). */
+  openShop(kind: 'shop' | 'potions' = 'shop') {
+    this.panelKind = kind;
     this.panel.className = 'panel open';
-    this.panel.dataset.kind = 'shop';
+    this.panel.dataset.kind = kind;
     this.renderShop(true);
   }
 
@@ -434,10 +476,14 @@ export class Hud {
         }
         grid.append(el('div', 'shop-section', title), row);
       };
-      section('Weapons', [...GUNS, 'ammo']);
-      section('Building', PIECE_ORDER);
-      section('Gear', ['grenade', 'charge', 'medkit']);
-      this.panel.replaceChildren(this.header('Shop'), el('div', 'panel-cash'), grid);
+      if (this.panelKind === 'potions') {
+        section('Potions', [...POTION_KINDS]);
+      } else {
+        section('Weapons', [...GUNS, 'ammo']);
+        section('Building', PIECE_ORDER);
+        section('Gear', ['grenade', 'charge', 'medkit']);
+      }
+      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid);
       // Focus the panel (not a card, so no tooltip pops up): Tab or an arrow key then walks the cards.
       this.panel.tabIndex = -1;
       this.panel.onkeydown = (e) => this.shopArrows(e);
@@ -537,6 +583,7 @@ export class Hud {
       if (inv.grenades) row(`Grenades ×${inv.grenades}`, { grenades: inv.grenades });
       if (inv.charges) row(`Charges ×${inv.charges}`, { charges: inv.charges });
       if (inv.medkits) row(`Medkits ×${inv.medkits}`, { medkits: inv.medkits });
+      for (const [k, n] of Object.entries(inv.potions ?? {})) if (n) row(`${LABEL[k]} ×${n}`, { potions: { [k]: n } });
       if (rows.length === 1) rows.push(el('div', 'vault-empty', 'No gear'));
       node.replaceChildren(...rows);
     };

@@ -1,3 +1,4 @@
+import { speedMult } from '../sim/potions';
 import { DT } from '../sim/constants';
 import type { IslandLayout } from '../sim/map';
 import { newMoveState, stepMove, type MoveCmd, type MoveState, type Mover } from '../sim/movement';
@@ -22,6 +23,8 @@ const cloneMover = (m: Mover): Mover => ({ pos: { ...m.pos }, vel: { ...m.vel },
  */
 export class Predictor {
   private state: Mover | null = null;
+  /** Speed-potion multiplier from the last snapshot, so prediction matches the sim while boosted. */
+  private speedMult = 1;
   private history: MoveCmd[] = [];
   private offset = { x: 0, y: 0, z: 0 };
   private pieceIds = new Set<number>();
@@ -48,6 +51,7 @@ export class Predictor {
   onSnapshot(snap: Snapshot) {
     this.syncWorld(snap);
     const me = snap.players.find((p) => p.id === this.humanId);
+    if (me) this.speedMult = speedMult(me, snap.time);
     if (me) this.reconcile(me);
   }
 
@@ -68,7 +72,7 @@ export class Predictor {
     this.offset.x *= k; this.offset.y *= k; this.offset.z *= k;
     const m = cloneMover(this.state);
     const f = Math.min(1, Math.max(0, frac));
-    if (f > 1e-4) stepMove(m, live, f * DT, { movePlayer: (d) => this.physics.peekMovePlayer(this.humanId, d) });
+    if (f > 1e-4) stepMove(m, live, f * DT, { movePlayer: (d) => this.physics.peekMovePlayer(this.humanId, d) }, this.speedMult);
     out.pos.x = m.pos.x + this.offset.x;
     out.pos.y = m.pos.y + this.offset.y;
     out.pos.z = m.pos.z + this.offset.z;
@@ -77,7 +81,7 @@ export class Predictor {
   }
 
   private apply(m: Mover, cmd: MoveCmd, dt: number) {
-    stepMove(m, cmd, dt, { movePlayer: (d) => this.physics.movePlayer(this.humanId, d) });
+    stepMove(m, cmd, dt, { movePlayer: (d) => this.physics.movePlayer(this.humanId, d) }, this.speedMult);
   }
 
   private reconcile(me: PlayerState) {
