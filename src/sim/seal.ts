@@ -1,4 +1,4 @@
-import { PIECES, PLAYER, SEAL } from './constants';
+import { MAP, PIECES, PLAYER, SEAL } from './constants';
 import { bunkerWallBoxes, type Bunker } from './map';
 import type { PieceState, Vec3 } from './types';
 import { rotateY, v3 } from './vec';
@@ -46,10 +46,19 @@ export function isSealed(bunker: Bunker, pieces: PieceState[]): boolean {
       for (const f of blockers) if (inside(f, x, z)) { blocked[i * n + j] = 1; break; }
     }
 
+  // Seed from every free cell inside the bunker so a piece covering the spawn point itself
+  // doesn't count as a seal (the respawning player is pushed into a free spot).
   const seen = new Uint8Array(n * n);
-  const start = Math.floor(n / 2);
-  const queue = [start * n + start];
-  seen[queue[0]] = 1;
+  const queue: number[] = [];
+  const seedR = MAP.bunker.interior / 2 - PLAYER.radius;
+  for (let i = 0; i < n; i++)
+    for (let j = 0; j < n; j++) {
+      const k = i * n + j;
+      const l = rotateY(v3(cx(i) - bunker.center.x, 0, cz(j) - bunker.center.z), -bunker.facingYaw);
+      if (blocked[k] || Math.abs(l.x) > seedR || Math.abs(l.z) > seedR) continue;
+      seen[k] = 1;
+      queue.push(k);
+    }
   while (queue.length) {
     const k = queue.pop()!;
     const i = Math.floor(k / n), j = k % n;

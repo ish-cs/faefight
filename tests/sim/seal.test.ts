@@ -48,3 +48,11 @@ describe('isSealed', () => {
     expect(isSealed(bunker(), [plug(0, 'ramp'), plug(1, 'scaffold'), plug(2, 'steel')])).toBe(false);
   });
 });
+
+describe('isSealed (spawn covered)', () => {
+  test('a wall dropped on the spawn point does not seal open doorways', () => {
+    const b = bunker();
+    const wall: PieceState = { id: 999, kind: 'wood', owner: 1, pos: v3(b.center.x, b.center.y, b.center.z), rotY: b.facingYaw, hp: 250 };
+    expect(isSealed(b, [wall])).toBe(false);
+  });
+});

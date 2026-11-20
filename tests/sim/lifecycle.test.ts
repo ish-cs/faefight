@@ -158,3 +158,18 @@ describe('lifecycle', () => {
     expect(s.winner).toBe(-1);
   });
 });
+
+describe('respawn spot', () => {
+  test('respawns beside a wall dropped on the spawn point, not inside it', async () => {
+    const { s, physics, b, run } = await setup();
+    const sp = map[1].spawn;
+    const wall: PieceState = { id: s.nextId++, kind: 'wood', owner: 1, pos: v3(sp.x, sp.y, sp.z), rotY: map[1].bunker.facingYaw, hp: 250 };
+    s.pieces.set(wall.id, wall);
+    physics.addPiece(wall);
+    killPlayer(s, physics, 2, 0, false);
+    run(0, 3.2);
+    expect(b.alive).toBe(true);
+    const hits = physics.overlapsBox(v3(b.pos.x, b.pos.y + 0.9, b.pos.z), v3(0.3, 0.85, 0.3), 0).filter((h) => h.type === 'piece');
+    expect(hits).toEqual([]);
+  });
+});

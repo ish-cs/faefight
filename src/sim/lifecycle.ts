@@ -3,8 +3,8 @@ import { emptyInventory, mergeInventory } from './economy';
 import type { IslandLayout } from './map';
 import type { Physics } from './physics';
 import { isSealed } from './seal';
-import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState } from './types';
-import { clone, dist, v3 } from './vec';
+import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState, Vec3 } from './types';
+import { clone, dist, rotateY, v3 } from './vec';
 
 export type MatchStateCore = {
   time: number;
@@ -67,6 +67,26 @@ export function islandSealed(s: MatchStateCore, map: IslandLayout[], island: num
   return s.forcedSeal || isSealed(map[island].bunker, [...s.pieces.values()]);
 }
 
+/** The spawn point, or the nearest free spot inside the bunker if a piece sits on it. */
+export function freeSpawnSpot(physics: Physics, isl: IslandLayout): Vec3 {
+  const half = v3(PLAYER.radius + 0.01, PLAYER.height / 2 - 0.05, PLAYER.radius + 0.01);
+  const free = (p: Vec3) =>
+    physics.overlapsBox(v3(p.x, p.y + PLAYER.height / 2 + 0.05, p.z), half, 0).every((h) => h.type === 'player');
+  const lim = MAP.bunker.interior / 2 - PLAYER.radius - 0.05;
+  const spots: Vec3[] = [];
+  for (let x = -lim; x <= lim + 1e-6; x += 0.35)
+    for (let z = -lim; z <= lim + 1e-6; z += 0.35) spots.push(v3(x, 0, z));
+  spots.sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z));
+  const sp = isl.spawn;
+  if (free(sp)) return sp;
+  for (const o of spots) {
+    const r = rotateY(o, isl.bunker.facingYaw);
+    const p = v3(sp.x + r.x, sp.y, sp.z + r.z);
+    if (free(p)) return p;
+  }
+  return sp;
+}
+
 export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLayout[], now: number, dt: number): MatchEvent[] {
   const out: MatchEvent[] = [];
 
@@ -98,7 +118,7 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
       out.push(ev(now, 'eliminated', { player: p.id }));
       continue;
     }
-    const spawn = map[p.island].spawn;
+    const spawn = freeSpawnSpot(physics, map[p.island]);
     p.pos = clone(spawn);
     p.hp = PLAYER.hp;
     p.alive = true;
