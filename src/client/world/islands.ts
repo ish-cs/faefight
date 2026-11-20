@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { float, positionWorld, texture, uv, vec3 } from 'three/tsl';
-import { bunkerWallBoxes, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
+import { bunkerSlitBoxes, bunkerWallBoxes, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
 import { buildCenter } from './center';
 import { boxUV, mat, StaticBatch } from './geo';
@@ -119,6 +119,22 @@ export function buildIslands(def: MapDef, teamColors: number[]): IslandsOut {
     for (const bx of bunkerWallBoxes(b)) {
       const m = mat(bx.center.x, bx.center.y, bx.center.z, 0, bx.rotY, 0);
       solid.add(M.concrete, boxUV(bx.half.x * 2, bx.half.y * 2, bx.half.z * 2, 3), m, 0xd8d2c4);
+    }
+    // firing slits: dark steel reveal liners + a thin protruding frame on both faces (decor only, opening untouched)
+    for (const sl of bunkerSlitBoxes(b)) {
+      const thinX = sl.half.x < sl.half.z; // wall thickness axis in the box frame
+      const w = (thinX ? sl.half.z : sl.half.x) * 2, h = sl.half.y * 2, t = (thinX ? sl.half.x : sl.half.z) * 2;
+      // slit frame: X = along the slit, Z = through the wall
+      const S = mat(sl.center.x, sl.center.y, sl.center.z, 0, sl.rotY + (thinX ? Math.PI / 2 : 0), 0);
+      const add = (geo: THREE.BufferGeometry, x: number, y: number, z: number) => dress.add(M.steel, geo, S.clone().multiply(mat(x, y, z)), 0x4a5056, false);
+      for (const sy of [-1, 1]) add(new THREE.BoxGeometry(w, 0.004, t), 0, sy * (h / 2 + 0.002), 0); // sill + head liners
+      for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.004, h, t), sx * (w / 2 + 0.002), 0, 0); // jamb liners
+      const f = 0.05, lip = 0.025;
+      for (const sz of [-1, 1]) {
+        const z = sz * (t / 2 + lip / 2);
+        for (const sy of [-1, 1]) add(new THREE.BoxGeometry(w + 2 * f, f, lip), 0, sy * (h / 2 + f / 2), z);
+        for (const sx of [-1, 1]) add(new THREE.BoxGeometry(f, h, lip), sx * (w / 2 + f / 2), 0, z);
+      }
     }
     const BL = new THREE.Matrix4().compose(new THREE.Vector3(b.center.x, groundY, b.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
     dress.add(M.concrete, boxUV(9, 0.04, 9, 3), BL.clone().multiply(mat(0, 0.02, 0)), 0xe6e0d2, false);
