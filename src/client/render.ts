@@ -223,6 +223,8 @@ export class Renderer {
     out.pitch = s.pitch;
     return out;
   }
+  /** scratch feet positions handed to the world each frame (grass bending) */
+  private feet = Array.from({ length: 8 }, () => new THREE.Vector3());
   private sampleTmp = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 };
 
   /** Display-rate feet position for a player. */
@@ -309,7 +311,12 @@ export class Renderer {
     }
 
     this.gunFx.update((now - this.snapArrived) / 1000);
-    this.world.render(this.waterY, this.camera.position); // tide, shadow focus, post chain, draw
+    let nf = 0;
+    if (snap) for (const p of snap.players) {
+      if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
+      if (this.playerPos(p.id, this.feet[nf])) nf++;
+    }
+    this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
   }
 
   info() {

@@ -6,7 +6,7 @@ import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
-import { buildPipeline, grade, type PostOptions } from './post';
+import { buildPipeline, grade, type PostOptions, sunScreen } from './post';
 
 export type Quality = 'low' | 'high' | 'ultra';
 const QUALITIES: Quality[] = ['low', 'high', 'ultra'];
@@ -30,8 +30,8 @@ type Preset = {
 };
 const PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, cascades: 2, shadowMap: 1024, shadowFar: 110, post: { samples: 4, bloom: false, ao: false } },
-  high: { pixelRatio: 1.5, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 } } },
-  ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 } } },
+  high: { pixelRatio: 1.5, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true } },
+  ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true } },
 };
 
 const SKY = { turbidity: 3, rayleigh: 1.5, mieCoefficient: 0.002, mieDirectionalG: 0.9 };
@@ -84,8 +84,9 @@ export class SkyLighting {
   private resScale = settings.get().video.resolutionScale;
   private pipeline: THREE.RenderPipeline | null = null;
   private csm: CSMShadowNode | null = null;
+  private sunTmp = new THREE.Vector3();
 
-  constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, private camera: THREE.PerspectiveCamera) {
+  constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
     gpu.toneMapping = THREE.ACESFilmicToneMapping;
     gpu.toneMappingExposure = 0.5;
@@ -226,6 +227,12 @@ export class SkyLighting {
 
   /** Draw the frame (cascades follow the camera on their own). */
   render() {
+    if (PRESETS[this.quality].post.flare) {
+      const v = this.sunTmp.copy(SUN_DIR).multiplyScalar(1000).add(this.camera.position).project(this.camera);
+      sunScreen.uv.value.set(v.x * 0.5 + 0.5, v.y * 0.5 + 0.5);
+      sunScreen.front.value = v.z < 1 ? 1 : 0;
+      sunScreen.aspect.value = this.camera.aspect;
+    }
     this.pipeline!.render();
   }
 
