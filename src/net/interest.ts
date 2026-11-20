@@ -210,6 +210,8 @@ export class InterestManager {
         out.push({ t: e.t, type: 'shot', data: { by: null, weapon: d.weapon, from: v3(r(d.from.x, g), r(d.from.y, g), r(d.from.z, g)) } });
       } else if (e.type === 'hit') {
         if (d.target === viewerId || d.by === viewerId || revealed(d.target)) out.push(e);
+      } else if (e.type === 'dry') {
+        if (revealed(d.by)) out.push(e);
       } else if (e.type === 'pieceHit' && !revealed(d.by)) {
         out.push({ ...e, data: { ...d, by: null } });
       } else {
@@ -229,7 +231,7 @@ export class InterestManager {
     return {
       ...p, pos, vel: v3(), yaw: 0, pitch: 0, hp: PLAYER.hp, equipped: 'fists', selected: 0, healAt: null,
       reloadUntil: 0, nextFireAt: 0, busyUntil: 0, invulnUntil: 0, lastDamagedAt: 0, breakoutUntil: null,
-      shield: 0, drinking: null, healLeft: 0, speedUntil: 0,
+      shield: 0, drinking: null, healLeft: 0, speedUntil: 0, reloadSec: 0, reloadMag: 0, ads: false,
     };
   }
 }

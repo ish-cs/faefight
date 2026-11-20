@@ -23,9 +23,18 @@ const tube = (r: number, z0: number, z1: number, x: number, y: number, furn = fa
   return { geo: g, furn };
 };
 
-const SPECS: Record<Exclude<WeaponKind, 'fists'>, { parts: () => Part[]; muzzle: [number, number, number] }> = {
+/**
+ * `mag`: the detachable part (magazine / rocket) as its own mesh so reloads can pull it out; built in the
+ * grip frame, then re-centred on `magAt`. `eject`: where spent cases leave the gun.
+ */
+type Spec = { parts: () => Part[]; muzzle: [number, number, number]; mag: () => Part[]; magAt: [number, number, number]; eject: [number, number, number] };
+
+const SPECS: Record<Exclude<WeaponKind, 'fists'>, Spec> = {
   pistol: {
     muzzle: [0, 0.065, -0.2],
+    eject: [0.02, 0.075, -0.05],
+    magAt: [0, -0.03, 0.006],
+    mag: () => [box(0.024, 0.11, 0.036, 0, -0.03, 0.006, -0.25), box(0.03, 0.012, 0.042, 0, -0.085, 0.02, -0.25, true)],
     parts: () => [
       box(0.032, 0.034, 0.19, 0, 0.066, -0.075), // slide
       box(0.028, 0.02, 0.15, 0, 0.042, -0.07), // frame
@@ -36,11 +45,13 @@ const SPECS: Record<Exclude<WeaponKind, 'fists'>, { parts: () => Part[]; muzzle:
   },
   smg: {
     muzzle: [0, 0.07, -0.34],
+    eject: [0.03, 0.09, -0.06],
+    magAt: [0, -0.035, -0.12],
+    mag: () => [box(0.03, 0.17, 0.042, 0, -0.035, -0.12, 0.12)],
     parts: () => [
       box(0.048, 0.07, 0.3, 0, 0.065, -0.08), // receiver
       tube(0.013, -0.23, -0.33, 0, 0.075), // barrel
       tube(0.02, -0.23, -0.27, 0, 0.075, false, 8), // shroud
-      box(0.03, 0.17, 0.042, 0, -0.035, -0.12, 0.12), // magazine
       box(0.032, 0.1, 0.042, 0, -0.01, 0.01, -0.3, true), // grip
       box(0.012, 0.012, 0.2, 0.0, 0.08, 0.16), // wire stock rail
       box(0.012, 0.07, 0.016, 0, 0.055, 0.26), // butt plate
@@ -49,6 +60,9 @@ const SPECS: Record<Exclude<WeaponKind, 'fists'>, { parts: () => Part[]; muzzle:
   },
   shotgun: {
     muzzle: [0, 0.095, -0.66],
+    eject: [0.03, 0.08, -0.02],
+    magAt: [0, 0.025, -0.06],
+    mag: () => [tube(0.011, -0.03, 0.03, 0, 0.025, true, 8), tube(0.0115, 0.03, 0.045, 0, 0.025, false, 8)],
     parts: () => [
       box(0.05, 0.07, 0.2, 0, 0.065, -0.04), // receiver
       tube(0.017, -0.14, -0.65, 0, 0.095, false, 12), // barrel
@@ -60,17 +74,40 @@ const SPECS: Record<Exclude<WeaponKind, 'fists'>, { parts: () => Part[]; muzzle:
   },
   rifle: {
     muzzle: [0, 0.085, -0.7],
+    eject: [0.03, 0.09, -0.08],
+    magAt: [0, -0.04, -0.13],
+    mag: () => [box(0.032, 0.15, 0.05, 0, -0.04, -0.13, 0.35), box(0.03, 0.04, 0.05, 0, -0.12, -0.155, 0.6)],
     parts: () => [
       box(0.05, 0.075, 0.36, 0, 0.07, -0.06), // receiver
       box(0.044, 0.02, 0.32, 0, 0.115, -0.07), // top cover
       tube(0.011, -0.42, -0.69, 0, 0.085), // barrel
       box(0.056, 0.06, 0.2, 0, 0.075, -0.33, 0, true), // handguard
       tube(0.007, -0.2, -0.52, 0, 0.12), // gas tube
-      box(0.032, 0.15, 0.05, 0, -0.04, -0.13, 0.35), // curved-ish magazine
-      box(0.03, 0.04, 0.05, 0, -0.12, -0.155, 0.6), // magazine tip
       box(0.032, 0.1, 0.042, 0, -0.005, 0.02, -0.3, true), // grip
       box(0.042, 0.085, 0.3, 0, 0.045, 0.24, 0.15, true), // stock
       box(0.008, 0.035, 0.01, 0, 0.13, -0.6), // front sight
+      box(0.03, 0.03, 0.09, 0, 0.145, -0.05), // optic body
+      tube(0.018, -0.12, -0.15, 0, 0.15), // optic objective
+    ],
+  },
+  rocket: {
+    // Shoulder-fired tube (loads from the rear); the rocket itself is the "mag".
+    muzzle: [0, 0.11, -0.64],
+    eject: [0, 0.11, 0.48],
+    magAt: [0, 0.11, -0.3],
+    mag: () => {
+      const nose = new THREE.ConeGeometry(0.036, 0.16, 12).rotateX(-Math.PI / 2).translate(0, 0.11, -0.53);
+      return [tube(0.034, -0.45, -0.12, 0, 0.11, false, 12), { geo: nose, furn: true }, tube(0.02, -0.12, -0.04, 0, 0.11, false, 8)];
+    },
+    parts: () => [
+      tube(0.05, 0.46, -0.6, 0, 0.11, true, 16), // launch tube
+      tube(0.064, 0.4, 0.5, 0, 0.11, false, 16), // rear venturi flare
+      tube(0.058, -0.56, -0.64, 0, 0.11, false, 16), // muzzle ring
+      tube(0.056, -0.1, 0.02, 0, 0.11, false, 14), // centre band
+      box(0.032, 0.1, 0.042, 0, -0.005, 0.0, -0.3), // grip
+      box(0.03, 0.09, 0.04, 0, 0.01, -0.27, -0.2), // fore grip
+      box(0.028, 0.05, 0.08, -0.07, 0.16, -0.14), // optical sight
+      box(0.06, 0.035, 0.14, 0, 0.055, 0.26, 0, true), // shoulder pad
     ],
   },
 };
@@ -81,8 +118,10 @@ const furnMat: Record<string, THREE.MeshStandardNodeMaterial> = {
   smg: new THREE.MeshStandardNodeMaterial({ color: 0x23252a, roughness: 0.75, metalness: 0.1 }),
   shotgun: new THREE.MeshStandardNodeMaterial({ color: 0x6b3d1e, roughness: 0.65, metalness: 0 }),
   rifle: new THREE.MeshStandardNodeMaterial({ color: 0x7a431c, roughness: 0.6, metalness: 0 }),
+  rocket: new THREE.MeshStandardNodeMaterial({ color: 0x4f5a2c, roughness: 0.7, metalness: 0.15 }),
 };
-const geoCache = new Map<string, { metal: THREE.BufferGeometry; furn: THREE.BufferGeometry }>();
+const shellMat = new THREE.MeshStandardNodeMaterial({ color: 0xa32a1e, roughness: 0.6, metalness: 0 });
+const geoCache = new Map<string, { metal: THREE.BufferGeometry; furn: THREE.BufferGeometry; mag: THREE.BufferGeometry }>();
 
 function geometriesFor(kind: Exclude<WeaponKind, 'fists'>) {
   let g = geoCache.get(kind);
@@ -93,13 +132,20 @@ function geometriesFor(kind: Exclude<WeaponKind, 'fists'>) {
       if (!m) throw new Error(`[weapons] could not merge ${kind} geometry`);
       return m;
     };
-    g = { metal: merge(parts.filter((p) => !p.furn)), furn: merge(parts.filter((p) => p.furn)) };
+    const [mx, my, mz] = SPECS[kind].magAt;
+    // The mag/shell/rocket is one mesh (first-part material decides: furniture-coloured for a shell).
+    const mag = merge(SPECS[kind].mag().map((p) => ({ ...p, geo: p.geo.toNonIndexed() })));
+    mag.translate(-mx, -my, -mz);
+    g = { metal: merge(parts.filter((p) => !p.furn)), furn: merge(parts.filter((p) => p.furn)), mag };
     geoCache.set(kind, g);
   }
   return g;
 }
 
-/** A gun model in the grip frame, or null for fists. userData.muzzle = local muzzle point. */
+/**
+ * A gun model in the grip frame, or null for fists. userData: muzzle = local muzzle point, eject = case
+ * ejection port, mag = the detachable magazine/shell/rocket mesh, magHome = where it sits.
+ */
 export function buildWeapon(kind: WeaponKind): THREE.Group | null {
   if (kind === 'fists') return null;
   const g = geometriesFor(kind);
@@ -107,8 +153,15 @@ export function buildWeapon(kind: WeaponKind): THREE.Group | null {
   group.name = `weapon:${kind}`;
   const metal = new THREE.Mesh(g.metal, metalMat);
   const furn = new THREE.Mesh(g.furn, furnMat[kind]);
-  for (const m of [metal, furn]) { m.castShadow = true; group.add(m); }
+  const mag = new THREE.Mesh(g.mag, kind === 'shotgun' ? shellMat : kind === 'rocket' ? furnMat.rocket : metalMat);
+  mag.name = 'mag';
+  mag.position.set(...SPECS[kind].magAt);
+  if (kind === 'shotgun') mag.visible = false; // only appears in the hand while loading
+  for (const m of [metal, furn, mag]) { m.castShadow = true; group.add(m); }
   group.userData.muzzle = new THREE.Vector3(...SPECS[kind].muzzle);
+  group.userData.eject = new THREE.Vector3(...SPECS[kind].eject);
+  group.userData.mag = mag;
+  group.userData.magHome = mag.position.clone();
   return group;
 }
 

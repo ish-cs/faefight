@@ -4,6 +4,8 @@ import { insideBunker } from '../../sim/bots/nav';
 import { MAP, PIECES } from '../../sim/constants';
 import type { IslandLayout } from '../../sim/map';
 import type { PieceKind, PieceState, PlayerState, Snapshot, Vec3, WeaponKind } from '../../sim/types';
+import { beatsBetween } from '../../sim/gunplay';
+import { reloadClock } from '../firstPerson';
 
 export type Surface = 'grass' | 'sand' | 'concrete' | 'wood' | 'hollow' | 'metal';
 
@@ -13,7 +15,8 @@ export type SoundId =
   | 'coin' | 'loot' | 'purchase' | 'vault'
   | 'kill' | 'death' | 'eliminated' | 'win' | 'lose' | 'draw'
   | 'alarm' | 'tick' | 'escaped' | 'horn' | 'footstep'
-  | 'shieldHit' | 'shieldBreak' | 'drink' | 'potionDone';
+  | 'shieldHit' | 'shieldBreak' | 'drink' | 'potionDone'
+  | 'reload' | 'dry' | 'ads';
 
 export type Cue = {
   sound: SoundId;
@@ -85,6 +88,8 @@ export class SoundDirector {
   private prev: Snapshot | null = null;
   private steps = new Map<number, StepTrack>();
   private lastTickSec: number | null = null;
+  /** Per player: the reload being voiced (its end time) and how far into it we've played. */
+  private reloads = new Map<number, { until: number; heard: number }>();
   env: Env = { alive: false, hp: 100, inBunker: false, shoreDist: 50, inWater: false };
 
   /** A new match (also a rematch): forget the previous match's snapshot so nothing is diffed across them. */
@@ -139,6 +144,12 @@ export class SoundDirector {
           else if (d.killer === this.humanId) out.push({ sound: 'kill', pos: null, gain: 0.9 });
           if (d.inWater) { const at = chest(d.victim); if (at) out.push({ sound: 'splash', pos: at, gain: 0.8 }); }
           break;
+        case 'dry': {
+          const own = d.by === this.humanId;
+          const at = chest(d.by);
+          if (own || at) out.push({ sound: 'dry', kind: String(d.weapon), pos: own ? null : at, gain: own ? 0.7 : 0.5, own });
+          break;
+        }
         case 'explosion':
           out.push({ sound: 'explosion', kind: String(d.kind), pos: d.pos as Vec3, gain: 1.4 });
           break;
@@ -178,6 +189,7 @@ export class SoundDirector {
     this.potions(s, prev, out);
     this.countdown(me, s, out);
     this.footsteps(s, prev, out);
+    this.reloadBeats(s, out);
 
     if (me) {
       this.env = {
@@ -226,6 +238,24 @@ export class SoundDirector {
     const sec = Math.ceil(me.breakoutUntil - s.time);
     if (sec > 0 && sec !== this.lastTickSec) out.push({ sound: 'tick', kind: sec <= 3 ? 'urgent' : 'normal', pos: null, gain: 0.7 });
     this.lastTickSec = sec;
+  }
+
+  /**
+   * Reload sounds land on the same beats the reload animation uses (from the sim's clock), one cue per
+   * beat crossed since the last snapshot: mag release / out / in, rack, each shotgun shell, pump, rocket load.
+   */
+  private reloadBeats(s: Snapshot, out: Cue[]) {
+    for (const p of s.players) {
+      const c = p.alive ? reloadClock(p, s.time) : null;
+      if (!c) { this.reloads.delete(p.id); continue; }
+      let r = this.reloads.get(p.id);
+      if (!r || r.until !== p.reloadUntil) { r = { until: p.reloadUntil, heard: -1 }; this.reloads.set(p.id, r); }
+      const own = p.id === this.humanId;
+      for (const b of beatsBetween(c.beats, r.heard, c.elapsed)) {
+        out.push({ sound: 'reload', kind: `${p.equipped}:${b.beat}`, pos: own ? null : { x: p.pos.x, y: p.pos.y + 1.2, z: p.pos.z }, gain: own ? 0.75 : 0.6, own });
+      }
+      r.heard = c.elapsed;
+    }
   }
 
   /** A step every STRIDE metres of grounded horizontal movement; surface from what's underfoot. */
