@@ -26,7 +26,7 @@ export type HostMsg =
   | { t: 'snap'; s: NetSnapshot }
   | { t: 'preview'; result: Placement; key: number }
   | { t: 'chat'; from: string; text: string }
-  | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' };
+  | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
 export const NET_VERSION = 3;
