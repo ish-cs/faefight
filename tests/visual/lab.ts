@@ -21,7 +21,7 @@ let tick = 0;
 let pending: MatchEvent[] = [];
 const push = () => {
   const s: Snapshot = {
-    time: tick / 30, tick: tick++, players: [], pieces, loot: [], generators: [], genLevels: [1, 1], sealed: [false, false], waterY: 0,
+    time: tick / 30, tick: tick++, players: [], pieces, loot: [], projectiles: [], generators: [], genLevels: [1, 1], sealed: [false, false], waterY: 0,
     suddenDeath: false, winner: null, potionShops: [], events: pending,
   };
   pending = [];

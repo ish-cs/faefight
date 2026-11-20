@@ -177,7 +177,7 @@ class DebrisPool {
 }
 
 /** Budgets: hard caps keep a multi-piece collapse from flooding the GPU or the frame. */
-export const PARTICLE_CAPS = { dust: 900, sparks: 500, debris: 360 };
+export const PARTICLE_CAPS = { dust: 1400, sparks: 800, debris: 420 };
 
 /** Impact + destruction particles: 3 draw calls total (dust, sparks, debris). */
 export class Particles {

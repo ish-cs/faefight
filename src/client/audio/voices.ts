@@ -73,7 +73,7 @@ export type LimiterOptions = {
 export const DEFAULT_LIMITS: LimiterOptions = {
   maxVoices: 24,
   perFrame: 2,
-  perFrameByKey: { footstep: 3, impact: 3, hitmarker: 1, coin: 1, tick: 1 },
+  perFrameByKey: { footstep: 3, impact: 3, hitmarker: 1, coin: 1, tick: 1, reload: 3 },
   minLevel: 0.02,
 };
 

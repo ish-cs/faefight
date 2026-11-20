@@ -60,7 +60,7 @@ const TURN_RATE = 8;
 const CHEST = 1.2;
 /** Net forward progress of one scaffold laid end-to-end. */
 const SCAFFOLD_STEP = 3.8;
-const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, smg: 12, pistol: 16, rifle: 25 };
+const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, smg: 12, pistol: 16, rifle: 25, rocket: 20 };
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
@@ -329,6 +329,8 @@ export class Bot {
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage'),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
+      // Same spread rules as players: aim down sights for anything past close range.
+      ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
     // Shields: stock up at a potion seller, drink out of combat (see potionAction).
     if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge) {

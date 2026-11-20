@@ -1,5 +1,6 @@
-import { PLAYER } from '../sim/constants';
-import type { Vec3 } from '../sim/types';
+import { PLAYER, WEAPONS } from '../sim/constants';
+import { reloadBeats, type ReloadBeat } from '../sim/gunplay';
+import type { PlayerState, Vec3, WeaponKind } from '../sim/types';
 
 /**
  * Pure first-person maths (no three.js): camera-mode persistence, eye position and the viewmodel's
@@ -76,3 +77,76 @@ export const angleDelta = (a: number, b: number) => Math.atan2(Math.sin(a - b), 
 
 /** Exponential approach factor for a rate (1/s) over dt seconds (frame-rate independent). */
 export const approach = (rate: number, dt: number) => 1 - Math.exp(-rate * dt);
+
+// ---- reloads -------------------------------------------------------------------------------------
+
+/**
+ * Where a reload is at, from the sim's own clock (so remote players animate in step with their sounds):
+ * seconds in, total length, the rounds the gun held at the start, and its beats. Null when not reloading.
+ */
+export function reloadClock(p: Pick<PlayerState, 'equipped' | 'reloadUntil' | 'reloadSec' | 'reloadMag'>, simNow: number):
+  { elapsed: number; duration: number; magStart: number; beats: ReloadBeat[] } | null {
+  if (p.reloadUntil <= 0 || p.reloadSec <= 0 || p.equipped === 'fists') return null;
+  const elapsed = Math.min(p.reloadSec, Math.max(0, p.reloadSec - (p.reloadUntil - simNow)));
+  return { elapsed, duration: p.reloadSec, magStart: p.reloadMag, beats: reloadBeats(p.equipped, p.reloadMag, 99) };
+}
+
+/**
+ * Reload pose (no three.js): `tilt` 0..1 rolls the gun toward you; the mag/shell/rocket sits at
+ * (magY, magZ) metres from its home along the gun (−Y = out the bottom, +Z = behind) and is drawn when
+ * `magShow`; `hand` 0..1 = support hand on the mag; `jolt` 0..1 = seat/rack/pump snap.
+ */
+export type ReloadPose = { tilt: number; magY: number; magZ: number; magShow: boolean; hand: number; jolt: number };
+export const REST_POSE: ReloadPose = { tilt: 0, magY: 0, magZ: 0, magShow: true, hand: 0, jolt: 0 };
+
+const smooth = (x: number) => { const t = Math.min(1, Math.max(0, x)); return t * t * (3 - 2 * t); };
+const pulse = (e: number, at: number) => (e >= at && e < at + 0.25 ? Math.exp(-(e - at) * 18) : 0);
+const at = (beats: ReloadBeat[], b: ReloadBeat['beat']) => beats.find((x) => x.beat === b)?.t;
+
+export function reloadPose(kind: WeaponKind, elapsed: number, duration: number, magStart: number, beats = reloadBeats(kind, magStart, 99)): ReloadPose {
+  if (kind === 'fists' || duration <= 0) return REST_POSE;
+  const e = elapsed;
+  const ramp = Math.min(0.28, duration * 0.2);
+  const tilt = Math.min(smooth(e / ramp), smooth((duration - e) / ramp));
+  let jolt = 0;
+  for (const b of beats) if (b.beat === 'magIn' || b.beat === 'rack' || b.beat === 'pump' || b.beat === 'load' || b.beat === 'shell') jolt = Math.max(jolt, pulse(e, b.t) * (b.beat === 'shell' ? 0.5 : 1));
+
+  if (kind === 'shotgun') {
+    // Each shell: picked up below the loading port, pushed in on its beat.
+    const shells = beats.filter((b) => b.beat === 'shell');
+    const cur = shells.find((b) => e > b.t - 0.38 && e <= b.t + 0.02);
+    if (!cur) return { tilt, magY: -0.12, magZ: 0, magShow: false, hand: shells.some((b) => e < b.t) ? 0.6 : 0, jolt };
+    const k = smooth((e - (cur.t - 0.38)) / 0.38);
+    return { tilt, magY: -0.12 * (1 - k), magZ: 0, magShow: e < cur.t, hand: 1, jolt };
+  }
+  if (kind === 'rocket') {
+    // The tube is empty after the shot; a fresh rocket slides in at the rear.
+    const load = at(beats, 'load') ?? duration * 0.7;
+    const from = load - 0.7;
+    const k = smooth((e - from) / 0.7);
+    return { tilt, magY: -0.05 * (1 - k), magZ: 0.95 * (1 - k), magShow: e >= from, hand: e >= from - 0.3 && e < load + 0.15 ? 1 : 0, jolt };
+  }
+  const out = at(beats, 'magOut') ?? duration * 0.2;
+  const inn = at(beats, 'magIn') ?? duration * 0.65;
+  const newFrom = out + (inn - out) * 0.4;
+  let magY = 0, magShow = true;
+  if (e >= out && e < newFrom) { const f = (e - out) / Math.max(0.01, newFrom - out); magY = -0.4 * f * f; magShow = f < 0.8; }
+  else if (e >= newFrom && e < inn) magY = -0.16 * (1 - smooth((e - newFrom) / (inn - newFrom)));
+  const rel = at(beats, 'release') ?? out;
+  if (e >= rel && e < out) magY = -0.006;
+  const hand = e >= out - 0.15 && e < inn + 0.12 ? 1 : 0;
+  return { tilt, magY, magZ: 0, magShow, hand, jolt };
+}
+
+// ---- aiming --------------------------------------------------------------------------------------
+
+/** Field of view while aiming (the weapon's zoom), eased by `ads` 0..1. */
+export function adsFov(baseFov: number, kind: WeaponKind, ads: number): number {
+  const zoom = 1 + (WEAPONS[kind].adsZoom - 1) * Math.min(1, Math.max(0, ads));
+  // Zoom divides the tangent of the half-angle (what a real magnification does), not the angle.
+  const half = Math.atan(Math.tan((baseFov * Math.PI) / 360) / zoom);
+  return (half * 360) / Math.PI;
+}
+
+/** Recoil kick in view (camera punch) for `since` s after a shot: snappier, larger for big guns. */
+export const PUNCH_SCALE: Record<WeaponKind, number> = { fists: 0, pistol: 1, smg: 0.55, shotgun: 2.2, rifle: 0.9, rocket: 2.8 };
