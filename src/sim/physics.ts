@@ -144,11 +144,16 @@ export class Physics {
 
   /** Top surface y under (x, z) ignoring players, or null over open water. */
   isGroundAt(x: number, z: number): number | null {
+    return this.surfaceBelow(x, 60, z, 120);
+  }
+
+  /** First non-player surface hit going straight down from (x, yFrom, z) within maxDrop, or null. */
+  surfaceBelow(x: number, yFrom: number, z: number, maxDrop: number): number | null {
     this.sync();
-    const ray = new RAPIER.Ray({ x, y: 60, z }, { x: 0, y: -1, z: 0 });
-    const h = this.world.castRay(ray, 120, true, undefined, undefined, undefined, undefined,
+    const ray = new RAPIER.Ray({ x, y: yFrom, z }, { x: 0, y: -1, z: 0 });
+    const h = this.world.castRay(ray, maxDrop, false, undefined, undefined, undefined, undefined,
       (c) => this.entities.get(c.handle)?.type !== 'player');
-    return h ? 60 - h.timeOfImpact : null;
+    return h ? yFrom - h.timeOfImpact : null;
   }
 
   /** Everything overlapping an oriented box. */
