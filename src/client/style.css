@@ -277,3 +277,28 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .scoreboard tr.dead .sb-status, .scoreboard tr.trapped .sb-status { color: var(--gold); }
 .scoreboard tr.eliminated, .scoreboard tr.spectating { opacity: 0.6; }
 .scoreboard .sb-seal.sealed { color: var(--danger); font-weight: 700; }
+
+/* "X sealed Y's bunker": big centre headline + a short screen shake. */
+.seal-announce {
+  position: fixed; left: 50%; top: 26%; transform: translate(-50%, -50%) scale(0.6); opacity: 0; pointer-events: none; z-index: 20;
+  font: 900 44px 'Helvetica Neue', system-ui, sans-serif; letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap;
+  color: #ffd84a; text-shadow: 0 4px 0 rgba(0,0,0,.55), 0 0 28px rgba(255,140,40,.65);
+}
+.seal-announce.mine { color: #ff4a3d; text-shadow: 0 4px 0 rgba(0,0,0,.6), 0 0 32px rgba(255,40,30,.75); }
+.seal-announce.show { animation: seal-pop 3.2s cubic-bezier(.2,1.4,.4,1) forwards; }
+@keyframes seal-pop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(1.8); }
+  8% { opacity: 1; transform: translate(-50%, -50%) scale(0.95); }
+  14% { transform: translate(-50%, -50%) scale(1); }
+  82% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -60%) scale(1); }
+}
+canvas.shake { animation: screen-shake 0.55s ease-out; }
+@keyframes screen-shake {
+  0% { transform: translate(0, 0); }
+  15% { transform: translate(var(--shake), calc(var(--shake) * -0.6)); }
+  30% { transform: translate(calc(var(--shake) * -0.8), calc(var(--shake) * 0.5)); }
+  45% { transform: translate(calc(var(--shake) * 0.5), calc(var(--shake) * 0.4)); }
+  65% { transform: translate(calc(var(--shake) * -0.3), calc(var(--shake) * -0.2)); }
+  100% { transform: translate(0, 0); }
+}
