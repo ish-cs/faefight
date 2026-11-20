@@ -312,11 +312,9 @@ export class Nav {
   }
 
   private solidAhead(l: Lane, s: number): boolean {
-    for (const k of [0.1, 0.2]) {
-      const p = laneAt(l, s + k);
-      if (this.view.groundAt(p.x, p.z) !== null) return true;
-    }
-    return false;
+    // Decks laid end to end can leave a few-cm seam; anything wider is a real gap.
+    const p = laneAt(l, s + 0.06);
+    return this.view.groundAt(p.x, p.z) !== null;
   }
 
   lane(from: number, to: number): Lane { return lane(this.nodeList, from, to); }
