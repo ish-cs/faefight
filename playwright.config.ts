@@ -3,7 +3,8 @@ import { defineConfig } from '@playwright/test';
 // Each run starts its own dev server (never reuses one), so a server left running by another
 // worktree on the same port can't make tests silently run against the wrong code. Set E2E_PORT to
 // run two checkouts' e2e suites side by side.
-const port = Number(process.env.E2E_PORT ?? 5199);
+const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
+const port = Number(env.E2E_PORT ?? 5199);
 
 export default defineConfig({
   testDir: 'tests/e2e',
