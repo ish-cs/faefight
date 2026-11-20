@@ -1,5 +1,6 @@
+import type { MoveCmd } from '../sim/movement';
 import { PIECES, WEAPONS } from '../sim/constants';
-import { validSlot } from '../sim/hotbar';
+import { POTION_KINDS, validSlot } from '../sim/hotbar';
 import type { BuildRequest, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
 import { CHAT_MAX_LEN, type ClientMsg } from './protocol';
 
@@ -14,8 +15,26 @@ const count = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x 
 
 const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 const WEAPON_KINDS = Object.keys(WEAPONS) as WeaponKind[];
-const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge', 'medkit'];
+const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge', 'medkit', ...POTION_KINDS];
 const oneOf = <T extends string>(list: readonly T[], x: unknown): T | null => (list.includes(x as T) ? (x as T) : null);
+
+/** Names that would pass for the host, the game or a bot tag. */
+const RESERVED_NAMES = new Set(['host', 'system', 'server', 'admin', 'bot', 'you']);
+
+/**
+ * Player name from an untrusted peer: NFKC (folds fullwidth/compat look-alikes), no control, format
+ * (zero-width, bidi override) or lone-surrogate chars, whitespace collapsed, ≤ NAME_MAX code points.
+ * Reserved names become "Player". Null if nothing is left. Uniqueness is the lobby's job.
+ */
+export function cleanName(x: unknown): string | null {
+  if (typeof x !== 'string') return null;
+  const s = x.slice(0, NAME_MAX * 8).normalize('NFKC')
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, (c) => (/\p{Cc}/u.test(c) ? ' ' : ''))
+    .replace(/\s+/gu, ' ').trim();
+  const name = [...s].slice(0, NAME_MAX).join('').trim();
+  if (!name) return null;
+  return RESERVED_NAMES.has(name.toLowerCase()) ? 'Player' : name;
+}
 
 function vec(x: unknown): Vec3 | null {
   if (!isObj(x)) return null;
@@ -47,6 +66,15 @@ function partialInv(x: unknown): Partial<Inventory> | null {
       const kind = oneOf(PIECE_KINDS, k), n = count(v);
       if (!kind || n === null) return null;
       out.pieces[kind] = n;
+    }
+  }
+  if (x.potions !== undefined) {
+    if (!isObj(x.potions)) return null;
+    out.potions = {};
+    for (const [k, v] of Object.entries(x.potions)) {
+      const kind = oneOf(POTION_KINDS, k), n = count(v);
+      if (!kind || n === null) return null;
+      out.potions[kind] = n;
     }
   }
   if (x.weapons !== undefined) {
@@ -97,7 +125,31 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     drop: oneOf(['one', 'stack'] as const, x.drop),
     moveSlot: moveSlot(x.moveSlot),
     useMedkit: bool(x.useMedkit),
+    drink: bool(x.drink),
   };
+}
+
+/** Most movement commands accepted in one message (~30 Hz sends carry 1–2 normally). */
+export const MAX_CMDS_PER_MSG = 8;
+const MAX_SEQ = 2 ** 31;
+
+/** Numbered movement commands; any malformed entry rejects the whole batch. */
+export function moveCmds(x: unknown): MoveCmd[] | null {
+  if (!Array.isArray(x) || x.length > MAX_CMDS_PER_MSG) return null;
+  const out: MoveCmd[] = [];
+  for (const c of x) {
+    if (!isObj(c) || !Number.isInteger(c.seq) || (c.seq as number) < 1 || (c.seq as number) > MAX_SEQ) return null;
+    if (typeof c.yaw !== 'number' || !Number.isFinite(c.yaw)) return null;
+    out.push({
+      seq: c.seq as number,
+      moveX: clamp(num(c.moveX), -1, 1),
+      moveZ: clamp(num(c.moveZ), -1, 1),
+      yaw: c.yaw,
+      jump: bool(c.jump),
+      sprint: bool(c.sprint),
+    });
+  }
+  return out;
 }
 
 export function sanitizeClientMsg(x: unknown): ClientMsg | null {
@@ -105,12 +157,13 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
   switch (x.t) {
     case 'hello': {
       if (typeof x.name !== 'string' || typeof x.version !== 'number') return null;
-      const name = x.name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, NAME_MAX);
+      const name = cleanName(x.name);
       return name ? { t: 'hello', name, version: x.version } : null;
     }
     case 'input': {
       const input = sanitizeInput(x.input);
-      return input ? { t: 'input', input } : null;
+      const cmds = x.cmds === undefined ? [] : moveCmds(x.cmds);
+      return input && cmds ? { t: 'input', input, cmds } : null;
     }
     case 'preview': {
       const req = buildReq(x.req);

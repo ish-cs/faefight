@@ -37,6 +37,14 @@ describe('InputAccumulator', () => {
     expect(a.take().useMedkit).toBe(false);
   });
 
+  it('drink is a one-shot', () => {
+    const a = new InputAccumulator();
+    a.push({ ...NO_INPUT, drink: true });
+    a.push({ ...NO_INPUT });
+    expect(a.take().drink).toBe(true);
+    expect(a.take().drink).toBe(false);
+  });
+
   it('takes held controls from the latest sample', () => {
     const a = new InputAccumulator();
     a.push({ ...NO_INPUT, yaw: 1, sprint: true });

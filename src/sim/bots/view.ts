@@ -41,6 +41,8 @@ export type BotView = {
   loot: Vec3[];
   waterY: number;
   suddenDeath: boolean;
+  /** Potion seller positions (anyone may buy there). */
+  potionShops?: Vec3[];
   /** Top surface y under (x, z) (land, piece or scaffold), or null over open water. */
   groundAt(x: number, z: number): number | null;
   /** Would this build request succeed for this bot right now (snap applied by caller)? */

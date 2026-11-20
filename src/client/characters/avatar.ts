@@ -22,6 +22,12 @@ const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _right = new THREE.Vector3();
 
+/** Display-rate motion of one player (render.ts fills it: predicted locally, interpolated for others). */
+export type Motion = { pos: THREE.Vector3; vel: THREE.Vector3; yaw: number; pitch: number };
+
+/** 1/s: how quickly the animation's velocity follows the real one (blends locomotion clips smoothly). */
+const VEL_SMOOTH_RATE = 12;
+
 export type AvatarFrame = {
   pos: THREE.Vector3; // interpolated feet
   vel: THREE.Vector3; // interpolated velocity
@@ -30,6 +36,8 @@ export type AvatarFrame = {
   alive: boolean;
   equipped: WeaponKind;
   blinkHidden: boolean; // invulnerability blink
+  /** Shield 0..100, drawn as a thin blue bar over the name tag (everyone's is visible). */
+  shield: number;
 };
 
 /** Name tag sprite (white text on the island colour), drawn above remote players. */
@@ -55,6 +63,32 @@ function nameTag(text: string, color: number): THREE.Sprite {
   return s;
 }
 
+/** Thin shield bar sprite over a name tag: dark track always, blue fill for the shield, 4 × 25 ticks. */
+function shieldBar(): { sprite: THREE.Sprite; draw(shield: number): void } {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 16;
+  const g = c.getContext('2d')!;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteNodeMaterial({ map: tex, transparent: true, depthWrite: false, sizeAttenuation: false, fog: false });
+  mat.color.setScalar(1.8);
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.1, 0.009, 1);
+  sprite.renderOrder = 6;
+  const draw = (shield: number) => {
+    g.clearRect(0, 0, 256, 16);
+    g.fillStyle = 'rgba(10,14,22,0.75)';
+    g.beginPath(); g.roundRect(0, 2, 256, 12, 6); g.fill();
+    const w = Math.max(0, Math.min(1, shield / 100)) * 252;
+    if (w > 0) { g.fillStyle = '#4aa8ff'; g.beginPath(); g.roundRect(2, 4, w, 8, 4); g.fill(); }
+    g.fillStyle = 'rgba(10,14,22,0.9)';
+    for (const x of [64, 128, 192]) g.fillRect(x - 1, 2, 2, 12);
+    tex.needsUpdate = true;
+  };
+  draw(0);
+  return { sprite, draw };
+}
+
 /** One player's visual: skinned soldier (or the capsule fallback), gun, flash, name tag, hitbox. */
 export class Avatar {
   readonly group = new THREE.Group();
@@ -76,6 +110,8 @@ export class Avatar {
   private flash: THREE.Mesh;
   private flashUntil = 0;
   private tag: THREE.Sprite | null = null;
+  private shieldTag: ReturnType<typeof shieldBar> | null = null;
+  private shownShield = 0;
   private aimUntil = 0;
   private flinchUntil = 0;
   private punchUntil = 0;
@@ -83,6 +119,7 @@ export class Avatar {
   alive = true;
   private diedAt = -1;
   private lastPos = new THREE.Vector3();
+  private smoothVel = new THREE.Vector3();
   private materials: THREE.Material[] = [];
 
   constructor(assets: CharacterAssets | null, p: PlayerState, color: number, isLocal: boolean) {
@@ -105,6 +142,11 @@ export class Avatar {
       this.tag = nameTag(p.name, color);
       this.tag.position.y = PLAYER.height + 0.42;
       this.group.add(this.tag);
+      this.shieldTag = shieldBar();
+      this.shieldTag.sprite.position.y = PLAYER.height + 0.42;
+      // Just above the tag on screen (sizeAttenuation off: offset in screen-space units via center).
+      this.shieldTag.sprite.center.set(0.5, -1.85);
+      this.group.add(this.shieldTag.sprite);
     }
     this.materials.push(this.hitbox.material as THREE.Material);
   }
@@ -205,7 +247,7 @@ export class Avatar {
   }
 
   update(f: AvatarFrame, dt: number, now: number) {
-    if (f.alive && !this.wasAlive) this.diedAt = -1; // respawned
+    if (f.alive && !this.wasAlive) { this.diedAt = -1; this.smoothVel.set(0, 0, 0); } // respawned
     if (!f.alive && this.wasAlive) this.diedAt = now;
     this.wasAlive = f.alive;
     this.alive = f.alive;
@@ -223,10 +265,16 @@ export class Avatar {
     this.setWeapon(f.alive ? f.equipped : this.weaponKind ?? 'fists');
     this.flash.visible = now < this.flashUntil;
     if (this.tag) this.tag.visible = f.alive;
+    if (this.shieldTag) {
+      this.shieldTag.sprite.visible = f.alive;
+      const sh = Math.ceil(f.shield);
+      if (sh !== this.shownShield) { this.shownShield = sh; this.shieldTag.draw(sh); }
+    }
 
     if (!this.mixer) return;
+    this.smoothVel.lerp(f.vel, 1 - Math.exp(-VEL_SMOOTH_RATE * dt));
     const { name, ts } = chooseClip({
-      alive: f.alive, vel: f.vel, yaw: f.yaw, equipped: f.equipped,
+      alive: f.alive, vel: this.smoothVel, yaw: f.yaw, equipped: f.equipped,
       flinching: now < this.flinchUntil, punching: now < this.punchUntil, aiming: now < this.aimUntil,
     });
     this.fadeTo(name, ts);
@@ -265,6 +313,7 @@ export class Avatar {
     for (const m of this.materials) m.dispose();
     this.hitbox.geometry.dispose();
     if (this.tag) { (this.tag.material as THREE.SpriteNodeMaterial).map?.dispose(); this.tag.material.dispose(); }
+    if (this.shieldTag) { (this.shieldTag.sprite.material as THREE.SpriteNodeMaterial).map?.dispose(); this.shieldTag.sprite.material.dispose(); }
   }
 }
 
@@ -273,8 +322,7 @@ export class CharacterSystem {
   private avatars = new Map<number, Avatar>();
   private assets: CharacterAssets | null = null;
   private lastNow = performance.now();
-  private tmpPos = new THREE.Vector3();
-  private tmpVel = new THREE.Vector3();
+  private tmpMotion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
   /** Player whose avatar is hidden (the local player in first person); -1 = none. */
   hiddenId = -1;
   /** Resolves once the models are in (or failed — then the capsule fallback is used). */
@@ -315,26 +363,20 @@ export class CharacterSystem {
    * alpha, posOf = render.ts's interpolated feet (handles teleports), localYaw = camera yaw for the
    * local player (smoother than the 30 Hz sim yaw). Pitch is the sim's aim pitch for everyone.
    */
-  sync(players: PlayerState[], prevOf: (id: number) => PlayerState | undefined, t: number, humanId: number,
-    localYaw: number, simTime: number, posOf: (id: number, out: THREE.Vector3) => THREE.Vector3 | null) {
+  sync(players: PlayerState[], humanId: number, localYaw: number, simTime: number,
+    motionOf: (id: number, out: Motion) => Motion | null) {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastNow) / 1000);
     this.lastNow = now;
+    const m = this.tmpMotion;
     for (const p of players) {
       const a = this.avatar(p, humanId);
-      const q = prevOf(p.id) ?? p;
-      if (!posOf(p.id, this.tmpPos)) this.tmpPos.set(p.pos.x, p.pos.y, p.pos.z);
-      this.tmpVel.set(q.vel.x + (p.vel.x - q.vel.x) * t, q.vel.y + (p.vel.y - q.vel.y) * t, q.vel.z + (p.vel.z - q.vel.z) * t);
-      let yaw = localYaw;
-      if (p.id !== humanId) {
-        let d = p.yaw - q.yaw;
-        d = Math.atan2(Math.sin(d), Math.cos(d));
-        yaw = q.yaw + d * t;
-      }
-      const pitch = q.pitch + (p.pitch - q.pitch) * t;
+      m.yaw = p.yaw;
+      m.pitch = p.pitch;
+      if (!motionOf(p.id, m)) { m.pos.set(p.pos.x, p.pos.y, p.pos.z); m.vel.set(p.vel.x, p.vel.y, p.vel.z); }
       a.update({
-        pos: this.tmpPos, vel: this.tmpVel, yaw, pitch, alive: p.alive, equipped: p.equipped,
-        blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0,
+        pos: m.pos, vel: m.vel, yaw: p.id === humanId ? localYaw : m.yaw, pitch: m.pitch, alive: p.alive, equipped: p.equipped,
+        blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0, shield: p.shield ?? 0,
       }, dt, now);
       if (p.id === this.hiddenId) a.group.visible = false;
     }

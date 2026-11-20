@@ -40,7 +40,7 @@ const ev = (t: number, type: MatchEvent['type'], data: Record<string, unknown>):
 const PARKED = v3(0, -1000, 0);
 
 const isEmpty = (inv: Inventory) =>
-  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 &&
+  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 && Object.values(inv.potions).every((n) => !n) &&
   Object.keys(inv.weapons).length === 0 && Object.values(inv.pieces).every((n) => !n);
 
 /**
@@ -73,11 +73,18 @@ export function killPlayer(
   p.inv = emptyInventory();
   p.hotbar = emptyHotbar();
   p.healAt = null;
+  p.shield = 0;
+  p.drinking = null;
+  p.healLeft = 0;
+  p.speedUntil = 0;
   p.equipped = 'fists';
   p.reloadUntil = 0;
   p.hp = 0;
   p.alive = false;
   p.vel = v3();
+  p.deaths++;
+  const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
+  if (k) k.kills++;
   if (p.breakoutUntil !== null) {
     // Died while trapped in a sealed bunker: no more respawns.
     p.breakoutUntil = null;
@@ -177,6 +184,7 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
     const spawn = freeSpawnSpot(physics, map[p.island]);
     p.pos = clone(spawn);
     p.hp = PLAYER.hp;
+    p.shield = 0;
     p.alive = true;
     p.invulnUntil = now + LIFECYCLE.invulnSec;
     physics.setPlayerPos(p.id, spawn);

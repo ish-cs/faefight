@@ -1,3 +1,4 @@
+import type { MoveCmd } from '../sim/movement';
 import type { Placement } from '../sim/building';
 import type { IslandLayout } from '../sim/map';
 import type { BuildRequest, Difficulty, PlayerInput } from '../sim/types';
@@ -15,7 +16,7 @@ export const CHAT_MAX_LEN = 200;
 /** Remote client → host. */
 export type ClientMsg =
   | { t: 'hello'; name: string; version: number }
-  | { t: 'input'; input: PlayerInput }
+  | { t: 'input'; input: PlayerInput; cmds: MoveCmd[] }
   | { t: 'preview'; req: BuildRequest; key: number }
   | { t: 'chat'; text: string };
 
@@ -26,7 +27,7 @@ export type HostMsg =
   | { t: 'snap'; s: NetSnapshot }
   | { t: 'preview'; result: Placement; key: number }
   | { t: 'chat'; from: string; text: string }
-  | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' };
+  | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 3;
+export const NET_VERSION = 4;
