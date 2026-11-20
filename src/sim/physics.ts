@@ -135,6 +135,20 @@ export class Physics {
     return { pos: v3(next.x, next.y - PLAYER.height / 2, next.z), grounded: this.cc.computedGrounded() };
   }
 
+  /** Like movePlayer, but leaves the collider where it was (client render-time extrapolation). */
+  peekMovePlayer(id: number, desired: Vec3): { pos: Vec3; grounded: boolean } {
+    this.sync();
+    const c = this.mustPlayer(id);
+    this.cc.computeColliderMovement(c, desired);
+    const m = this.cc.computedMovement();
+    const t = c.translation();
+    return { pos: v3(t.x + m.x, t.y + m.y - PLAYER.height / 2, t.z + m.z), grounded: this.cc.computedGrounded() };
+  }
+
+  hasPlayer(id: number): boolean {
+    return this.players.has(id);
+  }
+
   raycast(origin: Vec3, dir: Vec3, maxDist: number, ignorePlayer?: number): RayHit | null {
     this.sync();
     const ray = new RAPIER.Ray(origin, dir);

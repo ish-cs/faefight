@@ -1,3 +1,5 @@
+import type { MoveState } from './movement';
+
 export type Vec3 = { x: number; y: number; z: number };
 
 export type PieceKind = 'sandbags' | 'wood' | 'metal' | 'steel' | 'scaffold' | 'ramp' | 'container';
@@ -84,6 +86,8 @@ export type PlayerState = {
   reloadUntil: number;
   nextFireAt: number;
   busyUntil: number;
+  /** Movement state (grounding, coyote/jump-buffer timers, last applied command seq): see movement.ts. */
+  mv?: MoveState;
 };
 
 export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number };

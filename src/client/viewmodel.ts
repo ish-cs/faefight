@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { pass, renderOutput } from 'three/tsl';
 import { PLAYER, WEAPONS } from '../sim/constants';
-import type { MatchEvent, PlayerState, WeaponKind } from '../sim/types';
+import type { MatchEvent, PlayerState, Vec3, WeaponKind } from '../sim/types';
 import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import {
   angleDelta, approach, bobOffset, bobRate, idleSway, recoilKick, reloadDip, toggleMode, type CameraMode,
@@ -210,7 +210,8 @@ export class FirstPersonView {
   }
 
   /** Animate and draw the viewmodel over the already-rendered frame. Call after Renderer.render. */
-  render(me: PlayerState | undefined, yaw: number, pitch: number, dt: number) {
+  /** vel = the local player's predicted velocity (smoother than the sim's 30 Hz one), when known. */
+  render(me: PlayerState | undefined, yaw: number, pitch: number, dt: number, vel?: Vec3) {
     if (!this.active || !me) return;
     const now = performance.now();
     this.setWeapon(me.equipped, me.island);
@@ -218,8 +219,9 @@ export class FirstPersonView {
     this.t += dt;
 
     // Walk / run bob, faded in with speed and suppressed in the air.
-    const speed = Math.hypot(me.vel.x, me.vel.z);
-    const grounded = Math.abs(me.vel.y) < 0.8;
+    const v = vel ?? me.vel;
+    const speed = Math.hypot(v.x, v.z);
+    const grounded = Math.abs(v.y) < 0.8;
     this.moveK += ((grounded ? Math.min(1, speed / PLAYER.walk) : 0) - this.moveK) * approach(8, dt);
     this.phase += bobRate(speed) * dt;
     const bob = bobOffset(this.phase, speed);

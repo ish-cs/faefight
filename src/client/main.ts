@@ -6,7 +6,8 @@ import type { Link } from '../net/transport';
 import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import { snapPlacement, type Placement } from '../sim/building';
-import { PLAYER, TICK_HZ } from '../sim/constants';
+import { DT, PLAYER, TICK_HZ } from '../sim/constants';
+import type { MoveCmd } from '../sim/movement';
 import type { IslandLayout } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type Snapshot } from '../sim/types';
@@ -27,6 +28,9 @@ import { Scoreboard } from './scoreboard';
 import { applyDocumentSettings } from './settings/apply';
 import { openSettings } from './settings/panel';
 import { settings } from './settings/store';
+import { VerticalSmoother } from './interp';
+import type { Predictor } from './predict';
+import { MAX_CMDS_PER_MSG } from '../net/sanitize';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -86,7 +90,8 @@ type Backend = {
   /** Input send rate: every frame for the local worker; 30 Hz over the network. */
   readonly inputHz: number | null;
   connect(sink: GameSink): void;
-  input(i: PlayerInput): void;
+  /** Held/one-shot input plus the movement commands made since the last call (prediction). */
+  input(i: PlayerInput, cmds: MoveCmd[]): void;
   preview(req: BuildRequest, key: number): void;
   chat(text: string): void;
   /** Stop delivering to the sink (game torn down for a rematch / back to lobby). Remote: the link stays open. */
@@ -127,7 +132,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       humanId = s.humanId;
       send({ type: 'start', setup: s.setup, humanId: s.humanId });
     },
-    input: (input) => send({ type: 'input', input }),
+    input: (input, cmds) => send({ type: 'input', input, cmds }),
     preview: (req, key) => send({ type: 'preview', playerId: humanId, req, key }),
     chat: (text) => session?.localChat(text),
     debug: {
@@ -166,7 +171,7 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
       link.onMessage((raw) => handle(raw as HostMsg));
       link.onClose(() => { if (!closed && !disposed) { closed = true; sink.fatal('Host left', 'Match over: lost the connection to the host.'); } });
     },
-    input: (input) => { if (!disposed) link.send({ t: 'input', input }); },
+    input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds }); },
     preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
     chat: (text) => link.send({ t: 'chat', text }),
     close: () => { disposed = true; },
@@ -505,6 +510,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let wasLocked = false;
   let paused: HTMLElement | null = null;
   let dead: HTMLElement | null = null;
+  let predictor: Predictor | null = null;
   const buffer = backend.buffered ? new SnapshotBuffer<Snapshot>(0.1) : null;
 
   const openPanel = (kind: 'shop' | 'vault') => {
@@ -665,10 +671,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   // Placement verdict for the ghost as it stands now (null while the sim's answer for it is pending).
   const ghostState = () => (preview && lastReq && preview.key === reqKey(lastReq) ? preview.result.ok : null);
 
-  const applySnapshot = (s: Snapshot, intervalMs?: number) => {
+  const applySnapshot = (s: Snapshot) => {
     const first = !snap;
     snap = s;
-    hud.pushEvents(renderer.pushSnapshot(s, intervalMs));
+    hud.pushEvents(renderer.pushSnapshot(s));
     fpv.onEvents(s.events, humanId);
     audio.snapshot(s);
     if (first) {
@@ -697,10 +703,18 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderer.setMap(map, humanId);
       loading.progress('map', 1, 'Building islands');
       maybeWarm();
+      // Client-side prediction of our own movement (same movement code + a local collision world).
+      import('./predict').then(({ Predictor: P }) => P.create(m, id)).then((p) => { predictor = p; },
+        (err) => console.error('[predict] could not start; falling back to server positions', err));
       hud.setMap(map, humanId, island);
       audio.setMap(map, humanId);
     },
-    snapshot: (s) => { if (buffer) buffer.push(s); else applySnapshot(s); },
+    snapshot: (s) => {
+      // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
+      predictor?.onSnapshot(s);
+      renderer.ingest(s);
+      if (buffer) buffer.push(s); else applySnapshot(s);
+    },
     preview: (result, key) => {
       const k = previewKeys.get(key);
       if (k === undefined) return;
@@ -733,6 +747,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
+      /** Local player's rendered (predicted) feet this frame, and prediction stats. */
+      predicted: () => ({ active: !!predictor?.active, pos: lastRendered, seq: moveSeq, stats: predictor?.stats ?? null, pending: predictor?.pending ?? 0 }),
+      frames: () => frameStats(),
+      resetFrames: () => { frameMs.length = 0; },
+      interpDelay: () => renderer.interpDelay,
     };
   }
 
@@ -741,6 +760,21 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const sendAcc = new InputAccumulator();
   let nextSendAt = 0;
   let last = performance.now();
+  // Movement commands: fixed 1/30 s steps on our clock, applied locally at once (prediction) and sent.
+  let moveSeq = 0;
+  let moveAcc = 0;
+  let jumpLatch = false;
+  let unsent: MoveCmd[] = [];
+  const predicted = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };
+  let lastRendered: { x: number; y: number; z: number } | null = null;
+  const eyeY = new VerticalSmoother();
+  const viewFeet = new THREE.Vector3();
+  const frameMs: number[] = [];
+  const frameStats = () => {
+    const xs = [...frameMs].sort((a, b) => a - b);
+    const q = (k: number) => xs[Math.min(xs.length - 1, Math.floor(xs.length * k))] ?? 0;
+    return { n: xs.length, avg: xs.reduce((a, b) => a + b, 0) / (xs.length || 1), p50: q(0.5), p95: q(0.95), p99: q(0.99), max: xs[xs.length - 1] ?? 0 };
+  };
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
   const frame = () => {
@@ -750,10 +784,32 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
+    frameMs.push(now - last);
+    if (frameMs.length > 600) frameMs.shift();
     last = now;
     fpsFrames++;
     if (now - fpsSince >= 500) { hud.setFps((fpsFrames * 1000) / (now - fpsSince)); fpsFrames = 0; fpsSince = now; }
-    if (buffer) for (const r of buffer.advance(dt)) applySnapshot(r.snap, r.intervalMs);
+    if (buffer) for (const r of buffer.advance(dt)) applySnapshot(r.snap);
+    renderer.beginFrame();
+
+    // Movement: the raw (camera-frame) move axes become numbered fixed-step commands. The sim and
+    // our predictor apply exactly the same commands; between steps the predictor extrapolates
+    // with the live input so a key press shows on the very next frame.
+    let sample = input.sample();
+    if (sample.jump) jumpLatch = true;
+    const liveCmd = (seq: number): MoveCmd => ({ seq, moveX: sample.moveX, moveZ: sample.moveZ, yaw: input.yaw, jump: jumpLatch, sprint: sample.sprint });
+    moveAcc += dt;
+    for (let n = 0; moveAcc >= DT; n++) {
+      moveAcc -= DT;
+      if (n >= 5) { moveAcc = 0; break; }
+      const cmd = liveCmd(++moveSeq);
+      jumpLatch = false;
+      predictor?.step(cmd);
+      unsent.push(cmd);
+    }
+    if (unsent.length > MAX_CMDS_PER_MSG) unsent = unsent.slice(-MAX_CMDS_PER_MSG);
+    const predicting = !!predictor && predictor.renderState(liveCmd(moveSeq + 1), moveAcc / DT, dt, predicted);
+    renderer.setLocal(predicting ? predicted : null);
     hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead ? '' : 'none';
 
     const me = snap?.players.find((p) => p.id === humanId);
@@ -768,7 +824,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         posOf: (id, out) => renderer.playerPos(id, out) });
     } else spectator.exit();
     if (me && !spectating && renderer.playerPos(humanId, feet)) {
-      if (!fpv.updateCamera(feet, input.yaw, input.pitch, me, humanId)) camera.update(feet, input.yaw, input.pitch, dt);
+      lastRendered = { x: feet.x, y: feet.y, z: feet.z };
+      // Cameras follow a vertically smoothed feet position (steps/ramps/corrections don't jolt the
+      // view); look angles are applied raw.
+      const view = viewFeet.set(feet.x, eyeY.update(feet.y, predicting ? predicted.vel.y : null, dt), feet.z);
+      if (!fpv.updateCamera(view, input.yaw, input.pitch, me, humanId)) camera.update(view, input.yaw, input.pitch, dt);
 
       // Build ghost (holding a piece): ~3 m ahead on the ground, snapped like the sim snaps it, validated by the sim.
       input.held = me.hotbar[input.selected] ?? null;
@@ -803,8 +863,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       }
     }
 
-    let sample = input.sample();
-    // Spectating: the sim ignores a dead player anyway; an alive winner flying around must not move either.
+    // Spectating: the sim ignores a dead player anyway; an alive winner flying around must not act either.
     if (spectating) sample = { ...NO_INPUT, yaw: me!.yaw, pitch: me!.pitch, select: input.selected };
     else if (me?.alive && !fpv.isActive) { // first person: the eye ray already is the crosshair ray
       // Aim the sim's eye ray (from the player's head) at whatever is under the crosshair; the camera
@@ -818,18 +877,19 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       sample.pitch = Math.atan2(dy, Math.hypot(dx, dz));
       Object.assign(sample, moveForAim(sample.moveX, sample.moveZ, camYaw, sample.yaw));
     }
-    if (backend.inputHz === null) backend.input(sample);
+    if (backend.inputHz === null) { backend.input(sample, unsent); unsent = []; }
     else {
       // Network: send at a fixed rate; taps between sends are accumulated, never lost.
       sendAcc.push(sample);
       if (snap && now >= nextSendAt) {
-        backend.input(sendAcc.take());
+        backend.input(sendAcc.take(), unsent);
+        unsent = [];
         nextSendAt = Math.max(nextSendAt + 1000 / backend.inputHz, now - 1000 / backend.inputHz);
       }
     }
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     renderer.render(input.yaw);
-    fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt);
+    fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined);
     audio.frame(renderer.camera);
     if (warmed && !revealed) {
       framesAfterWarm++;
