@@ -59,6 +59,8 @@ export const BUILD_TUNING = {
   highGroundRange: [8, 35] as const, highGroundAfter: 2.5, perchSec: 12,
   /** A fortification slot that won't place is left alone this long (repair waits for calm anyway). */
   slotBackoffSec: 30,
+  /** Hotbar slots building never takes (guns, medkits, grenades, potions need room too). */
+  freeSlots: 2,
   /** Goal weights: covering under fire beats fighting in the open; fortifying is a calm-time job. */
   coverScore: 1.05, fortifyScore: 0.5,
 };

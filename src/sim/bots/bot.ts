@@ -461,17 +461,25 @@ export class Bot {
     if (view.suddenDeath || !ownsGun(me.inv)) return undefined;
     const t = this.t, sk = BUILD_SKILL[this.difficulty];
     const b: Partial<Record<PieceKind, number>> = {};
-    const add1 = (k: PieceKind, n = 1) => { if (n > 0) b[k] = (b[k] ?? 0) + n; };
+    // Hotbar room: a new kind takes a slot; always leave BT.freeSlots open for guns, heals and the like.
+    let free = me.hotbar.filter((k) => k === null).length;
+    const add1 = (k: PieceKind, n = 1) => {
+      if (n <= 0) return;
+      if (!b[k] && !me.hotbar.includes(k)) { if (free <= BT.freeSlots) return; free--; }
+      b[k] = (b[k] ?? 0) + n;
+    };
     if (total >= BT.fortReserve * (1 - t.builder))
       for (const [i, s] of this.fortSlots().entries())
         if (!slotBuilt(view.pieces, s) && (this.slotBackoff.get(i) ?? -Infinity) <= view.now) add1(s.kind);
     const walls = Math.round(BT.coverCarry[this.difficulty] * (0.4 + t.builder));
     const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
-    add1(skilled && total >= BT.metalCoverAt ? 'metal' : 'wood', walls);
-    if (sk.highGround && total >= BT.rampAt && t.builder >= 0.3) add1('ramp');
+    // Cover walls of the kind I already carry for plugs (one hotbar slot), metal once rich.
+    const wall: PieceKind = me.hotbar.includes('metal') || (skilled && total >= BT.metalCoverAt) ? 'metal' : 'wood';
+    add1(wall, walls);
     const scaffolds = this.scaffoldsNeeded(c);
     if (sk.bridgeCover && this.wallsOnBridge && scaffolds >= 2 * BT.scaffoldsPerBridgeWall)
-      add1('wood', Math.floor(scaffolds / BT.scaffoldsPerBridgeWall));
+      add1(wall, Math.floor(scaffolds / BT.scaffoldsPerBridgeWall));
+    if (sk.highGround && total >= BT.rampAt && t.builder >= 0.3) add1('ramp');
     return b;
   }
 
@@ -841,11 +849,12 @@ export class Bot {
     if (f.complete) { this.nextScoreAt = now; return IDLE; }
     if (this.scaffoldsNeeded(c) <= 1 && sealKit(c.me.inv) < c.openDoors.length) { this.nextScoreAt = now; return IDLE; }
     const key = `${l.from}>${l.to}`;
-    // My bridge got shot out under me (a gap where decks were): skilled players lay an alternate one on the other lane.
+    // My bridge got shot out (a gap where decks were): skilled players lay an alternate one on the other lane
+    // instead of feeding the same spot to whoever is covering it.
     const best = this.laneBest.get(key) ?? -Infinity;
     if (!mirror && f.s < best - 3) {
       this.laneBest.set(key, f.s);
-      if (BUILD_SKILL[this.difficulty].altRoute && now - this.mem.lastHurtAt < 20) { this.alt.add(to); this.nextScoreAt = now; return IDLE; }
+      if (BUILD_SKILL[this.difficulty].altRoute) { this.alt.add(to); this.nextScoreAt = now; return IDLE; }
     }
     if (!mirror) this.laneBest.set(key, Math.max(best, f.s));
     const stand = at(-1.1);

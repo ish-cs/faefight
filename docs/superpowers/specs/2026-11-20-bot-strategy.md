@@ -148,3 +148,38 @@ Measured (seeds alternate seats; 1v1s swing on one early kill, so 20 seeds):
 Open: with shields in, 8-PRO FFAs mostly end just after sudden death starts (last two or three standing), not before.
 
 `MEASURE=1v1|ffa [A=pro B=hard SEEDS=1,2,3 TRACE=10] npx vitest run tests/sim/proMeasure.test.ts` reproduces these.
+
+## 10. Building (`bots/build.ts`, goals `cover` and `fortify`)
+
+Bots build what a player would, at their skill; personality (`builder` trait) sets how much. All tunables sit in
+`BUILD_SKILL` (per difficulty) and `BUILD_TUNING` (everything else) so they can move into BotParams.
+
+| | cover odds | cover after | gap between pieces | misplaced | share of fort plan | peek hide/out | high-ground ramp · bridge walls · alt bridge |
+|---|---|---|---|---|---|---|---|
+| Easy | 0.25 | 1.4 s | 1.6 s | 35 % | 30 % | 2.0 / 1.6 s | no · no · no |
+| Medium | 0.55 | 0.8 s | 0.8 s | 12 % | 55 % | 1.4 / 1.3 s | no · yes · no |
+| Hard | 0.85 | 0.4 s | 0.3 s | 3 % | 85 % | 0.9 / 1.1 s | yes · yes · yes |
+| PRO | 0.95 | 0.22 s | 0.05 s | 0 | 100 % | 0.6 / 0.9 s | yes · yes · yes |
+
+Cover odds and fort share are scaled by `builder` (Turtle ≈ full, Rusher ≈ half / a third).
+
+- **Combat cover**: hit (BotView `hurt`) in the open with no solid cover within 3 m → one roll per incident; on
+  success, after the reaction delay, a wall (metal > wood > steel beyond the seal kit, else two sandbags stacked)
+  goes down 1.0–1.6 m toward the shooter (position from sight, tracer or memory). Then the peek rhythm: hide behind it,
+  strafe out to the side to shoot, back in. A second shooter from another side gets its own wall (flank).
+- **High ground** (Hard/PRO carrying a ramp): same-island fight at 8–35 m for 2.5 s → ramp rising toward the enemy,
+  fight from its top while it stands (12 s).
+- **Fortification plan** (`fortPlan`, from map geometry only): firing positions (two sandbags with a 1.2 m gap) 6 m
+  inland of where a bridge from each of the two nearest islands lands; sandbag lines on the outward side of vault,
+  generator, shop; for snipers/builders a watchtower (ramp + scaffold deck off its top). Bought in one shop visit
+  once cash ≥ 200 × (1 − builder) (builders buy it before bridge gear), built when calm at home. Missing slots
+  (never built or shot out) are the same thing, so **repair** is automatic when calm and affordable.
+- **Own bunker**: every bot placement (cover, fort, ramp, bridge wall) goes through `ownBunkerSafe`: nothing in a
+  doorway zone, and within 8 m of the bunker `isSealed(bunker, pieces + piece, 0.3)` must be false, i.e. a ≥ 1.3 m
+  way out remains (pieces grown by 0.3 m on top of the player radius). The plan itself stays > 8 m away.
+- **Bridges**: on long gaps, side walls along the deck edge facing the nearest third island (walkway stays clear);
+  when the main bridge is shot out, Hard/PRO lay the next one on the mirror lane (the line a bridge from the other
+  island would take); cutting incoming bridges is unchanged.
+- **Hotbar**: building never takes the last two free slots; cover walls use the same kind as the seal kit.
+- Easy players misplace pieces (persistent for fort slots, so they "repair" the silly spot too) and roll cover rarely.
+

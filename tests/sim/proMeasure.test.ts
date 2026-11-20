@@ -11,6 +11,8 @@ const LIMIT = 25 * 60 * 30;
 type Result = {
   winner: number | null; minutes: number; kills: number; seals: number; elims: number; preSdElims: number;
   msPerTick: number; diffs: Difficulty[]; killsBy: Map<number, number>; insideIdle: number;
+  /** Pieces placed per bot (scaffolds counted apart), and each bot's archetype. */
+  built: Map<number, { pieces: number; scaffolds: number; archetype: string }>;
 };
 
 async function run(diffs: Difficulty[], seed: number): Promise<Result> {
@@ -22,6 +24,7 @@ async function run(diffs: Difficulty[], seed: number): Promise<Result> {
   let snap: Snapshot = m.tick(new Map());
   let kills = 0, seals = 0, elims = 0, preSdElims = 0, ms = 0;
   const killsBy = new Map<number, number>();
+  const built = new Map([...bots].map(([id, b]) => [id, { pieces: 0, scaffolds: 0, archetype: b.personality.archetype }]));
   for (let i = 0; i < LIMIT && snap.winner === null; i++) {
     const t0 = performance.now();
     snap = m.tick(new Map());
@@ -40,11 +43,12 @@ async function run(diffs: Difficulty[], seed: number): Promise<Result> {
         const k = e.data.killer as number | null;
         if (k != null && k !== e.data.victim) { kills++; killsBy.set(k, (killsBy.get(k) ?? 0) + 1); }
       }
+      if (e.type === 'placed') { const b = built.get(e.data.by as number)!; if (e.data.kind === 'scaffold') b.scaffolds++; else b.pieces++; }
       if (e.type === 'sealed' && e.t < LIFECYCLE.suddenDeathAt) seals++;
       if (e.type === 'eliminated') { elims++; if (e.t < LIFECYCLE.suddenDeathAt) preSdElims++; }
     }
   }
-  return { winner: snap.winner, minutes: snap.time / 60, kills, seals, elims, preSdElims, msPerTick: ms / snap.tick, diffs, killsBy, insideIdle: 0 };
+  return { winner: snap.winner, minutes: snap.time / 60, kills, seals, elims, preSdElims, msPerTick: ms / snap.tick, diffs, killsBy, insideIdle: 0, built };
 }
 
 const fmt = (r: Result) =>
@@ -75,6 +79,7 @@ describe.runIf(env.MEASURE)('measure', () => {
         const r = await run(diffs, seed);
         const top = [...r.killsBy.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([id, k]) => `#${id}(${diffs[id - 1]}) ${k}`).join(', ');
         console.log(`FFA ${name} seed ${seed}: ${fmt(r)} · top killers ${top}`);
+        console.log('  built (pieces/scaffolds): ' + [...r.built].map(([id, b]) => `#${id} ${diffs[id - 1]} ${b.archetype} ${b.pieces}/${b.scaffolds}`).join(' · '));
       }
     }
   }, 3_600_000);

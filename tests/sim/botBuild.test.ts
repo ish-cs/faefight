@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { Bot } from '../../src/sim/bots/bot';
 import { BUILD_SKILL, BUILD_TUNING, fortPlan, ghost, ownBunkerSafe, shields } from '../../src/sim/bots/build';
 import { lookAt } from '../../src/sim/bots/aim';
-import { islandAt } from '../../src/sim/bots/nav';
+import { islandAt, lane, laneAt, laneS, type Lane } from '../../src/sim/bots/nav';
 import { preset, type Archetype } from '../../src/sim/bots/personality';
 import { eyePos } from '../../src/sim/combat';
 import { PIECES, PLAYER, WEAPONS } from '../../src/sim/constants';
@@ -13,7 +13,8 @@ import { NO_INPUT } from '../../src/sim/types';
 import type { Difficulty, PieceKind, PieceState, PlayerInput, Snapshot } from '../../src/sim/types';
 import { add, dist2D, forward, right, scale, v3 } from '../../src/sim/vec';
 
-const WALL_KINDS: PieceKind[] = ['sandbags', 'wood', 'metal', 'steel'];
+const laneOffset = (l: Lane, p: { x: number; z: number }) => Math.abs((p.x - l.origin.x) * l.dir.z - (p.z - l.origin.z) * l.dir.x);
+const WALL_KINDS: PieceKind[] =['sandbags', 'wood', 'metal', 'steel'];
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -249,6 +250,31 @@ describe('bridge craft (real physics)', () => {
     expect(walls.length).toBeGreaterThanOrEqual(1);
     // The walls stand on the deck (scaffold top), not in the water.
     for (const w of walls) expect(decks.some((d) => Math.abs(d.pos.y + PIECES.scaffold.h - w.pos.y) < 0.1 && dist2D(d.pos, w.pos) < 2.5)).toBe(true);
+    expect(crossed).toBe(true);
+  }, 120_000);
+});
+
+describe('bridge craft: alternate route', () => {
+  test('main bridge shot out while under fire → a hard bot lays a new one on the other lane', async () => {
+    const { m } = await duel('hard', 'Turtle', 9);
+    m.debugGive(1, { weapons: { pistol: { mag: WEAPONS.pistol.mag, spare: 36 } }, pieces: { scaffold: 16, wood: 3 } });
+    const main = lane(m.map, 0, 1), mirror = lane(m.map, 1, 0);
+    let snap = m.tick(new Map());
+    const decksOn = (l: typeof main) => snap.pieces.filter((p) => p.owner === 1 && p.kind === 'scaffold' && laneOffset(l, p.pos) < 0.5);
+    for (let i = 0; i < 60 * 30 && decksOn(main).length < 4; i++) snap = m.tick(new Map());
+    expect(decksOn(main).length).toBe(4);
+    // Back on land (say it went to restock), someone shoots its first deck out (everything past it falls).
+    const shore = laneAt(main, 15);
+    m.debugTeleport(1, v3(shore.x, m.map[0].groundY + 0.05, shore.z));
+    const first = decksOn(main).sort((a, b) => laneS(main, a.pos) - laneS(main, b.pos))[0];
+    m.debugDamagePiece(first.id, 10_000);
+    for (let i = 0; i < 40 * 30 && decksOn(mirror).length < 2; i++) snap = m.tick(new Map());
+    console.log(`after the cut: ${decksOn(main).length} decks on the main lane, ${decksOn(mirror).length} on the mirror lane`);
+    expect(decksOn(mirror).length).toBeGreaterThanOrEqual(2);
+    // The new bridge is finished and walked.
+    let crossed = false;
+    for (let i = 0; i < 90 * 30 && !crossed; i++) { snap = m.tick(new Map()); crossed = islandAt(m.map, snap.players[0].pos) === 1; }
+    console.log(`mirror lane: ${decksOn(mirror).length} decks, crossed ${crossed}`);
     expect(crossed).toBe(true);
   }, 120_000);
 });
