@@ -181,6 +181,9 @@ export class Hud {
       const sealed = !!snap.sealed[i];
       chip.classList.toggle('sealed', sealed);
       setText(chip.querySelector('.state') as HTMLElement, sealed ? 'SEALED' : 'OPEN');
+      // Other islands are labelled with their owner's name (a leaver's seat stays theirs, now bot-run).
+      const owner = i === me.island ? null : snap.players.find((p) => p.island === i);
+      if (owner) setText(chip.querySelector('.name') as HTMLElement, owner.name);
     });
     const ownSealed = !!snap.sealed[me.island];
     this.sealedBanner.style.display = ownSealed && !me.eliminated && snap.winner === null ? 'block' : 'none';

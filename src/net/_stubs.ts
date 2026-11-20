@@ -1,29 +1,8 @@
 // THROWAWAY: minimal stand-ins for src/net/{lobby,chat,code,index,sanitize}.ts while those are being written
 // by other agents. Delete once the real modules land and the client imports are switched over.
 import type { MatchSetup } from '../sim/matchApi';
-import type { Snapshot } from '../sim/types';
 import { CHAT_MAX_LEN, MAX_PLAYERS, type Slot } from './protocol';
 import type { HostRoom, Link, Transport } from './transport';
-
-// ---- snapshot codec stand-in (real one: src/net/snapshotCodec.ts) ----
-export type NetSnapshot = Snapshot;
-export class SnapshotEncoder {
-  private last: Snapshot | null = null;
-  private events = new Map<number, Snapshot['events']>();
-  push(snap: Snapshot): void {
-    this.last = snap;
-    for (const [id, ev] of this.events) this.events.set(id, ev.concat(snap.events));
-  }
-  take(forPlayerId: number): NetSnapshot {
-    if (!this.last) throw new Error('SnapshotEncoder.take before push');
-    const ev = this.events.get(forPlayerId) ?? this.last.events;
-    this.events.set(forPlayerId, []);
-    return { ...this.last, events: ev };
-  }
-}
-export class SnapshotDecoder {
-  decode(n: NetSnapshot): Snapshot { return n; }
-}
 
 export class Lobby {
   private s: Slot[];

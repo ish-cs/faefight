@@ -1,15 +1,13 @@
 import { NET_VERSION, type HostMsg, type Slot } from '../net/protocol';
 import { sanitizeClientMsg } from '../net/sanitize';
 import type { HostRoom, Link, Transport } from '../net/transport';
-import { ChatLimiter, cleanChat, Lobby, SnapshotEncoder, type NetSnapshot } from '../net/_stubs';
+import { ChatLimiter, cleanChat, Lobby } from '../net/_stubs';
+import { SnapshotEncoder } from '../net/snapshotCodec';
 import type { Placement } from '../sim/building';
 import type { IslandLayout } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { Snapshot } from '../sim/types';
 import type { ToWorker } from './protocol';
-
-/** Host → client snapshot frame (HostMsg gains this in NET_VERSION 2). */
-export type SnapMsg = { t: 'snap'; s: NetSnapshot };
 
 const HELLO_TIMEOUT_MS = 10_000;
 const HOST_PEER = 'host';
@@ -62,7 +60,7 @@ export class HostSession {
     this.ev.lobby(slots);
   }
 
-  private send(link: Link, m: HostMsg | SnapMsg) {
+  private send(link: Link, m: HostMsg) {
     try { link.send(m); } catch (err) { console.warn(`[host] send to ${link.peerId} failed`, err); }
   }
 
