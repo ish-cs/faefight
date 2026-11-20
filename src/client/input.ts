@@ -107,6 +107,11 @@ export class InputController {
     this.hooks.inventoryChange(open);
   }
 
+  /** Left button held (in build mode: keep placing along the ghost = drag-build). */
+  get clickHeld() {
+    return this.enabled && this.fireHeld;
+  }
+
   /** Aim key (right mouse by default) held with a gun in hand: aim down sights. */
   get ads(): boolean {
     return this.enabled && isHeld('aim', this.keys) && isGunItem(this.held);
@@ -167,7 +172,7 @@ export class InputController {
     // Other buttons act like keys ('Mouse2' = right button), so the keymap can bind them (aim by default).
     if (e.button !== 0) { this.keys.add(`Mouse${e.button}`); return; }
     if (e.button !== 0) return;
-    if (this.buildMode) { this.hooks.place(); return; }
+    if (this.buildMode) { this.fireHeld = true; this.hooks.place(); return; } // held = drag-build
     if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
     if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }
     if (this.held === 'medkit') { this.oneShot.useMedkit = true; return; }
