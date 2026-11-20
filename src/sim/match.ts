@@ -1,11 +1,12 @@
 import { buy, collect, mergeInventory, emptyInventory, tickGenerator, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER } from './constants';
+import { DT, ECONOMY, LIFECYCLE, PIECES } from './constants';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMap, type IslandLayout } from './map';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics } from './physics';
+import { newMoveState, stepMove, type MoveCmd } from './movement';
 import { unsupportedPieces } from './support';
 import { newPlayer } from './player';
 import { isPlaceholderBotName, nickname } from './names';
@@ -13,7 +14,7 @@ import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
 import type { BuildRequest, Difficulty, Inventory, MatchEvent, PlayerInput, PlayerState, Snapshot, Vec3 } from './types';
 import { NO_INPUT } from './types';
-import { add, clone, dist, dist2D, forward, norm, right, scale, sub, v3 } from './vec';
+import { clone, dist, dist2D, norm, sub, v3 } from './vec';
 
 export type BotBrain = { think(view: BotView): PlayerInput };
 export type MatchOptions = { makeBot?: (id: number, difficulty: Difficulty, rng: () => number) => BotBrain };
@@ -40,7 +41,6 @@ export class Match implements MatchApi {
   private tickNo = 0;
   private events: MatchEvent[] = [];
   private explosives: Explosive[] = [];
-  private grounded = new Map<number, boolean>();
   private bots = new Map<number, BotBrain>();
   private rng: () => number;
   private makeBot?: MatchOptions['makeBot'];
@@ -109,17 +109,26 @@ export class Match implements MatchApi {
     return [...this.s.players.values()].filter((p) => !p.isBot).map((p) => p.id);
   }
 
-  tick(inputs: Map<number, PlayerInput>): Snapshot {
+  /**
+   * moves: per human player, the movement commands to apply this tick (client-numbered, for
+   * prediction/reconciliation). A player without an entry moves one step from its PlayerInput.
+   */
+  tick(inputs: Map<number, PlayerInput>, moves?: Map<number, MoveCmd[]>): Snapshot {
     const now = this.s.time + DT;
     this.s.time = now;
     this.tickNo++;
     this.events = [];
 
     for (const p of this.s.players.values()) {
-      if (!p.alive) continue;
+      const cmds = this.bots.has(p.id) ? undefined : moves?.get(p.id);
+      if (!p.alive) {
+        // Dead: commands are consumed (acked) but do nothing.
+        if (cmds?.length) (p.mv ??= newMoveState()).ack = cmds[cmds.length - 1].seq;
+        continue;
+      }
       const bot = this.bots.get(p.id);
       const input = bot ? bot.think(this.botView(p)) : inputs.get(p.id) ?? NO_INPUT;
-      this.applyInput(p, input, now);
+      this.applyInput(p, input, now, cmds);
     }
 
     this.events.push(...tickExplosives(this.ctx, now));
@@ -189,7 +198,7 @@ export class Match implements MatchApi {
     this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
   }
 
-  private applyInput(p: PlayerState, input: PlayerInput, now: number) {
+  private applyInput(p: PlayerState, input: PlayerInput, now: number, cmds?: MoveCmd[]) {
     p.yaw = input.yaw;
     p.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, input.pitch));
 
@@ -198,7 +207,13 @@ export class Match implements MatchApi {
       p.reloadUntil = 0;
     }
 
-    this.move(p, input);
+    if (cmds) {
+      for (const c of cmds) {
+        if (p.alive) this.move(p, c); // a hard landing can kill mid-batch
+        else p.mv!.ack = c.seq;
+      }
+    }
+    else this.move(p, { seq: p.mv?.ack ?? 0, moveX: input.moveX, moveZ: input.moveZ, yaw: input.yaw, jump: input.jump, sprint: input.sprint });
 
     tickReload(p, now);
     if (now < p.busyUntil) return;
@@ -216,22 +231,12 @@ export class Match implements MatchApi {
     if (input.build) this.build(p, input.build, now);
   }
 
-  private move(p: PlayerState, input: PlayerInput) {
-    let dir = add(scale(forward(p.yaw), input.moveZ), scale(right(p.yaw), input.moveX));
-    const l = Math.hypot(dir.x, dir.z);
-    if (l > 1) dir = scale(dir, 1 / l);
-    const speed = input.sprint ? PLAYER.sprint : PLAYER.walk;
-    const grounded = this.grounded.get(p.id) ?? false;
-    p.vel.x = dir.x * speed;
-    p.vel.z = dir.z * speed;
-    p.vel.y = grounded && input.jump ? PLAYER.jumpVelocity : p.vel.y - PLAYER.gravity * DT;
-    const r = this.physics.movePlayer(p.id, scale(p.vel, DT));
-    p.pos = r.pos;
-    this.grounded.set(p.id, r.grounded);
-    const impact = -p.vel.y;
-    if (!grounded && r.grounded && impact > LIFECYCLE.safeFallSpeed)
-      this.events.push(...applyPlayerDamage(this.ctx, p, (impact - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time));
-    if (r.grounded && p.vel.y < 0) p.vel.y = 0;
+  private move(p: PlayerState, cmd: MoveCmd) {
+    const mv = (p.mv ??= newMoveState());
+    const { landingSpeed } = stepMove(p as PlayerState & { mv: typeof mv }, cmd, DT, { movePlayer: (d) => this.physics.movePlayer(p.id, d) });
+    mv.ack = cmd.seq;
+    if (landingSpeed > LIFECYCLE.safeFallSpeed)
+      this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time));
   }
 
   private build(p: PlayerState, req: BuildRequest, now: number) {
