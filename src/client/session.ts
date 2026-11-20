@@ -4,6 +4,8 @@ import type { HostRoom, Link, Transport } from '../net/transport';
 import { ChatLimiter, cleanChat } from '../net/chat';
 import { Lobby } from '../net/lobby';
 import { SnapshotEncoder } from '../net/snapshotCodec';
+import { InterestManager } from '../net/interest';
+import { PeerGuard, type Verdict } from '../net/rateLimit';
 import type { Placement } from '../sim/building';
 import type { IslandLayout } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
@@ -11,7 +13,10 @@ import type { Snapshot } from '../sim/types';
 import type { ToWorker } from './protocol';
 
 const HELLO_TIMEOUT_MS = 10_000;
-const HOST_PEER = 'host';
+// Lobby key for the host. Contains a NUL so no remote peer id (PeerJS, BroadcastChannel, loopback) can equal it.
+const HOST_PEER = '\u0000host';
+/** Difficulty of the bot that takes a leaver's seat in a rematch (same as a mid-match takeover). */
+const TAKEOVER_DIFFICULTY = 'medium' as const;
 
 export type HostEvents = {
   lobby(slots: Slot[]): void;
@@ -36,6 +41,8 @@ export class HostSession {
   /** Per-peer budgets: build previews (the ghost only re-asks when it moves) and malformed-message warnings. */
   private previewBudget = new Map<string, { windowStart: number; n: number }>();
   private warned = new Map<string, number>();
+  /** Per-client anti-ESP filter; created once the map is known. */
+  private interest: InterestManager | null = null;
 
   private constructor(private room: HostRoom, readonly hostName: string, private ev: HostEvents) {
     this.lobby = new Lobby(hostName, HOST_PEER);
@@ -81,7 +88,7 @@ export class HostSession {
     try { link.send(m); } catch (err) { console.warn(`[host] send to ${link.peerId} failed`, err); }
   }
 
-  private reject(link: Link, reason: 'full' | 'started' | 'version') {
+  private reject(link: Link, reason: 'full' | 'started' | 'version' | 'flood') {
     console.info(`[host] rejecting ${link.peerId}: ${reason}`);
     this.send(link, { t: 'ended', reason });
     setTimeout(() => link.close(), 200); // let the reason flush first
@@ -89,16 +96,33 @@ export class HostSession {
 
   private onJoin(link: Link) {
     let seated = false;
+    let kicked = false;
+    const guard = new PeerGuard(Date.now());
     const helloTimer = setTimeout(() => { if (!seated) { console.info(`[host] ${link.peerId} sent no hello`); link.close(); } }, HELLO_TIMEOUT_MS);
     link.onClose(() => { clearTimeout(helloTimer); if (seated) this.onLeave(link.peerId); });
+    /** True if the message must be dropped; disconnects the peer once it's clearly flooding. */
+    const blocked = (v: Verdict): boolean => {
+      if (v === 'ok') return false;
+      if (v === 'kick' && !kicked) {
+        kicked = true;
+        clearTimeout(helloTimer);
+        console.warn(`[host] disconnecting ${link.peerId}: message flood (${guard.dropped} dropped)`);
+        if (seated) this.onLeave(link.peerId); // a local close() doesn't fire our own onClose
+        this.reject(link, 'flood');
+      }
+      return true;
+    };
     link.onMessage((raw) => {
+      if (kicked) return;
+      const now = Date.now();
+      if (blocked(guard.admit(raw, now))) return;
       const msg = sanitizeClientMsg(raw);
       if (!msg) {
-        const now = Date.now();
         if (now - (this.warned.get(link.peerId) ?? -Infinity) > WARN_EVERY_MS) {
           this.warned.set(link.peerId, now);
           console.warn(`[host] dropping malformed messages from ${link.peerId}`);
         }
+        blocked(guard.malformed(now));
         return;
       }
       if (!seated) {
@@ -119,6 +143,7 @@ export class HostSession {
       const playerId = seat + 1;
       switch (msg.t) {
         case 'input':
+          if (blocked(guard.admitInput(now))) return;
           if (this.started) this.worker?.postMessage({ type: 'remoteInput', playerId, input: msg.input });
           break;
         case 'preview':
@@ -148,6 +173,7 @@ export class HostSession {
     const seat = this.lobby.seatOf(peerId);
     this.links.delete(peerId);
     if (seat === null) return;
+    this.interest?.forget(seat + 1);
     if (!this.started) { this.lobby.removePeer(peerId); this.broadcastLobby(); return; }
     const name = this.nameOf(seat);
     console.info(`[host] ${name} (seat ${seat}) left mid-match; bot takes over`);
@@ -179,8 +205,51 @@ export class HostSession {
     return { setup: this.lobby.toMatchSetup(), humanId: 1 };
   }
 
+  /**
+   * Rematch: a fresh match on a new worker with the same seats and the same lobby code. Friends who left
+   * mid-match get a medium bot (fresh nickname); everyone else keeps their seat, bots their nickname and
+   * difficulty. onMap then sends every friend a new 'start', which their client treats as a restart.
+   */
+  restart(worker: { postMessage(m: ToWorker): void }): { setup: MatchSetup; humanId: number } {
+    if (!this.started) throw new Error('HostSession.restart: match not started');
+    for (const seat of this.leaverSeats()) {
+      const slot = this.lobby.slots()[seat];
+      if (slot.kind === 'human') this.lobby.removePeer(slot.peerId);
+      this.lobby.setSeat(seat, { kind: 'bot', difficulty: TAKEOVER_DIFFICULTY });
+    }
+    this.resetStream(worker);
+    console.info('[host] rematch');
+    return { setup: this.lobby.toMatchSetup(), humanId: 1 };
+  }
+
+  /** End the match and send everyone back to the lobby screen (seats editable, new friends may join). */
+  backToLobby() {
+    if (!this.started) return;
+    for (const seat of this.leaverSeats()) {
+      const slot = this.lobby.slots()[seat];
+      if (slot.kind === 'human') this.lobby.removePeer(slot.peerId);
+    }
+    this.started = false;
+    this.resetStream(null);
+    console.info('[host] back to lobby');
+    this.broadcastLobby();
+  }
+
+  /** Human seats (not the host) whose friend is no longer connected. */
+  private leaverSeats(): number[] {
+    return this.lobby.slots().flatMap((s, i) => (s.kind === 'human' && !s.isHost && !this.links.has(s.peerId) ? [i] : []));
+  }
+
+  private resetStream(worker: { postMessage(m: ToWorker): void } | null) {
+    this.worker = worker;
+    this.encoder = new SnapshotEncoder();
+    this.tickNo = 0;
+    this.previewBudget.clear();
+  }
+
   /** Worker sent the map: tell every remote to start. */
   onMap(map: IslandLayout[], islands: number[]) {
+    this.interest = new InterestManager(map);
     for (const [peerId, link] of this.links) {
       const seat = this.lobby.seatOf(peerId);
       if (seat !== null) this.send(link, { t: 'start', map, playerId: seat + 1, island: islands[seat] ?? seat });
@@ -191,9 +260,12 @@ export class HostSession {
   onSnapshot(snap: Snapshot) {
     this.encoder.push(snap);
     if (this.tickNo++ % 2 !== 0) return;
+    this.interest?.update(snap);
     for (const [peerId, link] of this.links) {
       const seat = this.lobby.seatOf(peerId);
-      if (seat !== null) this.send(link, { t: 'snap', s: this.encoder.take(seat + 1) });
+      if (seat === null) continue;
+      const s = this.encoder.take(seat + 1);
+      this.send(link, { t: 'snap', s: this.interest ? this.interest.apply(seat + 1, s) : s });
     }
   }
 
@@ -216,6 +288,7 @@ export const JOIN_ERRORS: Record<string, string> = {
   'bad-code': 'Invite codes are 6 letters/digits, e.g. K7Q2MX.',
   full: 'That game is full.',
   started: 'That game has already started.',
+  flood: 'The host disconnected you for sending too many messages.',
   version: 'Your game version does not match the host. Reload the page and try again.',
   kicked: 'The host removed you from the game.',
   'host-left': 'The host left.',

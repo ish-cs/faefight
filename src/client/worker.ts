@@ -87,7 +87,9 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         else if (msg.cmd === 'hp') match.debugSetHp(humanId, msg.hp);
         else if (msg.cmd === 'shield') match.debugSetShield(msg.id ?? humanId, msg.shield);
         else if (msg.cmd === 'potionShop') match.debugSetPotionShops([{ x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z }]);
-        else match.debugGive(humanId, msg.inv);
+        else if (msg.cmd === 'eliminate') match.debugEliminate(msg.playerId);
+        else if (msg.cmd === 'kill') match.debugKill(msg.playerId);
+        else if (msg.cmd === 'give') match.debugGive(humanId, msg.inv);
         break;
     }
   } catch (err) {

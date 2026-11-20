@@ -250,3 +250,21 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
   content: ''; position: absolute; left: 50%; top: 0; width: 90px; height: 18px; transform: translateX(-50%);
   border-radius: 50% 50% 0 0 / 100% 100% 0 0; background: radial-gradient(ellipse at 50% 100%, rgba(255,40,30,.95), rgba(255,40,30,0) 70%);
 }
+
+/* ---- end of match: buttons, spectator banner, scoreboard ---- */
+.hud .end-buttons { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.hud .end-wait { color: var(--muted); font-size: 15px; padding: 0 6px; }
+.spectate-banner { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); padding: 7px 14px; font-size: 13px; font-weight: 600; letter-spacing: 0.4px; pointer-events: none; z-index: 5; white-space: nowrap; }
+.scoreboard { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 520px; max-width: calc(100vw - 32px); padding: 16px 20px; z-index: 20; pointer-events: none; }
+.scoreboard .sb-title { font-size: 13px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin-bottom: 10px; }
+.scoreboard table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.scoreboard th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.scoreboard td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.scoreboard td.num { font-variant-numeric: tabular-nums; text-align: right; width: 56px; }
+.scoreboard th:nth-child(3), .scoreboard th:nth-child(4) { text-align: right; }
+.scoreboard .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.scoreboard .tagpill { margin-left: 6px; font-size: 10px; padding: 1px 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.12); color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+.scoreboard tr.you td { background: rgba(255, 255, 255, 0.06); }
+.scoreboard tr.dead .sb-status, .scoreboard tr.trapped .sb-status { color: var(--gold); }
+.scoreboard tr.eliminated, .scoreboard tr.spectating { opacity: 0.6; }
+.scoreboard .sb-seal.sealed { color: var(--danger); font-weight: 700; }

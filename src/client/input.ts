@@ -26,7 +26,7 @@ export type InputHooks = {
   place(): void;
   /** Pointer lock gained/lost. */
   lockChange(locked: boolean): void;
-  /** Tab: hotbar edit mode (pointer released to drag slots) opened/closed. */
+  /** I: hotbar edit mode (pointer released to drag slots) opened/closed. */
   inventoryChange(open: boolean): void;
 };
 
@@ -38,7 +38,7 @@ export class InputController {
   selected = 0;
   /** What sits in the selected slot, per the latest snapshot (set by main each frame). */
   held: HotbarItem | null = null;
-  /** Tab mode: pointer released so hotbar slots can be dragged. */
+  /** I (inventory) mode: pointer released so hotbar slots can be dragged. */
   inventory = false;
   buildRot = 0;
   /** False while a menu or panel is open: game keys and mouse are ignored. */
@@ -89,7 +89,7 @@ export class InputController {
     this.selected = i;
   }
 
-  /** Tab: release the pointer to drag hotbar slots; Tab again (or a click on the game) recaptures. */
+  /** I: release the pointer to drag hotbar slots; I again (or a click on the game) recaptures. */
   setInventory(open: boolean) {
     if (open === this.inventory) return;
     this.inventory = open;
@@ -146,7 +146,7 @@ export class InputController {
 
   private onKey(e: KeyboardEvent, down: boolean) {
     if (e.code === 'AltLeft' || e.code === 'AltRight') e.preventDefault();
-    // Space/Tab are ours in game (jump, hotbar edit mode); with a panel open they press/move between buttons as usual.
+    // Space/Tab are ours in game (jump, scoreboard); with a panel open they press/move between buttons as usual.
     if ((e.code === 'Space' || e.code === 'Tab') && this.enabled) e.preventDefault();
     if (!down) { this.keys.delete(e.code); return; }
     if (!this.enabled) return;
@@ -165,7 +165,7 @@ export class InputController {
       case 'KeyX': this.rotate(1); break;
       case 'KeyE': this.hooks.interact(); break;
       case 'KeyR': this.oneShot.reload = true; break;
-      case 'Tab': this.setInventory(!this.inventory); break;
+      case 'KeyI': this.setInventory(!this.inventory); break;
       case 'Space': this.oneShot.jump = true; break;
     }
   }

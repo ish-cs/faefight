@@ -100,4 +100,15 @@ describe('snapshot codec', () => {
     enc.push({ ...s, tick: 2 });
     expect(JSON.stringify(enc.take(1)).length).toBeLessThan((60 * 1024) / 15);
   });
+  test("every player's kills and deaths reach every client", () => {
+    const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();
+    const s = snap(1, []);
+    s.players[0].kills = 3; s.players[0].deaths = 1;
+    s.players[1].kills = 0; s.players[1].deaths = 4;
+    enc.push(s);
+    for (const viewer of [1, 2]) {
+      const out = dec.decode(enc.take(viewer));
+      expect(out.players.map((p) => [p.kills, p.deaths])).toEqual([[3, 1], [0, 4]]);
+    }
+  });
 });

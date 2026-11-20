@@ -87,9 +87,13 @@ export class SoundDirector {
   private lastTickSec: number | null = null;
   env: Env = { alive: false, hp: 100, inBunker: false, shoreDist: 50, inWater: false };
 
+  /** A new match (also a rematch): forget the previous match's snapshot so nothing is diffed across them. */
   setMap(map: IslandLayout[], humanId: number) {
     this.map = map;
     this.humanId = humanId;
+    this.prev = null;
+    this.steps.clear();
+    this.lastTickSec = null;
   }
 
   update(s: Snapshot): Cue[] {

@@ -68,6 +68,9 @@ export type PlayerState = {
   shield: number;
   alive: boolean;
   eliminated: boolean;
+  /** Scoreboard: kills credited to this player (not suicides or environment deaths) and times died. */
+  kills: number;
+  deaths: number;
   respawnAt: number | null;
   /** Set while trapped in a sealed bunker after respawning: eliminated at this time unless out. */
   breakoutUntil: number | null;
@@ -115,9 +118,14 @@ export type Snapshot = {
   waterY: number;
   suddenDeath: boolean;
   winner: number | null;
-  /** Potion seller NPCs (anyone may buy there). */
-  potionShops: PotionShop[];
+  /** Potion seller NPCs (anyone may buy there). Optional so hand-built snapshots (tests, tools) can omit it. */
+  potionShops?: PotionShop[];
   events: MatchEvent[];
+  /**
+   * Remote clients only (net/interest.ts): players this client can't currently perceive. They stay
+   * in `players` (name, alive, eliminated) with a stale position and neutral state; don't render them.
+   */
+  hidden?: number[];
 };
 
 export type PotionShop = { id: number; pos: Vec3 };

@@ -17,6 +17,24 @@ const WEAPON_KINDS = Object.keys(WEAPONS) as WeaponKind[];
 const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge', 'medkit', ...POTION_KINDS];
 const oneOf = <T extends string>(list: readonly T[], x: unknown): T | null => (list.includes(x as T) ? (x as T) : null);
 
+/** Names that would pass for the host, the game or a bot tag. */
+const RESERVED_NAMES = new Set(['host', 'system', 'server', 'admin', 'bot', 'you']);
+
+/**
+ * Player name from an untrusted peer: NFKC (folds fullwidth/compat look-alikes), no control, format
+ * (zero-width, bidi override) or lone-surrogate chars, whitespace collapsed, ≤ NAME_MAX code points.
+ * Reserved names become "Player". Null if nothing is left. Uniqueness is the lobby's job.
+ */
+export function cleanName(x: unknown): string | null {
+  if (typeof x !== 'string') return null;
+  const s = x.slice(0, NAME_MAX * 8).normalize('NFKC')
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, (c) => (/\p{Cc}/u.test(c) ? ' ' : ''))
+    .replace(/\s+/gu, ' ').trim();
+  const name = [...s].slice(0, NAME_MAX).join('').trim();
+  if (!name) return null;
+  return RESERVED_NAMES.has(name.toLowerCase()) ? 'Player' : name;
+}
+
 function vec(x: unknown): Vec3 | null {
   if (!isObj(x)) return null;
   const v = { x: x.x, y: x.y, z: x.z };
@@ -115,7 +133,7 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
   switch (x.t) {
     case 'hello': {
       if (typeof x.name !== 'string' || typeof x.version !== 'number') return null;
-      const name = x.name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, NAME_MAX);
+      const name = cleanName(x.name);
       return name ? { t: 'hello', name, version: x.version } : null;
     }
     case 'input': {

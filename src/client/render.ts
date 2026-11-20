@@ -196,7 +196,7 @@ export class Renderer {
     const snap = this.curr;
     if (snap) {
       const prev = this.prev;
-      this.characters.sync(snap.players, (id) => prev?.players.find((q) => q.id === id), this.alpha(), this.humanId,
+      this.characters.sync(snap.hidden?.length ? snap.players.filter((p) => !snap.hidden!.includes(p.id)) : snap.players, (id) => prev?.players.find((q) => q.id === id), this.alpha(), this.humanId,
         localYaw, snap.time, (id, out) => this.playerPos(id, out));
       for (const m of this.loot.values()) m.rotation.y += 0.02;
     }

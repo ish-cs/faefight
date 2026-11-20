@@ -55,7 +55,6 @@ export class Match implements MatchApi {
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
   private feed: FeedLine[] = [];
-  private killCount = new Map<number, number>();
   /** Potion sellers (temporary default until the centre island lands; see potions.ts). */
   potionShops: PotionShop[] = defaultPotionShops();
 
@@ -213,6 +212,17 @@ export class Match implements MatchApi {
     this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
   }
 
+  /** Kill (if alive) and eliminate for good: no respawn. The win check runs on the next tick. */
+  debugEliminate(playerId: number): void {
+    const p = this.mustPlayer(playerId);
+    this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
+    if (p.eliminated) return;
+    p.eliminated = true;
+    p.respawnAt = null;
+    p.breakoutUntil = null;
+    this.events.push({ t: this.s.time, type: 'eliminated', data: { player: playerId } });
+  }
+
   private applyInput(p: PlayerState, input: PlayerInput, now: number) {
     p.yaw = input.yaw;
     p.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, input.pitch));
@@ -339,7 +349,6 @@ export class Match implements MatchApi {
       else if (e.type === 'kill') {
         const killer = (d.killer as number | null) ?? null, victim = d.victim as number;
         this.feed.push({ t: e.t, killer, victim });
-        if (killer !== null && killer !== victim) this.killCount.set(killer, (this.killCount.get(killer) ?? 0) + 1);
       }
     }
     const keep = <T extends { t: number }>(xs: T[], sec: number) => (xs.length && xs[0].t < now - sec ? xs.filter((x) => x.t >= now - sec) : xs);
@@ -364,7 +373,7 @@ export class Match implements MatchApi {
       self,
       enemies,
       others: [...this.s.players.values()].filter((o) => o.id !== self.id)
-        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: this.killCount.get(o.id) ?? 0 })),
+        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills })),
       map: this.map,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),
