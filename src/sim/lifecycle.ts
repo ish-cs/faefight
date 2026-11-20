@@ -1,5 +1,5 @@
 import { LIFECYCLE, MAP, PLAYER, SEAL } from './constants';
-import { emptyInventory, mergeInventory } from './economy';
+import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
 import { addKind, countOf, emptyHotbar, heldKinds, takeOut } from './hotbar';
 import type { IslandLayout } from './map';
 import type { Physics } from './physics';
@@ -13,6 +13,8 @@ export type MatchStateCore = {
   pieces: Map<number, PieceState>;
   loot: Map<number, LootBag>;
   generators: { island: number; stored: number }[];
+  /** Generator level (1-4) by island index; bought at the owner's shop, kept for the whole match. */
+  genLevels: number[];
   waterY: number;
   suddenDeath: boolean;
   forcedSeal: boolean;
@@ -28,6 +30,7 @@ export function newMatchState(map: IslandLayout[]): MatchStateCore {
     pieces: new Map(),
     loot: new Map(),
     generators: map.map((i) => ({ island: i.index, stored: 0 })),
+    genLevels: map.map(() => 1),
     waterY: MAP.waterY,
     suddenDeath: false,
     forcedSeal: false,
@@ -98,8 +101,27 @@ export function killPlayer(
   return [ev(now, 'kill', { victim: victimId, killer, inWater })];
 }
 
+/**
+ * Seal checks are a flood fill, and the escape countdown asks every tick for anyone standing near their bunker:
+ * cache per island until the set of pieces changes. Ids only ever grow, so (count, id sum) identifies the set.
+ */
+const sealCache = new WeakMap<MatchStateCore, { count: number; sum: number; byIsland: Map<number, boolean> }>();
+
 export function islandSealed(s: MatchStateCore, map: IslandLayout[], island: number): boolean {
-  return s.forcedSeal || isSealed(map[island].bunker, [...s.pieces.values()]);
+  if (s.forcedSeal) return true;
+  let sum = 0;
+  for (const id of s.pieces.keys()) sum += id;
+  let c = sealCache.get(s);
+  if (!c || c.count !== s.pieces.size || c.sum !== sum) {
+    c = { count: s.pieces.size, sum, byIsland: new Map() };
+    sealCache.set(s, c);
+  }
+  let sealed = c.byIsland.get(island);
+  if (sealed === undefined) {
+    sealed = isSealed(map[island].bunker, [...s.pieces.values()]);
+    c.byIsland.set(island, sealed);
+  }
+  return sealed;
 }
 
 /** The spawn point, or the nearest free spot inside the bunker if a piece sits on it. */
@@ -167,6 +189,7 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
     p.hp = PLAYER.hp;
     p.shield = 0;
     p.alive = true;
+    grantLockedGuns(p);
     p.invulnUntil = now + LIFECYCLE.invulnSec;
     physics.setPlayerPos(p.id, spawn);
   }

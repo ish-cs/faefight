@@ -202,10 +202,10 @@ function showMenu() {
   status.dataset.testid = 'menu-status';
   const lockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach((x) => (x.disabled = true));
   const unlockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach((x) => (x.disabled = false));
-  for (const d of ['easy', 'medium', 'hard'] as Difficulty[]) {
+  for (const d of ['easy', 'medium', 'hard', 'pro'] as Difficulty[]) {
     const b = document.createElement('button');
     b.className = `btn${d === 'medium' ? ' primary' : ''}`;
-    b.textContent = d[0].toUpperCase() + d.slice(1);
+    b.textContent = d === 'pro' ? 'PRO' : d[0].toUpperCase() + d.slice(1);
     b.dataset.testid = `play-${d}`;
     b.onclick = () => {
       lockMenu();

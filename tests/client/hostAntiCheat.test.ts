@@ -126,7 +126,7 @@ describe('HostSession anti-cheat', () => {
     p1.inv.cash = 4321;
     const p2 = newPlayer(2, 'Bob', false, 1, map[1].center);
     const snap: Snapshot = {
-      time: 5, tick: 150, players: [p1, p2], pieces: [], loot: [], generators: [{ island: 0, stored: 99 }, { island: 1, stored: 5 }],
+      time: 5, tick: 150, players: [p1, p2], pieces: [], loot: [], generators: [{ island: 0, stored: 99 }, { island: 1, stored: 5 }], genLevels: [1, 1],
       sealed: [false, false], waterY: 0, suddenDeath: false, winner: null, events: [],
     };
     h.onSnapshot(snap);
