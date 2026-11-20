@@ -3,6 +3,17 @@ import { nickname } from '../sim/names';
 import { MAX_PLAYERS, type Slot } from './protocol';
 
 const MIN_SEATS = 2;
+const NAME_MAX = 16;
+
+/** `name`, or `name 2`, `name 3`… so no two seats share a name (case-insensitive; `taken` is lowercase). */
+export function uniqueName(name: string, taken: Set<string>): string {
+  if (!taken.has(name.toLowerCase())) return name;
+  for (let n = 2; ; n++) {
+    const suffix = ` ${n}`;
+    const candidate = `${[...name].slice(0, NAME_MAX - suffix.length).join('').trimEnd()}${suffix}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
 
 /**
  * Host-side lobby seating. Pure state, no networking.
@@ -27,7 +38,7 @@ export class Lobby {
   /** Seat a joining human: first open seat, else a new seat while under MAX_PLAYERS. Null if full or already seated. */
   addHuman(name: string, peerId: string): number | null {
     if (this.seatOf(peerId) !== null) return null;
-    const slot: Slot = { kind: 'human', name, peerId, isHost: false };
+    const slot: Slot = { kind: 'human', name: uniqueName(name, this.takenNames()), peerId, isHost: false };
     const open = this.seats.findIndex((s) => s.kind === 'open');
     if (open >= 0) {
       this.seats[open] = slot;
@@ -63,7 +74,7 @@ export class Lobby {
   }
 
   private takenNames(): Set<string> {
-    return new Set(this.seats.flatMap((s) => (s.kind === 'human' || (s.kind === 'bot' && s.name) ? [s.name as string] : [])));
+    return new Set(this.seats.flatMap((s) => (s.kind === 'human' || (s.kind === 'bot' && s.name) ? [(s.name as string).toLowerCase()] : [])));
   }
 
   /** Append an open seat (up to MAX_PLAYERS). */

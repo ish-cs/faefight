@@ -23,7 +23,7 @@ import { InputController } from './input';
 import { LobbyUi } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
 import { Renderer } from './render';
-import { HostSession, JoinError, joinRoom } from './session';
+import { HostSession, JOIN_ERRORS, JoinError, joinRoom } from './session';
 import { SnapshotBuffer } from './snapBuffer';
 
 const app = document.getElementById('app')!;
@@ -140,7 +140,7 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
         if (m.t === 'snap') sink.snapshot(decoder.decode(m.s));
         else if (m.t === 'preview') sink.preview(m.result, m.key);
         else if (m.t === 'chat') sink.chat(m.from, m.text);
-        else if (m.t === 'ended') { closed = true; sink.fatal('Host left', 'Match over: the host left the game.'); }
+        else if (m.t === 'ended') { closed = true; if (m.reason === 'host-left') sink.fatal('Host left', 'Match over: the host left the game.'); else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`); }
       };
       early.forEach(handle);
       link.onMessage((raw) => handle(raw as HostMsg));

@@ -104,6 +104,11 @@ export type Snapshot = {
   suddenDeath: boolean;
   winner: number | null;
   events: MatchEvent[];
+  /**
+   * Remote clients only (net/interest.ts): players this client can't currently perceive. They stay
+   * in `players` (name, alive, eliminated) with a stale position and neutral state; don't render them.
+   */
+  hidden?: number[];
 };
 
 export const NO_INPUT: PlayerInput = {
