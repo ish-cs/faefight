@@ -1,11 +1,12 @@
 import { buy, collect, mergeInventory, emptyInventory, tickGenerator, vaultTransfer } from './economy';
-import { snapPlacement, validatePlacement, type Placement } from './building';
+import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { DT, ECONOMY, PIECES, PLAYER } from './constants';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMap, type IslandLayout } from './map';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics } from './physics';
+import { unsupportedPieces } from './support';
 import { newPlayer } from './player';
 import type { BotView } from './bots/view';
 import { Bot } from './bots/bot';
@@ -41,6 +42,7 @@ export class Match implements MatchApi {
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
   private sealDirty = true;
+  private supportDirty = false;
   private ctx: CombatCtx;
 
   private constructor(readonly map: IslandLayout[], private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
@@ -67,6 +69,7 @@ export class Match implements MatchApi {
         this.s.pieces.delete(id);
         physics.removePiece(id);
         this.sealDirty = true;
+        this.supportDirty = true;
       },
       onKill: (victim, killer) => {
         this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer));
@@ -102,6 +105,7 @@ export class Match implements MatchApi {
     }
 
     this.events.push(...tickExplosives(this.ctx, now));
+    this.collapseUnsupported(now);
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath);
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
     this.updateSeals(now);
@@ -120,6 +124,26 @@ export class Match implements MatchApi {
     if (!this.makeBot) throw new Error('Match.setBot: no bot factory configured');
     p.isBot = true;
     this.bots.set(playerId, this.makeBot(playerId, difficulty, this.rng));
+  }
+
+  /** Pieces left with nothing holding them up fall apart (no floating bridges or walls). */
+  private collapseUnsupported(now: number) {
+    if (!this.supportDirty) return;
+    this.supportDirty = false;
+    for (const id of unsupportedPieces(this.physics, this.s.pieces)) {
+      const p = this.s.pieces.get(id)!;
+      this.s.pieces.delete(id);
+      this.physics.removePiece(id);
+      this.sealDirty = true;
+      const pos = v3(p.pos.x, p.pos.y + PIECES[p.kind].h / 2, p.pos.z);
+      this.events.push({ t: now, type: 'destroyed', data: { piece: id, kind: p.kind, pos, rotY: p.rotY, collapse: true } });
+    }
+  }
+
+  debugDamagePiece(pieceId: number, amount: number): void {
+    const p = this.s.pieces.get(pieceId);
+    if (!p) throw new Error(`Match.debugDamagePiece: no piece ${pieceId}`);
+    if (damagePiece(p, amount, 'explosive')) this.ctx.onPieceDestroyed(pieceId);
   }
 
   debugTeleport(playerId: number, pos: Vec3): void {
