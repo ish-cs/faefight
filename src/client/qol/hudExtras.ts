@@ -34,13 +34,14 @@ const SPAN = (100 * Math.PI) / 180; // ±100° visible
 const HALF_W = 230; // px (bar is 460 wide)
 const DANGER_SEC = 3;
 
-type Marker = { node: HTMLElement; label?: HTMLElement; x: number | null };
+/** `x` undefined = never placed yet (so the first place() always writes). */
+type Marker = { node: HTMLElement; label?: HTMLElement; x?: number | null };
 
 class Compass {
   readonly root = el('div', 'qol-compass glass');
   private strip = el('div', 'qc-strip');
   private heading = el('div', 'qc-heading');
-  private ticks: { node: HTMLElement; deg: number; x: number | null }[] = [];
+  private ticks: { node: HTMLElement; deg: number; x?: number | null }[] = [];
   private markers = new Map<string, Marker>();
   private danger: { from: { x: number; z: number }; at: number }[] = [];
 
@@ -50,7 +51,7 @@ class Compass {
       const card = ({ 0: 'N', 90: 'E', 180: 'S', 270: 'W' } as Record<number, string>)[deg];
       const node = el('div', `qc-tick${card ? ' card' : deg % 45 === 0 ? ' mid' : ''}`, card ?? (deg % 45 === 0 ? String(deg) : ''));
       this.strip.append(node);
-      this.ticks.push({ node, deg, x: null });
+      this.ticks.push({ node, deg });
     }
     this.root.append(this.strip, this.heading, el('div', 'qc-caret'));
   }
@@ -63,13 +64,13 @@ class Compass {
       const lab = label !== undefined ? el('span', 'qc-label', label) : undefined;
       if (lab) node.append(lab);
       this.strip.append(node);
-      m = { node, label: lab, x: null };
+      m = { node, label: lab };
       this.markers.set(key, m);
     }
     return m;
   }
 
-  private place(m: { node: HTMLElement; x: number | null }, x: number | null) {
+  private place(m: { node: HTMLElement; x?: number | null }, x: number | null) {
     const rx = x === null ? null : Math.round(x);
     if (rx === m.x) return;
     m.x = rx;
@@ -85,12 +86,18 @@ class Compass {
 
   frame(yaw: number, me: { x: number; z: number } | null, snap: Snapshot | null, map: IslandLayout[], myIsland: number, nowMs: number) {
     setText(this.heading, String(headingDeg(yaw)).padStart(3, '0'));
-    for (const t of this.ticks) this.place(t, barX(relAngle((-t.deg * Math.PI) / 180, yaw), SPAN, HALF_W));
+    for (const t of this.ticks) {
+      this.place(t, barX(relAngle((-t.deg * Math.PI) / 180, yaw), SPAN, HALF_W));
+      const under = t.x != null && Math.abs(t.x) < 14 && t.deg % 90 !== 0; // the caret covers a number; letters stay
+      if (t.node.classList.contains('atcaret') !== under) t.node.classList.toggle('atcaret', under);
+    }
     if (!me || !snap) return;
+    const labelled: { m: Marker; d: number }[] = [];
     const at = (key: string, p: { x: number; z: number }) => {
       const m = this.markers.get(key)!;
       const d = Math.hypot(p.x - me.x, p.z - me.z);
       this.place(m, d < 4 ? null : barX(relAngle(yawToward(me, p), yaw), SPAN, HALF_W));
+      if (m.x != null && m.label) labelled.push({ m, d });
     };
     for (const isl of map) {
       if (isl.index === myIsland) {
@@ -113,6 +120,16 @@ class Compass {
     const owned = new Set(snap.players.map((p) => p.island));
     for (const isl of map) if (!owned.has(isl.index) && isl.index !== myIsland) { this.marker(`mid${isl.index}`, 'island center', 'Center'); at(`mid${isl.index}`, isl.center); }
     (snap.potionShops ?? []).forEach((sh, i) => { this.marker(`pot${i}`, 'potion', 'Potions'); at(`pot${i}`, sh.pos); });
+    // Markers in the same direction: only the nearest keeps its label (no overlapping text).
+    // Islands (players) win over the potion seller; then the nearer one.
+    const rank = (m: Marker) => (m.node.classList.contains('potion') ? 1 : 0);
+    labelled.sort((p, q) => rank(p.m) - rank(q.m) || p.d - q.d);
+    const taken: number[] = [];
+    for (const { m } of labelled) {
+      const clash = taken.some((x) => Math.abs(x - m.x!) < 74);
+      if (!clash) taken.push(m.x!);
+      if (m.node.classList.contains('nolabel') !== clash) m.node.classList.toggle('nolabel', clash);
+    }
     this.danger = this.danger.filter((d) => nowMs - d.at < DANGER_SEC * 1000);
     for (let i = 0; i < 4; i++) {
       const m = this.marker(`danger${i}`, 'danger');

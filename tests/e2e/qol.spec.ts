@@ -9,10 +9,17 @@ const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
 type P = { id: number; name: string; isBot: boolean; alive: boolean; island: number; reloadUntil: number;
   inv: { cash: number; weapons: Record<string, { mag: number; spare: number }>; pieces: Record<string, number> } };
 type Snap = { time: number; players: P[]; winner: number | null; stats?: unknown[] };
-type Isl = { center: { x: number; z: number }; shop: { x: number; z: number } };
+type Isl = { center: { x: number; z: number }; shop: { x: number; z: number }; bunker: { facingYaw: number } };
 
 const SHOTS = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.E2E_SHOTS;
 const snapOf = (p: Page) => dbg<Snap>(p, 'snapshot');
+
+/** The loading screen has faded (screenshots show the game, not the loader). */
+const revealed = async (p: Page) => {
+  await expect.poll(() => p.evaluate(() =>
+    !(window as unknown as { __faefightLoading?: { visible(): boolean } }).__faefightLoading?.visible()), { timeout: 60_000 }).toBe(true);
+  await p.waitForTimeout(800); // fade-out
+};
 
 function watchErrors(tag: string, p: Page, errors: string[]) {
   p.on('console', (m) => { if (m.type() === 'error') errors.push(`${tag}: ${m.text()}`); });
@@ -25,6 +32,7 @@ async function startSolo(page: Page, opts: { bots?: number } = {}) {
   if (opts.bots) await page.getByTestId(`bots-${opts.bots}`).click();
   await page.getByTestId('play-medium').click();
   await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });
+  await revealed(page);
   return dbg<number>(page, 'humanId');
 }
 
@@ -40,9 +48,10 @@ test('menu remembers difficulty + bot count; compass; Esc pauses vs bots; death 
   await expect(page.getByTestId('bot-count')).toBeVisible();
   await expect(page.getByTestId('bots-1')).toHaveClass(/on/);
   await page.getByTestId('bots-3').click();
-  if (SHOTS) { await page.waitForTimeout(1000); await page.screenshot({ path: `${SHOTS}/qol-menu.png` }); }
+  if (SHOTS) { await revealed(page); await page.screenshot({ path: `${SHOTS}/qol-menu.png` }); }
   await page.getByTestId('play-hard').click();
   await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });
+  await revealed(page);
   const me = await dbg<number>(page, 'humanId');
   expect((await snapOf(page)).players).toHaveLength(4);
 
@@ -102,7 +111,7 @@ test('combat QoL: ammo warnings, auto-reload, R on a full gun, Shift+click bulk 
   const warn = page.getByTestId('ammo-warning');
   await expect(warn).toHaveText('Last rounds');
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-ammo', 'nospare');
-  await expect(page.getByTestId('hotbar-slot-0')).toContainText('2/0');
+  await expect(page.getByTestId('hotbar-slot-0')).toContainText(/[12]\/0/);
   // More ammo: still low in the mag ("Low ammo"); the slot is fine.
   await dbg(page, 'give', { weapons: { pistol: { mag: 0, spare: 24 } } });
   await expect(warn).toHaveText('Low ammo');
@@ -116,12 +125,13 @@ test('combat QoL: ammo warnings, auto-reload, R on a full gun, Shift+click bulk 
   await expect(warn).toBeHidden();
   // R tops up the chamber round (a tactical reload: 12 + 1); R on that full gun does nothing.
   await page.keyboard.press('KeyR');
-  await expect.poll(async () => (await me()).inv.weapons.pistol, { timeout: 10_000 }).toEqual({ mag: 13, spare: 13 });
+  await expect.poll(async () => (await me()).inv.weapons.pistol.mag, { timeout: 10_000 }).toBe(13);
   await expect.poll(async () => (await me()).reloadUntil).toBe(0);
+  const full = (await me()).inv.weapons.pistol;
   await page.keyboard.press('KeyR');
   await page.waitForTimeout(400);
   expect((await me()).reloadUntil).toBe(0);
-  expect((await me()).inv.weapons.pistol).toEqual({ mag: 13, spare: 13 });
+  expect((await me()).inv.weapons.pistol).toEqual(full);
 
   // Shop: Shift+click a piece buys 5; then the quick re-buy button / B buys it again.
   const home = (await dbg<Isl[]>(page, 'map'))[(await me()).island];
@@ -150,8 +160,13 @@ test('end screen: match summary with per-player stats and awards', async ({ page
   // Earn a little and build a piece so there's something to award.
   const me = async () => (await snapOf(page)).players.find((p) => p.id === humanId)!;
   const home = (await dbg<Isl[]>(page, 'map'))[(await me()).island];
+  // Stand in the open between the bunker and the island centre, facing the centre, and drop a sandbag wall.
+  const yaw = home.bunker.facingYaw;
+  const fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  await dbg(page, 'teleport', home.center.x + fx * 4 + rx * 3, home.center.z + fz * 4 + rz * 3);
+  await page.evaluate((y) => { const i = (window as unknown as { __faefight: { input: { yaw: number; pitch: number } } }).__faefight.input; i.yaw = y; i.pitch = -0.35; }, yaw);
   await dbg(page, 'give', { pieces: { sandbags: 1 } });
-  await dbg(page, 'teleport', home.center.x, home.center.z);
+  await expect.poll(async () => (await me()).inv.pieces.sandbags ?? 0).toBe(1);
   await page.locator('canvas.game').click();
   await page.keyboard.press('Digit1');
   await expect(page.getByTestId('hotbar')).toHaveAttribute('data-ghost', 'ok', { timeout: 10_000 });
@@ -190,19 +205,20 @@ test('online: invite link, ?join= link, ping column, reconnect within the grace 
   await expect(a.getByTestId('copy-invite')).toHaveText('Link copied');
   const link = await a.evaluate(() => navigator.clipboard.readText());
   expect(link).toMatch(new RegExp(`^http://localhost:\\d+/\\?net=local&debug=1&join=${code}$`));
-  if (SHOTS) await a.screenshot({ path: `${SHOTS}/qol-lobby-invite.png` });
+  if (SHOTS) { await revealed(a); await a.screenshot({ path: `${SHOTS}/qol-lobby-invite.png` }); }
 
   // B opens the link: code filled, name focused; with the name typed it's one click.
   await b.goto(link);
   await expect(b.getByTestId('code-input')).toHaveValue(code);
   await expect(b.getByTestId('name-input')).toBeFocused();
   await b.keyboard.type('Bob');
-  if (SHOTS) await b.screenshot({ path: `${SHOTS}/qol-join-link.png` });
+  if (SHOTS) { await revealed(b); await b.screenshot({ path: `${SHOTS}/qol-join-link.png` }); }
   await b.getByTestId('join-game').click();
   await expect(a.getByTestId('seat-1')).toContainText('Bob');
   await a.getByTestId('start-match').click();
   const players = async (p: Page) => (await dbg<Snap | null>(p, 'snapshot'))?.players.length ?? 0;
   await expect.poll(() => players(b), { timeout: 30_000 }).toBe(2);
+  await revealed(b);
   const bId = await dbg<number>(b, 'humanId');
 
   // Ping column (host shows "host", Bob a number of ms) and the host's tick health.

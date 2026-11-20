@@ -42,6 +42,8 @@ export function sourceOf(weapon: unknown, by: unknown): DamageSource {
 export class RecapTracker {
   private hits: Hit[] = [];
   private lastPos: Vec3 | null = null;
+  /** HP + shield while last alive (what the water took when you drown). */
+  private lastHealth = 0;
 
   /** Feed every applied snapshot. Returns a recap on the snapshot where you died, else null. */
   onSnapshot(s: Snapshot, humanId: number): Recap | null {
@@ -56,7 +58,7 @@ export class RecapTracker {
       }
     }
     const me = s.players.find((p) => p.id === humanId);
-    if (me?.alive) this.lastPos = { ...me.pos };
+    if (me?.alive) { this.lastPos = { ...me.pos }; this.lastHealth = me.hp + (me.shield ?? 0); }
     const cut = s.time - RECAP_WINDOW_SEC;
     if (this.hits.length && this.hits[0].t < cut) this.hits = this.hits.filter((h) => h.t >= cut);
     return recap;
@@ -66,8 +68,7 @@ export class RecapTracker {
     const recent = this.hits.filter((h) => h.t >= t - RECAP_WINDOW_SEC);
     const sums = new Map<DamageSource, number>();
     for (const h of recent) sums.set(h.source, (sums.get(h.source) ?? 0) + h.amount);
-    const me = s.players.find((p) => p.id === humanId);
-    if (inWater) sums.set('water', (sums.get('water') ?? 0) + Math.max(1, Math.round(me?.hp ?? 0) || 1));
+    if (inWater) sums.set('water', (sums.get('water') ?? 0) + Math.max(1, Math.round(this.lastHealth)));
     const bySource = [...sums].map(([source, amount]) => ({ source, amount: Math.round(amount) })).filter((x) => x.amount > 0)
       .sort((a, b) => b.amount - a.amount);
     const lastHit = recent[recent.length - 1];

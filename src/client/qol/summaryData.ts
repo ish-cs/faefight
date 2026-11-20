@@ -21,7 +21,7 @@ export function awards(stats: PlayerStats[]): Award[] {
   const mvp = best(stats, mvpScore, (s) => s.kills);
   if (mvp) out.push({ key: 'mvp', title: 'MVP', id: mvp.id, detail: `${mvp.kills} kills · ${mvp.damage} dmg` });
   const b = best(stats, (s) => s.built, (s) => s.seals);
-  if (b) out.push({ key: 'builder', title: 'Builder', id: b.id, detail: `${b.built} pieces` });
+  if (b) out.push({ key: 'builder', title: 'Builder', id: b.id, detail: `${b.built} piece${b.built > 1 ? 's' : ''}` });
   const se = best(stats, (s) => s.seals, (s) => s.built);
   if (se) out.push({ key: 'sealer', title: 'Sealer', id: se.id, detail: `${se.seals} bunker${se.seals > 1 ? 's' : ''} sealed` });
   const sh = best(stats, (s) => s.headshots, (s) => s.damage);
