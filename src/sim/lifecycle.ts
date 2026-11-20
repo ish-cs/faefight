@@ -81,6 +81,9 @@ export function killPlayer(
   p.hp = 0;
   p.alive = false;
   p.vel = v3();
+  p.deaths++;
+  const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
+  if (k) k.kills++;
   if (p.breakoutUntil !== null) {
     // Died while trapped in a sealed bunker: no more respawns.
     p.breakoutUntil = null;

@@ -17,7 +17,7 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory> }
   | { type: 'debug'; cmd: 'hp'; hp: number }
-  | { type: 'debug'; cmd: 'kill' };
+  | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number };
 
 /** worker → main thread */
 export type FromWorker =

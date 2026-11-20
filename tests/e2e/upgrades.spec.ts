@@ -75,7 +75,7 @@ test('generator upgrade shows Lv2; a locked pistol comes back after death', asyn
   if (env.GEN_SHOT) { await page.waitForTimeout(500); await page.screenshot({ path: env.GEN_SHOT }); }
 
   // Die: respawn with the locked pistol back in slot 1 (full mag + 1 spare).
-  await dbg(page, 'kill');
+  await dbg(page, 'kill', humanId);
   await expect.poll(async () => (await me()).alive).toBe(false);
   await expect.poll(async () => (await me()).alive, { timeout: 10_000 }).toBe(true);
   const after = await me();
