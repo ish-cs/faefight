@@ -53,7 +53,7 @@ export class Match implements MatchApi {
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
   private feed: FeedLine[] = [];
-  private kills = new Map<number, number>();
+  private killCount = new Map<number, number>();
 
   private constructor(readonly map: IslandLayout[], private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
     this.s = newMatchState(map);
@@ -269,7 +269,7 @@ export class Match implements MatchApi {
       else if (e.type === 'kill') {
         const killer = (d.killer as number | null) ?? null, victim = d.victim as number;
         this.feed.push({ t: e.t, killer, victim });
-        if (killer !== null && killer !== victim) this.kills.set(killer, (this.kills.get(killer) ?? 0) + 1);
+        if (killer !== null && killer !== victim) this.killCount.set(killer, (this.killCount.get(killer) ?? 0) + 1);
       }
     }
     const keep = <T extends { t: number }>(xs: T[], sec: number) => (xs.length && xs[0].t < now - sec ? xs.filter((x) => x.t >= now - sec) : xs);
@@ -294,7 +294,7 @@ export class Match implements MatchApi {
       self,
       enemies,
       others: [...this.s.players.values()].filter((o) => o.id !== self.id)
-        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: this.kills.get(o.id) ?? 0 })),
+        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: this.killCount.get(o.id) ?? 0 })),
       map: this.map,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),

@@ -8,7 +8,7 @@ import type {
 import { add, clone, dist2D, forward, norm, right, scale, sub, v3, yawOf } from '../vec';
 import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
-import { Nav, islandAt, lane, laneAt, laneS, type Lane } from './nav';
+import { Nav, insideBunker, islandAt, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
   TALL, bestGun, doorBlocked, doorPieces, isHard, nextPurchase, ownsGun, plugFor, plugSpot, sealKit, shoppingPlan,
@@ -331,7 +331,8 @@ export class Bot {
       scaffolds: this.scaffoldsNeeded(c),
       kit: c.openDoors.length,
       charge: blockers.some((p) => isHard(p.kind)),
-      tower: c.view.now >= LIFECYCLE.suddenDeathAt - TOWER_PREP_SEC ? TOWER_BAGS : 0,
+      // Every 1 m of tower buys 20 s against the tide: the richer, the taller.
+      tower: c.view.now >= LIFECYCLE.suddenDeathAt - TOWER_PREP_SEC ? TOWER_BAGS + Math.min(4, Math.floor((c.me.inv.cash + c.me.vault.cash) / 250)) : 0,
     };
   }
 
@@ -403,11 +404,13 @@ export class Bot {
     const gun = ownsGun(me.inv);
     const hp = me.hp / 100;
     const rivalDown = !!c.rival && !c.rival.alive && c.rival.respawnAt !== null;
-    const trapped = me.breakoutUntil !== null;
+    const trapped = this.trapped(c);
     switch (g) {
       case 'fleeTide': {
         const g0 = view.groundAt(me.pos.x, me.pos.z) ?? me.pos.y;
         if (!view.suddenDeath) return 0;
+        // Up on a tower: stay there (stepping off means a fall, then the tide).
+        if (g0 - (c.on >= 0 ? view.map[c.on].groundY : view.waterY) > 0.6) return 1.6;
         return g0 - view.waterY < 2.5 || (me.inv.pieces.sandbags ?? 0) > 0 ? 1.2 : 0;
       }
       case 'fight': {
@@ -428,7 +431,8 @@ export class Bot {
       case 'defend':
         if (trapped) return 2;
         if (!view.sealed[home.index] || view.suddenDeath) return 0;
-        return (gun || me.inv.charges > 0 || this.blockers(c).some((p) => !isHard(p.kind)) ? 0.85 : 0.3) + 0.1 * t.caution;
+        // Nothing that can clear steel/metal: better to go earn a charge than to stand at the door.
+        return (gun || me.inv.charges > 0 || this.blockers(c).some((p) => !isHard(p.kind)) ? 0.85 : 0.1) + 0.1 * t.caution;
       case 'guard': {
         if (!c.homeReach || view.suddenDeath) return 0;
         const s = this.intruder(c);
@@ -507,7 +511,13 @@ export class Bot {
     }
   }
 
+  /** Inside my own sealed bunker (respawned into it, or sealed in alive): getting out is all that matters. */
+  private trapped(c: Ctx): boolean {
+    return c.me.breakoutUntil !== null || (c.view.sealed[c.home.index] && !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos));
+  }
+
   private pick(c: Ctx): Goal {
+    if (this.trapped(c)) return 'defend';
     let best: Goal = c.homeReach || !c.reach ? 'collect' : 'attack', bestScore = -Infinity;
     for (const g of GOALS) {
       const base = this.score(g, c);
@@ -659,7 +669,7 @@ export class Bot {
     }
     const fists = !ownsGun(c.me.inv);
     // Trapped inside with nothing else to try: punch anyway (a human would).
-    if (fists && isHard(target.kind) && c.me.breakoutUntil === null) { this.nextScoreAt = c.view.now; return IDLE; }
+    if (fists && isHard(target.kind) && !this.trapped(c)) { this.nextScoreAt = c.view.now; return IDLE; }
     const spot = inside ? c.home.bunker.center : add(door.center, scale(forward(door.yaw), fists ? 1.4 : 3));
     const walk = this.goTo(spot, fists ? 0.3 : 1.0);
     return walk.dir ? walk : { dir: null, shootAt: center };
@@ -813,7 +823,8 @@ export class Bot {
       const s = top - dist2D(p.pos, me.pos) * 0.02;
       if (s > bestScore) { bestScore = s; best = p.pos; }
     }
-    if (!best) return { dir: null, face: add(me.pos, forward(me.yaw)) };
+    const elevated = c.on >= 0 && here - view.map[c.on].groundY > 0.6;
+    if (!best || elevated) return { dir: null, face: add(me.pos, forward(me.yaw)) };
     return this.goTo(best, 0.5);
   }
 

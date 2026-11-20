@@ -65,7 +65,10 @@ Use cover: the bunker (indestructible) and placed pieces; builders throw down a 
 ## 6. Sudden death (15:00)
 
 Generators stop, every bunker seals for good (no respawns), tide rises 0.05 m/s (land at y = 2 floods ~40 s later).
-Get to high ground (stacked pieces, decks), kill the rest. Cash left in the vault is worthless now: spend it before.
+Get to high ground, kill the rest. Cash left in the vault is worthless now: spend it before.
+A player can hop onto a 1 m sandbag, and a bag placed half on top of the previous one is supported, so ~$100 of
+sandbags is a staircase tower: every metre buys 20 s against the tide. Bots buy 10–14 bags in the last 2.5 min
+before 15:00, build in the open middle of the island they're on, and once up, stay up (stepping off = fall damage).
 
 ## 7. Personalities
 
@@ -81,7 +84,9 @@ Traits only shift utility weights and tactics; every bot can do everything.
 | Economist | banks cash, saves for rifle + steel, late power spike |
 | Sniper | rifle, long preferred range, keeps distance, high ground |
 
-The archetype is shown as a name suffix ("Bot (hard) · Vulture"), which the lobby/HUD/kill feed already display.
+Names: bot seats with a placeholder name ("Bot (hard)", "") get a seeded, unique gamer nickname
+(`src/sim/names.ts`, e.g. "Kestrel_77", "nobodyhome", "Wavy.Dan"). Archetype and difficulty stay out of the
+visible name; `Bot.personality` exposes the archetype for debugging/tests.
 
 ## 8. What a bot may know (BotView)
 
