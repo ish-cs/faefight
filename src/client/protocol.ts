@@ -14,6 +14,10 @@ export type ToWorker =
   | { type: 'remoteInput'; playerId: number; input: PlayerInput; cmds?: MoveCmd[] }
   /** Hand a seat to a bot (its human left). */
   | { type: 'botify'; playerId: number }
+  /** A reconnected friend takes their seat back from the bot. */
+  | { type: 'humanize'; playerId: number }
+  /** Vs bot only: stop / restart ticking (pause card). */
+  | { type: 'pause'; paused: boolean }
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory> }

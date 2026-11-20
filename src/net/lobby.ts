@@ -57,6 +57,14 @@ export class Lobby {
     return i;
   }
 
+  /** A reconnecting friend's seat now belongs to their new link. False unless seat i is a (non-host) human. */
+  rebind(i: number, peerId: string): boolean {
+    const s = this.seats[i];
+    if (!s || s.kind !== 'human' || s.isHost || this.seatOf(peerId) !== null) return false;
+    this.seats[i] = { ...s, peerId };
+    return true;
+  }
+
   /**
    * Host edits a seat. Seat 0 is locked. A human seat may only be set to 'open' (kick).
    * Open/bot seats may become open or bot. Humans arrive only via addHuman.

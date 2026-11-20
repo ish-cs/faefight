@@ -163,7 +163,12 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
     case 'hello': {
       if (typeof x.name !== 'string' || typeof x.version !== 'number') return null;
       const name = cleanName(x.name);
-      return name ? { t: 'hello', name, version: x.version } : null;
+      if (!name) return null;
+      const rejoin = typeof x.rejoin === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(x.rejoin) ? x.rejoin : undefined;
+      return rejoin ? { t: 'hello', name, version: x.version, rejoin } : { t: 'hello', name, version: x.version };
+    }
+    case 'pong': {
+      return Number.isInteger(x.n) && (x.n as number) > 0 ? { t: 'pong', n: x.n as number } : null;
     }
     case 'input': {
       const input = sanitizeInput(x.input);

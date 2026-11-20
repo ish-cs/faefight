@@ -79,7 +79,8 @@ export type HudContext = {
   scoped?: boolean;
 };
 export type HudActions = {
-  buy(item: ShopItem): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void;
+  /** `bulk`: Shift+click (buy several of a building piece). */
+  buy(item: ShopItem, bulk?: boolean): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void;
   /** Hotbar slot clicked. */
   select(slot: number): void;
   /** Hotbar slot dragged onto another. */
@@ -523,7 +524,7 @@ export class Hud {
           const lock = el('span', 'ilock');
           lock.innerHTML = LOCK_ICON;
           b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
-          b.onclick = () => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item); };
+          b.onclick = (e) => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item, e.shiftKey); };
           row.append(b);
         }
         grid.append(el('div', 'shop-section', title), row);
