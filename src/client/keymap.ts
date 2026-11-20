@@ -11,7 +11,7 @@ export type Action =
   | 'aim' | 'reload' | 'interact' | 'drop'
   | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8' | 'slot9'
   | 'rotateLeft' | 'rotateRight' | 'freePlace'
-  | 'inventory' | 'scoreboard' | 'chat' | 'camera' | 'mute' | 'quality';
+  | 'inventory' | 'scoreboard' | 'chat' | 'camera' | 'mute' | 'quality' | 'fps';
 
 export type ActionGroup = 'Movement' | 'Actions' | 'Hotbar' | 'Building' | 'Interface';
 
@@ -38,6 +38,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'camera', label: 'First / third person', group: 'Interface', defaults: ['KeyV'] },
   { id: 'mute', label: 'Mute audio', group: 'Interface', defaults: ['KeyM'] },
   { id: 'quality', label: 'Toggle graphics quality', group: 'Interface', defaults: ['KeyP'] },
+  { id: 'fps', label: 'Show / hide FPS counter', group: 'Interface', defaults: ['F3'] },
 ];
 
 export const ACTION_IDS: readonly Action[] = ACTIONS.map((a) => a.id);

@@ -230,7 +230,7 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
       'set-framecap', FRAME_CAPS, (f) => (f === 0 ? 'Vsync' : `${f}`), () => v().frameCap, (f) => set((d) => { d.video.frameCap = f; }));
     toggle('Dynamic resolution', 'Lower the render resolution briefly when the frame rate drops below target', 'set-dynres',
       () => v().dynamicResolution, (x) => set((d) => { d.video.dynamicResolution = x; }));
-    toggle('Show FPS counter', '', 'set-fps', () => v().showFps, (x) => set((d) => { d.video.showFps = x; }));
+    toggle('Show FPS counter', `Also on ${keyLabel(settings.get().controls.keys.fps[0] ?? '') || '—'} in game`, 'set-fps', () => v().showFps, (x) => set((d) => { d.video.showFps = x; }));
     section('Field of view');
     slider('Third person', '', 'set-fov3', LIMITS.fovThird[0], LIMITS.fovThird[1], 1,
       () => v().fovThird, (x) => set((d) => { d.video.fovThird = x; }), (x) => `${Math.round(x)}°`);

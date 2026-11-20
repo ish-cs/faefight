@@ -6,7 +6,7 @@ import type { BuildRequest, Inventory, PlayerInput, Snapshot } from '../sim/type
 
 /** main thread → worker */
 export type ToWorker =
-  /** humanId = the local (this browser's) player; seat i becomes player id i + 1 on island i. */
+  /** humanId = the local (this browser's) player, 0 = none (spectating host); setup.players[i] becomes player id i + 1. */
   | { type: 'start'; setup: MatchSetup; humanId: number }
   /** Local player's input. */
   | { type: 'input'; input: PlayerInput; cmds?: MoveCmd[] }
@@ -26,7 +26,7 @@ export type ToWorker =
 
 /** worker → main thread */
 export type FromWorker =
-  /** islands[id - 1] = island index of player id. */
+  /** islands[id - 1] = island index of player id; humanId 0 / humanIsland -1 = no local player. */
   | { type: 'map'; map: IslandLayout[]; humanId: number; humanIsland: number; islands: number[] }
   | { type: 'snapshot'; snap: Snapshot }
   | { type: 'preview'; playerId: number; result: Placement; key: number }

@@ -16,6 +16,11 @@ describe('endState', () => {
   test('everyone out at once is a draw, not a loss', () => {
     expect(endState(-1, 1, true, players)).toEqual({ state: 'draw', title: 'DRAW', sub: 'The tide took everyone.' });
   });
+  test('a spectator (no player) sees only the result', () => {
+    expect(endState(null, 0, false, players)).toBeNull();
+    expect(endState(2, 0, false, players)).toEqual({ state: 'draw', title: 'MATCH OVER', sub: 'Bot (hard) wins.' });
+    expect(endState(-1, 0, false, players)?.title).toBe('DRAW');
+  });
   test('eliminated while others still play', () => {
     expect(endState(null, 1, true, players)).toEqual({ state: 'lost', title: 'ELIMINATED', sub: 'Your bunker was sealed when you died.' });
   });
