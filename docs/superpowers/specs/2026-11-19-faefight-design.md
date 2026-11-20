@@ -112,7 +112,7 @@ WASD move, mouse/trackpad aim (adjustable sensitivity, pointer lock), click shoo
 ## 9. Stages (each one playable)
 
 1. ✅ **Offline vs bots** (done 2026-11-19): one 1v1 map, movement, shooting, generator, shop, building, seal + elimination, basic bots. Placeholder art allowed.
-2. **Online:** invite codes, host-authoritative WebRTC, 2–8 players + bot fill, text chat.
+2. ✅ **Online** (done 2026-11-20): invite codes, host-authoritative WebRTC, 2–8 players + bot fill, text chat.
 3. **Look:** full realistic art pass, lighting, ocean, animations, sound.
 4. **Polish:** first-person toggle, human-like bot tuning for all difficulties, sudden death tuning, credits.
 
