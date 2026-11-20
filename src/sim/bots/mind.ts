@@ -1,7 +1,7 @@
 import type { Vec3 } from '../types';
 import { clone, v3 } from '../vec';
 import { islandAt } from './nav';
-import type { Traits } from './personality';
+import type { BotParams } from './params';
 import type { BotView } from './view';
 
 /** Where a rival was last seen and how they looked. */
@@ -27,6 +27,10 @@ export class Memory {
   readonly diedAt = new Map<number, number>();
   lastHurtAt = -Infinity;
   lastHurtBy: number | null = null;
+  /** Last tracer that passed close to me (or hit me): when, and where it came from. */
+  shotAtMe: { t: number; from: Vec3; by: number } | null = null;
+  /** Who killed me last (kill feed), and when. */
+  killedBy: { id: number; t: number } | null = null;
   private grudge = new Map<number, number>();
   private doneHurt = -Infinity;
   private doneShot = -Infinity;
@@ -61,7 +65,10 @@ export class Memory {
     for (const s of view.shots) {
       if (s.t <= this.doneShot) continue;
       top = Math.max(top, s.t);
-      if (me.alive && segDist(chest, s.from, s.to) < SHOT_AT_ME) this.grudge.set(s.by, (this.grudge.get(s.by) ?? 0) + 3);
+      if (me.alive && segDist(chest, s.from, s.to) < SHOT_AT_ME) {
+        this.grudge.set(s.by, (this.grudge.get(s.by) ?? 0) + 3);
+        if (!this.shotAtMe || s.t >= this.shotAtMe.t) this.shotAtMe = { t: s.t, from: clone(s.from), by: s.by };
+      }
       else this.busyUntil.set(s.by, s.t + BUSY_SEC);
     }
     this.doneShot = top;
@@ -71,6 +78,7 @@ export class Memory {
       if (f.t <= this.doneFeed) continue;
       top = Math.max(top, f.t);
       this.diedAt.set(f.victim, f.t);
+      if (f.victim === me.id && f.killer !== null && f.killer !== me.id) this.killedBy = { id: f.killer, t: f.t };
       if (f.killer !== null && f.killer !== me.id) this.busyUntil.set(f.killer, f.t + BUSY_SEC);
     }
     this.doneFeed = top;
@@ -113,22 +121,22 @@ export type RivalFacts = {
   away: boolean;
 };
 
-/** Desirability of going after this rival; higher is better. Personality only shifts weights. */
-export function rivalScore(f: RivalFacts, t: Traits): number {
+/** Desirability of going after this rival; higher is better. Personality is folded into the params. */
+export function rivalScore(f: RivalFacts, p: BotParams): number {
   let s = 1;
-  s -= f.reach ? 0 : Math.min(2, f.scaffolds * 0.06 * (1.2 - 0.4 * t.aggression));
-  s -= (f.dist / 100) * (0.25 + 0.35 * t.aggression);
-  if (f.respawning) s += (f.reach ? 1 : 0.35) * (0.4 + t.opportunism);
-  else if (f.sinceDeath < 40) s += 0.6 * (0.3 + t.opportunism) * (1 - f.sinceDeath / 40);
-  if (f.sealed) s += 0.4 + 0.5 * t.opportunism;
-  if (f.seenHp !== null) s += (1 - f.seenHp / 100) * 0.6 * (0.3 + t.opportunism);
-  s += Math.min(1.5, f.grudge / 35) * (0.2 + t.vengeance);
-  if (f.busy) s += 0.5 * t.opportunism;
-  if (f.kills > 0 && f.kills >= f.leaderKills) s += 0.15 + 0.25 * t.aggression;
-  if (f.onMyIsland) s += 0.5 + 0.6 * t.caution;
-  if (f.away && !f.sealed) s += 0.35 * t.opportunism;
+  s -= f.reach ? 0 : Math.min(2, f.scaffolds * p.rsUnbridged);
+  s -= (f.dist / 100) * p.rsDist;
+  if (f.respawning) s += (f.reach ? 1 : 0.35) * p.rsRespawning;
+  else if (f.sinceDeath < 40) s += p.rsRecentDeath * (1 - f.sinceDeath / 40);
+  if (f.sealed) s += p.rsSealed;
+  if (f.seenHp !== null) s += (1 - f.seenHp / 100) * p.rsLowHp;
+  s += Math.min(1.5, f.grudge / 35) * p.rsGrudge;
+  if (f.busy) s += p.rsBusy;
+  if (f.kills > 0 && f.kills >= f.leaderKills) s += p.rsLeader;
+  if (f.onMyIsland) s += p.rsIntruder;
+  if (f.away && !f.sealed) s += p.rsAway;
   return s;
 }
 
 /** Bonus the current target keeps over challengers, so the bot does not flip-flop. */
-export const commitment = (t: Traits) => 0.15 + 0.35 * t.patience;
+export const commitment = (p: BotParams) => p.rsCommit;

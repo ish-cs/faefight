@@ -10,21 +10,36 @@ import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } fr
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, lane, laneAt, laneS, type Lane } from './nav';
+import { DEFAULT_PARAMS, withTraits, type BotParams, type ParamKey } from './params';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
   TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
   shoppingPlan,
   type Needs, type ShopStyle,
 } from './plans';
+import { Strategist, type Plan, type PlanInput } from './strategy';
+import { DODGE_SKILL, Dodger } from './tactics';
 import type { BotView, OtherStatus } from './view';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'fleeTide' | 'heal';
+  | 'fight' | 'disengage' | 'fleeTide' | 'heal' | 'potions';
 const GOALS: Goal[] = [
   'fleeTide', 'defend', 'disengage', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'shop', 'heal', 'collect',
+  'shop', 'heal', 'potions', 'collect',
 ];
+/** Trainable per-goal utility bias (params.ts). */
+const GOAL_BIAS: Partial<Record<Goal, ParamKey>> = {
+  fight: 'biasFight', disengage: 'biasDisengage', guard: 'biasGuard', bank: 'biasBank', collect: 'biasCollect',
+  shop: 'biasShop', bridge: 'biasBridge', attack: 'biasAttack', seal: 'biasSeal', cut: 'biasCut', loot: 'biasLoot',
+  raid: 'biasRaid', heal: 'biasHeal',
+};
+
+/** What a bot is up to, for an on-screen debug overlay. */
+export type BotDebug = {
+  goal: Goal; target: number | null; plan: Plan['kind'] | null; motive: string; step: Plan['step'] | null;
+  underFire: boolean; enemy: number | null;
+};
 
 /** How often a bot reconsiders what to do, and how long it hesitates after changing plans (human thinking time). */
 const RESCORE_SEC: Record<Difficulty, number> = { easy: 1.6, medium: 1.0, hard: 0.5, pro: 0.3 };
@@ -40,11 +55,8 @@ const BUY_RETRIES = 2;
 const BUY_BACKOFF_SEC = 20;
 const ARRIVE = 0.6;
 const USE_RANGE = ECONOMY.interactRadius - 0.2;
-const COLLECT_AT = 40;
 const STUCK_SEC = 2, STUCK_DIST = 0.5, UNSTICK_SEC = 0.6;
 const TURN_RATE = 8;
-/** Beyond this, an enemy on another island isn't worth abandoning the current goal for. */
-const ENGAGE_RANGE = 25;
 const CHEST = 1.2;
 /** Net forward progress of one scaffold laid end-to-end. */
 const SCAFFOLD_STEP = 3.8;
@@ -52,7 +64,6 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
-const RAID_AT = 60;
 /** Sandbags carried into sudden death to climb above the tide, bought in the last minutes before it. */
 const TOWER_BAGS = 10, TOWER_PREP_SEC = 150;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
@@ -60,15 +71,16 @@ const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 const HIGH_GROUND_SEC = 75;
 /** Generator cash worth grabbing on the way out, and the level at which it is about to be wasted at the cap. */
 const COLLECT_BEFORE_LEAVING = 40, COLLECT_NEAR_CAP = 400;
-/** Grenades: throw range (outside the blast), minimum gap between throws, how stale a sighting may be. */
-const NADE_MIN = 6.5, NADE_MAX = 22, NADE_GAP = 3, NADE_SEEN_SEC = 2.5;
-/** Cash (carried + banked) at which a bot stocks up on grenades / a steel seal kit. */
-const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, hard: 450, pro: 400 };
-const STEEL_RICH = 800;
+/** Grenades: minimum gap between throws, how stale a sighting may be (range is in BotParams). */
+const NADE_GAP = 3, NADE_SEEN_SEC = 2.5;
+/**
+ * Lower-skill players are slower to think of grenades, steel and medkits: multipliers on the trained
+ * cash thresholds (easy never buys grenades) and offsets on the medkit HP.
+ */
+const RICH_MULT: Record<Difficulty, number> = { easy: Infinity, medium: 2.2, hard: 1.1, pro: 1 };
+const MEDKIT_SKILL: Record<Difficulty, number> = { easy: -20, medium: -10, hard: 0, pro: 0 };
 /** Rebuy money for after a death: pistol + a box of ammo. */
 const INSURANCE = WEAPONS.pistol.price + 25;
-/** HP at or below which a bot uses a medkit it carries. */
-const MEDKIT_AT: Record<Difficulty, number> = { easy: 35, medium: 45, hard: 55, pro: 55 };
 /**
  * Clear of my own bunker (from its center): within SEAL.exitRadius of it while it's sealed starts the 10 s
  * escape countdown, so never hang around closer than this.
@@ -90,6 +102,8 @@ type Act = {
   jump?: boolean;
   /** Skip the don't-step-toward-water check (climbing a tower in the tide). */
   raw?: boolean;
+  /** Stay put on purpose (hiding behind cover): no dodging. */
+  hold?: boolean;
 };
 const IDLE: Act = { dir: null };
 
@@ -109,6 +123,10 @@ type Ctx = {
   openDoors: Doorway[];
   /** Someone is shooting at me or close to me right now. */
   danger: boolean;
+  /** Under fire (noticed): where it's coming from. */
+  fire: Vec3 | null;
+  /** Armed enemies in sight within fighting range. */
+  armedNear: number;
 };
 
 export class Bot {
@@ -141,11 +159,25 @@ export class Bot {
   private hideFrom: { pos: Vec3; until: number } | null = null;
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
   private view!: BotView;
+  /** Strategy/tactics weights: the trained defaults with this bot's personality folded in. */
+  readonly params: BotParams;
+  private readonly strategist: Strategist;
+  readonly dodger: Dodger;
+  private wasAlive = true;
+  private lastEnemy: number | null = null;
+  private peek: { out: boolean; until: number } = { out: false, until: 0 };
+  private fireFrom: Vec3 | null = null;
 
-  constructor(readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality) {
+  constructor(
+    readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality,
+    params: BotParams = DEFAULT_PARAMS,
+  ) {
     this.personality = personality ?? rollPersonality(rng);
     this.t = this.personality.traits;
     const t = this.t;
+    this.params = withTraits(params, t);
+    this.strategist = new Strategist(rng);
+    this.dodger = new Dodger(rng, DODGE_SKILL[difficulty]);
     this.style = {
       upgradeFirst: t.patience > 0.65,
       longGun: t.range > 0.75,
@@ -161,6 +193,18 @@ export class Bot {
   get currentGoal(): Goal { return this.goal; }
   /** Rival this bot is currently going after (player id), if any. */
   get currentTarget(): number | null { return this.targetId; }
+  /** Current plan (strategic objective) or null before the first decision. */
+  get currentPlan(): Plan | null { return this.strategist.plan; }
+  /** Plan-layer events seen so far (died, targetGone, ...). */
+  get planEvents() { return this.strategist.history; }
+  /** Everything an on-screen debug overlay wants to show about this bot. */
+  get debug(): BotDebug {
+    const p = this.strategist.plan;
+    return {
+      goal: this.goal, target: this.targetId, plan: p?.kind ?? null, motive: p?.motive ?? '', step: p?.step ?? null,
+      underFire: this.fireFrom !== null, enemy: this.lastEnemy,
+    };
+  }
 
   think(view: BotView): PlayerInput {
     const me = view.self;
@@ -172,6 +216,9 @@ export class Bot {
     this.lastNow = now;
     this.mem.update(view);
     if (!me.alive) {
+      if (this.wasAlive) this.strategist.notify('died', now);
+      this.wasAlive = false;
+      this.fireFrom = null;
       this.aim.reset();
       this.stuckRef = null;
       this.retreat = null;
@@ -181,12 +228,20 @@ export class Bot {
       this.nextScoreAt = -Infinity;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
+    this.wasAlive = true;
     this.view = view;
     this.nav.begin(view);
     this.checkPurchase(me, now);
-    if (now >= this.nextScoreAt) this.chooseTarget(view);
-    const ctx = this.context(view);
-    if (now >= this.nextScoreAt) {
+    const rescore = now >= this.nextScoreAt;
+    const facts = rescore ? this.rivalFacts(view) : null;
+    if (facts) this.chooseTarget(facts);
+    let ctx = this.context(view);
+    if (facts) {
+      // Plan layer: a strategic objective above the goals; its target overrides the plain rival choice.
+      const plan = this.strategist.update(this.planInput(ctx, facts), this.params, NOISE[this.difficulty] * 3);
+      if (plan.target !== null && plan.target !== this.targetId) { this.targetId = plan.target; ctx = this.context(view); }
+    }
+    if (rescore) {
       const next = this.pick(ctx);
       if (next !== this.goal) this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
       this.goal = next;
@@ -249,6 +304,11 @@ export class Bot {
     if (now < this.unstickUntil) {
       dir = scale(right(look.yaw), this.unstickSide);
       jump = true;
+    } else if (ctx.fire && this.mayDodge(act, ctx)) {
+      // Under fire: strafe jukes across the shooter's line (and jump now and then), whatever else I'm doing.
+      const j = this.dodger.juke(dir, me, ctx.fire, now, this.params);
+      dir = j.dir;
+      jump ||= j.jump;
     }
     if (dir && !act.raw) dir = this.nav.safeDir(dir);
     const move = dir
@@ -258,7 +318,7 @@ export class Bot {
     // Patch up with a medkit when hurt and nobody is in my face (2 s with my hands busy).
     let select: number | null = null, useMedkit = false;
     const kit = me.hotbar.indexOf('medkit');
-    if (kit >= 0 && me.inv.medkits > 0 && me.hp <= MEDKIT_AT[this.difficulty] && me.busyUntil <= now && me.healAt === null &&
+    if (kit >= 0 && me.inv.medkits > 0 && me.hp <= this.params.medkitHp + MEDKIT_SKILL[this.difficulty] && me.busyUntil <= now && me.healAt === null &&
         (!enemy || ctx.enemyDist > 30) && now - this.mem.lastHurtAt > 0.5) {
       select = kit; useMedkit = true; fire = false;
     }
@@ -278,6 +338,16 @@ export class Bot {
       else if (pot) Object.assign(out, { select: pot.drink, slot: null, drink: true });
     }
     return out;
+  }
+
+  /**
+   * Jukes would wreck what I'm doing: placing a piece or charge, buying, banking, climbing the tide tower,
+   * getting out of my own bunker. Low on health, a human drops the task and dodges anyway.
+   */
+  private mayDodge(act: Act, c: Ctx): boolean {
+    if (act.raw || act.hold || this.retreat || this.goal === 'fleeTide' || this.trapped(c) || insideBunker(c.home.bunker, c.me.pos)) return false;
+    const busy = !!(act.build || act.placeCharge || act.shop || act.vault) || this.goal === 'seal' || this.goal === 'bridge' || this.goal === 'defend';
+    return !busy || c.me.hp < 100 * this.params.breakLosHp * 0.6;
   }
 
   /** Did the last purchase go through? A buy that keeps failing (e.g. nowhere to carry it) is left alone a while. */
@@ -340,16 +410,47 @@ export class Bot {
   }
 
   /** Score every rival; keep the current one unless another is clearly better. */
-  private chooseTarget(view: BotView) {
+  private chooseTarget(facts: RivalFacts[]) {
     let best: number | null = null, bestScore = -Infinity, cur = -Infinity;
-    for (const f of this.rivalFacts(view)) {
-      const s = rivalScore(f, this.t) + (this.rng() - 0.5) * NOISE[this.difficulty];
+    for (const f of facts) {
+      const s = rivalScore(f, this.params) + (this.rng() - 0.5) * NOISE[this.difficulty];
       if (f.id === this.targetId) cur = s;
       if (s > bestScore) { bestScore = s; best = f.id; }
     }
     if (best === null) { this.targetId = null; return; }
-    if (cur > -Infinity && cur + commitment(this.t) >= bestScore) return;
+    if (cur > -Infinity && cur + commitment(this.params) >= bestScore) return;
     this.targetId = best;
+  }
+
+  /** What the plan layer gets to see (all from the view and my memory of it). */
+  private planInput(c: Ctx, facts: RivalFacts[]): PlanInput {
+    const { view, me, home } = c;
+    const now = view.now;
+    const inv = me.inv;
+    const killed = this.mem.killedBy;
+    return {
+      now, suddenDeath: view.suddenDeath, hp: me.hp / 100, home: home.index, on: c.on,
+      rivals: facts.map((f) => {
+        const o = view.others.find((x) => x.id === f.id)!;
+        const isl = view.map[o.island];
+        const guarded = o.alive && this.mem.recent(o.id, now, 6)?.island === o.island;
+        return {
+          ...f, island: o.island, generator: view.generators[o.island], guarded,
+          openDoors: isl.bunker.doorways.filter((d) => !doorBlocked(view.pieces, d)).length,
+        };
+      }),
+      gun: ownsGun(inv), upgraded: !!(inv.weapons.smg || inv.weapons.rifle || inv.weapons.shotgun),
+      kit: sealKit(inv), carried: inv.cash, banked: me.vault.cash, insuranceDue: this.insuranceDue(me),
+      intruder: !!this.intruder(c), homeSealed: view.sealed[home.index], homePlugged: this.blockers(c).length > 0,
+      incomingBridge: !!this.incomingDeck(c),
+      killedBy: killed ? { id: killed.id, ago: now - killed.t } : null,
+      seller: this.nearestSeller(c) !== null, wantShields: this.wantShields(me),
+    };
+  }
+
+  private wantShields(me: PlayerState): boolean {
+    const n = (me.inv.potions?.shieldBig ?? 0) + (me.inv.potions?.shieldSmall ?? 0);
+    return n < 2 && me.inv.cash + this.spendable(me) >= 300;
   }
 
   // ---------------------------------------------------------------- context
@@ -368,16 +469,27 @@ export class Bot {
         .sort((a, b) => dist2D(view.map[a.island].center, home.center) - dist2D(view.map[b.island].center, home.center))[0] ?? null;
     }
     const rivalIsl = rival ? view.map[rival.island] : null;
-    let enemy: PlayerState | null = null, enemyDist = Infinity;
+    // Whom to shoot among those in sight: the one shooting me, the one nearly dead, my plan's target, the
+    // nearest; keep the current one unless another is clearly better (focus fire).
+    const P = this.params, now = view.now;
+    let enemy: PlayerState | null = null, enemyDist = Infinity, bestScore = -Infinity, armedNear = 0;
+    const shooter = this.mem.shotAtMe && now - this.mem.shotAtMe.t < 2 ? this.mem.shotAtMe.by : now - this.mem.lastHurtAt < 2 ? this.mem.lastHurtBy : null;
     for (const e of view.enemies) {
+      if (!e.alive) continue;
       const d = dist2D(e.pos, me.pos);
-      if (e.alive && d < enemyDist) { enemy = e; enemyDist = d; }
+      if (e.equipped !== 'fists' && d < 35) armedNear++;
+      const s = -d * P.tgtDist + (1 - e.hp / 100) * P.tgtLowHp + (e.id === shooter ? P.tgtShootingMe : 0) +
+        (e.id === this.targetId ? P.tgtPlanTarget : 0) + (e.id === this.lastEnemy ? P.tgtKeep : 0) - (d > 60 ? 1 : 0);
+      if (s > bestScore) { bestScore = s; enemy = e; enemyDist = d; }
     }
+    this.lastEnemy = enemy?.id ?? null;
     const reach = !!rivalIsl && (on === rivalIsl.index || this.nav.hop(src, rivalIsl.index) !== null);
     const homeReach = on === home.index || on < 0 || this.nav.hop(on, home.index) !== null;
     const openDoors = rivalIsl ? rivalIsl.bunker.doorways.filter((d) => !doorBlocked(view.pieces, d)) : [];
-    const danger = view.now - this.mem.lastHurtAt < 3 || (!!enemy && enemyDist < 40);
-    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, homeReach, openDoors, danger };
+    const danger = now - this.mem.lastHurtAt < 3 || (!!enemy && enemyDist < 40);
+    const fire = this.dodger.threat(this.mem, now, P);
+    this.fireFrom = fire;
+    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, homeReach, openDoors, danger, fire, armedNear };
   }
 
   private scaffoldsNeeded(c: Ctx): number {
@@ -395,9 +507,9 @@ export class Bot {
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       // Every 1 m of tower buys 20 s against the tide: the richer, the taller.
       tower: c.view.now >= LIFECYCLE.suddenDeathAt - TOWER_PREP_SEC ? TOWER_BAGS + Math.min(4, Math.floor(total / 250)) : 0,
-      grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
-      medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
-      steel: skilled && total >= STEEL_RICH,
+      grenades: total >= this.params.nadeRich * RICH_MULT[this.difficulty] ? (skilled ? 2 : 1) : 0,
+      medkits: total >= this.params.nadeRich * RICH_MULT[this.difficulty] ? (skilled ? 2 : 1) : 0,
+      steel: skilled && total >= this.params.steelRich,
       genLevel: c.view.genLevels?.[c.home.index],
     };
   }
@@ -443,6 +555,17 @@ export class Bot {
     return best;
   }
 
+  /** Nearest potion seller I can walk to, or null. */
+  private nearestSeller(c: Ctx): Vec3 | null {
+    let best: Vec3 | null = null, bestD = Infinity;
+    for (const s of c.view.potionShops ?? []) {
+      const d = dist2D(s, c.me.pos);
+      if (d >= bestD || c.view.groundAt(s.x, s.z) === null) continue;
+      if (d < 3 || this.nav.routeTo(s)) { best = s; bestD = d; }
+    }
+    return best;
+  }
+
   private nearestLoot(c: Ctx): Vec3 | null {
     let best: Vec3 | null = null, bestD = LOOT_RANGE;
     for (const p of c.view.loot) {
@@ -459,7 +582,7 @@ export class Bot {
   private raidIsland(c: Ctx): IslandLayout | null {
     const now = c.view.now;
     for (const i of [c.on, c.reach && c.rivalIsl ? c.rivalIsl.index : -1]) {
-      if (i < 0 || i === c.home.index || c.view.generators[i] < RAID_AT) continue;
+      if (i < 0 || i === c.home.index || c.view.generators[i] < this.params.raidAt) continue;
       const owner = c.view.others.find((o) => o.island === i);
       const guarded = owner && owner.alive && this.mem.recent(owner.id, now, 6)?.island === i;
       if (!guarded) return c.view.map[i];
@@ -489,6 +612,7 @@ export class Bot {
 
   private score(g: Goal, c: Ctx): number {
     const { view, me, home, t } = { ...c, t: this.t };
+    const P = this.params;
     const away = c.on === home.index ? 0 : 0.25;
     const gun = ownsGun(me.inv);
     const hp = me.hp / 100;
@@ -512,17 +636,20 @@ export class Bot {
         // Someone across the water gets shot at anyway (aim/fire layer on every goal); only drop
         // everything to fight when they're close or on the same island.
         const sameIsland = islandAt(view.map, c.enemy.pos) === islandAt(view.map, me.pos);
-        if (!sameIsland && c.enemyDist > ENGAGE_RANGE) return 0.2;
+        if (!sameIsland && c.enemyDist > P.engageRange) return 0.2;
         return (gun || c.enemyDist < 8 ? 0.85 : 0.35) + 0.25 * t.aggression;
       }
       case 'disengage': {
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
-        const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
+        const low = P.lowHp;
         if (hp < low) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
-          (c.enemyDist < Math.min(ENGAGE_RANGE, WEAPONS[c.enemy.equipped].range) || view.now - this.mem.lastHurtAt < 1.5);
-        return outgunned ? 0.95 + 0.2 * t.caution : 0;
+          (c.enemyDist < Math.min(P.engageRange, WEAPONS[c.enemy.equipped].range) || view.now - this.mem.lastHurtAt < 1.5);
+        if (outgunned) return 0.95 + 0.2 * t.caution;
+        // Two or more guns on me at once: don't take that fight, especially hurt.
+        if (c.armedNear >= 2) return 0.6 + P.outnumbered * (c.armedNear - 1) + (1 - hp) * 0.4;
+        return 0;
       }
       case 'defend': {
         if (trapped) return 2;
@@ -538,8 +665,14 @@ export class Bot {
       case 'heal': {
         // Health comes back slowly out of combat: low and away from home, go back and recover.
         if (view.suddenDeath || c.enemy || c.on === home.index || !c.homeReach || me.inv.medkits > 0) return 0;
-        const low = 0.35 + 0.25 * t.caution - 0.15 * t.aggression;
+        const low = P.healHp;
         return hp < low ? 0.75 + (low - hp) : 0;
+      }
+      case 'potions': {
+        // Shields at a seller I can walk to, when I can afford them and nobody is on me.
+        if (view.suddenDeath || c.enemy || !this.wantShields(me)) return 0;
+        const s = this.nearestSeller(c);
+        return s ? 0.25 + 0.1 * t.caution - dist2D(s, me.pos) / 150 : 0;
       }
       case 'guard': {
         if (!c.homeReach || view.suddenDeath) return 0;
@@ -566,7 +699,7 @@ export class Bot {
       case 'collect': {
         if (!c.homeReach) return 0;
         const stored = view.generators[home.index];
-        let s = stored >= COLLECT_AT ? 0.45 + 0.1 * t.greed + Math.min(stored, 500) / 1000 : 0.15;
+        let s = stored >= P.collectAt ?0.45 + 0.1 * t.greed + Math.min(stored, 500) / 1000 : 0.15;
         // Don't leave cash at an unguarded generator (anyone can take it), and don't let it hit the cap.
         const leaving = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
         if (c.on === home.index && stored >= COLLECT_BEFORE_LEAVING && leaving && !c.enemy) s = Math.max(s, 0.72);
@@ -643,7 +776,9 @@ export class Bot {
     for (const g of GOALS) {
       const base = this.score(g, c);
       if (base <= 0 && g !== best) continue;
-      const s = base + (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
+      const bias = GOAL_BIAS[g];
+      const s = base + (bias ? this.params[bias] : 0) + this.strategist.bonus(g, this.params) +
+        (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
       if (s > bestScore) { bestScore = s; best = g; }
     }
     return best;
@@ -663,6 +798,11 @@ export class Bot {
       case 'loot': return this.doLoot(c);
       case 'raid': return this.doRaid(c);
       case 'heal': return this.goTo(c.home.vault, 2.0);
+      case 'potions': {
+        const s = this.nearestSeller(c);
+        if (!s) { this.nextScoreAt = c.view.now; return IDLE; }
+        return this.goTo(s, USE_RANGE - 0.3);
+      }
       case 'fight': return this.doFight(c);
       case 'disengage': return this.doDisengage(c);
       case 'fleeTide': return this.doFleeTide(c);
@@ -941,7 +1081,7 @@ export class Bot {
         });
         if (!door) continue;
         low = true;
-      } else if (age > NADE_SEEN_SEC || age < 0.3 || d < NADE_MIN || d > NADE_MAX) continue;
+      } else if (age > NADE_SEEN_SEC || age < 0.3 || d < this.params.nadeMin || d > this.params.nadeMax) continue;
       const a = throwAngles(eye, v3(s.pos.x, s.pos.y + 0.3, s.pos.z), low);
       if (!a) continue;
       // Thrown by hand: as accurate as this player's aim.
@@ -1018,15 +1158,25 @@ export class Bot {
     }
     const to = norm(flat(sub(e.pos, me.pos)));
     const gun = bestGun(me.inv, c.enemyDist);
-    const want = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
+    const P = this.params;
+    const want = PREFERRED_RANGE[gun] * P.rangeMult;
     const side = scale(right(yawOf(to)), this.strafeSign * (want < 2 ? 0.3 : 1));
     const sameIsland = islandAt(c.view.map, e.pos) === c.on;
+    // Hurt and being hit: break line of sight first (behind the nearest solid thing), then peek back out.
+    const breakLos = !!c.fire && me.hp < 100 * P.breakLosHp;
 
     // Careful players fight from behind something solid; builders throw a wall down if nothing is near.
-    if (gun !== 'fists' && c.enemyDist > 6 && sameIsland && (t.caution > 0.5 || me.hp < 60)) {
+    if (gun !== 'fists' && (c.enemyDist > 6 || breakLos) && (sameIsland || breakLos) && (t.caution > 0.5 || me.hp < P.coverHp || breakLos)) {
       const cover = this.coverFrom(c, e);
-      if (cover && dist2D(cover, me.pos) > 0.8) return this.goTo(cover, 0.6);
-      if (cover) return { dir: scale(side, 0.4) };
+      if (cover && dist2D(cover, me.pos) > 0.8 && (breakLos || !this.peek.out)) return { ...this.goTo(cover, 0.6), sprint: breakLos };
+      if (cover) {
+        // In cover: alternate hiding and peeking out to shoot, with human-irregular timing.
+        if (now >= this.peek.until) {
+          this.peek.out = !this.peek.out && !breakLos;
+          this.peek.until = now + (this.peek.out ? P.peekSec : P.hideSec) * (0.5 + this.rng());
+        }
+        return this.peek.out ? { dir: norm(side) } : { dir: null, hold: true };
+      }
       const spare = TALL.reduce((n, k) => n + (me.inv.pieces[k] ?? 0), 0) - c.openDoors.length;
       if (t.builder > 0.5 && spare > 0 && now - this.lastCoverAt > 8 && me.busyUntil <= now) {
         const kind = TALL.slice().reverse().find((k) => (me.inv.pieces[k] ?? 0) > 0)!;
