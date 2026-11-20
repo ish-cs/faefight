@@ -8,6 +8,7 @@ import { PIECE_ORDER } from './input';
 import { ISLAND_COLORS, ISLAND_NAMES } from './render';
 import { endState } from './endState';
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
+import { chipState } from './chipState';
 
 const GUNS = ['pistol', 'smg', 'shotgun', 'rifle'] as const;
 const LABEL: Record<string, string> = {
@@ -334,8 +335,10 @@ export class Hud {
 
     Array.from(this.seals.children).forEach((chip, i) => {
       const sealed = !!snap.sealed[i];
-      chip.classList.toggle('sealed', sealed);
-      setText(chip.querySelector('.state') as HTMLElement, sealed ? 'SEALED' : 'OPEN');
+      const out = !!snap.players.find((p) => p.island === i)?.eliminated;
+      chip.classList.toggle('sealed', sealed && !out);
+      chip.classList.toggle('out', out);
+      setText(chip.querySelector('.state') as HTMLElement, chipState(sealed, out));
       // Other islands are labelled with their owner's name (a leaver's seat stays theirs, now bot-run).
       const owner = i === me.island ? null : snap.players.find((p) => p.island === i);
       if (owner) setText(chip.querySelector('.name') as HTMLElement, owner.name);
