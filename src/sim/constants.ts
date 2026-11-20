@@ -166,6 +166,8 @@ export const LIFECYCLE = {
   /** Respawning into a sealed bunker: break out within this long or you're eliminated. */
   breakoutSec: 10,
   invulnSec: 3,
+  /** Spawn protection: lasts while inside your bunker (max this long), then invulnSec after leaving. */
+  spawnProtectMaxSec: 15,
   suddenDeathAt: 900,
   tideRate: 0.05,
   lootPickupRadius: 1.5,

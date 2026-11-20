@@ -49,6 +49,13 @@ export class Renderer {
   private ghost: THREE.Mesh | null = null;
   private ghostKind: PieceKind | null = null;
   private ghostMat = new THREE.MeshBasicNodeMaterial({ color: 0x3ddc84, transparent: true, opacity: 0.6, depthWrite: false });
+  private ghostLink: THREE.Mesh | null = null;
+  private ghostLinkGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);
+  private ghostT = performance.now();
+  private ghostPulse = 0;
+  private ghostTmp = new THREE.Vector3();
+  private ghostTmp2 = new THREE.Vector3();
+  private ghostWhite = new THREE.Color(0xffffff);
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
   private lootGeo = new THREE.SphereGeometry(0.28, 16, 10).scale(1, 0.8, 1);
   private lootMat = new THREE.MeshStandardNodeMaterial({ color: 0x8b5a2b, roughness: 0.9 });
@@ -226,18 +233,56 @@ export class Renderer {
     return m ? out.copy(m.pos) : null;
   }
 
-  setGhost(kind: PieceKind | null, pos?: Vec3, rotY = 0, ok = false) {
-    if (!kind || !pos) { if (this.ghost) this.ghost.visible = false; return; }
+  /**
+   * Build ghost. It glides toward a new spot (~50 ms) instead of popping, except across big jumps or a
+   * kind change. `link` draws a thin line from the ghost to what it snaps onto.
+   */
+  setGhost(kind: PieceKind | null, pos?: Vec3, rotY = 0, ok = false, link: Vec3 | null = null) {
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - this.ghostT) / 1000);
+    this.ghostT = now;
+    if (!kind || !pos) {
+      if (this.ghost) this.ghost.visible = false;
+      if (this.ghostLink) this.ghostLink.visible = false;
+      return;
+    }
     if (!this.ghost) {
       this.ghost = new THREE.Mesh(this.geometryFor(kind), this.ghostMat);
       this.ghost.renderOrder = 10;
       this.scene.add(this.ghost);
     }
-    if (this.ghostKind !== kind) { this.ghost.geometry = this.geometryFor(kind); this.ghostKind = kind; }
-    this.ghost.visible = true;
-    this.ghost.position.set(pos.x, pos.y + 0.01, pos.z);
-    this.ghost.rotation.y = rotY;
-    this.ghostMat.color.copy(boosted(ok ? 0x3ddc84 : 0xff4d4d));
+    const g = this.ghost;
+    const jump = this.ghostKind !== kind || !g.visible || g.position.distanceTo(this.ghostTmp.set(pos.x, pos.y + 0.01, pos.z)) > 4;
+    if (this.ghostKind !== kind) { g.geometry = this.geometryFor(kind); this.ghostKind = kind; }
+    g.visible = true;
+    if (jump) { g.position.set(pos.x, pos.y + 0.01, pos.z); g.rotation.y = rotY; }
+    else {
+      const k = 1 - Math.exp(-dt / 0.045);
+      g.position.lerp(this.ghostTmp.set(pos.x, pos.y + 0.01, pos.z), k);
+      g.rotation.y += Math.atan2(Math.sin(rotY - g.rotation.y), Math.cos(rotY - g.rotation.y)) * k;
+    }
+    this.ghostPulse = Math.max(0, this.ghostPulse - dt * 5);
+    g.scale.setScalar(1 + 0.12 * this.ghostPulse);
+    this.ghostMat.color.copy(boosted(ok ? 0x3ddc84 : 0xff4d4d)).lerp(this.ghostWhite, 0.6 * this.ghostPulse);
+
+    if (!link) { if (this.ghostLink) this.ghostLink.visible = false; return; }
+    if (!this.ghostLink) {
+      this.ghostLink = new THREE.Mesh(this.ghostLinkGeo, new THREE.MeshBasicNodeMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false }));
+      this.ghostLink.renderOrder = 11;
+      this.scene.add(this.ghostLink);
+    }
+    const from = this.ghostTmp.copy(g.position);
+    from.y += 0.15;
+    const len = from.distanceTo(this.ghostTmp2.set(link.x, link.y, link.z));
+    this.ghostLink.visible = len > 0.05;
+    this.ghostLink.position.copy(from);
+    this.ghostLink.lookAt(this.ghostTmp2);
+    this.ghostLink.scale.set(0.035, 0.035, len);
+  }
+
+  /** Brief flash/pop on the ghost when a piece is placed from it. */
+  pulseGhost() {
+    this.ghostPulse = 1;
   }
 
   /** Meshes the aim ray may hit: world + pieces + other players. */
