@@ -19,8 +19,6 @@ import {
 } from './plans';
 import type { BotView, OtherStatus } from './view';
 
-const OFF: string = (globalThis as any).process?.env?.BOTOFF ?? ''; // TEMP ablation
-if (OFF.includes('push')) BT.pushLead = Infinity;
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
   | 'fight' | 'disengage' | 'fleeTide' | 'heal' | 'cover' | 'fortify';
@@ -462,7 +460,7 @@ export class Bot {
    */
   private buildNeeds(c: Ctx, total: number): Partial<Record<PieceKind, number>> | undefined {
     const { me, view } = c;
-    if (view.suddenDeath || !ownsGun(me.inv) || OFF.includes('needs')) return undefined;
+    if (view.suddenDeath || !ownsGun(me.inv)) return undefined;
     const t = this.t, sk = BUILD_SKILL[this.difficulty];
     const b: Partial<Record<PieceKind, number>> = {};
     // Hotbar room: a new kind takes a slot; always leave BT.freeSlots open for guns, heals and the like.
@@ -734,7 +732,6 @@ export class Bot {
       }
       case 'cover': {
         const cv = this.cover;
-        if (OFF.includes('cover')) return 0;
         if (!cv || (c.enemy && c.enemyDist < 5)) return 0;
         // Winning the trade (they're much lower): push the kill instead of hiding.
         if (c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield - BT.pushLead) return 0;
@@ -742,7 +739,6 @@ export class Bot {
       }
       case 'fortify': {
         if (view.suddenDeath || c.on !== home.index || c.danger || !gun || this.intruder(c)) return 0;
-        if (OFF.includes('fort')) return 0;
         const next = this.nextSlot(c);
         return next ? BT.fortifyScore + 0.3 * t.builder : 0;
       }

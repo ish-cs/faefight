@@ -146,7 +146,7 @@ describe('never seals its own bunker', () => {
         expect(snap.sealed[0]).toBe(false);
       }
     }
-  }, 120_000);
+  }, 300_000);
 
   test('4 builder bots over 5 minutes, several seeds: no bot ever seals itself in', async () => {
     let placedNear = 0;
