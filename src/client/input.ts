@@ -99,6 +99,11 @@ export class InputController {
     this.hooks.inventoryChange(open);
   }
 
+  /** Left button held (in build mode: keep placing along the ghost = drag-build). */
+  get clickHeld() {
+    return this.enabled && this.fireHeld;
+  }
+
   get free() {
     return this.enabled && isHeld('freePlace', this.keys);
   }
@@ -132,7 +137,7 @@ export class InputController {
     if (this.inventory) { this.setInventory(false); return; }
     if (!this.locked) this.requestLock();
     if (e.button !== 0) return;
-    if (this.buildMode) { this.hooks.place(); return; }
+    if (this.buildMode) { this.fireHeld = true; this.hooks.place(); return; } // held = drag-build
     if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
     if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }
     if (this.held === 'medkit') { this.oneShot.useMedkit = true; return; }

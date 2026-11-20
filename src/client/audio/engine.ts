@@ -231,8 +231,8 @@ export class AudioSystem {
   }
 
   /** UI-originated sounds (e.g. opening the vault). */
-  ui(sound: 'vault') {
-    this.play({ sound, pos: null, gain: 0.8 });
+  ui(sound: 'vault' | 'tick', gain = 0.8) {
+    this.play({ sound, pos: null, gain });
   }
 
   /** Feed every snapshot in order (events are per snapshot). */
