@@ -79,9 +79,11 @@ export function accelerate(vx: number, vz: number, wx: number, wz: number, groun
  * Advance one mover by dt with one command (mutates m). Returns the landing speed (m/s, > 0 only on
  * the step that touched down) so the sim can apply fall damage.
  */
-export function stepMove(m: Mover, cmd: MoveCmd, dt: number, body: MoveBody): { landingSpeed: number } {
+/** `speedMult` scales the wished speed (speed potion). */
+export function stepMove(m: Mover, cmd: MoveCmd, dt: number, body: MoveBody, speedMult = 1): { landingSpeed: number } {
   const mv = m.mv;
-  const wish = wishVelocity(cmd.moveX, cmd.moveZ, cmd.yaw, cmd.sprint);
+  const w0 = wishVelocity(cmd.moveX, cmd.moveZ, cmd.yaw, cmd.sprint);
+  const wish = { x: w0.x * speedMult, z: w0.z * speedMult };
   const h = accelerate(m.vel.x, m.vel.z, wish.x, wish.z, mv.grounded, dt);
   m.vel.x = h.x;
   m.vel.z = h.z;

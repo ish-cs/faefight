@@ -1,12 +1,13 @@
-import { AMMO_BOX, CHARGE, GENERATOR_LEVELS, GENERATOR_MAX_LEVEL, GRENADE, LOCK_PRICE_MULT, MEDKIT, PIECES, PLAYER, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
-import { addKind, canAdd, countOf, isHotbarItem, removeIfEmpty, syncFromInventory } from './hotbar';
-import type { GunKind, HotbarItem, Inventory, LockItem, PieceKind, PlayerState, ShopAction, ShopItem, VaultAction, WeaponKind } from './types';
+import { AMMO_BOX, CHARGE, GENERATOR_LEVELS, GENERATOR_MAX_LEVEL, GRENADE, LOCK_PRICE_MULT, MEDKIT, PIECES, PLAYER, POTIONS, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
+import { addKind, canAdd, countOf, isHotbarItem, isPotionItem, removeIfEmpty, syncFromInventory } from './hotbar';
+import { SHOP_LABEL, shopFor, type ShopKind } from './potions';
+import type { GunKind, HotbarItem, Inventory, LockItem, PieceKind, PlayerState, PotionKind, ShopAction, ShopItem, VaultAction, WeaponKind } from './types';
 
 export type Result = { ok: true } | { ok: false; reason: string };
 const fail = (reason: string): Result => ({ ok: false, reason });
 
 export function emptyInventory(): Inventory {
-  return { cash: 0, weapons: {}, pieces: {}, grenades: 0, charges: 0, medkits: 0 };
+  return { cash: 0, weapons: {}, pieces: {}, grenades: 0, charges: 0, medkits: 0, potions: {} };
 }
 
 /** Rate and cap of a generator at `level` (1..GENERATOR_MAX_LEVEL; out-of-range clamps). */
@@ -47,9 +48,10 @@ export function genUpgradePrice(level: number): number | null {
   return level >= GENERATOR_MAX_LEVEL ? null : GENERATOR_LEVELS[Math.max(1, level)].price;
 }
 
-function priceOf(item: ShopAction['buy']): number {
+export function priceOf(item: ShopAction['buy']): number {
   const locked = lockedGunOf(item);
   if (locked) return lockPrice(locked);
+  if (isPotionItem(item)) return POTIONS[item].price;
   if (isGun(item)) return WEAPONS[item].price;
   if (isPiece(item)) return PIECES[item].price;
   if (item === 'ammo') return AMMO_BOX.price;
@@ -89,6 +91,8 @@ export function buy(player: PlayerState, action: ShopAction, genLevels?: number[
     inv.grenades += 1;
   } else if (item === 'medkit') {
     inv.medkits += 1;
+  } else if (isPotionItem(item)) {
+    inv.potions[item] = (inv.potions[item] ?? 0) + 1;
   } else {
     inv.charges += 1;
   }
@@ -134,15 +138,26 @@ export function grantLockedGuns(player: PlayerState): void {
   }
 }
 
+/**
+ * Buying at a particular counter: the home shop (any island's NPC) or a potion seller each sell only
+ * their own stock. `genLevels` is passed through for generator upgrades.
+ */
+export function buyAt(player: PlayerState, at: ShopKind, action: ShopAction, genLevels?: number[]): Result {
+  const sells = shopFor(action.buy);
+  if (sells !== at) return fail(`${SHOP_LABEL[action.buy] ?? action.buy} is only sold at ${sells === 'potion' ? 'the potion seller' : 'your home shop'}`);
+  return buy(player, action, genLevels);
+}
+
 /** Checks `from` holds everything `req` asks for. Weapon entries in `req` are matched by key only. */
 function holds(from: Inventory, req: Partial<Inventory>): string | null {
-  const amounts = [req.cash, req.grenades, req.charges, req.medkits, ...Object.values(req.pieces ?? {})];
+  const amounts = [req.cash, req.grenades, req.charges, req.medkits, ...Object.values(req.pieces ?? {}), ...Object.values(req.potions ?? {})];
   if (amounts.some((n) => n !== undefined && (!Number.isFinite(n) || n < 0))) return 'amounts must be zero or more';
   if ((req.cash ?? 0) > from.cash) return `only $${from.cash} available`;
   if ((req.grenades ?? 0) > from.grenades) return 'not enough grenades';
   if ((req.charges ?? 0) > from.charges) return 'not enough charges';
   if ((req.medkits ?? 0) > from.medkits) return 'not enough medkits';
   for (const [k, n] of Object.entries(req.pieces ?? {})) if ((n ?? 0) > (from.pieces[k as PieceKind] ?? 0)) return `not enough ${k}`;
+  for (const [k, n] of Object.entries(req.potions ?? {})) if ((n ?? 0) > (from.potions[k as PotionKind] ?? 0)) return `not enough ${k}`;
   for (const k of Object.keys(req.weapons ?? {})) if (!from.weapons[k as WeaponKind]) return `no ${k} to move`;
   return null;
 }
@@ -162,6 +177,12 @@ function move(from: Inventory, to: Inventory, req: Partial<Inventory>) {
     from.pieces[kind] = (from.pieces[kind] ?? 0) - (n ?? 0);
     if (from.pieces[kind] === 0) delete from.pieces[kind];
     moved.pieces[kind] = n ?? 0;
+  }
+  for (const [k, n] of Object.entries(req.potions ?? {})) {
+    const kind = k as PotionKind;
+    from.potions[kind] = (from.potions[kind] ?? 0) - (n ?? 0);
+    if (from.potions[kind] === 0) delete from.potions[kind];
+    moved.potions[kind] = n ?? 0;
   }
   for (const k of Object.keys(req.weapons ?? {})) {
     const kind = k as WeaponKind;
@@ -194,6 +215,7 @@ function kindsIn(req: Partial<Inventory>): HotbarItem[] {
   if (req.grenades) out.push('grenade');
   if (req.charges) out.push('charge');
   if (req.medkits) out.push('medkit');
+  for (const [k, n] of Object.entries(req.potions ?? {})) if (n && isHotbarItem(k)) out.push(k);
   return out;
 }
 
@@ -212,6 +234,10 @@ export function mergeInventory(into: Inventory, from: Inventory): void {
   into.grenades += from.grenades;
   into.charges += from.charges;
   into.medkits += from.medkits;
+  for (const [k, n] of Object.entries(from.potions ?? {})) {
+    const kind = k as PotionKind;
+    into.potions[kind] = (into.potions[kind] ?? 0) + (n ?? 0);
+  }
   for (const [k, n] of Object.entries(from.pieces)) {
     const kind = k as PieceKind;
     into.pieces[kind] = (into.pieces[kind] ?? 0) + (n ?? 0);

@@ -12,9 +12,9 @@ const map = buildMap(2);
 
 function player(id: number, pos: Vec3, extra: Partial<PlayerState> = {}): PlayerState {
   return {
-    id, name: `p${id}`, isBot: id !== ME, island: id - 1, pos, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, hp: 100,
+    id, name: `p${id}`, isBot: id !== ME, island: id - 1, pos, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, hp: 100, shield: 0,
     alive: true, eliminated: false, kills: 0, deaths: 0, respawnAt: null, breakoutUntil: null, invulnUntil: 0, lastDamagedAt: 0,
-    inv: { ...emptyInventory(), cash: 50 }, vault: emptyInventory(), locked: [], hotbar: Array(9).fill(null), selected: 0, equipped: 'fists', healAt: null, reloadUntil: 0, nextFireAt: 0, busyUntil: 0,
+    inv: { ...emptyInventory(), cash: 50 }, vault: emptyInventory(), locked: [], hotbar: Array(9).fill(null), selected: 0, equipped: 'fists', healAt: null, drinking: null, healLeft: 0, speedUntil: 0, reloadUntil: 0, nextFireAt: 0, busyUntil: 0,
     ...extra,
   };
 }
@@ -22,7 +22,7 @@ function player(id: number, pos: Vec3, extra: Partial<PlayerState> = {}): Player
 function snap(time: number, players: PlayerState[], events: [MatchEventType, Record<string, unknown>][] = [], extra: Partial<Snapshot> = {}): Snapshot {
   return {
     time, tick: Math.round(time * 30), players, pieces: [], loot: [], generators: [], genLevels: [1, 1], sealed: [false, false], waterY: 0,
-    suddenDeath: false, winner: null, events: events.map(([type, data]): MatchEvent => ({ t: time, type, data })), ...extra,
+    suddenDeath: false, winner: null, potionShops: [], events: events.map(([type, data]): MatchEvent => ({ t: time, type, data })), ...extra,
   };
 }
 
@@ -127,6 +127,32 @@ describe('SoundDirector: events → cues', () => {
     expect(sounds(d.update(snap(1, ps, [['hit', { target: ME, by: BOT, amount: 20 }]])))).toEqual(['hurt']);
     expect(sounds(d.update(snap(1.1, ps, [['hit', { target: BOT, by: ME, amount: 20 }]])))).toEqual(['impact', 'hitmarker']);
     expect(sounds(d.update(snap(1.2, ps, [['hit', { target: 3, by: BOT, amount: 20 }]])))).toEqual(['impact']);
+  });
+
+  it('shield hits sound different from flesh; a break shatters', () => {
+    const d = director();
+    const ps = [player(ME, at(0)), player(BOT, at(5))];
+    expect(sounds(d.update(snap(1, ps, [['hit', { target: ME, by: BOT, amount: 20, shieldAmount: 20, broke: false }]])))).toEqual(['shieldHit']);
+    expect(sounds(d.update(snap(1.1, ps, [['hit', { target: ME, by: BOT, amount: 30, shieldAmount: 10, broke: true }]])))).toEqual(['shieldHit', 'shieldBreak', 'hurt']);
+    expect(sounds(d.update(snap(1.2, ps, [['hit', { target: BOT, by: ME, amount: 20, shieldAmount: 20, broke: false }]])))).toEqual(['shieldHit', 'hitmarker']);
+    const cues = d.update(snap(1.3, ps, [['hit', { target: BOT, by: ME, amount: 20, shieldAmount: 5, broke: true }]]));
+    expect(sounds(cues)).toEqual(['shieldHit', 'shieldBreak', 'impact', 'hitmarker']);
+    expect(cues[1].pos).not.toBeNull();
+  });
+
+  it('drinking: gulp when anyone starts, a chime when your potion is done', () => {
+    const d = director();
+    d.update(snap(1, [player(ME, at(0)), player(BOT, at(5))]));
+    const drinking = { kind: 'shieldBig' as const, doneAt: 3 };
+    let cues = d.update(snap(1.1, [player(ME, at(0), { drinking }), player(BOT, at(5), { drinking })]));
+    expect(sounds(cues)).toEqual(['drink', 'drink']);
+    expect(cues[0].pos).toBeNull();
+    expect(cues[1].pos).not.toBeNull();
+    cues = d.update(snap(3.1, [player(ME, at(0), { shield: 50 }), player(BOT, at(5))]));
+    expect(sounds(cues)).toEqual(['potionDone:shieldBig']);
+    // Dying mid-drink: no chime.
+    d.update(snap(4, [player(ME, at(0), { drinking })]));
+    expect(sounds(d.update(snap(4.1, [player(ME, at(0), { alive: false })])))).toEqual([]);
   });
 
   it('kill / death / water splash', () => {

@@ -65,6 +65,17 @@ describe('sanitizeInput', () => {
     for (const bad of ['lock:fists', 'lock:', 'lock:tank', 'lock:pistol ', 'LOCK:pistol', 'genUpgrade2', { lock: 'pistol' }, 'lock:__proto__'])
       expect(sanitizeInput({ ...NO_INPUT, shop: { buy: bad } })!.shop).toBeNull();
   });
+  test('drink is a strict boolean; potions are shop items and vault counts', () => {
+    expect(sanitizeInput({ ...NO_INPUT, drink: true })!.drink).toBe(true);
+    for (const bad of ['yes', 1, {}, null, undefined]) expect(sanitizeInput({ ...NO_INPUT, drink: bad })!.drink).toBe(false);
+    for (const k of ['shieldSmall', 'shieldBig', 'healPotion', 'speedPotion'])
+      expect(sanitizeInput({ ...NO_INPUT, shop: { buy: k } })!.shop).toEqual({ buy: k });
+    expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'shieldHuge' } })!.shop).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { potions: { shieldBig: 2 } } } })!.vault).toEqual({ deposit: { potions: { shieldBig: 2 } } });
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { potions: { shieldBig: -1 } } } })!.vault).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { potions: { nectar: 1 } } } })!.vault).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, vault: { withdraw: { potions: 'all' } } })!.vault).toBeNull();
+  });
   test('booleans are coerced strictly', () => {
     expect(sanitizeInput({ ...NO_INPUT, fire: 'yes' })!.fire).toBe(false);
   });

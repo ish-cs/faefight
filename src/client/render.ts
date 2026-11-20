@@ -6,6 +6,7 @@ import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
 import { CharacterSystem, type Motion } from './characters/avatar';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
+import { PotionSellers } from './world/potionSeller';
 
 export { pieceGeometry };
 export const ISLAND_COLORS = [0xe0533d, 0x3d84e0, 0x3dbb6a, 0xe0b23d, 0xa65de0, 0x3dd0d0, 0xe07a3d, 0xd6d6d6];
@@ -41,6 +42,7 @@ export class Renderer {
   /** Animated player avatars (src/client/characters). */
   readonly characters = new CharacterSystem(this.scene, (island) => ISLAND_COLORS[island % 8]);
   private loot = new Map<number, THREE.Mesh>();
+  private potionSellers = new PotionSellers(this.scene);
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
   private fx: Fx[] = [];
   private ghost: THREE.Mesh | null = null;
@@ -135,6 +137,7 @@ export class Renderer {
       const level = snap.genLevels?.[island] ?? 1;
       pips.forEach((m, i) => { m.material = i < level ? this.pipOn : this.pipOff; });
     });
+    this.potionSellers.sync(snap.potionShops);
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
   }
@@ -245,6 +248,7 @@ export class Renderer {
   }
 
   render(localYaw: number) {
+    this.potionSellers.frame(performance.now());
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;

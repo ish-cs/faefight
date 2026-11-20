@@ -1,4 +1,4 @@
-import type { PieceKind, WeaponKind } from './types';
+import type { PieceKind, PotionKind, WeaponKind } from './types';
 
 export const TICK_HZ = 30;
 export const DT = 1 / TICK_HZ;
@@ -44,6 +44,18 @@ export const SHOTGUN_SPREAD_DEG = 4;
 
 export const GRENADE = { price: 100, dmg: 100, radius: 4, fuseSec: 2.5, throwSpeed: 14 };
 export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
+/** Shield sits on top of health (blue bar). */
+export const SHIELD_MAX = 100;
+export const POTIONS: Record<PotionKind, { price: number; useSec: number }> = {
+  shieldSmall: { price: 50, useSec: 1 },
+  shieldBig: { price: 100, useSec: 2 },
+  healPotion: { price: 60, useSec: 1 },
+  speedPotion: { price: 120, useSec: 1 },
+};
+/** Small shields only top you up to 50; big ones go to 100 (the usual shooter rule). */
+export const SHIELD_POTIONS = { shieldSmall: { amount: 25, cap: 50 }, shieldBig: { amount: 50, cap: 100 } } as const;
+export const HEAL_POTION = { amount: 40, overSec: 4 };
+export const SPEED_POTION = { mult: 1.3, sec: 15 };
 export const CHARGE = { price: 250, pieceDmg: 1500, radius: 2, playerRadius: 1, playerDmg: 100, fuseSec: 3 };
 
 export type DamageSource = 'bullet' | 'fist' | 'explosive';

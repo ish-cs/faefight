@@ -11,7 +11,7 @@ import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from '
 import { Nav, insideBunker, islandAt, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
-  TALL, bestGun, doorBlocked, doorPieces, isHard, nextPurchase, ownsGun, plugFor, plugSpot, sealKit, shoppingPlan,
+  TALL, bestGun, doorBlocked, doorPieces, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit, shoppingPlan,
   type Needs, type ShopStyle,
 } from './plans';
 import type { BotView, OtherStatus } from './view';
@@ -213,12 +213,20 @@ export class Bot {
 
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE);
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
-    return {
+    const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage'),
       fire, reload, interact, slot, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge,
     };
+    // Shields: stock up at a potion seller, drink out of combat (see potionAction).
+    if (!act.shop && !act.build && !fire) {
+      const atSeller = (view.potionShops ?? []).some((s) => dist2D(me.pos, s) <= USE_RANGE);
+      const pot = potionAction(me, now, !!enemy, atSeller);
+      if (pot && 'buy' in pot) out.shop = { buy: pot.buy };
+      else if (pot) Object.assign(out, { select: pot.drink, slot: null, drink: true });
+    }
+    return out;
   }
 
   /** Did the last purchase go through? A buy that keeps failing (e.g. nowhere to carry it) is left alone a while. */

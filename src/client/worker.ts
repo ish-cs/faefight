@@ -98,6 +98,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         if (!match) throw new Error('debug before start');
         if (msg.cmd === 'teleport') match.debugTeleport(humanId, { x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z });
         else if (msg.cmd === 'hp') match.debugSetHp(humanId, msg.hp);
+        else if (msg.cmd === 'shield') match.debugSetShield(msg.id ?? humanId, msg.shield);
+        else if (msg.cmd === 'potionShop') match.debugSetPotionShops([{ x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z }]);
         else if (msg.cmd === 'eliminate') match.debugEliminate(msg.playerId);
         else if (msg.cmd === 'kill') match.debugKill(msg.playerId);
         else if (msg.cmd === 'give') match.debugGive(humanId, msg.inv);

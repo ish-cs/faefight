@@ -58,6 +58,15 @@ describe('interest management', () => {
     expect(p2.yaw).toBe(0);
   });
 
+  test("a hidden enemy's shield and potion state are masked too", () => {
+    const { map, players } = setup();
+    players[1].pos = bunkerLocal(map, 1, 1.5, 1.5);
+    Object.assign(players[1], { shield: 80, healLeft: 20, speedUntil: 99, drinking: { kind: 'shieldBig', doneAt: 11 } });
+    const out = view(new InterestManager(map), snapOf(players), 1);
+    expect(out.hidden).toEqual([2]);
+    expect(out.players.find((p) => p.id === 2)).toMatchObject({ shield: 0, healLeft: 0, speedUntil: 0, drinking: null });
+  });
+
   test('the same enemy is visible to someone looking straight through the doorway', () => {
     const { map, players } = setup();
     players[1].pos = bunkerLocal(map, 1, 0, 0);
