@@ -302,3 +302,8 @@ canvas.shake { animation: screen-shake 0.55s ease-out; }
   65% { transform: translate(calc(var(--shake) * -0.3), calc(var(--shake) * -0.2)); }
   100% { transform: translate(0, 0); }
 }
+
+/* Eliminated player's bunker chip: greyed out, struck through. */
+.seal-chip.out { opacity: 0.55; }
+.seal-chip.out .state { color: #9aa3ad; }
+.seal-chip.out .name { text-decoration: line-through; }
