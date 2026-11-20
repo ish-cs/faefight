@@ -16,11 +16,14 @@ Pick a bot difficulty on the menu, then click the game to capture the mouse.
 | Key | Action |
 |---|---|
 | WASD / Shift / Space | Move / sprint / jump |
-| Mouse | Aim (click to capture) · LMB fire · R reload |
-| 1–5 | Fists / pistol / SMG / shotgun / rifle |
+| Mouse | Aim (click to capture) · LMB fire / place / throw · R reload |
+| 1–9 / wheel | Select hotbar slot: a gun to shoot, a piece to build (click places), a grenade/charge (click throws/places), an empty slot for fists |
+| Q / Ctrl+Q (or Shift+Q) | Drop one from the selected slot / drop the whole stack |
+| Tab | Release the mouse and drag hotbar slots to reorder (Tab again or click the game to resume) |
+| Z / X | Rotate the held piece · hold Alt for free placement |
 | E | Collect cash at a generator · open your shop or vault |
-| B | Build mode: 1–7 pick piece, Q/E or wheel rotate, hold Alt for free placement, click to place |
-| G / C | Throw grenade / place breach charge |
+
+Bought items go into the first free hotbar slot (9 slots, like Minecraft). With a full hotbar you can only buy more of what you already hold.
 
 ## Develop
 

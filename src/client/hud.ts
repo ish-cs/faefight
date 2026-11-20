@@ -1,6 +1,7 @@
 import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, LIFECYCLE, PIECES, WEAPONS } from '../sim/constants';
 import type { IslandLayout } from '../sim/map';
-import type { Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
+import { HOTBAR_SIZE, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem } from '../sim/hotbar';
+import type { HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
 import { dist2D } from '../sim/vec';
 import { PIECE_ORDER } from './input';
 import { ISLAND_COLORS, ISLAND_NAMES } from './render';
@@ -36,8 +37,36 @@ const fmtClock = (s: number) => {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 };
 
-export type HudContext = { buildMode: boolean; buildKind: PieceKind; ghostOk: boolean | null; free: boolean };
-export type HudActions = { buy(item: ShopItem): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void };
+/** Short hotbar labels (slots are narrow). */
+const SHORT: Record<HotbarItem, string> = {
+  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
+  sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
+  grenade: 'Grenade', charge: 'Charge',
+};
+const category = (k: HotbarItem) => (isGunItem(k) ? 'gun' : isPieceItem(k) ? 'piece' : k);
+// Tiny line icons per category, drawn in currentColor.
+const ICONS: Record<string, string> = {
+  gun: '<svg viewBox="0 0 24 24"><path d="M3 8h15l2 2h1v3h-6l-1 1h-2l-1 4H7l1-4H3z" fill="currentColor"/></svg>',
+  piece: '<svg viewBox="0 0 24 24"><path d="M3 6h18v12H3zM3 12h18M9 6v6M15 12v6" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
+  grenade: '<svg viewBox="0 0 24 24"><circle cx="12" cy="14" r="6.5" fill="currentColor"/><path d="M10 7h4v-2h-4zM14 6l4-2" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
+  charge: '<svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="2" fill="currentColor"/><path d="M12 8V4h5" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
+};
+
+export type HudContext = {
+  /** Locally selected hotbar slot (sent to the sim every input). */
+  selected: number;
+  ghostOk: boolean | null;
+  free: boolean;
+  /** Tab mode: pointer released so slots can be dragged. */
+  inventory: boolean;
+};
+export type HudActions = {
+  buy(item: ShopItem): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void;
+  /** Hotbar slot clicked. */
+  select(slot: number): void;
+  /** Hotbar slot dragged onto another. */
+  moveSlot(from: number, to: number): void;
+};
 
 export class Hud {
   readonly root = el('div', 'hud');
@@ -55,7 +84,9 @@ export class Hud {
   private prompt = el('div', 'prompt');
   private weapon = el('div', 'weapon');
   private extras = el('div', 'extras');
-  private pieces = el('div', 'pieces');
+  private hotbar = el('div', 'hotbar');
+  private hotbarSig = '';
+  private dragFrom: number | null = null;
   private timer = el('div', 'timer');
   private seals = el('div', 'seals');
   private banner = el('div', 'banner');
@@ -82,9 +113,10 @@ export class Hud {
     tc.append(this.timer, this.seals, this.banner);
     this.weapon.dataset.testid = 'weapon';
     this.cash.dataset.testid = 'cash';
-    this.pieces.dataset.testid = 'pieces';
+    this.hotbar.dataset.testid = 'hotbar';
     this.panel.dataset.testid = 'panel';
-    this.root.append(tl, bl, br, tc, this.pieces, this.prompt, this.killfeed, this.crosshair, this.center,
+    this.buildHotbar();
+    this.root.append(tl, bl, br, tc, this.hotbar, this.prompt, this.killfeed, this.crosshair, this.center,
       this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
     parent.append(this.root);
   }
@@ -99,12 +131,77 @@ export class Hud {
       chip.append(dot, el('span', 'name', isl.index === humanIsland ? 'You' : ISLAND_NAMES[isl.index % 8]), el('span', 'state', 'OPEN'));
       return chip;
     }));
-    this.pieces.replaceChildren(...PIECE_ORDER.map((k, i) => {
-      const s = el('div', 'piece-slot');
-      s.dataset.kind = k;
-      s.append(el('span', 'key', String(i + 1)), el('span', 'pname', LABEL[k]), el('span', 'count', '0'));
+  }
+
+  private buildHotbar() {
+    const slots = Array.from({ length: HOTBAR_SIZE }, (_, i) => {
+      const s = el('div', 'hb-slot empty');
+      s.dataset.slot = String(i);
+      s.dataset.testid = `hotbar-slot-${i}`;
+      s.append(el('span', 'hb-key', String(i + 1)), el('span', 'hb-icon'), el('span', 'hb-name'), el('span', 'hb-count'));
       return s;
-    }));
+    });
+    this.hotbar.replaceChildren(...slots);
+    const slotAt = (t: EventTarget | null) => {
+      const s = t instanceof Element ? t.closest<HTMLElement>('.hb-slot') : null;
+      return s ? Number(s.dataset.slot) : null;
+    };
+    const clearDrag = () => {
+      this.dragFrom = null;
+      this.hotbar.classList.remove('dragging');
+      slots.forEach((s) => s.classList.remove('drag-src', 'drag-over'));
+    };
+    this.hotbar.addEventListener('pointerdown', (e) => {
+      const i = slotAt(e.target);
+      if (i === null || e.button !== 0) return;
+      e.preventDefault();
+      this.dragFrom = i;
+      this.hotbar.classList.add('dragging');
+      slots[i].classList.add('drag-src');
+    });
+    this.hotbar.addEventListener('pointerover', (e) => {
+      if (this.dragFrom === null) return;
+      const i = slotAt(e.target);
+      slots.forEach((s, j) => s.classList.toggle('drag-over', j === i && j !== this.dragFrom));
+    });
+    window.addEventListener('pointerup', (e) => {
+      const from = this.dragFrom;
+      if (from === null) return;
+      const to = slotAt(document.elementFromPoint(e.clientX, e.clientY));
+      clearDrag();
+      if (to === null) return;
+      if (to === from) this.act.select(to);
+      else this.act.moveSlot(from, to);
+    });
+  }
+
+  private updateHotbar(me: PlayerState, ctx: HudContext) {
+    const inv = me.inv;
+    const reloading = me.reloadUntil > 0;
+    const sig = JSON.stringify([me.hotbar, inv.weapons, inv.pieces, inv.grenades, inv.charges, ctx.selected, reloading]);
+    this.hotbar.classList.toggle('editing', ctx.inventory);
+    this.hotbar.dataset.ghost = ctx.ghostOk === null ? 'none' : ctx.ghostOk ? 'ok' : 'blocked';
+    if (sig === this.hotbarSig) return;
+    this.hotbarSig = sig;
+    Array.from(this.hotbar.children).forEach((node, i) => {
+      const s = node as HTMLElement;
+      const k = me.hotbar[i] ?? null;
+      s.dataset.item = k ?? '';
+      s.classList.toggle('empty', !k);
+      s.classList.toggle('selected', i === ctx.selected);
+      const icon = s.querySelector('.hb-icon') as HTMLElement;
+      const cat = k ? category(k) : '';
+      if (icon.dataset.cat !== cat) { icon.dataset.cat = cat; icon.innerHTML = cat ? ICONS[cat] : ''; }
+      s.dataset.cat = cat;
+      setText(s.querySelector('.hb-name') as HTMLElement, k ? SHORT[k] : '');
+      let count = '';
+      if (k && isGunItem(k)) {
+        const a = inv.weapons[k];
+        count = a ? `${a.mag}/${a.spare}` : '';
+        s.classList.toggle('reloading', reloading && i === ctx.selected);
+      } else if (k) count = String(countOf(inv, k));
+      setText(s.querySelector('.hb-count') as HTMLElement, count);
+    });
   }
 
   setFps(n: number) {
@@ -147,29 +244,25 @@ export class Hud {
     if (near) setText(this.gen, `${near.g.island === me.island ? 'Your generator' : `${ISLAND_NAMES[near.g.island % 8]} generator`}  $${Math.floor(near.g.stored)}`);
 
     const station = this.nearStation();
-    const promptText = ctx.buildMode ? '' :
+    const promptText = isPieceItem(me.hotbar[ctx.selected]) ? '' :
       station === 'shop' ? 'E  Shop' : station === 'vault' ? 'E  Vault' :
       station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` : '';
     setText(this.prompt, promptText);
     this.prompt.style.display = promptText && !this.panelKind ? '' : 'none';
 
-    const w = me.equipped;
-    const ammo = w === 'fists' ? null : inv.weapons[w];
+    // What's in hand: the selected slot (a gun, a stack of pieces/explosives) or fists.
+    const held = me.hotbar[ctx.selected] ?? null;
+    const buildKind = isPieceItem(held) ? held : null;
+    const ammo = isGunItem(held) ? inv.weapons[held] : undefined;
     const reloading = me.reloadUntil > 0;
-    this.weapon.replaceChildren(el('span', 'wname', LABEL[w]), el('span', 'ammo', ammo ? `${ammo.mag}/${ammo.spare}` : ''));
+    const heldText = ammo ? `${ammo.mag}/${ammo.spare}` : held && !isGunItem(held) ? `×${countOf(inv, held)}` : '';
+    this.weapon.replaceChildren(el('span', 'wname', held ? LABEL[held] : 'Fists'), el('span', 'ammo', heldText));
     this.weapon.classList.toggle('reloading', reloading);
-    setText(this.extras, `${reloading ? 'Reloading…  ' : ''}Grenades ${inv.grenades}  ·  Charges ${inv.charges}`);
+    setText(this.extras, reloading ? 'Reloading…' : '');
+    this.extras.style.display = reloading ? '' : 'none';
 
-    this.pieces.classList.toggle('build', ctx.buildMode);
-    for (const slot of Array.from(this.pieces.children) as HTMLElement[]) {
-      const k = slot.dataset.kind as PieceKind;
-      const n = inv.pieces[k] ?? 0;
-      setText(slot.querySelector('.count') as HTMLElement, String(n));
-      slot.classList.toggle('empty', n === 0);
-      slot.classList.toggle('selected', ctx.buildMode && ctx.buildKind === k);
-    }
-    this.pieces.dataset.ghost = ctx.ghostOk === null ? 'none' : ctx.ghostOk ? 'ok' : 'blocked';
-    this.crosshair.classList.toggle('build', ctx.buildMode);
+    this.updateHotbar(me, ctx);
+    this.crosshair.classList.toggle('build', !!buildKind);
 
     const left = LIFECYCLE.suddenDeathAt - snap.time;
     setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
@@ -195,15 +288,15 @@ export class Hud {
     if (!me.alive && !me.eliminated && me.respawnAt !== null) {
       setText(this.center, ownSealed ? `Bunker sealed — you'll respawn trapped in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s with 10s to break out` : `Respawning in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s`);
       this.center.style.display = 'block';
-    } else if (ctx.buildMode) {
-      const have = inv.pieces[ctx.buildKind] ?? 0;
-      setText(this.center, `Build: ${LABEL[ctx.buildKind]} (${have})${ctx.free ? ' · free place' : ''}${have === 0 ? ' — buy some at your shop' : ''}`);
+    } else if (buildKind) {
+      const have = inv.pieces[buildKind] ?? 0;
+      setText(this.center, `Build: ${LABEL[buildKind]} (${have})  ·  Z/X rotate  ·  ${ctx.free ? 'free place' : 'Alt free place'}`);
       this.center.style.display = 'block';
       this.center.classList.add('small');
     } else {
       this.center.style.display = 'none';
     }
-    if (!ctx.buildMode) this.center.classList.remove('small');
+    if (!buildKind) this.center.classList.remove('small');
 
     const end = endState(snap.winner, this.humanId, me.eliminated, snap.players);
     if (end) {
@@ -327,6 +420,7 @@ export class Hud {
       let note = '';
       let disabled = me.inv.cash < priceOf(item);
       if ((GUNS as readonly string[]).includes(item) && me.inv.weapons[item as WeaponKind]) { disabled = true; note = 'owned'; }
+      else if (isHotbarItem(item) && countOf(me.inv, item) === 0 && !canAdd(me.hotbar, item)) { disabled = true; note = 'Hotbar full'; }
       else if (item === 'ammo') {
         if (me.equipped === 'fists') { disabled = true; note = 'equip a gun'; }
         else note = `+${WEAPONS[me.equipped].mag * AMMO_BOX.mags} ${LABEL[me.equipped]}`;

@@ -1,8 +1,10 @@
 import { BUILD } from '../sim/constants';
-import type { PieceKind, PlayerInput, WeaponKind } from '../sim/types';
+import { HOTBAR_SIZE, isPieceItem } from '../sim/hotbar';
+import type { HotbarItem, PieceKind, PlayerInput } from '../sim/types';
 
 export const PIECE_ORDER: PieceKind[] = ['sandbags', 'wood', 'metal', 'steel', 'scaffold', 'ramp', 'container'];
-export const SLOT_ORDER: WeaponKind[] = ['fists', 'pistol', 'smg', 'shotgun', 'rifle'];
+/** Wheel travel (px) per hotbar step: one mouse notch is ~100, trackpads send many small deltas. */
+const WHEEL_STEP = 50;
 
 const SENS_KEY = 'faefight.sensitivity';
 const BASE_RAD_PER_PX = 0.0022;
@@ -24,14 +26,20 @@ export type InputHooks = {
   place(): void;
   /** Pointer lock gained/lost. */
   lockChange(locked: boolean): void;
+  /** Tab: hotbar edit mode (pointer released to drag slots) opened/closed. */
+  inventoryChange(open: boolean): void;
 };
 
 /** Keyboard + mouse/trackpad → PlayerInput. Held controls are sampled; taps are queued as one-shots. */
 export class InputController {
   yaw = 0;
   pitch = 0;
-  buildMode = false;
-  buildKind: PieceKind = 'sandbags';
+  /** Selected hotbar slot; sent with every input (the sim derives what's in hand from it). */
+  selected = 0;
+  /** What sits in the selected slot, per the latest snapshot (set by main each frame). */
+  held: HotbarItem | null = null;
+  /** Tab mode: pointer released so hotbar slots can be dragged. */
+  inventory = false;
   buildRot = 0;
   /** False while a menu or panel is open: game keys and mouse are ignored. */
   enabled = false;
@@ -39,6 +47,7 @@ export class InputController {
   private keys = new Set<string>();
   private fireHeld = false;
   private oneShot: Partial<PlayerInput> = {};
+  private wheelAcc = 0;
 
   constructor(private canvas: HTMLCanvasElement, private hooks: InputHooks) {
     window.addEventListener('keydown', (e) => this.onKey(e, true));
@@ -48,9 +57,14 @@ export class InputController {
     window.addEventListener('mouseup', (e) => { if (e.button === 0) this.fireHeld = false; });
     window.addEventListener('mousemove', (e) => this.onMouseMove(e));
     canvas.addEventListener('wheel', (e) => {
-      if (!this.enabled || !this.buildMode) return;
+      if (!this.enabled) return;
       e.preventDefault();
-      this.rotate(Math.sign(e.deltaY) * -1);
+      this.wheelAcc += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+      while (Math.abs(this.wheelAcc) >= WHEEL_STEP) {
+        const dir = Math.sign(this.wheelAcc);
+        this.wheelAcc -= dir * WHEEL_STEP;
+        this.select((this.selected + dir + HOTBAR_SIZE) % HOTBAR_SIZE);
+      }
     }, { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => this.hooks.lockChange(this.locked));
@@ -58,6 +72,31 @@ export class InputController {
 
   get locked() {
     return document.pointerLockElement === this.canvas;
+  }
+
+  /** Holding a piece = build mode: the ghost shows and a click places it. */
+  get buildMode(): boolean {
+    return isPieceItem(this.held);
+  }
+
+  get buildKind(): PieceKind | null {
+    return isPieceItem(this.held) ? this.held : null;
+  }
+
+  select(i: number) {
+    if (!Number.isInteger(i) || i < 0 || i >= HOTBAR_SIZE) throw new Error(`InputController.select: bad slot ${i}`);
+    if (i !== this.selected) this.fireHeld = false;
+    this.selected = i;
+  }
+
+  /** Tab: release the pointer to drag hotbar slots; Tab again (or a click on the game) recaptures. */
+  setInventory(open: boolean) {
+    if (open === this.inventory) return;
+    this.inventory = open;
+    this.fireHeld = false;
+    if (open) { if (document.pointerLockElement) document.exitPointerLock(); }
+    else this.requestLock();
+    this.hooks.inventoryChange(open);
   }
 
   get free() {
@@ -86,9 +125,12 @@ export class InputController {
 
   private onMouseDown(e: MouseEvent) {
     if (!this.enabled) return;
+    if (this.inventory) { this.setInventory(false); return; }
     if (!this.locked) this.requestLock();
     if (e.button !== 0) return;
     if (this.buildMode) { this.hooks.place(); return; }
+    if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
+    if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }
     this.fireHeld = true;
     this.oneShot.fire = true; // a click shorter than a frame still fires once
   }
@@ -108,19 +150,18 @@ export class InputController {
     this.keys.add(e.code);
     if (!first) return;
     const digit = /^Digit([1-9])$/.exec(e.code);
-    if (digit) {
-      const i = Number(digit[1]) - 1;
-      if (this.buildMode) { if (i < PIECE_ORDER.length) this.buildKind = PIECE_ORDER[i]; }
-      else if (i < SLOT_ORDER.length) this.oneShot.slot = SLOT_ORDER[i];
-      return;
-    }
+    if (digit) { this.select(Number(digit[1]) - 1); return; }
     switch (e.code) {
-      case 'KeyB': this.buildMode = !this.buildMode; this.fireHeld = false; break;
-      case 'KeyQ': if (this.buildMode) this.rotate(-1); break;
-      case 'KeyE': if (this.buildMode) this.rotate(1); else this.hooks.interact(); break;
+      case 'KeyQ':
+        // Ctrl+Q (or Shift+Q, Mac-friendly) drops the whole stack.
+        if (e.ctrlKey) e.preventDefault();
+        this.oneShot.drop = e.ctrlKey || e.shiftKey ? 'stack' : 'one';
+        break;
+      case 'KeyZ': this.rotate(-1); break;
+      case 'KeyX': this.rotate(1); break;
+      case 'KeyE': this.hooks.interact(); break;
       case 'KeyR': this.oneShot.reload = true; break;
-      case 'KeyG': this.oneShot.throwGrenade = true; break;
-      case 'KeyC': this.oneShot.placeCharge = true; break;
+      case 'Tab': this.setInventory(!this.inventory); break;
       case 'Space': this.oneShot.jump = true; break;
     }
   }
@@ -137,6 +178,7 @@ export class InputController {
       sprint: on('ShiftLeft') === 1 || on('ShiftRight') === 1,
       fire: this.enabled && this.fireHeld && !this.buildMode,
       reload: false, interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
+      select: this.selected, drop: null, moveSlot: null,
       ...this.oneShot,
     };
     this.oneShot = {};
