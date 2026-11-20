@@ -3,10 +3,11 @@ import { eyePos } from '../combat';
 import type { Doorway, IslandLayout } from '../map';
 import { NO_INPUT } from '../types';
 import type {
-  BuildRequest, Difficulty, PieceState, PlayerInput, PlayerState, ShopItem, VaultAction, Vec3, WeaponKind,
+  BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, VaultAction, Vec3, WeaponKind,
 } from '../types';
 import { add, clone, dist2D, forward, norm, right, scale, sub, v3, yawOf } from '../vec';
 import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
+import { BUILD_SKILL, BUILD_TUNING as BT, flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, lane, laneAt, laneS, type Lane } from './nav';
@@ -20,10 +21,10 @@ import type { BotView, OtherStatus } from './view';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'fleeTide' | 'heal';
+  | 'fight' | 'disengage' | 'fleeTide' | 'heal' | 'cover' | 'fortify';
 const GOALS: Goal[] = [
-  'fleeTide', 'defend', 'disengage', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'shop', 'heal', 'collect',
+  'fleeTide', 'defend', 'disengage', 'cover', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
+  'fortify', 'shop', 'heal', 'collect',
 ];
 
 /** How often a bot reconsiders what to do, and how long it hesitates after changing plans (human thinking time). */
@@ -56,6 +57,8 @@ const RAID_AT = 60;
 /** Sandbags carried into sudden death to climb above the tide, bought in the last minutes before it. */
 const TOWER_BAGS = 10, TOWER_PREP_SEC = 150;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
+/** Walls a bot throws down for cover, best first (sandbags go up two high). */
+const WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
 /** Snipers go up a sandbag tower this long before sudden death. */
 const HIGH_GROUND_SEC = 75;
 /** Generator cash worth grabbing on the way out, and the level at which it is about to be wasted at the cap. */
@@ -133,7 +136,23 @@ export class Bot {
   private pendingBuy: { item: ShopItem; cash: number; at: number } | null = null;
   private buyFails = new Map<ShopItem, number>();
   private buyBlockedUntil = new Map<ShopItem, number>();
-  private lastCoverAt = -Infinity;
+  /** Shot at in the open: who from, the wall(s) I put up, and the hide/peek rhythm behind it. */
+  private cover: {
+    threatId: number; threat: Vec3; lastContact: number; startAt: number; placed: number;
+    phase: 'hide' | 'peek'; phaseUntil: number; side: number;
+  } | null = null;
+  private coverRollAt = -Infinity;
+  /** Top of a ramp I threw down in a fight (high ground), while it lasts. */
+  private perch: { ramp: Vec3; pos: Vec3; until: number } | null = null;
+  private fightSince: number | null = null;
+  private lastPieceAt = -Infinity;
+  private slots: Slot[] | null = null;
+  private slotBackoff = new Map<number, number>();
+  /** Bridges: furthest deck reached per lane, islands I'm bridging to on the mirror lane (main one got cut), wall spacing. */
+  private laneBest = new Map<string, number>();
+  private alt = new Set<number>();
+  private lastWallS = new Map<string, number>();
+  private wallsOnBridge: boolean;
   private towerYaw: number | null = null;
   private wander: { to: Vec3; until: number } | null = null;
   private lastNadeAt = -Infinity;
@@ -152,10 +171,12 @@ export class Bot {
       closeGun: t.range < 0.3,
       metal: t.builder > 0.6,
       steel: t.patience > 0.75 && t.greed > 0.75,
-      coverWood: t.builder > 0.6 ? 2 : 0,
+      coverWood: 0,
       invest: t.patience > 0.75,
+      buildFirst: t.builder > 0.7,
     };
     this.aim = new Aim(AIM[difficulty], rng);
+    this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
   }
 
   get currentGoal(): Goal { return this.goal; }
@@ -178,6 +199,9 @@ export class Bot {
       this.pendingBuy = null;
       this.nadePlan = null;
       this.hideFrom = null;
+      this.cover = null;
+      this.perch = null;
+      this.fightSince = null;
       this.nextScoreAt = -Infinity;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
@@ -186,10 +210,13 @@ export class Bot {
     this.checkPurchase(me, now);
     if (now >= this.nextScoreAt) this.chooseTarget(view);
     const ctx = this.context(view);
+    this.coverTrigger(ctx);
     if (now >= this.nextScoreAt) {
       const next = this.pick(ctx);
       if (next !== this.goal) this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
       this.goal = next;
+      if (next !== 'fight') this.fightSince = null;
+      else if (this.fightSince === null) this.fightSince = now;
       this.nextScoreAt = now + RESCORE_SEC[this.difficulty] * (0.75 + 0.5 * this.rng());
     }
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
@@ -264,6 +291,9 @@ export class Bot {
     }
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE);
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
+    if (act.build) {
+      this.lastPieceAt = now;
+    }
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage'),
@@ -303,9 +333,28 @@ export class Bot {
 
   private scaffoldsTo(from: number, to: number): number {
     const map = this.view.map;
+    if (this.alt.has(to) && from === this.view.self.island) {
+      const f = this.mirrorFrontier(to);
+      return Math.max(1, Math.ceil((f.s - Math.sqrt(map[to].radius ** 2 - 9)) / SCAFFOLD_STEP));
+    }
     const l = lane(map, from, to);
     const left = l.length - Math.sqrt(map[to].radius ** 2 - 9) - this.nav.frontier(l).s;
     return Math.max(1, Math.ceil(left / SCAFFOLD_STEP));
+  }
+
+  /**
+   * The mirror lane home↔to (the line a bridge from `to` would take), scanned from my end: s (measured from `to`)
+   * of the last solid point coming out from my shore. Used for an alternate bridge when my main one got shot out.
+   */
+  private mirrorFrontier(to: number): { l: Lane; s: number; complete: boolean } {
+    const map = this.view.map, home = this.view.self.island;
+    const l = lane(map, to, home);
+    for (let s = l.length - Math.sqrt(map[home].radius ** 2 - 9) + 2; s >= 0; s -= 0.25) {
+      const p = laneAt(l, s);
+      if (this.view.groundAt(p.x, p.z) === null) return { l, s: s + 0.25, complete: false };
+      if (islandAt(map, p) === to) return { l, s, complete: true };
+    }
+    throw new Error(`Bot ${this.id}: mirror lane ${to}>${home} never reached island ${to}`);
   }
 
   private rivalFacts(view: BotView): RivalFacts[] {
@@ -399,7 +448,55 @@ export class Bot {
       medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       steel: skilled && total >= STEEL_RICH,
       genLevel: c.view.genLevels?.[c.home.index],
+      build: this.buildNeeds(c, total),
     };
+  }
+
+  /**
+   * Pieces to carry for building, bought in one shop visit: the unbuilt part of my fortification plan (once I can
+   * spare the cash: builders sooner), cover walls for fights, a ramp for high ground, side walls for a long bridge.
+   */
+  private buildNeeds(c: Ctx, total: number): Partial<Record<PieceKind, number>> | undefined {
+    const { me, view } = c;
+    if (view.suddenDeath || !ownsGun(me.inv)) return undefined;
+    const t = this.t, sk = BUILD_SKILL[this.difficulty];
+    const b: Partial<Record<PieceKind, number>> = {};
+    const add1 = (k: PieceKind, n = 1) => { if (n > 0) b[k] = (b[k] ?? 0) + n; };
+    if (total >= BT.fortReserve * (1 - t.builder))
+      for (const [i, s] of this.fortSlots().entries())
+        if (!slotBuilt(view.pieces, s) && (this.slotBackoff.get(i) ?? -Infinity) <= view.now) add1(s.kind);
+    const walls = Math.round(BT.coverCarry[this.difficulty] * (0.4 + t.builder));
+    const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
+    add1(skilled && total >= BT.metalCoverAt ? 'metal' : 'wood', walls);
+    if (sk.highGround && total >= BT.rampAt && t.builder >= 0.3) add1('ramp');
+    const scaffolds = this.scaffoldsNeeded(c);
+    if (sk.bridgeCover && this.wallsOnBridge && scaffolds >= 2 * BT.scaffoldsPerBridgeWall)
+      add1('wood', Math.floor(scaffolds / BT.scaffoldsPerBridgeWall));
+    return b;
+  }
+
+  /** My share of the home fortification plan (easy players misplace some of it for good). */
+  private fortSlots(): Slot[] {
+    if (this.slots) return this.slots;
+    const view = this.view, home = view.self.island;
+    const sk = BUILD_SKILL[this.difficulty];
+    this.slots = fortShare(fortPlan(view.map, home, this.t), this.t, this.difficulty).map((s) => {
+      if (s.after !== undefined || this.rng() >= sk.misplace) return s;
+      const f = fumble(s.pos, s.rotY, this.rng);
+      return { ...s, pos: f.pos, rotY: f.rotY };
+    });
+    return this.slots;
+  }
+
+  /** Next fortification slot to (re)build: missing, its base standing, not recently failed, and I carry the piece. */
+  private nextSlot(c: Ctx): { slot: Slot; i: number } | null {
+    const slots = this.fortSlots();
+    for (const [i, s] of slots.entries()) {
+      if (slotBuilt(c.view.pieces, s) || (this.slotBackoff.get(i) ?? -Infinity) > c.view.now) continue;
+      if (s.after !== undefined && !slotBuilt(c.view.pieces, slots[s.after])) continue;
+      if ((c.me.inv.pieces[s.kind] ?? 0) > 0) return { slot: s, i };
+    }
+    return null;
   }
 
   /** Where a rival believed to be inside their own (open) bunker was last seen, or null. */
@@ -623,6 +720,16 @@ export class Bot {
         if (!bag) return 0;
         return 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70;
       }
+      case 'cover': {
+        const cv = this.cover;
+        if (!cv || (c.enemy && c.enemyDist < 5)) return 0;
+        return BT.coverScore + 0.1 * t.builder;
+      }
+      case 'fortify': {
+        if (view.suddenDeath || c.on !== home.index || c.danger || !gun || this.intruder(c)) return 0;
+        const next = this.nextSlot(c);
+        return next ? BT.fortifyScore + 0.3 * t.builder : 0;
+      }
       case 'raid': {
         if (view.suddenDeath || !gun) return 0;
         const isl = this.raidIsland(c);
@@ -665,6 +772,8 @@ export class Bot {
       case 'heal': return this.goTo(c.home.vault, 2.0);
       case 'fight': return this.doFight(c);
       case 'disengage': return this.doDisengage(c);
+      case 'cover': return this.doCover(c);
+      case 'fortify': return this.doFortify(c);
       case 'fleeTide': return this.doFleeTide(c);
     }
   }
@@ -721,19 +830,45 @@ export class Bot {
 
   private doBridge(c: Ctx): Act {
     if (!c.rivalIsl) return IDLE;
-    const l = lane(c.view.map, c.home.index, c.rivalIsl.index);
-    const f = this.nav.frontier(l);
-    if (f.complete) { this.nextScoreAt = c.view.now; return IDLE; }
-    if (this.scaffoldsNeeded(c) <= 1 && sealKit(c.me.inv) < c.openDoors.length) { this.nextScoreAt = c.view.now; return IDLE; }
-    const stand = laneAt(l, f.s - 1.1);
+    const to = c.rivalIsl.index, now = c.view.now;
+    const mirror = this.alt.has(to);
+    // Main lane runs from my side (s grows toward them); the mirror lane is measured from their side.
+    const m = mirror ? this.mirrorFrontier(to) : null;
+    const l = m ? m.l : lane(c.view.map, c.home.index, to);
+    const f = m ?? this.nav.frontier(l);
+    const sign = mirror ? -1 : 1;
+    const at = (k: number) => laneAt(l, f.s + sign * k);
+    if (f.complete) { this.nextScoreAt = now; return IDLE; }
+    if (this.scaffoldsNeeded(c) <= 1 && sealKit(c.me.inv) < c.openDoors.length) { this.nextScoreAt = now; return IDLE; }
+    const key = `${l.from}>${l.to}`;
+    // My bridge got shot out under me (a gap where decks were): skilled players lay an alternate one on the other lane.
+    const best = this.laneBest.get(key) ?? -Infinity;
+    if (!mirror && f.s < best - 3) {
+      this.laneBest.set(key, f.s);
+      if (BUILD_SKILL[this.difficulty].altRoute && now - this.mem.lastHurtAt < 20) { this.alt.add(to); this.nextScoreAt = now; return IDLE; }
+    }
+    if (!mirror) this.laneBest.set(key, Math.max(best, f.s));
+    const stand = at(-1.1);
     const walk = this.goTo(stand, ARRIVE);
     if (walk.dir) return walk;
-    const ahead = laneAt(l, f.s + 4);
-    if (c.me.busyUntil > c.view.now) return { dir: null, face: ahead };
+    const ahead = at(4);
+    if (c.me.busyUntil > now) return { dir: null, face: ahead };
+    // Long bridge: a wall along the deck edge facing the nearest third island (flank fire), walkway left free.
+    const shore = Math.sqrt(c.home.radius ** 2 - 9);
+    const out = mirror ? l.length - shore - f.s : f.s - shore;
+    const lastWall = this.lastWallS.get(key) ?? -Infinity;
+    const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
+    if (wall && BUILD_SKILL[this.difficulty].bridgeCover && this.wallsOnBridge && out > BT.bridgeWallFrom && Math.abs(f.s - lastWall) >= BT.bridgeWallEvery) {
+      this.lastWallS.set(key, f.s);
+      const side = flankSide(c.view.map, c.home.index, to) * (mirror ? -1 : 1);
+      const p = add(at(-1.6), scale(right(yawOf(l.dir)), side * 0.85));
+      const act = this.place(c, wall, v3(p.x, c.me.pos.y, p.z), yawOf(l.dir) + Math.PI / 2, ahead);
+      if (act) return act;
+    }
     const rotY = yawOf(l.dir);
     // Butt the new deck against the end of the last one (it sits level with whatever its near end attaches to).
     for (const k of [2.0, 2.1, 2.2, 2.3, 2.4, 2.6]) {
-      const p = laneAt(l, f.s + k);
+      const p = at(k);
       const pos = v3(p.x, c.me.pos.y, p.z);
       if (!c.view.canPlace('scaffold', pos, rotY).ok) continue;
       this.nav.invalidate();
@@ -986,8 +1121,8 @@ export class Bot {
     return this.goTo(isl.generator, 1.5);
   }
 
-  /** Best spot behind solid cover from enemy e within reach, or null. */
-  private coverFrom(c: Ctx, e: PlayerState): Vec3 | null {
+  /** Best spot behind solid cover from a shooter at e within reach, or null. */
+  private coverFrom(c: Ctx, e: { pos: Vec3 }): Vec3 | null {
     const me = c.me;
     let best: Vec3 | null = null, bestD = 10;
     const consider = (center: Vec3, half: number) => {
@@ -1022,22 +1157,19 @@ export class Bot {
     const side = scale(right(yawOf(to)), this.strafeSign * (want < 2 ? 0.3 : 1));
     const sameIsland = islandAt(c.view.map, e.pos) === c.on;
 
-    // Careful players fight from behind something solid; builders throw a wall down if nothing is near.
+    // High ground: hold the top of a ramp I threw down while it stands.
+    if (this.perch && (now > this.perch.until || !c.view.pieces.some((p) => p.kind === 'ramp' && dist2D(p.pos, this.perch!.ramp) < 0.3))) this.perch = null;
+    if (this.perch) {
+      const d = dist2D(me.pos, this.perch.pos);
+      return d > 0.35 ? { dir: norm(flat(sub(this.perch.pos, me.pos))) } : { dir: null };
+    }
+    const ramp = this.highGround(c, e, to, gun, sameIsland);
+    if (ramp) return ramp;
+    // Careful players fight from behind something solid.
     if (gun !== 'fists' && c.enemyDist > 6 && sameIsland && (t.caution > 0.5 || me.hp < 60)) {
       const cover = this.coverFrom(c, e);
       if (cover && dist2D(cover, me.pos) > 0.8) return this.goTo(cover, 0.6);
       if (cover) return { dir: scale(side, 0.4) };
-      const spare = TALL.reduce((n, k) => n + (me.inv.pieces[k] ?? 0), 0) - c.openDoors.length;
-      if (t.builder > 0.5 && spare > 0 && now - this.lastCoverAt > 8 && me.busyUntil <= now) {
-        const kind = TALL.slice().reverse().find((k) => (me.inv.pieces[k] ?? 0) > 0)!;
-        const pos = add(me.pos, scale(to, 1.6));
-        const rotY = yawOf(to);
-        const blocksMyDoor = c.home.bunker.doorways.some((d) => dist2D(d.center, pos) < 2.5);
-        if (!blocksMyDoor && c.view.canPlace(kind, pos, rotY).ok) {
-          this.lastCoverAt = now;
-          return { dir: null, build: { kind, pos, rotY, free: true } };
-        }
-      }
     }
 
     const gapM = c.enemyDist - want;
@@ -1051,6 +1183,174 @@ export class Bot {
     }
     return { dir: norm(dir) };
   }
+
+  // ---------------------------------------------------------------- building
+
+  /** Place a piece if the sim would take it and it keeps my own bunker open; null otherwise. */
+  private place(c: Ctx, kind: PieceKind, pos: Vec3, rotY: number, face: Vec3): Act | null {
+    const r = c.view.canPlace(kind, pos, rotY);
+    if (!r.ok) return null;
+    if (!c.view.suddenDeath && !ownBunkerSafe(c.home.bunker, c.view.pieces, ghost(kind, r.pos, rotY, c.me.id))) return null;
+    return { dir: null, face, build: { kind, pos, rotY, free: true } };
+  }
+
+  /** Busy placing, or still between two pieces of a sequence (better players chain them tighter). */
+  private building(c: Ctx, kind?: PieceKind): boolean {
+    const gap = BUILD_SKILL[this.difficulty].gap;
+    return c.me.busyUntil > c.view.now || c.view.now < this.lastPieceAt + (kind ? PIECES[kind].placeSec : 0) + gap;
+  }
+
+  /** Walls I may throw down for cover: tall pieces beyond the seal kit, else sandbags. */
+  private wallKind(c: Ctx): PieceKind | null {
+    const inv = c.me.inv;
+    const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
+    if (tall > c.openDoors.length) return WALLS.find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
+    return (inv.pieces.sandbags ?? 0) > 0 ? 'sandbags' : null;
+  }
+
+  /** Where the shooter with this id is (seen now, their tracer, or last sighting). */
+  private threatPos(c: Ctx, id: number): Vec3 | null {
+    const e = c.view.enemies.find((x) => x.id === id);
+    if (e) return clone(e.pos);
+    let best: { t: number; from: Vec3 } | null = null;
+    for (const sh of c.view.shots) if (sh.by === id && (!best || sh.t > best.t)) best = sh;
+    if (best) return v3(best.from.x, best.from.y - PLAYER.eyeHeight, best.from.z);
+    return this.mem.recent(id, c.view.now, 3)?.pos ?? null;
+  }
+
+  /**
+   * Shot at in the open with nothing solid nearby: decide (once per incident, odds by skill and taste) to throw a
+   * wall down between me and the shooter after a human reaction time. A second shooter from another side gets
+   * a wall too (walling off a flank).
+   */
+  private coverTrigger(c: Ctx) {
+    const { view, me } = c;
+    const now = view.now;
+    const cv = this.cover;
+    if (cv) {
+      if (c.enemy?.id === cv.threatId) { cv.threat = clone(c.enemy.pos); cv.lastContact = now; }
+      if (now - cv.lastContact > BT.coverForgetSec) { this.cover = null; this.nextScoreAt = now; }
+    }
+    const by = this.mem.lastHurtBy;
+    if (by === null || by === me.id || now - this.mem.lastHurtAt > 1.0) return;
+    if (view.suddenDeath || c.on < 0 || insideBunker(c.home.bunker, me.pos)) return;
+    const from = this.threatPos(c, by);
+    if (!from) return;
+    if (this.cover?.threatId === by) { this.cover.threat = from; this.cover.lastContact = now; return; }
+    if (now < this.coverRollAt) return;
+    this.coverRollAt = now + BT.coverRetrySec;
+    if (dist2D(from, me.pos) < 5 || !this.wallKind(c)) return;
+    const eye = add(from, v3(0, PLAYER.eyeHeight, 0)), chest = add(me.pos, v3(0, CHEST, 0));
+    if (view.pieces.some((p) => dist2D(p.pos, me.pos) < 4 && shields(p, eye, chest))) return;
+    const spot = this.coverFrom(c, { pos: from });
+    if (spot && dist2D(spot, me.pos) < BT.coverNearSpot) return;
+    const sk = BUILD_SKILL[this.difficulty];
+    if (this.rng() >= sk.coverChance * Math.min(1, 0.55 + this.t.builder)) return;
+    this.cover = {
+      threatId: by, threat: from, lastContact: now, startAt: now + sk.coverDelay * (0.7 + 0.6 * this.rng()), placed: 0,
+      phase: 'hide', phaseUntil: 0, side: this.rng() < 0.5 ? -1 : 1,
+    };
+    this.nextScoreAt = Math.min(this.nextScoreAt, now + sk.coverDelay * 0.5);
+  }
+
+  /** A piece near me that shields a spot just behind it from the threat, and that spot. */
+  private coverWall(c: Ctx, threat: Vec3): { wall: PieceState; hide: Vec3 } | null {
+    const eye = add(threat, v3(0, PLAYER.eyeHeight, 0));
+    let best: { wall: PieceState; hide: Vec3 } | null = null, bestD = 4;
+    for (const p of c.view.pieces) {
+      if (p.kind === 'scaffold' || p.kind === 'ramp') continue;
+      const d = dist2D(p.pos, c.me.pos);
+      if (d >= bestD || Math.abs(p.pos.y - c.me.pos.y) > 1.2) continue;
+      const away = norm(flat(sub(p.pos, threat)));
+      const hide = add(v3(p.pos.x, c.me.pos.y, p.pos.z), scale(away, PIECES[p.kind].d / 2 + 0.6));
+      if (!shields(p, eye, add(hide, v3(0, CHEST, 0)))) continue;
+      best = { wall: p, hide }; bestD = d;
+    }
+    return best;
+  }
+
+  /** Under fire: throw the wall up (two bags high if it's sandbags), then hide behind it and peek out to shoot. */
+  private doCover(c: Ctx): Act {
+    const cv = this.cover;
+    if (!cv) { this.nextScoreAt = c.view.now; return IDLE; }
+    const { me, view } = c;
+    const now = view.now;
+    const sk = BUILD_SKILL[this.difficulty];
+    const face = add(cv.threat, v3(0, CHEST, 0));
+    const got = this.coverWall(c, cv.threat);
+    if (!got) {
+      if (now < cv.startAt || this.building(c)) return c.enemy ? this.doFight(c) : { dir: null, face };
+      const kind = this.wallKind(c);
+      if (!kind || cv.placed >= BT.coverMaxPieces) { this.cover = null; this.nextScoreAt = now; return IDLE; }
+      const to = norm(flat(sub(cv.threat, me.pos)));
+      // A bag already lying between us: stack the next one on it.
+      const low = kind === 'sandbags' ? view.pieces.find((p) => p.kind === 'sandbags' && p.owner === me.id && dist2D(p.pos, me.pos) < 2.2 &&
+        Math.abs(p.pos.y - me.pos.y) < 0.3 && (p.pos.x - me.pos.x) * to.x + (p.pos.z - me.pos.z) * to.z > 0.5) : undefined;
+      if (low) {
+        const act = this.place(c, kind, v3(low.pos.x, me.pos.y + 0.4, low.pos.z), low.rotY, face);
+        if (act) { cv.placed++; return act; }
+      }
+      for (const d of BT.coverDist) {
+        let pos = add(me.pos, scale(to, d)), rotY = yawOf(to);
+        if (this.rng() < sk.misplace) ({ pos, rotY } = fumble(pos, rotY, this.rng));
+        const act = this.place(c, kind, pos, rotY, face);
+        if (act) { cv.placed++; return act; }
+      }
+      // Nowhere to put it: fight it out.
+      this.cover = null;
+      this.nextScoreAt = now;
+      return c.enemy ? this.doFight(c) : IDLE;
+    }
+    // Peek rhythm: hide behind the wall, step out to the side and shoot, back in.
+    const { wall, hide } = got;
+    const away = norm(flat(sub(wall.pos, cv.threat)));
+    const peek = add(hide, scale(right(yawOf(away)), cv.side * (PIECES[wall.kind].w / 2 + 0.7)));
+    const spot = cv.phase === 'hide' ? hide : peek;
+    const there = dist2D(me.pos, spot) < 0.35;
+    if (there && cv.phaseUntil === 0) cv.phaseUntil = now + (cv.phase === 'hide' ? sk.peekHide : sk.peekOut) * (0.75 + 0.5 * this.rng());
+    if (cv.phaseUntil > 0 && now >= cv.phaseUntil) {
+      cv.phase = cv.phase === 'hide' ? 'peek' : 'hide';
+      cv.phaseUntil = 0;
+      if (cv.phase === 'peek' && this.rng() < 0.3) cv.side = -cv.side;
+    }
+    return there ? { dir: null, face } : { dir: norm(flat(sub(spot, me.pos))), face };
+  }
+
+  /** Mid-range fight on the same island for a while: a ramp toward them and fight from its top. */
+  private highGround(c: Ctx, e: PlayerState, to: Vec3, gun: WeaponKind, sameIsland: boolean): Act | null {
+    const { me, view } = c;
+    const now = view.now;
+    const [lo, hi] = BT.highGroundRange;
+    if (!BUILD_SKILL[this.difficulty].highGround || (me.inv.pieces.ramp ?? 0) === 0 || !sameIsland || gun === 'fists' ||
+      c.enemyDist < lo || c.enemyDist > hi || this.fightSince === null || now - this.fightSince < BT.highGroundAfter ||
+      c.on < 0 || me.pos.y - view.map[c.on].groundY > 0.3 || e.pos.y - me.pos.y > 1 || this.building(c)) return null;
+    const pos = add(me.pos, scale(to, 2.1));
+    const act = this.place(c, 'ramp', pos, yawOf(to) + Math.PI, add(e.pos, v3(0, CHEST, 0)));
+    if (!act) return null;
+    this.perch = { ramp: v3(pos.x, me.pos.y, pos.z), pos: add(pos, scale(to, 1.0)), until: now + BT.perchSec };
+    return act;
+  }
+
+  /** Walk to the next fortification slot and build it (also rebuilds pieces that got shot out). */
+  private doFortify(c: Ctx): Act {
+    const next = this.nextSlot(c);
+    if (!next) { this.nextScoreAt = c.view.now; return IDLE; }
+    const { slot, i } = next;
+    const { home, view } = c;
+    const stand = slot.after !== undefined
+      ? add(this.fortSlots()[slot.after].pos, scale(right(slot.rotY), 1.9))
+      : add(slot.pos, scale(norm(flat(sub(home.center, slot.pos))), dist2D(slot.pos, home.center) < 1 ? 0 : 2.2));
+    const face = add(slot.pos, v3(0, 0.5, 0));
+    const walk = this.goTo(v3(stand.x, home.groundY, stand.z), 0.6);
+    if (walk.dir) return walk;
+    if (this.building(c, slot.kind)) return { dir: null, face };
+    const act = this.place(c, slot.kind, slot.pos, slot.rotY, face);
+    if (act) return act;
+    this.slotBackoff.set(i, view.now + BT.slotBackoffSec);
+    this.nextScoreAt = view.now;
+    return { dir: null, face };
+  }
+
 
   /** Back off from whoever is hurting me: home to the bunker if that isn't toward them, else straight away. */
   private doDisengage(c: Ctx): Act {

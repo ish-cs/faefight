@@ -17,8 +17,10 @@ const inside = (f: Footprint, x: number, z: number) => {
  * True when no walkable path leads from the bunker's spawn to open ground more than
  * SEAL.exitRadius from the bunker center. Ramps and scaffold are walkable; a piece blocks
  * only if its top is at least SEAL.blockHeight above ground and it reaches body height.
+ * `pieceMargin` grows every piece's footprint (not the bunker walls) by that much per side: with 0.3 the
+ * answer is "is there still a path at least 2 × (radius + 0.3) = 1.3 m wide out of here?".
  */
-export function isSealed(bunker: Bunker, pieces: PieceState[]): boolean {
+export function isSealed(bunker: Bunker, pieces: PieceState[], pieceMargin = 0): boolean {
   const g = bunker.center.y;
   const r = PLAYER.radius;
   const blockers: Footprint[] = [];
@@ -30,11 +32,11 @@ export function isSealed(bunker: Bunker, pieces: PieceState[]): boolean {
     if (p.kind === 'ramp' || p.kind === 'scaffold') continue;
     const s = PIECES[p.kind];
     // Skip pieces whose footprint can't reach the grid around this bunker.
-    const reach = SEAL.half + Math.hypot(s.w, s.d) / 2 + r;
+    const reach = SEAL.half + Math.hypot(s.w, s.d) / 2 + r + pieceMargin;
     if (Math.abs(p.pos.x - bunker.center.x) > reach || Math.abs(p.pos.z - bunker.center.z) > reach) continue;
     const bottom = p.pos.y - g, top = bottom + s.h;
     if (top < SEAL.blockHeight || bottom >= BODY_TOP) continue;
-    blockers.push({ center: p.pos, hx: s.w / 2 + r, hz: s.d / 2 + r, rotY: p.rotY });
+    blockers.push({ center: p.pos, hx: s.w / 2 + r + pieceMargin, hz: s.d / 2 + r + pieceMargin, rotY: p.rotY });
   }
 
   const n = Math.round((2 * SEAL.half) / SEAL.cell);
