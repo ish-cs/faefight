@@ -1,0 +1,104 @@
+import { AMMO_BOX, MAP, PIECES, SEAL, WEAPONS } from '../constants';
+import { buy } from '../economy';
+import type { Doorway } from '../map';
+import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
+import { add, dist2D, forward, scale, v3 } from '../vec';
+
+export const GUNS: Exclude<WeaponKind, 'fists'>[] = ['rifle', 'smg', 'pistol', 'shotgun'];
+/** Pieces tall enough to plug a doorway alone, strongest first. */
+export const TALL: PieceKind[] = ['steel', 'metal', 'wood'];
+const HARD: PieceKind[] = ['metal', 'steel', 'container'];
+const NON_BLOCKING: PieceKind[] = ['scaffold', 'ramp'];
+
+const WALL_HALF = MAP.bunker.wall / 2;
+
+export const hasAmmo = (inv: Inventory, g: WeaponKind) => {
+  const a = inv.weapons[g];
+  return g !== 'fists' && !!a && a.mag + a.spare > 0;
+};
+export const ownsGun = (inv: Inventory) => GUNS.some((g) => hasAmmo(inv, g));
+export const isHard = (kind: PieceKind) => HARD.includes(kind);
+
+/** Best gun to hold at this range ('fists' if none has ammo). */
+export function bestGun(inv: Inventory, range: number): WeaponKind {
+  if (range < 8 && hasAmmo(inv, 'shotgun')) return 'shotgun';
+  return GUNS.find((g) => hasAmmo(inv, g)) ?? 'fists';
+}
+
+/** How many doorways the carried pieces can plug (two sandbags stack to one). */
+export const sealKit = (inv: Inventory) =>
+  TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0) + Math.floor((inv.pieces.sandbags ?? 0) / 2);
+
+/** Where a piece spanning `door` sits: just outside the wall, rotated to the doorway. */
+export function plugSpot(door: Doorway, kind: PieceKind, level: number): Vec3 {
+  const p = add(door.center, scale(forward(door.yaw), WALL_HALF + PIECES[kind].d / 2 + 0.05));
+  return v3(p.x, door.center.y + level, p.z);
+}
+
+const plugZone = (door: Doorway) => add(door.center, scale(forward(door.yaw), 0.4));
+
+/** Pieces in front of a doorway that could stand in a player's way, highest first. */
+export function doorPieces(pieces: PieceState[], door: Doorway): PieceState[] {
+  const z = plugZone(door);
+  return pieces
+    .filter((p) => !NON_BLOCKING.includes(p.kind) && dist2D(p.pos, z) <= (p.kind === 'container' ? 1.8 : 1.0))
+    .sort((a, b) => b.pos.y - a.pos.y);
+}
+
+export const doorBlocked = (pieces: PieceState[], door: Doorway) =>
+  doorPieces(pieces, door).some((p) => p.pos.y - door.center.y + PIECES[p.kind].h >= SEAL.blockHeight);
+
+/** Which carried piece to put in this doorway next, and at what height (a second sandbag goes on top of the first). */
+export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { kind: PieceKind; level: number } | null {
+  const tall = TALL.find((k) => (inv.pieces[k] ?? 0) > 0);
+  if (tall) return { kind: tall, level: 0 };
+  const bags = inv.pieces.sandbags ?? 0;
+  const base = doorPieces(pieces, door).find((p) => p.kind === 'sandbags' && Math.abs(p.pos.y - door.center.y) < 0.2);
+  if (base && bags >= 1) return { kind: 'sandbags', level: PIECES.sandbags.h };
+  return bags >= 2 ? { kind: 'sandbags', level: 0 } : null;
+}
+
+export type Needs = { scaffolds: number; kit: number; charge: boolean };
+
+/** Next thing worth buying right now (null = nothing, or saving up for the top priority). */
+export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficulty): ShopItem | null {
+  const inv = p.inv, cash = inv.cash;
+  if (!ownsGun(inv)) {
+    // Guns with no ammo left still count as owned: restock instead of re-buying.
+    if (GUNS.some((g) => inv.weapons[g])) return cash >= AMMO_BOX.price ? 'ammo' : null;
+    return cash >= WEAPONS.pistol.price ? 'pistol' : null;
+  }
+  if (needs.charge && inv.charges === 0) return cash >= 250 ? 'charge' : null;
+  const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
+  if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
+  if ((inv.pieces.scaffold ?? 0) < needs.scaffolds) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
+  if (sealKit(inv) < needs.kit) {
+    const wantMetal = difficulty === 'hard' ? cash >= PIECES.metal.price : difficulty === 'medium' && cash >= 2 * PIECES.metal.price;
+    if (wantMetal) return 'metal';
+    return cash >= PIECES.wood.price ? 'wood' : null;
+  }
+  if (!inv.weapons.smg && !inv.weapons.rifle && cash >= WEAPONS.smg.price) return 'smg';
+  if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
+  return null;
+}
+
+const ESSENTIAL: ShopItem[] = ['pistol', 'charge', 'ammo', 'scaffold', 'metal', 'wood'];
+
+/** Purchases affordable now in order, and whether they cover every essential need. */
+export function shoppingPlan(p: PlayerState, needs: Needs, difficulty: Difficulty): { items: ShopItem[]; covered: boolean } {
+  const sim = structuredClone(p);
+  const items: ShopItem[] = [];
+  for (let i = 0; i < 30; i++) {
+    const item = nextPurchase(sim, needs, difficulty);
+    if (!item) break;
+    const r = buy(sim, { buy: item });
+    if (!r.ok) {
+      console.warn(`shoppingPlan: chose ${item} but buy failed: ${r.reason}`);
+      break;
+    }
+    items.push(item);
+  }
+  sim.inv.cash = Infinity;
+  const left = nextPurchase(sim, needs, difficulty);
+  return { items, covered: left === null || !ESSENTIAL.includes(left) };
+}
