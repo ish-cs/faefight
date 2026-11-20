@@ -83,7 +83,7 @@ type Backend = {
   input(i: PlayerInput): void;
   preview(req: BuildRequest, key: number): void;
   chat(text: string): void;
-  debug?: { teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void };
+  debug?: { teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void; kill(): void };
 };
 
 /** Simulation in a local worker: vs-bot (session = null) or online host. */
@@ -123,6 +123,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       teleport: (x, z) => send({ type: 'debug', cmd: 'teleport', x, z }),
       give: (inv) => send({ type: 'debug', cmd: 'give', inv }),
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
+      kill: () => send({ type: 'debug', cmd: 'kill' }),
     },
   };
 }

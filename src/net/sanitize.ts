@@ -1,6 +1,6 @@
 import { PIECES, WEAPONS } from '../sim/constants';
 import { validSlot } from '../sim/hotbar';
-import type { BuildRequest, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
+import type { BuildRequest, GunKind, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
 import { CHAT_MAX_LEN, type ClientMsg } from './protocol';
 
 // Everything from a remote peer is untrusted: rebuild each message field by field from known shapes.
@@ -14,7 +14,10 @@ const count = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x 
 
 const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 const WEAPON_KINDS = Object.keys(WEAPONS) as WeaponKind[];
-const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge', 'medkit'];
+const GUN_KINDS = WEAPON_KINDS.filter((k): k is GunKind => k !== 'fists');
+const SHOP_ITEMS: ShopItem[] = [
+  ...PIECE_KINDS, ...GUN_KINDS, 'ammo', 'grenade', 'charge', 'medkit', 'genUpgrade', ...GUN_KINDS.map((g) => `lock:${g}` as const),
+];
 const oneOf = <T extends string>(list: readonly T[], x: unknown): T | null => (list.includes(x as T) ? (x as T) : null);
 
 function vec(x: unknown): Vec3 | null {

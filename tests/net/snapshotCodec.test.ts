@@ -11,7 +11,7 @@ function snap(tick: number, pieces: PieceState[], events: Snapshot['events'] = [
   b.vault.cash = 999;
   return {
     time: tick / 30, tick, players: [a, b], pieces, loot: [], generators: [{ island: 0, stored: 12.3456 }, { island: 1, stored: 0 }],
-    sealed: [false, false], waterY: 0, suddenDeath: false, winner: null, events,
+    genLevels: [2, 1], sealed: [false, false], waterY: 0, suddenDeath: false, winner: null, events,
   };
 }
 const steel = (hp = 1200): PieceState => ({ id: 5, kind: 'steel', owner: 1, pos: v3(1, 2, 3), rotY: 0.5, hp });
@@ -78,6 +78,19 @@ describe('snapshot codec', () => {
     expect(forA.players[0].hotbar[2]).toBe('rifle');
     expect(forA.players[1].hotbar).toEqual(Array(9).fill(null));
     expect(forA.players[1].equipped).toBe('rifle');
+  });
+  test('generator levels reach every client; gun locks only reach their owner', () => {
+    const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();
+    const s = snap(1, []);
+    s.players[0].locked = ['pistol'];
+    s.players[1].locked = ['rifle', 'smg'];
+    enc.push(s);
+    const forA = dec.decode(enc.take(1));
+    expect(forA.genLevels).toEqual([2, 1]);
+    expect(forA.players[0].locked).toEqual(['pistol']);
+    expect(forA.players[1].locked).toEqual([]);
+    expect(enc.take(1).players[1].locked).toBeUndefined(); // not even sent
+    expect(dec.decode(enc.take(2)).players[1].locked).toEqual(['rifle', 'smg']);
   });
   test('an 8-player mid-match update fits the 60 KB/s budget at 15 Hz', () => {
     const enc = new SnapshotEncoder();

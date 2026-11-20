@@ -125,7 +125,7 @@ export class Match implements MatchApi {
 
     this.events.push(...tickExplosives(this.ctx, now));
     this.collapseUnsupported(now);
-    for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath);
+    for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); this.syncHand(p); }
@@ -219,7 +219,7 @@ export class Match implements MatchApi {
 
     if (input.interact)
       for (const g of this.s.generators) if (near(this.map[g.island].generator)) collect(p, g);
-    if (input.shop && near(isl.shop)) buy(p, input.shop);
+    if (input.shop && near(isl.shop)) buy(p, input.shop, this.s.genLevels);
     if (input.vault && near(isl.vault) && vaultTransfer(p, input.vault).ok) p.busyUntil = now + ECONOMY.vaultSec;
     if (input.reload) tryReload(p, now);
     if (input.fire) this.events.push(...tryFire(this.ctx, p, now));
@@ -350,6 +350,7 @@ export class Match implements MatchApi {
       map: this.map,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),
+      genLevels: [...this.s.genLevels],
       sealed: [...this.sealed],
       hurt: this.hits.filter((h) => h.target === self.id).map(({ t, by, amount }) => ({ t, by, amount })),
       shots: this.shots.filter((s) => s.by !== self.id && dist(s.from, eye) <= SIGHT_RANGE),
@@ -370,6 +371,7 @@ export class Match implements MatchApi {
       pieces: [...this.s.pieces.values()],
       loot: [...this.s.loot.values()],
       generators: this.s.generators,
+      genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,

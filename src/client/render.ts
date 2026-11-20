@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
-import { PLAYER } from '../sim/constants';
+import { GENERATOR_MAX_LEVEL, PLAYER } from '../sim/constants';
+import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout } from '../sim/map';
 import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
 import { CharacterSystem } from './characters/avatar';
@@ -44,6 +45,11 @@ export class Renderer {
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
   private lootGeo = new THREE.SphereGeometry(0.28, 16, 10).scale(1, 0.8, 1);
   private lootMat = new THREE.MeshStandardNodeMaterial({ color: 0x8b5a2b, roughness: 0.9 });
+  /** Level pips above each island's generator (lit = reached), by island. */
+  private genPips: THREE.Mesh[][] = [];
+  private pipGeo = new THREE.BoxGeometry(0.18, 0.18, 0.18);
+  private pipOn = new THREE.MeshBasicNodeMaterial({ color: boosted(0xffd23d) });
+  private pipOff = new THREE.MeshBasicNodeMaterial({ color: 0x4a525c });
 
   private constructor(canvas: HTMLCanvasElement) {
     this.gpu = new THREE.WebGPURenderer({ canvas, antialias: true });
@@ -73,6 +79,22 @@ export class Renderer {
     this.map = map;
     this.humanId = humanId;
     this.world.setMap(map, ISLAND_COLORS);
+    for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);
+    const h = PROP_HALF.generator;
+    this.genPips = map.map((isl) => {
+      // A row across the line from the island centre, so it faces whoever walks up from home.
+      const g = isl.generator, dx = g.x - isl.center.x, dz = g.z - isl.center.z, d = Math.hypot(dx, dz) || 1;
+      const ax = -dz / d, az = dx / d;
+      return Array.from({ length: GENERATOR_MAX_LEVEL }, (_, i) => {
+        const m = new THREE.Mesh(this.pipGeo, i === 0 ? this.pipOn : this.pipOff);
+        const off = (i - (GENERATOR_MAX_LEVEL - 1) / 2) * 0.36;
+        m.position.set(g.x + ax * off, g.y + h.y * 2 + 0.2, g.z + az * off);
+        m.rotation.y = Math.atan2(ax, az);
+        m.name = `genPip:${isl.index}:${i + 1}`;
+        this.scene.add(m);
+        return m;
+      });
+    });
   }
 
   /**
@@ -87,6 +109,10 @@ export class Renderer {
     this.waterY = snap.waterY;
     this.world.syncPieces(snap.pieces);
     this.syncLoot(snap);
+    this.genPips.forEach((pips, island) => {
+      const level = snap.genLevels?.[island] ?? 1;
+      pips.forEach((m, i) => { m.material = i < level ? this.pipOn : this.pipOff; });
+    });
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
   }

@@ -65,6 +65,17 @@ export const ECONOMY = {
   vaultSec: 1,
 };
 
+/** Generator upgrade levels (index 0 = level 1, the starting generator). Price = cost to reach that level. */
+export const GENERATOR_LEVELS = [
+  { price: 0, rate: ECONOMY.generatorRate, cap: ECONOMY.generatorCap },
+  { price: 150, rate: 8, cap: 700 },
+  { price: 400, rate: 12, cap: 1000 },
+  { price: 900, rate: 18, cap: 1500 },
+] as const;
+export const GENERATOR_MAX_LEVEL = GENERATOR_LEVELS.length;
+/** Locking a gun (respawn with it) costs this many times the gun. */
+export const LOCK_PRICE_MULT = 4;
+
 export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5 };
 
 export const LIFECYCLE = {

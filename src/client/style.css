@@ -91,6 +91,8 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .hud .hb-name { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; line-height: 1.2; }
 .hud .hb-count { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
 .hud .hb-count:empty { display: none; }
+.hud .hb-lock { display: none; position: absolute; top: 4px; right: 6px; width: 11px; height: 11px; color: var(--gold); }
+.hud .hb-slot.locked .hb-lock { display: block; }
 .hud .hb-slot.reloading .hb-count { color: var(--gold); }
 .hud .hb-slot.selected { background: rgba(61, 220, 132, 0.16); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, 0 6px 18px rgba(0, 0, 0, 0.35); transform: translateY(-4px); }
 .hud .hotbar[data-ghost="blocked"] .hb-slot.selected { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger) inset; background: rgba(255, 77, 77, 0.14); }
@@ -140,6 +142,13 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .shop-item[data-group="explosive"] .sicon { color: #ff8a65; }
 .shop-item[data-group="medkit"] .sicon { color: #7ee2a8; }
 .shop-item .iprice { font-size: 13px; font-weight: 700; color: var(--gold); font-variant-numeric: tabular-nums; }
+.shop-item[hidden] { display: none; }
+.shop-item[data-group="upgrade"] .sicon { color: #c9a7ff; }
+.shop-item .ilock { display: none; position: absolute; top: 5px; left: 6px; width: 12px; height: 12px; color: var(--gold); }
+.shop-item .ilock svg, .hud .hb-lock svg { width: 100%; height: 100%; display: block; }
+.shop-item.show-lock .ilock { display: block; }
+.shop-item.lock-card .ilock { top: 30px; left: 44px; width: 19px; height: 19px; color: #c9a7ff; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7)); }
+.shop-item.lock-card.blocked .ilock { opacity: 0.6; }
 .shop-item .ibadge { position: absolute; top: 4px; right: 6px; font-size: 10px; font-weight: 700; color: var(--text); opacity: 0.8; }
 .shop-item .istatus { display: none; }
 .shop-item:hover:not([aria-disabled="true"]), .shop-item:focus-visible:not([aria-disabled="true"]) { background: rgba(61, 220, 132, 0.18); border-color: rgba(61, 220, 132, 0.7); transform: translateY(-2px); }

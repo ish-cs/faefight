@@ -1,5 +1,5 @@
 import { LIFECYCLE, MAP, PLAYER, SEAL } from './constants';
-import { emptyInventory, mergeInventory } from './economy';
+import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
 import { addKind, countOf, emptyHotbar, heldKinds, takeOut } from './hotbar';
 import type { IslandLayout } from './map';
 import type { Physics } from './physics';
@@ -13,6 +13,8 @@ export type MatchStateCore = {
   pieces: Map<number, PieceState>;
   loot: Map<number, LootBag>;
   generators: { island: number; stored: number }[];
+  /** Generator level (1-4) by island index; bought at the owner's shop, kept for the whole match. */
+  genLevels: number[];
   waterY: number;
   suddenDeath: boolean;
   forcedSeal: boolean;
@@ -28,6 +30,7 @@ export function newMatchState(map: IslandLayout[]): MatchStateCore {
     pieces: new Map(),
     loot: new Map(),
     generators: map.map((i) => ({ island: i.index, stored: 0 })),
+    genLevels: map.map(() => 1),
     waterY: MAP.waterY,
     suddenDeath: false,
     forcedSeal: false,
@@ -159,6 +162,7 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
     p.pos = clone(spawn);
     p.hp = PLAYER.hp;
     p.alive = true;
+    grantLockedGuns(p);
     p.invulnUntil = now + LIFECYCLE.invulnSec;
     physics.setPlayerPos(p.id, spawn);
   }
