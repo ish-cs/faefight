@@ -85,7 +85,7 @@ export class SkyLighting {
   private pipeline: THREE.RenderPipeline | null = null;
   private csm: CSMShadowNode | null = null;
 
-  constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, private camera: THREE.PerspectiveCamera) {
+  constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
     gpu.toneMapping = THREE.ACESFilmicToneMapping;
     gpu.toneMappingExposure = 0.5;
