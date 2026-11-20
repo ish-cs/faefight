@@ -68,6 +68,8 @@ export type HudContext = {
   /** Locally selected hotbar slot (sent to the sim every input). */
   selected: number;
   ghostOk: boolean | null;
+  /** Why the ghost is red ("too far", "needs support", "blocked") or what it snapped to; shown after the build hint. */
+  buildNote?: string | null;
   free: boolean;
   /** I (inventory) mode: pointer released so slots can be dragged. */
   inventory: boolean;
@@ -376,7 +378,7 @@ export class Hud {
       this.center.style.display = 'block';
     } else if (buildKind) {
       const have = inv.pieces[buildKind] ?? 0;
-      setText(this.center, `Build: ${LABEL[buildKind]} (${have})  ·  Z/X rotate  ·  ${ctx.free ? 'free place' : 'Alt free place'}`);
+      setText(this.center, `Build: ${LABEL[buildKind]} (${have})  ·  Z/X rotate  ·  ${ctx.free ? 'free place' : 'Alt free place'}${ctx.buildNote ? `  ·  ${ctx.buildNote}` : ''}`);
       this.center.style.display = 'block';
       this.center.classList.add('small');
     } else {
