@@ -13,10 +13,12 @@ import type { BotView, OtherStatus } from './view';
 
 export type Goal = 'collect' | 'shop' | 'bridge' | 'attack' | 'seal' | 'defend' | 'fight' | 'fleeTide';
 
-const RESCORE_SEC = 0.5;
+/** How often a bot reconsiders what to do, and how long it hesitates after changing plans (human thinking time). */
+const RESCORE_SEC: Record<Difficulty, number> = { easy: 1.6, medium: 1.0, hard: 0.6 };
+const HESITATE_SEC: Record<Difficulty, number> = { easy: 1.2, medium: 0.6, hard: 0.25 };
 const STICKY = 0.1;
 const NOISE: Record<Difficulty, number> = { easy: 0.3, medium: 0.15, hard: 0.06 };
-const BUY_GAP: Record<Difficulty, number> = { easy: 0.5, medium: 0.35, hard: 0.2 };
+const BUY_GAP: Record<Difficulty, number> = { easy: 3, medium: 1.5, hard: 0.8 };
 /** Chance an easy bot buys sandbags instead of the piece it meant to. */
 const EASY_MISBUY = 0.1;
 const ARRIVE = 0.6;
@@ -59,6 +61,7 @@ type Ctx = {
 
 export class Bot {
   private goal: Goal = 'collect';
+  private hesitateUntil = -Infinity;
   private nextScoreAt = -Infinity;
   private lastNow = NaN;
   private readonly aim: Aim;
@@ -98,11 +101,15 @@ export class Bot {
     this.nav.begin(view);
     const ctx = this.context(view);
     if (now >= this.nextScoreAt) {
-      this.goal = this.pick(ctx);
-      this.nextScoreAt = now + RESCORE_SEC;
+      const next = this.pick(ctx);
+      if (next !== this.goal) this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
+      this.goal = next;
+      this.nextScoreAt = now + RESCORE_SEC[this.difficulty] * (0.75 + 0.5 * this.rng());
     }
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
-    const act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : this.act(this.goal, ctx);
+    // Still deciding what to do next: stand and look around (fighting back still happens below).
+    const thinking = now < this.hesitateUntil && !ctx.enemy;
+    const act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
 
     // Aim: enemies first, then whatever the goal wants to look or shoot at, else along the walk.
     const eye = eyePos(me);

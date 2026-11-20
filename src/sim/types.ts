@@ -82,7 +82,7 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 export type Snapshot = {
