@@ -1,4 +1,4 @@
-import { MAP, PIECES, SEAL, WEAPONS } from '../constants';
+import { AMMO_BOX, MAP, PIECES, SEAL, WEAPONS } from '../constants';
 import { buy } from '../economy';
 import type { Doorway } from '../map';
 import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
@@ -63,7 +63,11 @@ export type Needs = { scaffolds: number; kit: number; charge: boolean };
 /** Next thing worth buying right now (null = nothing, or saving up for the top priority). */
 export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficulty): ShopItem | null {
   const inv = p.inv, cash = inv.cash;
-  if (!ownsGun(inv)) return cash >= WEAPONS.pistol.price ? 'pistol' : null;
+  if (!ownsGun(inv)) {
+    // Guns with no ammo left still count as owned: restock instead of re-buying.
+    if (GUNS.some((g) => inv.weapons[g])) return cash >= AMMO_BOX.price ? 'ammo' : null;
+    return cash >= WEAPONS.pistol.price ? 'pistol' : null;
+  }
   if (needs.charge && inv.charges === 0) return cash >= 250 ? 'charge' : null;
   const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
@@ -88,7 +92,10 @@ export function shoppingPlan(p: PlayerState, needs: Needs, difficulty: Difficult
     const item = nextPurchase(sim, needs, difficulty);
     if (!item) break;
     const r = buy(sim, { buy: item });
-    if (!r.ok) throw new Error(`shoppingPlan: chose ${item} but buy failed: ${r.reason}`);
+    if (!r.ok) {
+      console.warn(`shoppingPlan: chose ${item} but buy failed: ${r.reason}`);
+      break;
+    }
     items.push(item);
   }
   sim.inv.cash = Infinity;

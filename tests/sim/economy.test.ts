@@ -48,7 +48,7 @@ describe('shop', () => {
     expect(p.inv.pieces.sandbags).toBe(2);
     expect(p.inv.cash).toBe(80);
   });
-  test('ammo needs a gun equipped', () => {
+  test('ammo needs a gun', () => {
     const p = player(100);
     expect(buy(p, { buy: 'ammo' }).ok).toBe(false);
     expect(p.inv.cash).toBe(100);
@@ -56,6 +56,12 @@ describe('shop', () => {
     p.equipped = 'pistol';
     expect(buy(p, { buy: 'ammo' }).ok).toBe(true);
     expect(p.inv.weapons.pistol!.spare).toBe(36 + 24);
+  });
+  test('ammo with fists out refills an owned gun', () => {
+    const p = player(100);
+    p.inv.weapons.smg = { mag: 0, spare: 0 };
+    expect(buy(p, { buy: 'ammo' }).ok).toBe(true);
+    expect(p.inv.weapons.smg!.spare).toBe(60);
   });
   test('cannot buy a gun twice', () => {
     const p = player(500);

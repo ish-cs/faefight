@@ -44,9 +44,10 @@ export function buy(player: PlayerState, action: ShopAction): Result {
   } else if (isPiece(item)) {
     inv.pieces[item] = (inv.pieces[item] ?? 0) + 1;
   } else if (item === 'ammo') {
-    const gun = player.equipped;
-    const ammo = inv.weapons[gun];
-    if (gun === 'fists' || !ammo) return fail('equip a gun to buy ammo');
+    // Ammo for the gun in hand; with fists out, for the first gun you own.
+    const gun = player.equipped !== 'fists' ? player.equipped : GUNS.find((g) => inv.weapons[g]);
+    const ammo = gun ? inv.weapons[gun] : undefined;
+    if (!gun || !ammo) return fail('you need a gun to buy ammo');
     ammo.spare += WEAPONS[gun].mag * AMMO_BOX.mags;
   } else if (item === 'grenade') {
     inv.grenades += 1;

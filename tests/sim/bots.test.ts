@@ -363,3 +363,15 @@ describe('goal choice', () => {
     expect(goals.has('fight')).toBe(false);
   });
 });
+
+describe('shopping with an empty gun', () => {
+  test('a bot whose only gun is empty plans ammo instead of crashing', async () => {
+    const { nextPurchase, shoppingPlan } = await import('../../src/sim/bots/plans');
+    const p = newPlayer(0, 'bot', true, 0, map[0].spawn);
+    p.inv.cash = 100;
+    p.inv.weapons.pistol = { mag: 0, spare: 0 };
+    const needs = { scaffolds: 0, kit: 0, charge: false };
+    expect(nextPurchase(p, needs, 'hard')).toBe('ammo');
+    expect(() => shoppingPlan(p, needs, 'hard')).not.toThrow();
+  });
+});
