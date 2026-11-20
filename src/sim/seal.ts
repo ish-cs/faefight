@@ -29,6 +29,9 @@ export function isSealed(bunker: Bunker, pieces: PieceState[]): boolean {
   for (const p of pieces) {
     if (p.kind === 'ramp' || p.kind === 'scaffold') continue;
     const s = PIECES[p.kind];
+    // Skip pieces whose footprint can't reach the grid around this bunker.
+    const reach = SEAL.half + Math.hypot(s.w, s.d) / 2 + r;
+    if (Math.abs(p.pos.x - bunker.center.x) > reach || Math.abs(p.pos.z - bunker.center.z) > reach) continue;
     const bottom = p.pos.y - g, top = bottom + s.h;
     if (top < SEAL.blockHeight || bottom >= BODY_TOP) continue;
     blockers.push({ center: p.pos, hx: s.w / 2 + r, hz: s.d / 2 + r, rotY: p.rotY });
