@@ -24,7 +24,7 @@ Pick a bot difficulty on the menu, then click the game to capture the mouse.
 | E | Collect cash at a generator · open your shop or vault |
 | V | Toggle first / third person |
 | M | Mute / unmute sound |
-| P | Toggle graphics quality (low / high) |
+| P | Cycle graphics quality (low / high / ultra) |
 | Enter | Chat |
 
 Every key can be rebound in **Settings → Controls** (main menu or the pause card). Settings (controls, video, audio, gameplay) are stored in `localStorage` under `faefight.settings.v1`.

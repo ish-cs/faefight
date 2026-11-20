@@ -17,7 +17,7 @@ export const LEGACY_KEYS = {
 } as const;
 
 /** Exhaustive over the world's Quality type: adding a preset there fails typecheck until it's listed here. */
-const QUALITY_SET: Record<Quality, true> = { low: true, high: true };
+const QUALITY_SET: Record<Quality, true> = { low: true, high: true, ultra: true };
 export const QUALITIES = Object.keys(QUALITY_SET) as Quality[];
 
 export const CROSSHAIRS = ['cross', 'dot', 'circle', 'cross-dot'] as const;

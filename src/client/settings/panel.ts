@@ -6,6 +6,7 @@ import {
 import {
   CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, LIMITS, QUALITIES, type Settings, settings,
 } from './store';
+import type { Quality } from '../world/sky';
 
 /**
  * Settings modal (main menu + in-game pause card). Every control writes straight to the settings
@@ -20,7 +21,11 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'gameplay', label: 'Gameplay' },
 ];
 const GROUPS: ActionGroup[] = ['Movement', 'Actions', 'Hotbar', 'Building', 'Interface'];
-const QUALITY_NOTE: Record<string, string> = { low: 'No bloom, 2K shadows', high: 'Bloom, 4K soft shadows, MSAA' };
+const QUALITY_NOTE: Record<Quality, string> = {
+  low: 'No bloom or AO, 2 shadow cascades',
+  high: 'Bloom, ambient occlusion, 3 shadow cascades',
+  ultra: 'High + sharper render and 4 shadow cascades',
+};
 const CROSSHAIR_LABEL: Record<Crosshair, string> = { cross: 'Cross', dot: 'Dot', circle: 'Circle', 'cross-dot': 'Cross + dot' };
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = '') => {
@@ -216,7 +221,7 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
   function renderVideo() {
     const v = () => settings.get().video;
     section('Display');
-    segmented('Graphics quality', QUALITY_NOTE[v().quality] ?? '', 'set-quality', QUALITIES, (q) => q[0].toUpperCase() + q.slice(1),
+    segmented('Graphics quality', QUALITY_NOTE[v().quality], 'set-quality', QUALITIES, (q) => q[0].toUpperCase() + q.slice(1),
       () => v().quality, (q) => set((d) => { d.video.quality = q; }), render);
     slider('Resolution scale', 'Render resolution relative to the quality preset', 'set-resscale',
       LIMITS.resolutionScale[0], LIMITS.resolutionScale[1], 0.05,

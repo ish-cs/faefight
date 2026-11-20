@@ -77,7 +77,7 @@ async function load(): Promise<CharacterAssets> {
       const m = o as THREE.SkinnedMesh;
       if (!m.isSkinnedMesh) return;
       m.castShadow = true;
-      m.receiveShadow = false;
+      m.receiveShadow = true; // self-shadowing + standing in crane/container shadow grounds them in the scene
       // Flat-coloured low-poly materials: matte cloth/skin reads more natural than the exported gloss.
       for (const mat of (Array.isArray(m.material) ? m.material : [m.material]) as THREE.MeshStandardMaterial[]) {
         mat.roughness = Math.max(mat.roughness, 0.75);

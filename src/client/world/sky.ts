@@ -1,11 +1,15 @@
 import * as THREE from 'three/webgpu';
-import { emissive, mrt, output, pass } from 'three/tsl';
-import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { cameraPosition, color, cos, dot, exp, float, fog, luminance, max, min, mix, normalize, positionView, positionWorld, pow, sin, smoothstep, step, uniform, vec3, vec4 } from 'three/tsl';
+import { MAP } from '../../sim/constants';
+import type { IslandLayout } from '../../sim/map';
+import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
+import { buildPipeline, grade, type PostOptions } from './post';
 
-export type Quality = 'low' | 'high';
+export type Quality = 'low' | 'high' | 'ultra';
+const QUALITIES: Quality[] = ['low', 'high', 'ultra'];
 
 /** Persisted in Settings → Video. */
 export function loadQuality(): Quality {
@@ -15,65 +19,158 @@ function saveQuality(q: Quality) {
   settings.update((s) => { s.video.quality = q; });
 }
 
-/** Sun ≈ 34° elevation, warm. */
-export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 36), THREE.MathUtils.degToRad(58));
+/** Late-morning sun ≈ 38° elevation. Sky dome, environment map, key light, haze and water glints all derive from this. */
+export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 38), THREE.MathUtils.degToRad(58));
 
-const PRESETS: Record<Quality, { pixelRatio: number; shadowMap: number; shadowExtent: number; bloom: boolean; samples: number }> = {
-  low: { pixelRatio: 1, shadowMap: 2048, shadowExtent: 38, bloom: false, samples: 0 },
-  high: { pixelRatio: 1.5, shadowMap: 4096, shadowExtent: 55, bloom: true, samples: 4 },
+type Preset = {
+  pixelRatio: number;
+  /** cascaded shadow maps: count × size², shadow distance (m) */
+  cascades: number; shadowMap: number; shadowFar: number;
+  post: PostOptions;
+};
+const PRESETS: Record<Quality, Preset> = {
+  low: { pixelRatio: 1, cascades: 2, shadowMap: 1024, shadowFar: 110, post: { samples: 4, bloom: false, ao: false } },
+  high: { pixelRatio: 1.5, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 } } },
+  ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 } } },
 };
 
+const SKY = { turbidity: 3, rayleigh: 1.5, mieCoefficient: 0.002, mieDirectionalG: 0.9 };
+
+function makeSky(clouds: boolean) {
+  const sky = new SkyMesh();
+  sky.scale.setScalar(4000);
+  sky.turbidity.value = SKY.turbidity;
+  sky.rayleigh.value = SKY.rayleigh;
+  sky.mieCoefficient.value = SKY.mieCoefficient;
+  sky.mieDirectionalG.value = SKY.mieDirectionalG;
+  sky.sunPosition.value.copy(SUN_DIR);
+  sky.cloudCoverage.value = clouds ? 0.35 : 0.2;
+  sky.cloudDensity.value = clouds ? 0.5 : 0.35;
+  return sky;
+}
+
+/** Re-grade a SkyMesh's output: gain + saturation around luminance. */
+function regradeSky(sky: SkyMesh, gain: THREE.Node<'float'> | number, saturation: THREE.Node<'float'> | number) {
+  const mat = sky.material as THREE.NodeMaterial;
+  const rgb = (mat.colorNode as THREE.Node<'vec4'>).rgb.mul(gain);
+  mat.colorNode = vec4(mix(vec3(luminance(rgb)), rgb, saturation), 1);
+}
+
 /**
- * Sky dome, image-based ambient, warm sun with soft shadows, haze, tone mapping and (high) bloom.
- * Owns the frame's final draw so the post chain can be switched by the quality preset.
+ * Sky dome, image-based lighting, warm cascaded-shadow sun, aerial-perspective haze, ACES tone mapping, colour
+ * grade, and (high/ultra) GTAO + bloom. Owns the frame's final draw so the post chain follows the quality preset.
  */
 export class SkyLighting {
-  readonly sun = new THREE.DirectionalLight(0xffe6c2, 4.2);
+  readonly sun = new THREE.DirectionalLight(0xffe9cc, 6);
+  /** live-tweakable grade uniforms (debug) */
+  readonly grade = grade;
+  /** haze uniforms (debug) */
+  readonly haze = {
+    color: uniform(new THREE.Color(0x9fc0dc)),
+    sunColor: uniform(new THREE.Color(0xf4dcb4)),
+    density: uniform(0.0011),
+    heightFalloff: uniform(0.012),
+  };
+  /** brightness of the bounce hemisphere baked into the environment map (debug: tweak, then buildEnvironment()) */
+  readonly envGround = uniform(12);
+  /** main sky dome brightness / saturation (the env map uses its own hazier copy) */
+  readonly skyGain = uniform(0.7);
+  readonly skySaturation = uniform(1.12);
+  /** bunker interiors (x, groundY, z, yaw) — up to 8; parked far away until setMap */
+  private interiors = Array.from({ length: 8 }, () => uniform(new THREE.Vector4(1e6, 0, 1e6, 0)));
+  private interiorAO = this.buildInteriorAO();
   quality: Quality;
   /** Settings → Video resolution scale: multiplies the preset's pixel ratio (result clamped to 0.5–2). */
   private resScale = settings.get().video.resolutionScale;
   private pipeline: THREE.RenderPipeline | null = null;
+  private csm: CSMShadowNode | null = null;
 
-  constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, private camera: THREE.Camera) {
+  constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, private camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
     gpu.toneMapping = THREE.ACESFilmicToneMapping;
     gpu.toneMappingExposure = 0.5;
     gpu.shadowMap.enabled = true;
+    gpu.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is removed in WebGPURenderer; soften via radius
 
-    const sky = new SkyMesh();
-    sky.scale.setScalar(4000);
-    sky.turbidity.value = 5;
-    sky.rayleigh.value = 1.5;
-    sky.mieCoefficient.value = 0.004;
-    sky.mieDirectionalG.value = 0.85;
-    sky.cloudCoverage.value = 0.35;
-    sky.cloudDensity.value = 0.5;
-    sky.sunPosition.value.copy(SUN_DIR);
+    const sky = makeSky(true);
+    regradeSky(sky, this.skyGain, this.skySaturation);
     scene.add(sky);
-
-    try {
-      const envScene = new THREE.Scene();
-      const envSky = new SkyMesh();
-      envSky.scale.setScalar(4000);
-      envSky.turbidity.value = 5; envSky.rayleigh.value = 1.5;
-      envSky.sunPosition.value.copy(SUN_DIR);
-      envSky.showSunDisc.value = 0;
-      envSky.cloudCoverage.value = 0;
-      envScene.add(envSky);
-      const pmrem = new THREE.PMREMGenerator(gpu);
-      scene.environment = pmrem.fromScene(envScene).texture;
-      scene.environmentIntensity = 0.38;
-    } catch (err) {
-      console.warn('[world/sky] sky environment map unavailable, using hemisphere light only', err);
-    }
-    scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x8a7a58, 0.32));
+    this.buildEnvironment();
 
     this.sun.castShadow = true;
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.04;
+    this.sun.shadow.bias = -0.0002;
+    this.sun.shadow.normalBias = 0.035;
+    this.sun.shadow.camera.near = 1;
+    this.sun.shadow.camera.far = 700;
+    this.sun.position.copy(SUN_DIR).multiplyScalar(200);
+    this.sun.target.position.set(0, 0, 0);
     scene.add(this.sun, this.sun.target);
-    scene.fog = new THREE.FogExp2(0xb4d0e2, 0.0019);
+
+    // Aerial perspective: exponential distance haze that thins with altitude, warmer when looking toward the sun.
+    const h = this.haze;
+    const viewDir = normalize(positionWorld.sub(cameraPosition));
+    const toSun = pow(max(dot(viewDir, uniform(SUN_DIR.clone())), 0), 6);
+    const dist = positionView.z.negate();
+    const heightK = exp(max(positionWorld.y, 0).mul(h.heightFalloff).negate());
+    const amount = float(1).sub(exp(dist.mul(h.density).mul(heightK).negate()));
+    scene.fogNode = fog(mix(h.color, h.sunColor, toSun.mul(0.6)), amount);
+
     this.apply();
+  }
+
+  /**
+   * IBL: PMREM of the same sky (sun disc removed — the DirectionalLight is the sun) above a lower hemisphere that
+   * stands in for light bounced off the sea and sun-baked concrete. Gives every PBR material matching ambient +
+   * reflections (containers, galvanised steel, water). The ambient sky is hazier and half-desaturated: a pure
+   * Rayleigh dome turns every shaded face violet-blue.
+   */
+  buildEnvironment() {
+    try {
+      (this.scene.environment as THREE.Texture | null)?.dispose();
+      const envScene = new THREE.Scene();
+      const sky = makeSky(false);
+      sky.showSunDisc.value = 0;
+      sky.turbidity.value = 9;
+      sky.rayleigh.value = 0.9;
+      regradeSky(sky, 1, 0.5);
+      envScene.add(sky);
+      const groundMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide });
+      // warm sunlit-quay bounce near the horizon, teal-grey sea straight down
+      const y = normalize(positionWorld).y.negate().clamp(0, 1);
+      groundMat.colorNode = mix(color(0.34, 0.33, 0.28), color(0.1, 0.17, 0.19), y.pow(0.5)).mul(this.envGround);
+      groundMat.fog = false;
+      envScene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 48, 16, 0, Math.PI * 2, Math.PI / 2 + 0.02, Math.PI / 2), groundMat));
+      const pmrem = new THREE.PMREMGenerator(this.gpu);
+      this.scene.environment = pmrem.fromScene(envScene, 0.02).texture;
+      this.scene.environmentIntensity = 0.8;
+      pmrem.dispose();
+    } catch (err) {
+      console.warn('[world/sky] sky environment map unavailable, using hemisphere light only', err);
+      this.scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x8a7a58, 0.8));
+    }
+  }
+
+  /**
+   * Ambient occlusion for the roofed bunkers: the environment map has no idea a point is under a concrete slab, so
+   * without this the interior glows with full sky light. Fades in across the wall thickness to 30 % ambient.
+   */
+  private buildInteriorAO(): THREE.Node<'float'> {
+    const half = MAP.bunker.interior / 2, roof = MAP.bunker.height + 0.05;
+    let inside: THREE.Node<'float'> = float(0);
+    for (const u of this.interiors) {
+      const d = positionWorld.sub(u.xyz);
+      const c = cos(u.w), s = sin(u.w);
+      const lx = d.x.mul(c).sub(d.z.mul(s)).abs(), lz = d.x.mul(s).add(d.z.mul(c)).abs();
+      const edge = min(float(half).sub(lx), float(half).sub(lz));
+      const k = smoothstep(-0.2, 0.35, edge).mul(step(d.y, roof)).mul(step(-0.5, d.y));
+      inside = max(inside, k);
+    }
+    return mix(float(1), float(0.3), inside);
+  }
+
+  setInteriors(map: IslandLayout[]) {
+    if (map.length > this.interiors.length) console.warn(`[world/sky] ${map.length} bunkers, interior AO covers only ${this.interiors.length}`);
+    map.slice(0, this.interiors.length).forEach((isl, i) => this.interiors[i].value.set(isl.bunker.center.x, isl.groundY, isl.bunker.center.z, isl.bunker.facingYaw));
   }
 
   setQuality(q: Quality) {
@@ -96,54 +193,46 @@ export class SkyLighting {
   }
 
   toggleQuality(): Quality {
-    this.setQuality(this.quality === 'high' ? 'low' : 'high');
+    this.setQuality(QUALITIES[(QUALITIES.indexOf(this.quality) + 1) % QUALITIES.length]);
     return this.quality;
   }
 
   private apply() {
     const p = PRESETS[this.quality];
     this.applyPixelRatio();
-    this.gpu.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is removed in WebGPURenderer; soften via radius
-    this.sun.shadow.radius = p.shadowMap > 2048 ? 3 : 1;
+
+    // Cascaded shadows: crisp near the player, still casting long shadows out to `shadowFar`. CSMShadowNode
+    // snaps each cascade to its texel grid, so edges don't shimmer as the camera moves.
     const sh = this.sun.shadow;
-    if (sh.mapSize.x !== p.shadowMap) {
-      sh.mapSize.set(p.shadowMap, p.shadowMap);
-      sh.map?.dispose();
-      sh.map = null;
+    sh.mapSize.set(p.shadowMap, p.shadowMap);
+    sh.radius = p.shadowMap >= 2048 ? 2.5 : 1.5;
+    const prev = this.csm;
+    const csm = new CSMShadowNode(this.sun, { cascades: p.cascades, maxFar: p.shadowFar, mode: 'practical', lightMargin: 120 });
+    csm.fade = true;
+    sh.shadowNode = csm;
+    this.csm = csm;
+    if (prev) {
+      prev.dispose();
+      // the shadow node is baked into every lit material's shader → rebuild them
+      this.scene.traverse((o) => {
+        const m = (o as THREE.Mesh).material;
+        if (m) for (const x of Array.isArray(m) ? m : [m]) x.needsUpdate = true;
+      });
     }
-    const sc = sh.camera;
-    sc.left = -p.shadowExtent; sc.right = p.shadowExtent; sc.top = p.shadowExtent; sc.bottom = -p.shadowExtent;
-    sc.near = 1; sc.far = 260;
-    sc.updateProjectionMatrix();
+
     this.pipeline?.dispose();
-    this.pipeline = null;
-    if (p.bloom) {
-      const pipe = new THREE.RenderPipeline(this.gpu);
-      // Bloom only what is emissive (generator glow etc.), never the bright sky/sea.
-      const scenePass = pass(this.scene, this.camera, { samples: p.samples });
-      scenePass.setMRT(mrt({ output, emissive }));
-      const col = scenePass.getTextureNode('output');
-      const glow = scenePass.getTextureNode('emissive');
-      pipe.outputNode = col.add(bloom(glow, 0.9, 0.5, 0));
-      this.pipeline = pipe;
-    }
+    this.pipeline = buildPipeline(this.gpu, this.scene, this.camera, p.post, this.interiorAO);
   }
 
-  /** Keep the shadow frustum centred on what the camera sees, then draw the frame. */
-  render(focus: THREE.Vector3) {
-    // snap to shadow texels to avoid shimmering edges while moving
-    const ext = PRESETS[this.quality].shadowExtent, texel = (2 * ext) / this.sun.shadow.mapSize.x;
-    const fx = Math.round(focus.x / texel) * texel, fz = Math.round(focus.z / texel) * texel;
-    this.sun.target.position.set(fx, 0, fz);
-    this.sun.position.copy(this.sun.target.position).addScaledVector(SUN_DIR, 120);
-    if (this.pipeline) this.pipeline.render();
-    else this.gpu.render(this.scene, this.camera);
+  /** Draw the frame (cascades follow the camera on their own). */
+  render() {
+    this.pipeline!.render();
   }
 
-  dispose() { this.pipeline?.dispose(); }
+  dispose() { this.pipeline?.dispose(); this.csm?.dispose(); }
 }
 
-/** 'P' toggles the preset (ignored while typing in an input). */
+/** 'P' cycles the preset low → high → ultra (ignored while typing in an input). */
 export function installQualityToggle(sky: SkyLighting) {
   let toast: HTMLDivElement | null = null;
   let hideAt = 0;
