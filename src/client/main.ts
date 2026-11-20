@@ -25,6 +25,7 @@ import { LobbyUi } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom } from './session';
 import { SnapshotBuffer } from './snapBuffer';
+import { DynamicResolution } from './dynRes';
 import { endButtons, GameScope, type EndRole } from './rematch';
 import { Scoreboard } from './scoreboard';
 import { applyDocumentSettings } from './settings/apply';
@@ -103,6 +104,7 @@ type Backend = {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
+    pieces(x: number, z: number, n: number): void;
   };
 };
 
@@ -145,6 +147,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
       potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
+      pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
     },
@@ -469,9 +472,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let running = true;
   /** Free-fly chosen from the end screen (otherwise spectating = being dead). */
   let spectateChosen = false;
+  /** Dynamic resolution: drops the render scale while frames run over budget, restores it when stable. */
+  const dynRes = new DynamicResolution();
+  dynRes.enabled = settings.get().video.dynamicResolution;
   const offSettings = settings.subscribe((st) => {
     renderer.world.sky.setQuality(st.video.quality);
     renderer.world.sky.setResolutionScale(st.video.resolutionScale);
+    dynRes.enabled = st.video.dynamicResolution;
+    renderer.world.sky.setDynamicScale(dynRes.scale);
   });
 
   // ---- reveal: map + avatars + first snapshot → shader warm-up → a few hidden frames → fade in ----
@@ -789,7 +797,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
       predicted: () => ({ active: !!predictor?.active, pos: lastRendered, seq: moveSeq, stats: predictor?.stats ?? null, pending: predictor?.pending ?? 0 }),
       frames: () => frameStats(),
-      resetFrames: () => { frameMs.length = 0; },
+      resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; },
+      gpuMs: () => renderer.gpuStats(),
+      renderScale: () => ({ dyn: dynRes.scale, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: dynRes.smoothedMs }),
       interpDelay: () => renderer.interpDelay,
     };
   }
@@ -812,8 +822,16 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const frameStats = () => {
     const xs = [...frameMs].sort((a, b) => a - b);
     const q = (k: number) => xs[Math.min(xs.length - 1, Math.floor(xs.length * k))] ?? 0;
-    return { n: xs.length, avg: xs.reduce((a, b) => a + b, 0) / (xs.length || 1), p50: q(0.5), p95: q(0.95), p99: q(0.99), max: xs[xs.length - 1] ?? 0 };
+    const ws = [...workMs].sort((a, b) => a - b);
+    const wq = (k: number) => ws[Math.min(ws.length - 1, Math.floor(ws.length * k))] ?? 0;
+    return {
+      n: xs.length, avg: xs.reduce((a, b) => a + b, 0) / (xs.length || 1), p50: q(0.5), p95: q(0.95), p99: q(0.99), max: xs[xs.length - 1] ?? 0,
+      /** Main-thread time spent inside the frame callback (CPU cost, independent of vsync). */
+      cpuAvg: ws.reduce((a, b) => a + b, 0) / (ws.length || 1), cpuP95: wq(0.95), cpuP99: wq(0.99),
+      hitches: xs.filter((x) => x > 25).length,
+    };
   };
+  const workMs: number[] = [];
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
   const frame = () => {
@@ -823,6 +841,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
+    if (revealed) {
+      dynRes.frame(now - last, 1000 / (cap || 60));
+      renderer.world.sky.setDynamicScale(dynRes.scale);
+    }
     frameMs.push(now - last);
     if (frameMs.length > 600) frameMs.shift();
     last = now;
@@ -944,6 +966,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       loading.progress('frames', framesAfterWarm / WARM_FRAMES);
       if (framesAfterWarm >= WARM_FRAMES) reveal();
     }
+    workMs.push(performance.now() - now);
+    if (workMs.length > 600) workMs.shift();
     if (running) requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

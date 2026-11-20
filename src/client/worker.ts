@@ -100,6 +100,14 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         else if (msg.cmd === 'hp') match.debugSetHp(humanId, msg.hp);
         else if (msg.cmd === 'shield') match.debugSetShield(msg.id ?? humanId, msg.shield);
         else if (msg.cmd === 'potionShop') match.debugSetPotionShops([{ x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z }]);
+        else if (msg.cmd === 'pieces') {
+          const kinds = ['wood', 'metal', 'steel', 'sandbags', 'container', 'scaffold'] as const;
+          for (let i = 0; i < Math.min(400, msg.n); i++) {
+            const ring = 6 + Math.floor(i / 24) * 4, a = (i % 24) / 24 * Math.PI * 2 + ring;
+            const x = msg.x + Math.cos(a) * ring, z = msg.z + Math.sin(a) * ring;
+            match.debugPlacePiece(kinds[i % kinds.length], { x, y: groundYFor(x, z), z }, a);
+          }
+        }
         else if (msg.cmd === 'eliminate') match.debugEliminate(msg.playerId);
         else if (msg.cmd === 'kill') match.debugKill(msg.playerId);
         else if (msg.cmd === 'give') match.debugGive(humanId, msg.inv);
