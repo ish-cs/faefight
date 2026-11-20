@@ -11,11 +11,11 @@ import { makeRng } from './textures';
  * it with camera distance (instances are sorted by a random rank, so lowering density just drops the tail — both in
  * the shader per blade and per bed via `instanceCount`). Purely visual, no collision. Off on the low preset.
  */
-const MAX_PER_M2 = 230;
+const MAX_PER_M2 = 200;
 const PRESET: Record<Quality, { on: boolean; density: number; far: number }> = {
-  low: { on: false, density: 0, far: 0 },
-  high: { on: true, density: 0.5, far: 30 },
-  ultra: { on: true, density: 1, far: 40 },
+  low: { on: true, density: 0.15, far: 18 },
+  high: { on: true, density: 0.6, far: 34 },
+  ultra: { on: true, density: 1, far: 42 },
 };
 export const MAX_PUSHERS = 8;
 
@@ -56,45 +56,113 @@ export class Grass {
 
   constructor() { this.root.name = 'grass'; }
 
+  /** blades waiting to be bucketed into spatial cells: [x, y, z, yaw, h, w, rank, rnd] */
+  private pending: number[][] = [];
+  private rankRng = makeRng(4242);
+
   build(map: IslandLayout[], backdrop: (isl: IslandLayout) => { hw: number; z0: number; top: number }, maskOf: (isl: IslandLayout) => { data: ImageData; size: number; R: number }) {
     const t0 = performance.now();
-    let total = 0;
     for (const isl of map) {
       const rng = makeRng(777 + isl.index * 131);
       const m = maskOf(isl);
+      const maskAt = (x: number, z: number, ch: number) => {
+        const px = Math.floor(((x + m.R) / (2 * m.R)) * m.size), pz = Math.floor(((z + m.R) / (2 * m.R)) * m.size);
+        if (px < 0 || pz < 0 || px >= m.size || pz >= m.size) return 0;
+        return m.data.data[(pz * m.size + px) * 4 + ch] / 255;
+      };
       // island beds: scatter where the surface mask says grass (G channel), same pixels the ground shader uses
-      for (const e of ISLAND_DECOR.grassBeds) {
-        total += this.addBed(isl, rng, e, isl.groundY, (x, z) => {
-          const px = Math.floor(((x + m.R) / (2 * m.R)) * m.size), pz = Math.floor(((z + m.R) / (2 * m.R)) * m.size);
-          if (px < 0 || pz < 0 || px >= m.size || pz >= m.size) return 0;
-          return m.data.data[(pz * m.size + px) * 4 + 1] / 255;
-        });
-      }
+      for (const e of ISLAND_DECOR.grassBeds) this.addBed(isl, rng, e, isl.groundY, (x, z) => maskAt(x, z, 1));
       const bd = backdrop(isl);
       for (const b of BACKDROP_DECOR.grass) {
         const e = { x: b.x * bd.hw, z: bd.z0 + b.z, rx: b.rx, rz: b.rz };
         const ph = rng.rr(0, 6);
-        total += this.addBed(isl, rng, e, bd.top, (x, z) => ellipseK(e, x, z, ph));
+        this.addBed(isl, rng, e, bd.top, (x, z) => ellipseK(e, x, z, ph));
+      }
+      // tall clumps: listed spots, bunker corners, around the props (not in front of their interaction side)
+      const R = isl.radius, bz = R - 7, bh = 2.55;
+      const toLocal = (p: { x: number; z: number }) => {
+        const dx = p.x - isl.center.x, dz = p.z - isl.center.z, c = Math.cos(isl.bunker.facingYaw), sn = Math.sin(isl.bunker.facingYaw);
+        return [dx * c - dz * sn, dx * sn + dz * c] as [number, number];
+      };
+      const spots: [number, number][] = [...ISLAND_DECOR.tallGrass, [-bh, bz + bh], [bh, bz + bh], [-bh - 0.1, bz - bh + 0.4], [bh + 0.1, bz - bh + 0.4]];
+      for (const pr of [isl.generator, isl.vault, isl.shop]) {
+        const [lx, lz] = toLocal(pr);
+        spots.push([lx + rng.rr(-1.1, -0.8), lz + rng.rr(0.6, 0.9)], [lx + rng.rr(0.8, 1.1), lz + rng.rr(0.6, 0.9)]);
+      }
+      for (const [x, z] of spots) this.addClump(isl, rng, x, z, isl.groundY, rng.rr(0.8, 1.2));
+      for (let k = 0; k < 14; k++) this.addClump(isl, rng, rng.rr(-bd.hw + 2, bd.hw - 2), bd.z0 + rng.rr(0.6, 1.4), bd.top, rng.rr(0.7, 1.1));
+      // weeds in the slab joints (every 4.5 m) and hairline cracks: small tufts, avoiding the bunker footprint
+      for (let k = 0; k < 150; k++) {
+        const along = rng.rr(-R, R), line = -R + 4.5 * Math.floor(rng.rr(1, (2 * R) / 4.5));
+        const [x, z] = rng.rnd() < 0.5 ? [line, along] : [along, line];
+        if (Math.hypot(x, z) > R - 1.2) continue;
+        if (Math.abs(x) < 3 && Math.abs(z - bz) < 3) continue;
+        if (maskAt(x, z, 1) > 0.3) continue;
+        this.addTuft(isl, rng, x, z, isl.groundY);
       }
     }
+    const beds = this.flush();
     this.applyQuality();
-    console.info(`[world/grass] ${total} blades in ${this.beds.length} beds (${Math.round(performance.now() - t0)} ms)`);
+    console.info(`[world/grass] ${beds.blades} blades in ${beds.cells} cells (${Math.round(performance.now() - t0)} ms)`);
   }
 
-  private addBed(isl: IslandLayout, rng: ReturnType<typeof makeRng>, e: Ellipse, y: number, cover: (x: number, z: number) => number): number {
+  private blade(isl: IslandLayout, x: number, z: number, y: number, yaw: number, h: number, w: number, rnd: number) {
+    const p = islandToWorld(isl, x, z);
+    this.pending.push([p.x, y, p.z, yaw, h, w, this.rankRng.rnd(), rnd]);
+  }
+
+  private addBed(isl: IslandLayout, rng: ReturnType<typeof makeRng>, e: Ellipse, y: number, cover: (x: number, z: number) => number) {
     const area = 4 * e.rx * e.rz * 1.5; // bbox incl. wobble margin
     const tries = Math.ceil(area * MAX_PER_M2);
-    const blades: number[][] = [];
     for (let i = 0; i < tries; i++) {
       const x = e.x + rng.rr(-1.25, 1.25) * e.rx, z = e.z + rng.rr(-1.25, 1.25) * e.rz;
       const k = cover(x, z);
       if (k <= 0.02 || rng.rnd() > k) continue;
-      const w = islandToWorld(isl, x, z);
       const tuft = rng.rnd();
-      const h = (0.12 + 0.24 * rng.rnd() * rng.rnd() + 0.1 * k) * (tuft < 0.06 ? 1.7 : 1);
-      blades.push([w.x, y, w.z, rng.rr(0, Math.PI * 2), h, rng.rr(0.035, 0.06), rng.rnd(), rng.rnd()]);
+      const h = (0.12 + 0.24 * rng.rnd() * rng.rnd() + 0.12 * k) * (tuft < 0.06 ? 1.7 : 1);
+      this.blade(isl, x, z, y, rng.rr(0, Math.PI * 2), h, rng.rr(0.035, 0.06), rng.rnd());
     }
-    if (blades.length < 8) return 0;
+  }
+
+  /** Tall grass clump: 20–36 long blades leaning outward from a tight base. */
+  private addClump(isl: IslandLayout, rng: ReturnType<typeof makeRng>, cx: number, cz: number, y: number, s: number) {
+    const n = Math.round(rng.rr(20, 36) * s);
+    for (let i = 0; i < n; i++) {
+      const a = rng.rr(0, Math.PI * 2), r = Math.sqrt(rng.rnd()) * 0.22 * s;
+      this.blade(isl, cx + Math.cos(a) * r, cz + Math.sin(a) * r, y, rng.rr(0, Math.PI * 2), rng.rr(0.4, 0.95) * s, rng.rr(0.03, 0.05), rng.rr(0.3, 1));
+    }
+  }
+
+  /** Crack weed: a few short blades. */
+  private addTuft(isl: IslandLayout, rng: ReturnType<typeof makeRng>, cx: number, cz: number, y: number) {
+    const n = Math.round(rng.rr(5, 12));
+    for (let i = 0; i < n; i++) {
+      const a = rng.rr(0, Math.PI * 2), r = rng.rr(0, 0.07);
+      this.blade(isl, cx + Math.cos(a) * r, cz + Math.sin(a) * r, y, rng.rr(0, Math.PI * 2), rng.rr(0.05, 0.17), rng.rr(0.025, 0.04), rng.rr(0.55, 0.95));
+    }
+  }
+
+  /** Bucket pending blades into 16 m world cells → one instanced mesh per cell (culled + thinned per cell). */
+  private flush() {
+    const CELL = 16;
+    const cells = new Map<string, number[][]>();
+    for (const b of this.pending) {
+      const key = `${Math.floor(b[0] / CELL)},${Math.floor(b[2] / CELL)}`;
+      let c = cells.get(key);
+      if (!c) { c = []; cells.set(key, c); }
+      c.push(b);
+    }
+    let blades = 0;
+    for (const list of cells.values()) {
+      if (list.length < 8) continue;
+      blades += list.length;
+      this.pushMesh(list);
+    }
+    this.pending = [];
+    return { blades, cells: this.beds.length };
+  }
+
+  private pushMesh(blades: number[][]) {
     blades.sort((a, b) => a[6] - b[6]); // by rank → density cuts drop the tail
     const A = new Float32Array(blades.length * 4), B = new Float32Array(blades.length * 4);
     const box = new THREE.Box3();
@@ -115,12 +183,11 @@ export class Grass {
     geo.boundingSphere = sphere;
     geo.boundingBox = box;
     const mesh = new THREE.Mesh(geo, this.material);
-    mesh.name = 'grass:bed';
+    mesh.name = 'grass:cell';
     mesh.receiveShadow = true;
     mesh.castShadow = false;
     this.root.add(mesh);
     this.beds.push({ mesh, geo, n: blades.length, center: sphere.center.clone(), radius: sphere.radius });
-    return blades.length;
   }
 
   private buildMaterial() {

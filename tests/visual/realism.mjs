@@ -16,7 +16,9 @@ page.setDefaultTimeout(240_000);
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e)));
-await page.goto(`${url}/?debug=1&bots=7`);
+// fixed resolution for comparable numbers (dynamic resolution would trade pixels for frame time)
+await page.addInitScript(() => { try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { dynamicResolution: false } })); } catch { /* fresh profile */ } });
+await page.goto(`${url}/?debug=1&bots=7&gputime=1`);
 await page.getByTestId('play-easy').click();
 await page.waitForFunction(() => window.__faefight?.snapshot?.(), null, { timeout: 90_000 });
 await page.waitForFunction(() => !window.__faefightLoading?.visible(), null, { timeout: 120_000 });
@@ -52,6 +54,8 @@ const SPOTS = [
   { name: 'edge', at: [-15, 12], look: [-25, 30], pitch: -0.12 },
   { name: 'birds', at: [8, 10], look: [4, 32], pitch: 0.3 },
   { name: 'perch', at: [16.8, 6.6], look: [19.4, 9.36], pitch: -0.25 },
+  { name: 'beach', at: [14, 15], look: [34, 36], pitch: -0.12 },
+  { name: 'props', at: [-8, -12], look: [-1, -8], pitch: -0.32 },
   { name: 'gravel', at: [-9.5, 4.5], look: [-13, 9], pitch: -0.5 },
 ];
 // toward the sun (SUN_DIR: elevation 38°, azimuth 58° in three.js spherical coords)
@@ -79,11 +83,12 @@ if (mode === 'perf' || mode === 'all') {
       await goto({ ...s, wait: 600 });
       await dbg('resetFrames');
       await page.waitForTimeout(2500);
-      acc.push(await dbg('frames'));
+      acc.push({ ...(await dbg('frames')), gpu: (await dbg('gpuMs')).avg ?? 0 });
     }
     const avg = acc.reduce((a, f) => a + f.avg, 0) / acc.length;
     const p50 = acc.reduce((a, f) => a + f.p50, 0) / acc.length;
-    out[q] = { p50: +p50.toFixed(2), avgMs: +avg.toFixed(2), fps: +(1000 / avg).toFixed(0), p95: +Math.max(...acc.map((f) => f.p95)).toFixed(2), p99: +Math.max(...acc.map((f) => f.p99)).toFixed(2), perSpot: acc.map((f) => +f.avg.toFixed(2)) };
+    const gpu = acc.reduce((a, f) => a + f.gpu, 0) / acc.length;
+    out[q] = { gpuMs: +gpu.toFixed(2), p50: +p50.toFixed(2), avgMs: +avg.toFixed(2), fps: +(1000 / avg).toFixed(0), p95: +Math.max(...acc.map((f) => f.p95)).toFixed(2), p99: +Math.max(...acc.map((f) => f.p99)).toFixed(2), perSpot: acc.map((f) => +f.avg.toFixed(2)) };
   }
   console.log(JSON.stringify(out));
   console.log('renderInfo', JSON.stringify(await dbg('renderInfo')));
