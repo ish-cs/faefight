@@ -82,7 +82,7 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .hud .hb-icon svg { width: 100%; height: 100%; display: block; }
 .hud .hb-slot[data-cat="gun"] .hb-icon { color: var(--gold); }
 .hud .hb-slot[data-cat="piece"] .hb-icon { color: #8fc7ff; }
-.hud .hb-slot[data-cat="grenade"] .hb-icon, .hud .hb-slot[data-cat="charge"] .hb-icon { color: #ff8a65; }
+.hud .hb-slot[data-cat="explosive"] .hb-icon { color: #ff8a65; }
 .hud .hb-slot[data-cat="medkit"] .hb-icon { color: #7ee2a8; }
 .hud .heal { position: absolute; top: calc(50% + 30px); left: 50%; transform: translateX(-50%); width: 170px; padding: 6px 10px 8px; background: var(--glass-strong); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: 5px; align-items: center; }
 .hud .heal-label { font-size: 12px; font-weight: 600; color: #b8f5d0; }
@@ -124,18 +124,36 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .hud .panel { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(640px, 92vw); max-height: 82vh; overflow: auto; padding: 18px 20px; pointer-events: auto;
   background: var(--glass-strong); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(18px) saturate(140%); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45); }
 .hud .panel.open { display: block; }
+.hud .panel:focus { outline: none; }
 .panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .panel-title { font-size: 22px; font-weight: 700; }
 .panel .close { font: inherit; font-size: 12px; color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; cursor: pointer; }
 .panel-cash { color: var(--gold); font-weight: 600; margin-bottom: 10px; }
-.shop-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-.shop-section { grid-column: 1 / -1; font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin-top: 6px; }
-.shop-item { font: inherit; color: var(--text); text-align: left; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 10px 12px; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
-.shop-item:hover:not(:disabled) { background: rgba(61, 220, 132, 0.18); border-color: rgba(61, 220, 132, 0.6); }
-.shop-item:disabled { opacity: 0.38; cursor: not-allowed; }
-.shop-item .iname { font-weight: 600; }
-.shop-item .iprice { color: var(--gold); font-weight: 700; }
-.shop-item .inote { grid-column: 1 / -1; font-size: 11px; color: var(--muted); min-height: 13px; }
+.shop-grid { display: flex; flex-direction: column; gap: 6px; }
+.shop-section { font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin-top: 8px; }
+.shop-row { display: grid; grid-template-columns: repeat(auto-fill, 76px); gap: 8px; }
+.shop-item { position: relative; font: inherit; color: var(--text); width: 76px; height: 82px; padding: 8px 4px 6px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; transition: background 0.1s, border-color 0.1s, transform 0.1s; }
+.shop-item .sicon { width: 40px; height: 40px; }
+.shop-item .sicon svg { width: 100%; height: 100%; display: block; }
+.shop-item[data-group="gun"] .sicon { color: var(--gold); }
+.shop-item[data-group="piece"] .sicon { color: #8fc7ff; }
+.shop-item[data-group="explosive"] .sicon { color: #ff8a65; }
+.shop-item[data-group="medkit"] .sicon { color: #7ee2a8; }
+.shop-item .iprice { font-size: 13px; font-weight: 700; color: var(--gold); font-variant-numeric: tabular-nums; }
+.shop-item .ibadge { position: absolute; top: 4px; right: 6px; font-size: 10px; font-weight: 700; color: var(--text); opacity: 0.8; }
+.shop-item .istatus { display: none; }
+.shop-item:hover:not([aria-disabled="true"]), .shop-item:focus-visible:not([aria-disabled="true"]) { background: rgba(61, 220, 132, 0.18); border-color: rgba(61, 220, 132, 0.7); transform: translateY(-2px); }
+.shop-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shop-item:active:not([aria-disabled="true"]) { transform: translateY(0); }
+.shop-item[aria-disabled="true"] { cursor: not-allowed; }
+.shop-item.poor .sicon, .shop-item.poor .iprice { opacity: 0.35; }
+.shop-item.poor .iprice { color: var(--danger); opacity: 0.7; }
+.shop-item.blocked .sicon { opacity: 0.25; }
+.shop-item.blocked .iprice { display: none; }
+.shop-item.blocked .istatus { display: block; position: absolute; left: 4px; right: 4px; bottom: 6px; padding: 2px 0; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2px; white-space: nowrap; text-align: center; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: var(--muted); }
+.shop-item.blocked[data-status="full"] .istatus { background: rgba(255, 77, 77, 0.22); color: #ffb3b3; }
+.shop-item::after { content: attr(data-name); position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%); white-space: nowrap; font-size: 12px; font-weight: 600; padding: 4px 8px; border-radius: 6px; background: rgba(8, 11, 16, 0.92); border: 1px solid var(--line); pointer-events: none; opacity: 0; transition: opacity 0.1s; z-index: 2; }
+.shop-item:hover::after, .shop-item:focus-visible::after { opacity: 1; }
 .vault-cash { display: flex; gap: 6px; align-items: center; margin: 8px 0 12px; flex-wrap: wrap; }
 .cash-input { font: inherit; width: 110px; padding: 6px 10px; color: var(--text); background: rgba(255, 255, 255, 0.08); border: 1px solid var(--line); border-radius: 8px; }
 .vault-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

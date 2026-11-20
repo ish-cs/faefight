@@ -6,6 +6,7 @@ import { dist2D } from '../sim/vec';
 import { PIECE_ORDER } from './input';
 import { ISLAND_COLORS, ISLAND_NAMES } from './render';
 import { endState } from './endState';
+import { ICONS, iconGroup, type IconKind } from './icons';
 
 const GUNS = ['pistol', 'smg', 'shotgun', 'rifle'] as const;
 const LABEL: Record<string, string> = {
@@ -43,15 +44,6 @@ const SHORT: Record<HotbarItem, string> = {
   pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
   grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit',
-};
-const category = (k: HotbarItem) => (isGunItem(k) ? 'gun' : isPieceItem(k) ? 'piece' : k);
-// Tiny line icons per category, drawn in currentColor.
-const ICONS: Record<string, string> = {
-  gun: '<svg viewBox="0 0 24 24"><path d="M3 8h15l2 2h1v3h-6l-1 1h-2l-1 4H7l1-4H3z" fill="currentColor"/></svg>',
-  piece: '<svg viewBox="0 0 24 24"><path d="M3 6h18v12H3zM3 12h18M9 6v6M15 12v6" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
-  grenade: '<svg viewBox="0 0 24 24"><circle cx="12" cy="14" r="6.5" fill="currentColor"/><path d="M10 7h4v-2h-4zM14 6l4-2" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
-  charge: '<svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="2" fill="currentColor"/><path d="M12 8V4h5" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
-  medkit: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="3" fill="currentColor"/><path d="M9 6V4h6v2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 9.5v7M8.5 13h7" stroke="#0e1218" stroke-width="2.6"/></svg>',
 };
 
 export type HudContext = {
@@ -197,9 +189,8 @@ export class Hud {
       s.classList.toggle('empty', !k);
       s.classList.toggle('selected', i === ctx.selected);
       const icon = s.querySelector('.hb-icon') as HTMLElement;
-      const cat = k ? category(k) : '';
-      if (icon.dataset.cat !== cat) { icon.dataset.cat = cat; icon.innerHTML = cat ? ICONS[cat] : ''; }
-      s.dataset.cat = cat;
+      if (icon.dataset.kind !== (k ?? '')) { icon.dataset.kind = k ?? ''; icon.innerHTML = k ? ICONS[k] : ''; }
+      s.dataset.cat = k ? iconGroup(k) : '';
       setText(s.querySelector('.hb-name') as HTMLElement, k ? SHORT[k] : '');
       let count = '';
       if (k && isGunItem(k)) {
@@ -392,6 +383,7 @@ export class Hud {
 
   closePanel() {
     this.panelKind = null;
+    this.panel.onkeydown = null;
     this.panel.className = 'panel';
     this.panel.replaceChildren();
   }
@@ -410,37 +402,81 @@ export class Hud {
     if (rebuild || !this.panel.querySelector('.shop-grid')) {
       const grid = el('div', 'shop-grid');
       const section = (title: string, items: ShopItem[]) => {
-        grid.append(el('div', 'shop-section', title));
+        const row = el('div', 'shop-row');
+        row.setAttribute('role', 'group');
+        row.setAttribute('aria-label', title);
         for (const item of items) {
+          // Icon + price only; the name is the tooltip (and the accessible label).
           const b = el('button', 'shop-item');
+          b.type = 'button';
           b.dataset.item = item;
           b.dataset.testid = `buy-${item}`;
-          b.append(el('span', 'iname', LABEL[item]), el('span', 'iprice', `$${priceOf(item)}`), el('span', 'inote', ''));
-          b.onclick = () => this.act.buy(item);
-          grid.append(b);
+          b.dataset.name = LABEL[item];
+          b.dataset.group = iconGroup(item as IconKind);
+          const icon = el('span', 'sicon');
+          icon.innerHTML = ICONS[item as IconKind];
+          b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'));
+          b.onclick = () => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item); };
+          row.append(b);
         }
+        grid.append(el('div', 'shop-section', title), row);
       };
-      section('Weapons', [...GUNS, 'ammo', 'grenade', 'charge', 'medkit']);
+      section('Weapons', [...GUNS, 'ammo']);
       section('Building', PIECE_ORDER);
+      section('Gear', ['grenade', 'charge', 'medkit']);
       this.panel.replaceChildren(this.header('Shop'), el('div', 'panel-cash'), grid);
+      // Focus the panel (not a card, so no tooltip pops up): Tab or an arrow key then walks the cards.
+      this.panel.tabIndex = -1;
+      this.panel.onkeydown = (e) => this.shopArrows(e);
+      this.panel.focus({ preventScroll: true });
     }
     setText(this.panel.querySelector('.panel-cash') as HTMLElement, `Carrying $${me.inv.cash}`);
     for (const b of Array.from(this.panel.querySelectorAll<HTMLButtonElement>('.shop-item'))) {
       const item = b.dataset.item as ShopItem;
-      let note = '';
-      let disabled = me.inv.cash < priceOf(item);
-      if ((GUNS as readonly string[]).includes(item) && me.inv.weapons[item as WeaponKind]) { disabled = true; note = 'owned'; }
-      else if (isHotbarItem(item) && countOf(me.inv, item) === 0 && !canAdd(me.hotbar, item)) { disabled = true; note = 'Hotbar full'; }
+      const poor = me.inv.cash < priceOf(item);
+      let status = '';
+      let badge = '';
+      if ((GUNS as readonly string[]).includes(item) && me.inv.weapons[item as WeaponKind]) status = 'Owned';
+      else if (isHotbarItem(item) && countOf(me.inv, item) === 0 && !canAdd(me.hotbar, item)) status = 'Hotbar full';
       else if (item === 'ammo') {
-        if (me.equipped === 'fists') { disabled = true; note = 'equip a gun'; }
-        else note = `+${WEAPONS[me.equipped].mag * AMMO_BOX.mags} ${LABEL[me.equipped]}`;
-      } else if (item in PIECES) note = `have ${me.inv.pieces[item as PieceKind] ?? 0}`;
-      else if (item === 'grenade') note = `have ${me.inv.grenades}`;
-      else if (item === 'charge') note = `have ${me.inv.charges}`;
-      else if (item === 'medkit') note = `have ${me.inv.medkits} · +${MEDKIT.heal} HP`;
-      if (b.disabled !== disabled) b.disabled = disabled;
-      setText(b.querySelector('.inote') as HTMLElement, note);
+        if (me.equipped === 'fists') status = 'Equip a gun';
+        else badge = `+${WEAPONS[me.equipped].mag * AMMO_BOX.mags}`;
+      }
+      if (!status && isHotbarItem(item) && !isGunItem(item)) {
+        const n = countOf(me.inv, item);
+        if (n > 0) badge = `×${n}`;
+      }
+      const blocked = poor || status !== '';
+      if (b.getAttribute('aria-disabled') !== String(blocked)) b.setAttribute('aria-disabled', String(blocked));
+      b.classList.toggle('poor', poor && !status);
+      b.classList.toggle('blocked', status !== '');
+      b.dataset.status = status === 'Hotbar full' ? 'full' : status ? 'other' : '';
+      setText(b.querySelector('.istatus') as HTMLElement, status);
+      setText(b.querySelector('.ibadge') as HTMLElement, badge);
+      const label = `${LABEL[item]}, $${priceOf(item)}${status ? `, ${status}` : poor ? ', not enough cash' : ''}${badge ? `, ${badge}` : ''}`;
+      if (b.getAttribute('aria-label') !== label) b.setAttribute('aria-label', label);
     }
+  }
+
+  /** Arrow keys move focus between shop cards (Enter/Space buys, Tab also works). */
+  private shopArrows(e: KeyboardEvent) {
+    const dir = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!dir) return;
+    const cards = Array.from(this.panel.querySelectorAll<HTMLButtonElement>('.shop-item'));
+    const at = cards.indexOf(document.activeElement as HTMLButtonElement);
+    e.preventDefault();
+    if (at < 0) { cards[0]?.focus(); return; }
+    let next = at + dir;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      // Same column in the next/previous row: nearest card by x on a different line.
+      const r = cards[at].getBoundingClientRect();
+      const rows = cards.filter((c) => (dir > 0 ? c.getBoundingClientRect().top > r.top + 4 : c.getBoundingClientRect().top < r.top - 4));
+      const lineTop = dir > 0 ? Math.min(...rows.map((c) => c.getBoundingClientRect().top)) : Math.max(...rows.map((c) => c.getBoundingClientRect().top));
+      const line = rows.filter((c) => Math.abs(c.getBoundingClientRect().top - lineTop) < 4);
+      const best = line.sort((a, b) => Math.abs(a.getBoundingClientRect().left - r.left) - Math.abs(b.getBoundingClientRect().left - r.left))[0];
+      next = best ? cards.indexOf(best) : at;
+    }
+    cards[Math.max(0, Math.min(cards.length - 1, next))].focus();
   }
 
   private renderVault() {

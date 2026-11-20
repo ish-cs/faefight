@@ -144,7 +144,9 @@ export class InputController {
   }
 
   private onKey(e: KeyboardEvent, down: boolean) {
-    if (e.code === 'AltLeft' || e.code === 'AltRight' || e.code === 'Space' || e.code === 'Tab') e.preventDefault();
+    if (e.code === 'AltLeft' || e.code === 'AltRight') e.preventDefault();
+    // Space/Tab are ours in game (jump, hotbar edit mode); with a panel open they press/move between buttons as usual.
+    if ((e.code === 'Space' || e.code === 'Tab') && this.enabled) e.preventDefault();
     if (!down) { this.keys.delete(e.code); return; }
     if (!this.enabled) return;
     const first = !e.repeat;

@@ -354,12 +354,14 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   const openPanel = (kind: 'shop' | 'vault') => {
     if (kind === 'shop') hud.openShop(); else { hud.openVault(); audio.ui('vault'); }
     input.enabled = false;
+    chat.enabled = false; // Enter on a focused shop card buys; it must not open chat
     if (document.pointerLockElement) document.exitPointerLock();
   };
   const closePanel = () => {
     if (!hud.panelOpen) return;
     hud.closePanel();
     input.enabled = !hud.ended && !dead;
+    chat.enabled = !hud.ended && !dead;
     canvas.focus();
   };
 
@@ -500,7 +502,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
     hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, free: input.free, inventory: input.inventory });
-    chat.enabled = !hud.ended && !dead;
+    chat.enabled = !hud.ended && !dead && !hud.panelOpen;
     if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
   };
 

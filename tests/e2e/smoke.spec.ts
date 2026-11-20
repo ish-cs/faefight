@@ -59,8 +59,12 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await expect(page.getByTestId('buy-pistol')).toBeDisabled();
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', 'pistol');
   await expect(page.getByTestId('hotbar-slot-0')).toContainText(/pistol\s*12\/36/i);
-  // A medkit is a hotbar item too: next free slot.
-  await page.getByTestId('buy-medkit').click();
+  // Shop cards are icon + price; the name is only the accessible label / tooltip.
+  await expect(page.getByTestId('buy-pistol')).toHaveAttribute('aria-label', /^Pistol, \$50, Owned/);
+  await expect(page.getByTestId('buy-pistol')).not.toContainText('Pistol');
+  // A medkit is a hotbar item too: next free slot. Bought from the keyboard (Enter on the focused card).
+  await page.getByTestId('buy-medkit').focus();
+  await page.keyboard.press('Enter');
   await expect(page.getByTestId('cash')).toHaveText(`$${cash - 125}`);
   await expect(page.getByTestId('hotbar-slot-1')).toHaveAttribute('data-item', 'medkit');
   await page.keyboard.press('Escape');
