@@ -1,7 +1,8 @@
 import './style.css';
 import type { Object3D } from 'three/webgpu';
 import type { HostMsg, Slot } from '../net/protocol';
-import { SnapshotDecoder } from '../net/snapshotCodec';
+import { SnapshotDecoder, type NetSnapshot } from '../net/snapshotCodec';
+import { WireDecoder } from '../net/wire';
 import type { Link } from '../net/transport';
 import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
@@ -159,6 +160,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
 /** Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived before the game was ready. */
 function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, early: HostMsg[]): Backend {
   const decoder = new SnapshotDecoder();
+  const wire = new WireDecoder();
   let closed = false;
   let disposed = false;
   return {
@@ -168,7 +170,10 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
       sink.map(start.map, start.playerId, start.island);
       const handle = (m: HostMsg) => {
         if (disposed) return;
-        if (m.t === 'snap') sink.snapshot(decoder.decode(m.s));
+        if (m.t === 'snap') {
+          const n = wire.decode<NetSnapshot>(m.b);
+          if (n) sink.snapshot(decoder.decode(n));
+        }
         else if (m.t === 'preview') sink.preview(m.result, m.key);
         else if (m.t === 'chat') sink.chat(m.from, m.text);
         else if (m.t === 'ended') { closed = true; if (m.reason === 'host-left') sink.fatal('Host left', 'Match over: the host left the game.'); else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`); }
@@ -177,7 +182,7 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
       link.onMessage((raw) => handle(raw as HostMsg));
       link.onClose(() => { if (!closed && !disposed) { closed = true; sink.fatal('Host left', 'Match over: lost the connection to the host.'); } });
     },
-    input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds }); },
+    input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds, ack: wire.ack || undefined }); },
     preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
     chat: (text) => link.send({ t: 'chat', text }),
     close: () => { disposed = true; },
