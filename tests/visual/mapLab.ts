@@ -15,7 +15,7 @@ const r = await Renderer.create(canvas);
 const def = buildMapDef(n, tpl);
 r.setMap(def, 0);
 const snap: Snapshot = {
-  time: 0, tick: 0, players: [], pieces: [], loot: [], generators: [], sealed: def.islands.map(() => false), waterY: 0,
+  time: 0, tick: 0, players: [], pieces: [], loot: [], generators: [], sealed: def.islands.map(() => false), genLevels: def.islands.map(() => 1), waterY: 0,
   suddenDeath: false, winner: null, events: [],
 };
 r.pushSnapshot(snap);

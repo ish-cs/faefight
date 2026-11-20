@@ -2,7 +2,7 @@ import type { Slot } from '../net/protocol';
 import { MAX_PLAYERS } from '../net/protocol';
 import type { Difficulty } from '../sim/types';
 import { MAP_NAMES, MAP_TEMPLATES, type MapChoice } from '../sim/map';
-import { ISLAND_COLORS, ISLAND_NAMES } from './render';
+import { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 
 export type LobbyActions = {
   setSeat(i: number, slot: Slot): void;
@@ -15,8 +15,12 @@ export type LobbyActions = {
 };
 
 const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
-const DIFFS: Difficulty[] = ['easy', 'medium', 'hard'];
+const DIFFS: Difficulty[] = ['easy', 'medium', 'hard', 'pro'];
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
+/** Seat-select label: "Easy", "Medium", "Hard", "PRO". */
+const diffLabel = (d: Difficulty) => (d === 'pro' ? 'PRO' : cap(d));
+/** Lobby tag: "easy", "medium", "hard", "PRO". */
+const diffTag = (d: Difficulty) => (d === 'pro' ? 'PRO' : d);
 
 const choiceName = (c: MapChoice) => (c === 'random' ? 'Random' : MAP_NAMES[c]);
 
@@ -99,8 +103,9 @@ export class LobbyUi {
 
   render(slots: Slot[], you: number, map: MapChoice = 'harbor') {
     const a = this.actions;
-    if (this.mapSel) this.mapSel.value = map;
+    if (this.mapSel) { this.mapSel.value = map; this.mapSel.disabled = false; }
     this.mapText.textContent = choiceName(map);
+    if (!this.startBtn) { this.status.textContent = 'Waiting for host…'; delete this.status.dataset.testid; }
     this.list.replaceChildren(...slots.map((s, i) => {
       const row = el('div', 'seat');
       row.dataset.testid = `seat-${i}`;
@@ -114,14 +119,14 @@ export class LobbyUi {
         if (i === you) name.append(el('span', 'tagpill you', 'you'));
       } else if (s.kind === 'bot') {
         name.textContent = s.name ?? 'Bot';
-        name.append(el('span', 'tagpill', `bot · ${s.difficulty}`));
+        name.append(el('span', 'tagpill', `bot · ${diffTag(s.difficulty)}`));
       }
       else { name.textContent = 'Open'; name.classList.add('open'); }
       row.append(dot, name);
       if (a && i > 0 && s.kind !== 'human') {
         const sel = el('select', 'seat-select');
         sel.dataset.testid = `seat-select-${i}`;
-        for (const [v, label] of [['open', 'Open'], ...DIFFS.map((d) => [`bot-${d}`, `Bot ${cap(d)}`])]) {
+        for (const [v, label] of [['open', 'Open'], ...DIFFS.map((d) => [`bot-${d}`, `Bot ${diffLabel(d)}`])]) {
           const o = el('option', '', label);
           o.value = v;
           sel.append(o);

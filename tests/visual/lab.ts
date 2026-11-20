@@ -22,8 +22,8 @@ let tick = 0;
 let pending: MatchEvent[] = [];
 const push = () => {
   const s: Snapshot = {
-    time: tick / 30, tick: tick++, players: [], pieces, loot: [], generators: [], sealed: [false, false], waterY: 0,
-    suddenDeath: false, winner: null, events: pending,
+    time: tick / 30, tick: tick++, players: [], pieces, loot: [], generators: [], genLevels: [1, 1], sealed: [false, false], waterY: 0,
+    suddenDeath: false, winner: null, potionShops: [], events: pending,
   };
   pending = [];
   r.pushSnapshot(s);

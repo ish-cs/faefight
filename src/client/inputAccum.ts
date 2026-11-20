@@ -26,12 +26,13 @@ export class InputAccumulator {
     if (input.drop) p.drop = p.drop === 'stack' ? 'stack' : input.drop;
     if (input.moveSlot) p.moveSlot = input.moveSlot;
     if (input.useMedkit) p.useMedkit = true;
+    if (input.drink) p.drink = true;
   }
 
   take(): PlayerInput {
     const input: PlayerInput = {
       ...this.held, reload: false, interact: false, throwGrenade: false, placeCharge: false,
-      slot: null, build: null, shop: null, vault: null, drop: null, moveSlot: null, useMedkit: false, ...this.pending,
+      slot: null, build: null, shop: null, vault: null, drop: null, moveSlot: null, useMedkit: false, drink: false, ...this.pending,
     };
     this.pending = {};
     return input;

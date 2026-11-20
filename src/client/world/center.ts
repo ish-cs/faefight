@@ -76,7 +76,7 @@ export function buildCenter(def: MapDef, root: THREE.Group, dress: StaticBatch, 
   ];
   for (const p of props) {
     const h = CENTER_PROP_HALF[p.key], pos = c[p.key];
-    const yaw = centerPropYaw(pos);
+    const yaw = centerPropYaw(pos, c.center);
     const PB = new THREE.Matrix4().compose(new THREE.Vector3(pos.x, pos.y, pos.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw + Math.PI), new THREE.Vector3(1, 1, 1));
     p.build(dress, PB, new THREE.Vector3(h.x, h.y, h.z));
     const proxy = new THREE.Mesh(new THREE.BoxGeometry(h.x * 2, h.y * 2, h.z * 2), M.matte);

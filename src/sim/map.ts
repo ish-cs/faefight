@@ -106,8 +106,15 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
   const r = spec.radius;
   const g = MAP.groundY;
   const base = (r + spec.gap / 2) / Math.sin(Math.PI / playerCount);
-  const ring = Math.max(base, r + spec.centerR[0] + spec.minCenterGap);
-  const centerR = Math.min(spec.centerR[1], Math.max(spec.centerR[0], ring - r - spec.centerGap));
+  // 3+ players: the center island sits at the ring's centre (the only point equally far from every island), and the
+  // ring grows if needed to keep it clear. 2 players: it sits off to the side on the bisector, so it is not a
+  // stepping stone on the direct route; island→center is half the island gap, so going via the center costs the
+  // same bridging as going direct.
+  const two = playerCount === 2;
+  const ring = two ? base : Math.max(base, r + spec.centerR[0] + spec.minCenterGap);
+  const centerR = two ? spec.centerR[0] : Math.min(spec.centerR[1], Math.max(spec.centerR[0], ring - r - spec.centerGap));
+  const centerDist = r + centerR + Math.max(spec.minCenterGap, spec.gap / 2);
+  const c0 = two ? v3(0, 0, Math.sqrt(centerDist ** 2 - ring ** 2)) : v3(0, 0, 0);
   const islands: IslandLayout[] = [];
   const statics: StaticBox[] = [];
   const cosmetics: CosmeticDef[] = [];
@@ -181,10 +188,10 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
   }
 
   // Center island: shield well in the middle, three stations around it, low concrete barriers between them.
-  const polar = (rad: number, deg: number, y = g) => v3(Math.cos((deg * Math.PI) / 180) * rad, y, Math.sin((deg * Math.PI) / 180) * rad);
+  const polar = (rad: number, deg: number, y = g) => v3(c0.x + Math.cos((deg * Math.PI) / 180) * rad, y, c0.z + Math.sin((deg * Math.PI) / 180) * rad);
   const center: CenterIsland = {
-    center: v3(0, 0, 0), radius: centerR, groundY: g,
-    shieldWell: v3(0, g, 0),
+    center: c0, radius: centerR, groundY: g,
+    shieldWell: v3(c0.x, g, c0.z),
     goldGen: polar(CENTER.stationRadius, 90),
     supplyGen: polar(CENTER.stationRadius, 210),
     potionShop: polar(CENTER.stationRadius, 330),

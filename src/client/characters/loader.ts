@@ -35,6 +35,20 @@ export const HAND_BONE = 'WristR';
 const CLIP_PREFIX = /^CharacterArmature\|/;
 
 let pending: Promise<CharacterAssets> | null = null;
+const bytes = FILES.map(() => ({ loaded: 0, total: 0 }));
+const progressFns = new Set<(frac: number) => void>();
+let lastFrac = 0;
+
+/** Model download progress 0..1 (fires now with the current value, then as bytes arrive). Returns unsubscribe. */
+export function onCharacterProgress(fn: (frac: number) => void): () => void {
+  progressFns.add(fn);
+  fn(lastFrac);
+  return () => progressFns.delete(fn);
+}
+function reportProgress(frac: number) {
+  lastFrac = Math.max(lastFrac, Math.min(1, frac));
+  for (const fn of progressFns) fn(lastFrac);
+}
 
 export function loadCharacters(): Promise<CharacterAssets> {
   pending ??= load();
@@ -44,7 +58,11 @@ export function loadCharacters(): Promise<CharacterAssets> {
 async function load(): Promise<CharacterAssets> {
   const t0 = performance.now();
   const loader = new GLTFLoader();
-  const gltfs = await Promise.all(FILES.map((f) => loader.loadAsync(f.url)));
+  const gltfs = await Promise.all(FILES.map((f, i) => loader.loadAsync(f.url, (e) => {
+    bytes[i] = { loaded: e.loaded, total: e.lengthComputable ? e.total : 0 };
+    const total = bytes.reduce((n, b) => n + b.total, 0), loaded = bytes.reduce((n, b) => n + b.loaded, 0);
+    if (total > 0) reportProgress(0.95 * (loaded / total)); // the last 5% is parsing + measuring
+  })));
   const clips = new Map<string, THREE.AnimationClip>();
   for (const c of gltfs[0].animations) {
     c.name = c.name.replace(CLIP_PREFIX, '');
@@ -59,7 +77,7 @@ async function load(): Promise<CharacterAssets> {
       const m = o as THREE.SkinnedMesh;
       if (!m.isSkinnedMesh) return;
       m.castShadow = true;
-      m.receiveShadow = false;
+      m.receiveShadow = true; // self-shadowing + standing in crane/container shadow grounds them in the scene
       // Flat-coloured low-poly materials: matte cloth/skin reads more natural than the exported gloss.
       for (const mat of (Array.isArray(m.material) ? m.material : [m.material]) as THREE.MeshStandardMaterial[]) {
         mat.roughness = Math.max(mat.roughness, 0.75);
@@ -101,6 +119,7 @@ async function load(): Promise<CharacterAssets> {
   mixer.stopAllAction();
   mixer.uncacheRoot(probe);
 
+  reportProgress(1);
   console.info(`[characters] loaded ${FILES.length} rigs, ${clips.size} clips, h=${height.toFixed(3)} → scale ${scale.toFixed(3)} in ${Math.round(performance.now() - t0)} ms`);
   return { variants, clips, scale, footY: bounds.min.y, gripLocal };
 }

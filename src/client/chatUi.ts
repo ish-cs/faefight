@@ -1,4 +1,5 @@
 import { CHAT_MAX_LEN } from '../net/protocol';
+import { isAction } from './keymap';
 
 const MAX_LINES = 6;
 const FADE_MS = 8000;
@@ -39,7 +40,7 @@ export class ChatUi {
         else if (e.code === 'Escape') { e.preventDefault(); this.close(); }
         return;
       }
-      if ((e.code === 'Enter' || e.code === 'NumpadEnter') && this.enabled && !(e.target instanceof HTMLInputElement)) {
+      if (isAction('chat', e.code) && this.enabled && !(e.target instanceof HTMLInputElement)) {
         e.preventDefault();
         e.stopPropagation();
         this.openInput();

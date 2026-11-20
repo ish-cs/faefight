@@ -169,7 +169,7 @@ export function buildIslands(def: MapDef, teamColors: number[]): IslandsOut {
       barrierProp(solid, dress, new THREE.Matrix4().compose(c, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), st.rotY), new THREE.Vector3(1, 1, 1)), h);
       return;
     }
-    containerCover(dress, c, h, st.rotY, 3001 + (st.island >= 0 ? (i % 3) * 7 + st.island * 131 : i));
+    containerCover(dress, c, h, st.rotY, i);
     const proxy = new THREE.Mesh(new THREE.BoxGeometry(h.x * 2, h.y * 2, h.z * 2), M.matte);
     proxy.position.copy(c);
     proxy.rotation.y = st.rotY;

@@ -1,7 +1,9 @@
-import { AMMO_BOX, MAP, PIECES, SEAL, WEAPONS } from '../constants';
-import { buy } from '../economy';
+import { AMMO_BOX, CHARGE, GENERATOR_MAX_LEVEL, GRENADE, MAP, MEDKIT, PIECES, POTIONS, SEAL, WEAPONS } from '../constants';
+import { buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
+import { canAdd, countOf } from '../hotbar';
+import { uselessReason } from '../potions';
 import type { Doorway } from '../map';
-import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
+import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, PotionKind, ShopItem, Vec3, WeaponKind } from '../types';
 import { add, dist2D, forward, scale, v3 } from '../vec';
 
 export const GUNS: Exclude<WeaponKind, 'fists'>[] = ['rifle', 'smg', 'pistol', 'shotgun'];
@@ -58,8 +60,13 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
   return bags >= 2 ? { kind: 'sandbags', level: 0 } : null;
 }
 
-/** `tower`: sandbags wanted for climbing above the sudden-death tide. */
-export type Needs = { scaffolds: number; kit: number; charge: boolean; tower?: number };
+/**
+ * `tower`: sandbags wanted for climbing above the sudden-death tide. `grenades`/`medkits`: how many to carry.
+ * `steel`: rich enough that the seal kit should be steel. `genLevel`: my generator's level (unknown = no upgrades).
+ */
+export type Needs = {
+  scaffolds: number; kit: number; charge: boolean; tower?: number; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
+};
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
 export type ShopStyle = {
@@ -75,6 +82,8 @@ export type ShopStyle = {
   steel: boolean;
   /** Extra wood walls carried for throwing down cover. */
   coverWood: number;
+  /** Upgrade the generator as soon as the essentials are covered (economists, turtles). */
+  invest?: boolean;
 };
 export const PLAIN_STYLE: ShopStyle = { upgradeFirst: false, longGun: false, closeGun: false, metal: false, steel: false, coverWood: 0 };
 
@@ -86,7 +95,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     if (GUNS.some((g) => inv.weapons[g])) return cash >= AMMO_BOX.price ? 'ammo' : null;
     return cash >= WEAPONS.pistol.price ? 'pistol' : null;
   }
-  if (needs.charge && inv.charges === 0) return cash >= 250 ? 'charge' : null;
+  if (needs.charge && inv.charges === 0) return cash >= CHARGE.price ? 'charge' : null;
   if ((inv.pieces.sandbags ?? 0) < (needs.tower ?? 0)) return cash >= PIECES.sandbags.price ? 'sandbags' : null;
   const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
@@ -94,17 +103,26 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   if (sealKit(inv) < needs.kit) {
-    if (style.steel && cash >= 2 * PIECES.steel.price) return 'steel';
-    const wantMetal = difficulty === 'hard' ? cash >= PIECES.metal.price
+    if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price) return 'steel';
+    const skilled = difficulty === 'hard' || difficulty === 'pro';
+    const wantMetal = skilled ? cash >= PIECES.metal.price
       : (difficulty === 'medium' || style.metal) && cash >= 2 * PIECES.metal.price;
     if (wantMetal) return 'metal';
     return cash >= PIECES.wood.price ? 'wood' : null;
   }
+  const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
+  if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
   if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
+  if (inv.grenades < (needs.grenades ?? 0)) return cash >= GRENADE.price ? 'grenade' : null;
+  if (inv.medkits < (needs.medkits ?? 0)) return cash >= MEDKIT.price ? 'medkit' : null;
   if (style.closeGun && !inv.weapons.shotgun && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
   if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
+  // Rich: invest in the generator, then lock the favourite gun so a death doesn't leave me unarmed.
+  if (genPrice !== null && cash >= 3 * genPrice) return 'genUpgrade';
+  const fav = GUNS.find((g) => inv.weapons[g]);
+  if (fav && !p.locked.includes(fav) && cash >= 2 * lockPrice(fav)) return lockItem(fav);
   return null;
 }
 
@@ -116,10 +134,14 @@ export function shoppingPlan(
 ): { items: ShopItem[]; covered: boolean; spent: number } {
   const sim = structuredClone(p);
   const items: ShopItem[] = [];
+  const n = { ...needs };
+  const levels: number[] = [];
   for (let i = 0; i < 30; i++) {
-    const item = nextPurchase(sim, needs, difficulty, style);
+    levels[p.island] = n.genLevel ?? GENERATOR_MAX_LEVEL;
+    const item = nextPurchase(sim, n, difficulty, style);
     if (!item) break;
-    const r = buy(sim, { buy: item });
+    const r = buy(sim, { buy: item }, levels);
+    n.genLevel = levels[p.island];
     if (!r.ok) {
       console.warn(`shoppingPlan: chose ${item} but buy failed: ${r.reason}`);
       break;
@@ -128,6 +150,33 @@ export function shoppingPlan(
   }
   const spent = p.inv.cash - sim.inv.cash;
   sim.inv.cash = Infinity;
-  const left = nextPurchase(sim, needs, difficulty, style);
+  const left = nextPurchase(sim, n, difficulty, style);
   return { items, covered: left === null || !ESSENTIAL.includes(left), spent };
+}
+
+/** Cash a bot keeps back from potion shopping (for guns, ammo and seal kit). */
+export const POTION_RESERVE = 150;
+const SHIELD_STOCK = 2;
+
+/**
+ * Bots value shields: at a potion seller they stock up on shield potions with spare cash, and out of
+ * combat (no enemy in sight) they drink one whenever it would help, so they walk into the next fight
+ * shielded. Returns the hotbar slot to drink from, or a potion to buy, or null.
+ */
+export function potionAction(p: PlayerState, now: number, enemyInSight: boolean, atSeller: boolean): { drink: number } | { buy: PotionKind } | null {
+  if (!p.alive) return null;
+  if (atSeller) {
+    for (const kind of ['shieldBig', 'shieldSmall'] as const) {
+      if (countOf(p.inv, kind) >= SHIELD_STOCK || p.inv.cash < POTIONS[kind].price + POTION_RESERVE) continue;
+      if (countOf(p.inv, kind) === 0 && !canAdd(p.hotbar, kind)) continue;
+      return { buy: kind };
+    }
+  }
+  if (enemyInSight || p.drinking || now < p.busyUntil) return null;
+  const order: PotionKind[] = ['shieldBig', 'shieldSmall', ...(p.hp <= 60 ? ['healPotion' as const] : [])];
+  for (const kind of order) {
+    const slot = p.hotbar.indexOf(kind);
+    if (slot >= 0 && countOf(p.inv, kind) > 0 && !uselessReason(p, kind, now)) return { drink: slot };
+  }
+  return null;
 }

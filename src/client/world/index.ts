@@ -5,6 +5,7 @@ import { CosmeticLayer } from './cosmetics';
 import { buildIslands } from './islands';
 import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
+import { setBuiltInPotionStalls } from './potionSeller';
 import { installQualityToggle, SkyLighting } from './sky';
 import { buildWater } from './water';
 
@@ -26,7 +27,7 @@ export class World {
   private cosmetics: CosmeticLayer | null = null;
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
-  constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.Camera, private collidables: THREE.Object3D[]) {
+  constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
     this.sky = new SkyLighting(gpu, scene, camera);
     installQualityToggle(this.sky);
     scene.add(this.pieces.root, this.pieceFx.root);
@@ -47,6 +48,8 @@ export class World {
     this.collidables.push(...collidables);
     this.water = buildWater(def);
     this.scene.add(this.water);
+    this.sky.setInteriors(def.islands);
+    setBuiltInPotionStalls([def.center.potionShop]); // center.ts draws this seller; PotionSellers must not double it
     this.cosmetics = new CosmeticLayer(def.cosmetics);
     this.scene.add(this.cosmetics.root);
     console.info(`[world] built ${def.name}: ${def.islands.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
@@ -81,9 +84,9 @@ export class World {
   /** `pieceHit` / `destroyed` events → decals, particles, shake, debris. */
   pieceEvent(e: MatchEvent, players: PlayerState[]) { this.pieceFx.onEvent(e, players); }
 
-  render(waterY: number, focus: THREE.Vector3) {
+  render(waterY: number, _focus?: THREE.Vector3) {
     if (this.water) this.water.position.y = waterY;
     this.pieceFx.update(performance.now());
-    this.sky.render(focus);
+    this.sky.render(); // cascaded shadows follow the camera themselves
   }
 }

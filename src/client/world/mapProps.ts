@@ -104,11 +104,8 @@ export function containerCover(dress: StaticBatch, center: THREE.Vector3, half: 
   const longZ = half.z > half.x;
   const base = new THREE.Matrix4().compose(V(center.x, center.y - half.y, center.z), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), rotY + (longZ ? Math.PI / 2 : 0)), V(1, 1, 1));
   const rng = makeRng(seed);
-  let last = -1;
   for (let k = 0; k < levels; k++) {
-    let ci = Math.floor(rng.rnd() * COVER_COLORS.length);
-    if (ci === last) ci = (ci + 1) % COVER_COLORS.length;
-    last = ci;
+    const ci = (seed + k * 3) % COVER_COLORS.length; // neighbouring stacks and levels never share a livery
     const flip = rng.rnd() < 0.5 ? Math.PI : 0;
     container(dress, at(base, mat(0, k * 2.59, 0, 0, flip, 0)), COVER_COLORS[ci]);
   }

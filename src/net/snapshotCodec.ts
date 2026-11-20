@@ -5,10 +5,11 @@ import type { MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim
 /**
  * What the host sends a remote client. Same as Snapshot except: pieces are omitted when unchanged
  * since that client's last update, events cover every tick since then, other players' inventories,
- * vaults and hotbars are left out (the decoder fills them in empty; `equipped` is still sent so their
- * gun renders), and floats are rounded.
+ * vaults, hotbars and gun locks are left out (the decoder fills them in empty; `equipped` is still sent
+ * so their gun renders), and floats are rounded. Everyone's shield IS sent: it is shown on name tags.
  */
-export type NetPlayer = Omit<PlayerState, 'inv' | 'vault' | 'hotbar'> & Partial<Pick<PlayerState, 'inv' | 'vault' | 'hotbar'>>;
+type Private = 'inv' | 'vault' | 'hotbar' | 'locked';
+export type NetPlayer = Omit<PlayerState, Private> & Partial<Pick<PlayerState, Private>>;
 export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players'> & { pieces?: PieceState[]; players: NetPlayer[] };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -61,8 +62,16 @@ export class SnapshotEncoder {
   }
 
   private player(p: PlayerState, own: boolean): NetPlayer {
-    const out: NetPlayer = { ...p, pos: rv(p.pos), vel: rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp) };
-    if (!own) { delete out.inv; delete out.vault; delete out.hotbar; }
+    // Your own position/velocity go out unrounded: the client replays its movement from them (prediction).
+    const out: NetPlayer = {
+      ...p, pos: own ? { ...p.pos } : rv(p.pos), vel: own ? { ...p.vel } : rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp), shield: Math.ceil(p.shield), healLeft: Math.ceil(p.healLeft),
+    };
+    if (!own) {
+      delete out.inv; delete out.vault; delete out.hotbar; delete out.locked;
+      // Host-side bookkeeping a remote client never reads for other players (keeps 8 players under budget).
+      const o = out as Partial<PlayerState>;
+      delete o.mv; delete o.busyUntil; delete o.nextFireAt; delete o.lastDamagedAt; delete o.healAt;
+    }
     return out;
   }
 }
@@ -73,7 +82,8 @@ export class SnapshotDecoder {
   decode(n: NetSnapshot): Snapshot {
     if (n.pieces) this.pieces = n.pieces;
     const players = n.players.map((p): PlayerState => ({
-      ...p, inv: p.inv ?? emptyInventory(), vault: p.vault ?? emptyInventory(), hotbar: p.hotbar ?? emptyHotbar(),
+      ...p, inv: p.inv ?? emptyInventory(), vault: p.vault ?? emptyInventory(), hotbar: p.hotbar ?? emptyHotbar(), locked: p.locked ?? [],
+      busyUntil: p.busyUntil ?? 0, nextFireAt: p.nextFireAt ?? 0, lastDamagedAt: p.lastDamagedAt ?? 0, healAt: p.healAt ?? null,
     }));
     return { ...n, players, pieces: this.pieces };
   }

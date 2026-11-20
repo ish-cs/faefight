@@ -20,7 +20,7 @@ export const PROP_HALF = { generator: v3(0.6, 0.7, 0.6), vault: v3(0.6, 1.0, 0.5
 export const CENTER_PROP_HALF = { goldGen: v3(0.6, 0.7, 0.6), supplyGen: v3(0.7, 0.6, 0.7), potionShop: v3(0.3, 0.9, 0.3) };
 
 /** Center stations face the island middle. */
-export const centerPropYaw = (p: { x: number; z: number }) => Math.atan2(p.x, p.z);
+export const centerPropYaw = (p: { x: number; z: number }, c: { x: number; z: number }) => Math.atan2(p.x - c.x, p.z - c.z);
 
 export class Physics {
   private world: RAPIER.World;
@@ -56,7 +56,7 @@ export class Physics {
       disc(c.center, c.radius, c.groundY);
       for (const key of ['goldGen', 'supplyGen', 'potionShop'] as const) {
         const p = c[key], h = CENTER_PROP_HALF[key];
-        ph.addStaticBox(v3(p.x, p.y + h.y, p.z), h, centerPropYaw(p));
+        ph.addStaticBox(v3(p.x, p.y + h.y, p.z), h, centerPropYaw(p, c.center));
       }
     }
     // Built-in cover: solid and indestructible (a `world` hit, like the islands and bunkers).
@@ -155,6 +155,20 @@ export class Physics {
     c.setTranslation(next);
     this.dirty = true;
     return { pos: v3(next.x, next.y - PLAYER.height / 2, next.z), grounded: this.cc.computedGrounded() };
+  }
+
+  /** Like movePlayer, but leaves the collider where it was (client render-time extrapolation). */
+  peekMovePlayer(id: number, desired: Vec3): { pos: Vec3; grounded: boolean } {
+    this.sync();
+    const c = this.mustPlayer(id);
+    this.cc.computeColliderMovement(c, desired);
+    const m = this.cc.computedMovement();
+    const t = c.translation();
+    return { pos: v3(t.x + m.x, t.y + m.y - PLAYER.height / 2, t.z + m.z), grounded: this.cc.computedGrounded() };
+  }
+
+  hasPlayer(id: number): boolean {
+    return this.players.has(id);
   }
 
   raycast(origin: Vec3, dir: Vec3, maxDist: number, ignorePlayer?: number): RayHit | null {

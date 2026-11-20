@@ -7,15 +7,19 @@ import { NO_INPUT, type PlayerInput, type Snapshot, type Vec3 } from '../../src/
 import { dist2D, v3 } from '../../src/sim/vec';
 import { COSMETIC } from '../../src/sim/map';
 
-const two = (map: 'harbor' | 'yard' = 'harbor') =>
-  Match.create({ players: [{ name: 'a', isBot: false }, { name: 'b', isBot: false }], map });
+const two = async (map: 'harbor' | 'yard' = 'harbor') => {
+  const m = await Match.create({ players: [{ name: 'a', isBot: false }, { name: 'b', isBot: false }], map });
+  mid = m.def.center.center;
+  return m;
+};
 const run = (m: Match, sec: number, inputs = new Map<number, PlayerInput>()) => {
   let s: Snapshot = m.tick(inputs);
   for (let i = 1; i < sec * 30; i++) s = m.tick(inputs);
   return s;
 };
-/** Stand 1.2 m from a station on the ground. */
-const beside = (p: Vec3) => v3(p.x * 0.8, p.y, p.z * 0.8);
+/** Stand a metre toward the center island's middle from a station. */
+let mid: Vec3 = v3();
+const beside = (p: Vec3) => v3(mid.x + (p.x - mid.x) * 0.8, p.y, mid.z + (p.z - mid.z) * 0.8);
 
 describe('center island: gold generator', () => {
   test('fills at twice the home rate and caps at 1000', async () => {
@@ -33,7 +37,7 @@ describe('center island: gold generator', () => {
     run(m, 20);
     const g = m.def.center.goldGen;
     m.debugTeleport(1, beside(g));
-    m.debugTeleport(2, v3(g.x * 0.8 + 0.5, g.y, g.z * 0.8));
+    m.debugTeleport(2, v3(beside(g).x + 0.5, g.y, beside(g).z));
     const before = m.tick(new Map()).players.map((p) => p.inv.cash);
     const s1 = m.tick(new Map([[1, { ...NO_INPUT, interact: true }]]));
     const got1 = s1.players[0].inv.cash - before[0];
@@ -97,12 +101,12 @@ describe('center island: supply generator', () => {
 });
 
 describe('center island: shield well', () => {
-  test('standing in the well refills a shield up to 50 (once players have shields)', async () => {
+  test('standing in the well refills shield up to 50, no further', async () => {
     const m = await two();
     m.debugTeleport(1, m.def.center.shieldWell);
-    const s0 = m.tick(new Map());
-    const me = (m as unknown as { s: { players: Map<number, { shield?: number }> } }).s.players.get(1)!;
-    if (!('shield' in s0.players[0])) me.shield = 0; // shields not on this branch yet: exercise the hook
+    m.tick(new Map());
+    const me = (m as unknown as { s: { players: Map<number, { shield: number }> } }).s.players.get(1)!;
+    expect(me.shield).toBeLessThan(0.5); // one tick in the well
     run(m, 5);
     expect(me.shield).toBeCloseTo(Math.min(CENTER.wellCap, 5 * CENTER.wellPerSec), 0);
     run(m, 30);
@@ -179,5 +183,17 @@ describe('map cover and cosmetics', () => {
     m.debugTeleport(1, isl.spawn);
     const s = run(m, 4);
     expect(s.broken).toContain(target.id);
+  });
+});
+
+describe('center island: potion seller', () => {
+  test('the potion seller NPC stands on the center island and sells potions', async () => {
+    const m = await two('yard');
+    expect(m.potionShops.map((s) => s.pos)).toEqual([m.def.center.potionShop]);
+    m.debugTeleport(1, beside(m.def.center.potionShop));
+    m.debugGive(1, { cash: 500 });
+    m.tick(new Map());
+    const s = m.tick(new Map([[1, { ...NO_INPUT, shop: { buy: 'shieldSmall' } }]]));
+    expect(s.players[0].inv.potions.shieldSmall).toBe(1);
   });
 });

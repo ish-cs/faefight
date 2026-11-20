@@ -118,7 +118,7 @@ describe('bots and the center island', () => {
     const m = await Match.create({ players: [{ name: 'Bot (hard)', isBot: true, difficulty: 'hard' }, { name: 'x', isBot: false }], seed: 2 });
     for (let i = 0; i < 30 * 40; i++) m.tick(new Map()); // let gold build up (bot may wander)
     const c = m.def.center;
-    m.debugTeleport(1, { x: c.supplyGen.x * 1.4, y: c.groundY, z: c.supplyGen.z * 1.4 });
+    m.debugTeleport(1, { x: c.center.x + (c.supplyGen.x - c.center.x) * 1.4, y: c.groundY, z: c.center.z + (c.supplyGen.z - c.center.z) * 1.4 });
     let got = false;
     for (let i = 0; i < 30 * 20 && !got; i++) got = m.tick(new Map()).events.some((e) => e.type === 'centerCollect' && e.data.by === 1);
     expect(got).toBe(true);

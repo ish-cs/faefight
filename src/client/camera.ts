@@ -5,7 +5,7 @@ const RIGHT = 0.6;
 const UP = PLAYER.eyeHeight; // 1.6 m
 const BACK = 3.2;
 const SKIN = 0.2; // keep this far in front of whatever blocks the camera
-const EASE_OUT_RATE = 6; // m/s
+const PULL_OUT_RATE = 5; // 1/s: exponential ease back out after an obstruction clears (frame-rate independent)
 
 /** Third-person over-the-shoulder camera that pulls in when geometry blocks it. */
 export class ThirdPersonCamera {
@@ -38,7 +38,7 @@ export class ThirdPersonCamera {
     const hit = this.ray.intersectObjects(this.blockers(), false)[0];
     const want = hit ? Math.max(0.3, hit.distance - SKIN) : BACK;
     // Snap in instantly (never render from inside a wall), ease back out smoothly.
-    this.dist = want < this.dist ? want : Math.min(want, this.dist + EASE_OUT_RATE * dt);
+    this.dist = want < this.dist ? want : this.dist + (want - this.dist) * (1 - Math.exp(-PULL_OUT_RATE * dt));
 
     this.cam.position.copy(pivot).addScaledVector(back, this.dist);
     this.cam.rotation.set(pitch, yaw, 0, 'YXZ');

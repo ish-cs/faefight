@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { sanitizeClientMsg, sanitizeInput } from '../../src/net/sanitize';
+import { MAX_CMDS_PER_MSG, sanitizeClientMsg, sanitizeInput } from '../../src/net/sanitize';
 import { NO_INPUT } from '../../src/sim/types';
 
 describe('sanitizeInput', () => {
@@ -58,6 +58,24 @@ describe('sanitizeInput', () => {
     expect(sanitizeInput({ ...NO_INPUT, vault: { withdraw: { medkits: 'lots' } } })!.vault).toBeNull();
     expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'medkit' } })!.shop).toEqual({ buy: 'medkit' });
   });
+  test('shop accepts generator upgrades and gun locks only in their exact forms', () => {
+    expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'genUpgrade' } })!.shop).toEqual({ buy: 'genUpgrade' });
+    for (const g of ['pistol', 'smg', 'shotgun', 'rifle'])
+      expect(sanitizeInput({ ...NO_INPUT, shop: { buy: `lock:${g}` } })!.shop).toEqual({ buy: `lock:${g}` });
+    for (const bad of ['lock:fists', 'lock:', 'lock:tank', 'lock:pistol ', 'LOCK:pistol', 'genUpgrade2', { lock: 'pistol' }, 'lock:__proto__'])
+      expect(sanitizeInput({ ...NO_INPUT, shop: { buy: bad } })!.shop).toBeNull();
+  });
+  test('drink is a strict boolean; potions are shop items and vault counts', () => {
+    expect(sanitizeInput({ ...NO_INPUT, drink: true })!.drink).toBe(true);
+    for (const bad of ['yes', 1, {}, null, undefined]) expect(sanitizeInput({ ...NO_INPUT, drink: bad })!.drink).toBe(false);
+    for (const k of ['shieldSmall', 'shieldBig', 'healPotion', 'speedPotion'])
+      expect(sanitizeInput({ ...NO_INPUT, shop: { buy: k } })!.shop).toEqual({ buy: k });
+    expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'shieldHuge' } })!.shop).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { potions: { shieldBig: 2 } } } })!.vault).toEqual({ deposit: { potions: { shieldBig: 2 } } });
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { potions: { shieldBig: -1 } } } })!.vault).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { potions: { nectar: 1 } } } })!.vault).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, vault: { withdraw: { potions: 'all' } } })!.vault).toBeNull();
+  });
   test('booleans are coerced strictly', () => {
     expect(sanitizeInput({ ...NO_INPUT, fire: 'yes' })!.fire).toBe(false);
   });
@@ -78,6 +96,18 @@ describe('sanitizeClientMsg', () => {
     const req = { kind: 'wood', pos: { x: 1, y: 2, z: 3 }, rotY: 0, free: true };
     expect(sanitizeClientMsg({ t: 'preview', req, key: 3 })).toEqual({ t: 'preview', req, key: 3 });
     expect(sanitizeClientMsg({ t: 'preview', req: { ...req, kind: 'x' }, key: 3 })).toBeNull();
+  });
+  test('input carries numbered movement commands, sanitized', () => {
+    const cmd = { seq: 5, moveX: 3, moveZ: -1, yaw: 0.25, jump: 1, sprint: true, extra: 'x' };
+    const r = sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: [cmd] });
+    expect(r).toEqual({ t: 'input', input: NO_INPUT, cmds: [{ seq: 5, moveX: 1, moveZ: -1, yaw: 0.25, jump: false, sprint: true }] });
+    // Missing cmds (older shape) → empty list; bad seq / yaw / too many → whole message dropped.
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT })).toEqual({ t: 'input', input: NO_INPUT, cmds: [] });
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: [{ ...cmd, seq: 1.5 }] })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: [{ ...cmd, seq: 0 }] })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: [{ ...cmd, yaw: NaN }] })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: Array(MAX_CMDS_PER_MSG + 1).fill(cmd) })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: 'lots' })).toBeNull();
   });
   test('unknown types are dropped', () => {
     expect(sanitizeClientMsg({ t: 'admin', cmd: 'win' })).toBeNull();

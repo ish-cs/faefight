@@ -162,7 +162,7 @@ function duel(difficulty: Difficulty, seed: number, offDeg = 0) {
 }
 
 describe('Bot aim', () => {
-  for (const difficulty of ['easy', 'medium', 'hard'] as Difficulty[]) {
+  for (const difficulty of ['easy', 'medium', 'hard', 'pro'] as Difficulty[]) {
     test(`${difficulty}: holds fire for the reaction delay, then fires within a tick`, () => {
       const { view, bot, self } = duel(difficulty, 3);
       const t0 = view.now;
@@ -197,8 +197,9 @@ describe('Bot aim', () => {
       }
       return sum / 200;
     };
-    const easy = meanErr('easy'), hard = meanErr('hard');
+    const easy = meanErr('easy'), hard = meanErr('hard'), pro = meanErr('pro');
     expect(hard).toBeLessThan(easy);
+    expect(pro).toBeLessThan(hard);
     expect(easy).toBeLessThan((10 * Math.PI) / 180);
   });
 });
@@ -380,12 +381,50 @@ describe('shopping with an empty gun', () => {
 });
 
 describe('difficulty = human skill, not special rules', () => {
-  test('easy aim is very loose and slow to react; every level is gentler than before', () => {
-    expect(AIM.easy.coneRad).toBeGreaterThan((12 * Math.PI) / 180);
+  test('easy/medium stay loose and slow; hard sits clearly between medium and PRO; PRO is human-pro, not perfect', () => {
+    const deg = Math.PI / 180;
+    expect(AIM.easy.coneRad).toBeGreaterThan(12 * deg);
     expect(AIM.easy.reactSec).toBeGreaterThanOrEqual(0.7);
     expect(AIM.medium.reactSec).toBeGreaterThanOrEqual(0.45);
-    expect(AIM.hard.reactSec).toBeGreaterThanOrEqual(0.28);
-    expect(AIM.hard.coneRad).toBeGreaterThan((4 * Math.PI) / 180);
+    expect(AIM.hard.reactSec).toBeGreaterThan(AIM.pro.reactSec);
+    expect(AIM.hard.reactSec).toBeLessThan(AIM.medium.reactSec);
+    expect(AIM.hard.coneRad).toBeGreaterThan(AIM.pro.coneRad);
+    expect(AIM.hard.coneRad).toBeLessThan(AIM.medium.coneRad);
+    // Human pro reaction (~0.2 s), a small but real error cone, and a hand-speed flick cap (< 720°/s).
+    expect(AIM.pro.reactSec).toBeGreaterThanOrEqual(0.18);
+    expect(AIM.pro.reactSec).toBeLessThanOrEqual(0.22);
+    expect(AIM.pro.coneRad).toBeGreaterThan(1 * deg);
+    expect(AIM.pro.coneRad).toBeLessThan(3 * deg);
+    expect(AIM.pro.maxTurn).toBeLessThanOrEqual(720 * deg);
+  });
+  test('PRO flicks are limited by hand speed: a 120° turn takes several ticks', () => {
+    const { view, bot, self } = duel('pro', 5, 120);
+    let k = 0;
+    for (; k < 30; k++) {
+      const inp = bot.think(view);
+      self.yaw = inp.yaw; self.pitch = inp.pitch;
+      view.now += DT;
+      const exact = lookAt(eyePos(self), v3(view.enemies[0].pos.x, view.enemies[0].pos.y + 1.2, view.enemies[0].pos.z));
+      if (angleBetween(inp, exact) < (10 * Math.PI) / 180) break;
+    }
+    // 120° at ≤ 12 rad/s needs ≥ 0.17 s (≥ 5 ticks), and smooth tracking gets there well within half a second.
+    expect(k).toBeGreaterThanOrEqual(5);
+    expect(k).toBeLessThan(15);
+  });
+  test('PRO still misses sometimes: aim error is small but not zero (misses at rifle range)', () => {
+    let misses = 0, sum = 0;
+    for (let i = 0; i < 100; i++) {
+      const { view, bot, self, enemy } = duel('pro', 2000 + i, 0);
+      let inp = bot.think(view);
+      for (let k = 1; k <= 12; k++) { self.yaw = inp.yaw; self.pitch = inp.pitch; view.now += DT; inp = bot.think(view); }
+      const err = angleBetween(inp, lookAt(eyePos(self), v3(enemy.pos.x, enemy.pos.y + 1.2, enemy.pos.z)));
+      sum += err;
+      // The same error at 30 m would be off the 0.35 m body radius.
+      if (Math.tan(err) * 30 > 0.35) misses++;
+    }
+    expect(sum / 100).toBeGreaterThan((0.3 * Math.PI) / 180);
+    expect(misses).toBeGreaterThan(5);
+    expect(misses).toBeLessThan(80);
   });
   test('an easy bot is slower than a hard bot to notice cash waiting at its generator', () => {
     const reaction = (difficulty: 'easy' | 'hard', seed: number) => {

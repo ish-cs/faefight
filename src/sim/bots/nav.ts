@@ -13,6 +13,8 @@ const LOOK = [0.4, 0.8];
 const DETOURS = [0.4, -0.4, 0.8, -0.8, 1.2, -1.2, 1.6, -1.6];
 /** Highest step the character controller climbs without jumping (autostep 0.3 m). */
 const STEP_UP = 0.35;
+/** Don't walk off anything higher than this when there's another way (falls over ~3.3 m hurt). */
+const MAX_DROP = 3;
 const BUNKER_HALF = MAP.bunker.interior / 2 + MAP.bunker.wall;
 /** Walk grid: cell size, and how far to keep the body from cover (player radius + margin). */
 const GRID_CELL = 0.5;
@@ -264,11 +266,14 @@ export class Nav {
   private nodesFor: IslandLayout[] | null = null;
   private grids = new Map<number, WalkGrid>();
   private planned: { node: number; goal: Vec3; at: number; pts: Vec3[] } | null = null;
+  /** Finished bridges between node pairs, memoised for the current tick. */
+  private bridges = new Map<number, Lane | null>();
 
   constructor(private readonly ttl = 0.5) {}
 
   begin(view: BotView) {
     this.view = view;
+    this.bridges.clear();
     if (this.nodesFor !== view.map) {
       this.nodesFor = view.map;
       this.nodeList = navNodes(view.map, view.center?.island);
@@ -328,9 +333,14 @@ export class Nav {
    * (e.g. built off a stack), so check the end on node a is enterable.
    */
   bridge(a: number, b: number): Lane | null {
+    const key = a * 64 + b;
+    const hit = this.bridges.get(key);
+    if (hit !== undefined) return hit;
+    let out: Lane | null = null;
     for (const l of [this.lane(a, b), this.lane(b, a)])
-      if (this.frontier(l).complete && this.enterable(l, a)) return l;
-    return null;
+      if (this.frontier(l).complete && this.enterable(l, a)) { out = l; break; }
+    this.bridges.set(key, out);
+    return out;
   }
 
   /** Shortest walk over finished bridges from node a to b (node list incl. both ends), or null. */
@@ -447,25 +457,29 @@ export class Nav {
   }
 
   /**
-   * dir, or the nearest rotation of it whose path stays on solid (and, in sudden death, dry) ground; null if none.
+   * dir, or the nearest rotation of it whose path stays on solid (and, in sudden death, dry) ground without a
+   * drop that would hurt; null if none.
    * A surface well above our feet is a roof, wall or overhanging deck: over a node the land is still under it,
    * over water what is under it is unknown, so it is avoided.
    */
   safeDir(dir: Vec3): Vec3 | null {
     const me = this.view.self.pos;
-    const ok = (d: Vec3) => LOOK.every((k) => {
+    const ok = (d: Vec3, maxDrop: number) => LOOK.every((k) => {
       const p = v3(me.x + d.x * k, me.y, me.z + d.z * k);
       let floor = this.view.groundAt(p.x, p.z);
       if (floor !== null && floor - me.y > STEP_UP + 0.25) {
         const i = this.nodeAt(p);
         floor = i >= 0 ? this.nodeList[i].groundY : null;
       }
-      return floor !== null && !(this.view.suddenDeath && floor <= this.view.waterY + 0.05);
+      return floor !== null && me.y - floor <= maxDrop && !(this.view.suddenDeath && floor <= this.view.waterY + 0.05);
     });
-    if (ok(dir)) return dir;
-    for (const a of DETOURS) {
-      const d = rotateY(dir, a);
-      if (ok(d)) return d;
+    // Rather a hurtful drop than being stuck up there forever.
+    for (const maxDrop of [MAX_DROP, Infinity]) {
+      if (ok(dir, maxDrop)) return dir;
+      for (const a of DETOURS) {
+        const d = rotateY(dir, a);
+        if (ok(d, maxDrop)) return d;
+      }
     }
     return null;
   }

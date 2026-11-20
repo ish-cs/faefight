@@ -65,12 +65,8 @@ export function collectSupply(p: PlayerState, c: CenterState): { sandbags: numbe
 export const inShieldWell = (center: CenterIsland, pos: Vec3) =>
   dist2D(pos, center.shieldWell) <= CENTER.wellRadius && Math.abs(pos.y - center.shieldWell.y) < 1.5;
 
-/**
- * Shield well hook. Shields are being added by another change; until PlayerState has a numeric `shield`,
- * this is a no-op. Once it exists, standing in the well refills it up to CENTER.wellCap.
- */
+/** Shield well: standing in it slowly refills shield, but only up to CENTER.wellCap (potions go higher). */
 export function refillShield(p: PlayerState, dt: number): void {
-  const s = p as PlayerState & { shield?: number };
-  if (typeof s.shield !== 'number' || s.shield >= CENTER.wellCap) return;
-  s.shield = Math.min(CENTER.wellCap, s.shield + CENTER.wellPerSec * dt);
+  if (p.shield >= CENTER.wellCap) return;
+  p.shield = Math.min(CENTER.wellCap, p.shield + CENTER.wellPerSec * dt);
 }
