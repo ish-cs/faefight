@@ -229,6 +229,7 @@ export class InterestManager {
     return {
       ...p, pos, vel: v3(), yaw: 0, pitch: 0, hp: PLAYER.hp, equipped: 'fists', selected: 0, healAt: null,
       reloadUntil: 0, nextFireAt: 0, busyUntil: 0, invulnUntil: 0, lastDamagedAt: 0, breakoutUntil: null,
+      shield: 0, drinking: null, healLeft: 0, speedUntil: 0,
     };
   }
 }
