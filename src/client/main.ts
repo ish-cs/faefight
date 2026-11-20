@@ -4,6 +4,7 @@ import { snapPlacement, type Placement } from '../sim/building';
 import { PLAYER } from '../sim/constants';
 import type { IslandLayout } from '../sim/map';
 import type { BuildRequest, Difficulty, Inventory, Snapshot } from '../sim/types';
+import { moveForAim } from './aim';
 import { ThirdPersonCamera } from './camera';
 import { Hud } from './hud';
 import { InputController } from './input';
@@ -263,11 +264,14 @@ async function startGame(difficulty: Difficulty, menu: HTMLElement) {
     if (me?.alive) {
       // Aim the sim's eye ray (from the player's head) at whatever is under the crosshair; the camera
       // sits over the shoulder, so the raw look angles would shoot ~0.6 m right of the crosshair.
-      const target = camera.aimPoint(renderer.aimTargets(), AIM_RANGE);
+      // Targets nearer than the head itself would flip the aim backwards, so clamp just past the eye.
       const ex = feet.x, ey = feet.y + PLAYER.eyeHeight, ez = feet.z;
+      const target = camera.aimPoint(renderer.aimTargets(), AIM_RANGE, new THREE.Vector3(ex, ey, ez));
       const dx = target.x - ex, dy = target.y - ey, dz = target.z - ez;
+      const camYaw = sample.yaw;
       sample.yaw = Math.atan2(-dx, -dz);
       sample.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+      Object.assign(sample, moveForAim(sample.moveX, sample.moveZ, camYaw, sample.yaw));
     }
     send({ type: 'input', input: sample });
     renderer.render(input.yaw);

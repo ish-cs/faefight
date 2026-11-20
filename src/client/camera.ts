@@ -46,11 +46,13 @@ export class ThirdPersonCamera {
 
   /**
    * World point under the crosshair (screen centre), so the sim's eye ray can be aimed at it.
-   * Points closer than `minDist` are pushed out so near walls don't swing the aim/move yaw wildly.
+   * Points not at least 0.6 m in front of `eye` (along the view) are pushed out, so things between
+   * the camera and the head don't flip the aim backwards.
    */
-  aimPoint(targets: THREE.Object3D[], maxDist: number, minDist = 10): THREE.Vector3 {
+  aimPoint(targets: THREE.Object3D[], maxDist: number, eye: THREE.Vector3): THREE.Vector3 {
     const origin = this.cam.position;
     const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.cam.quaternion);
+    const minDist = eye.clone().sub(origin).dot(dir) + 0.6;
     this.ray.set(origin, dir);
     this.ray.far = maxDist;
     const hit = this.ray.intersectObjects(targets, false)[0];
