@@ -4,7 +4,8 @@ import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { PIECES, PLAYER } from '../sim/constants';
 import { bunkerWallBoxes, type IslandLayout } from '../sim/map';
 import { PROP_HALF } from '../sim/physics';
-import type { MatchEvent, PieceKind, PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
+import type { MatchEvent, PieceKind, PieceState, Snapshot, Vec3 } from '../sim/types';
+import { CharacterSystem } from './characters/avatar';
 
 export const ISLAND_COLORS = [0xe0533d, 0x3d84e0, 0x3dbb6a, 0xe0b23d, 0xa65de0, 0x3dd0d0, 0xe07a3d, 0xd6d6d6];
 export const ISLAND_NAMES = ['Red', 'Blue', 'Green', 'Gold', 'Purple', 'Teal', 'Orange', 'White'];
@@ -72,7 +73,6 @@ function labelSprite(text: string, bg: string): THREE.Sprite {
   return s;
 }
 
-type PlayerView = { group: THREE.Group; body: THREE.Mesh };
 type Fx = { mesh: THREE.Mesh; mat: THREE.MeshBasicNodeMaterial; born: number; life: number; grow?: number };
 
 export class Renderer {
@@ -90,7 +90,8 @@ export class Renderer {
   private curr: Snapshot | null = null;
   private currAt = 0;
   private interpMs = TICK_MS;
-  private players = new Map<number, PlayerView>();
+  /** Animated player avatars (src/client/characters). */
+  readonly characters = new CharacterSystem(this.scene, (island) => ISLAND_COLORS[island % 8]);
   private pieces = new Map<number, THREE.Mesh>();
   private loot = new Map<number, THREE.Mesh>();
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
@@ -307,6 +308,7 @@ export class Renderer {
   }
 
   private onEvent(e: MatchEvent) {
+    if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
     if (e.type === 'shot') {
       const from = e.data.from as Vec3 | undefined, to = e.data.to as Vec3 | undefined;
       if (from && to) this.addTracer(from, to, e.data.by === this.humanId);
@@ -397,30 +399,6 @@ export class Renderer {
     for (const [id, m] of this.loot) if (!seen.has(id)) { this.scene.remove(m); this.loot.delete(id); }
   }
 
-  private playerView(p: PlayerState): PlayerView {
-    let v = this.players.get(p.id);
-    if (v) return v;
-    const group = new THREE.Group();
-    const r = PLAYER.radius;
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(r, PLAYER.height - 2 * r, 8, 20),
-      new THREE.MeshStandardNodeMaterial({ color: ISLAND_COLORS[p.island % 8], roughness: 0.55 }));
-    body.position.y = PLAYER.height / 2;
-    body.castShadow = true;
-    group.add(body);
-    // Facing indicator: dark visor toward local -Z (yaw 0 looks toward -Z) plus a gun stub on the right.
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.12), new THREE.MeshStandardNodeMaterial({ color: 0x15181c, roughness: 0.2, metalness: 0.4 }));
-    visor.position.set(0, PLAYER.eyeHeight, -r + 0.02);
-    group.add(visor);
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.45), new THREE.MeshStandardNodeMaterial({ color: 0x222222, roughness: 0.4, metalness: 0.6 }));
-    gun.position.set(r + 0.02, 1.2, -0.3);
-    gun.castShadow = true;
-    group.add(gun);
-    this.scene.add(group);
-    v = { group, body };
-    this.players.set(p.id, v);
-    return v;
-  }
-
   /** Interpolated feet position for a player (between the last two snapshots). */
   playerPos(id: number, out = new THREE.Vector3()): THREE.Vector3 | null {
     if (!this.curr || !this.prev) return null;
@@ -454,7 +432,7 @@ export class Renderer {
   /** Meshes the aim ray may hit: world + pieces + other players. */
   aimTargets(): THREE.Object3D[] {
     const out = [...this.collidables];
-    for (const [id, v] of this.players) if (id !== this.humanId && v.group.visible) out.push(v.body);
+    this.characters.aimTargets(this.humanId, out);
     return out;
   }
 
@@ -462,25 +440,9 @@ export class Renderer {
     const now = performance.now();
     const snap = this.curr;
     if (snap) {
-      const t = this.alpha();
-      const tmp = new THREE.Vector3();
-      for (const p of snap.players) {
-        const v = this.playerView(p);
-        v.group.visible = p.alive;
-        if (!p.alive) continue;
-        this.playerPos(p.id, tmp);
-        v.group.position.copy(tmp);
-        if (p.id === this.humanId) v.group.rotation.y = localYaw;
-        else {
-          const a = this.prev?.players.find((q) => q.id === p.id) ?? p;
-          let d = p.yaw - a.yaw;
-          d = Math.atan2(Math.sin(d), Math.cos(d));
-          v.group.rotation.y = a.yaw + d * t;
-        }
-        // Blink while invulnerable after respawn.
-        v.body.visible = !(snap.time < p.invulnUntil && Math.floor(now / 120) % 2 === 0);
-      }
-      for (const [id, v] of this.players) if (!snap.players.some((p) => p.id === id)) { this.scene.remove(v.group); this.players.delete(id); }
+      const prev = this.prev;
+      this.characters.sync(snap.players, (id) => prev?.players.find((q) => q.id === id), this.alpha(), this.humanId,
+        localYaw, snap.time, (id, out) => this.playerPos(id, out));
       for (const m of this.loot.values()) m.rotation.y += 0.02;
     }
     if (this.water) this.water.position.y = this.waterY;
