@@ -4,12 +4,19 @@ import { sub, yawOf } from '../vec';
 
 const DEG = Math.PI / 180;
 
-export type AimProfile = { reactSec: number; coneRad: number; turnRate: number };
+/**
+ * reactSec: time from first sighting to the first shot. coneRad: aim error radius (tightens while tracking).
+ * turnRate: smoothing of the tracking (1/s). maxTurn: fastest flick a hand manages (rad/s).
+ */
+export type AimProfile = { reactSec: number; coneRad: number; turnRate: number; maxTurn: number };
 
 export const AIM: Record<Difficulty, AimProfile> = {
-  easy: { reactSec: 0.8, coneRad: 14 * DEG, turnRate: 4 },
-  medium: { reactSec: 0.5, coneRad: 8 * DEG, turnRate: 6 },
-  hard: { reactSec: 0.3, coneRad: 4.5 * DEG, turnRate: 9 },
+  easy: { reactSec: 0.8, coneRad: 14 * DEG, turnRate: 4, maxTurn: 6 },
+  medium: { reactSec: 0.5, coneRad: 8 * DEG, turnRate: 6, maxTurn: 8 },
+  hard: { reactSec: 0.24, coneRad: 3 * DEG, turnRate: 11, maxTurn: 11 },
+  // Human pro: ~0.2 s reaction, ~2° error that tightens to ~1.4° while tracking (still misses at range),
+  // fast smooth tracking, flicks capped at ~690°/s.
+  pro: { reactSec: 0.2, coneRad: 2 * DEG, turnRate: 14, maxTurn: 12 },
 };
 
 /** Losing sight longer than this makes the next sighting a fresh reaction. */
@@ -72,7 +79,9 @@ export class Aim {
     const exact = lookAt(eye, point);
     const want = { yaw: exact.yaw + this.err.yaw * cone, pitch: exact.pitch + this.err.pitch * cone };
     const t = 1 - Math.exp(-this.p.turnRate * dt);
-    const aim = { yaw: cur.yaw + wrapAngle(want.yaw - cur.yaw) * t, pitch: cur.pitch + (want.pitch - cur.pitch) * t };
+    const lim = this.p.maxTurn * dt;
+    const clampStep = (x: number) => Math.max(-lim, Math.min(lim, x * t));
+    const aim = { yaw: cur.yaw + clampStep(wrapAngle(want.yaw - cur.yaw)), pitch: cur.pitch + clampStep(want.pitch - cur.pitch) };
     const range = Math.hypot(point.x - eye.x, point.y - eye.y, point.z - eye.z);
     const tolerance = cone + Math.atan2(0.6, Math.max(range, 0.1));
     return { ...aim, ready: tracked >= this.p.reactSec - 1e-9, onTarget: angleBetween(aim, exact) <= tolerance };

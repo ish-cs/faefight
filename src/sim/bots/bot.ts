@@ -1,4 +1,4 @@
-import { DT, ECONOMY, LIFECYCLE, PIECES, WEAPONS } from '../constants';
+import { DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import type { Doorway, IslandLayout } from '../map';
 import { NO_INPUT } from '../types';
@@ -18,17 +18,19 @@ import type { BotView, OtherStatus } from './view';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'fleeTide';
+  | 'fight' | 'disengage' | 'fleeTide' | 'breach' | 'heal';
 const GOALS: Goal[] = [
-  'fleeTide', 'defend', 'disengage', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge', 'shop', 'collect',
+  'fleeTide', 'defend', 'disengage', 'fight', 'guard', 'bank', 'breach', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
+  'shop', 'heal', 'collect',
 ];
 
 /** How often a bot reconsiders what to do, and how long it hesitates after changing plans (human thinking time). */
-const RESCORE_SEC: Record<Difficulty, number> = { easy: 1.6, medium: 1.0, hard: 0.6 };
-const HESITATE_SEC: Record<Difficulty, number> = { easy: 1.2, medium: 0.6, hard: 0.25 };
+const RESCORE_SEC: Record<Difficulty, number> = { easy: 1.6, medium: 1.0, hard: 0.5, pro: 0.3 };
+const HESITATE_SEC: Record<Difficulty, number> = { easy: 1.2, medium: 0.6, hard: 0.15, pro: 0.05 };
 const STICKY = 0.1;
-const NOISE: Record<Difficulty, number> = { easy: 0.3, medium: 0.15, hard: 0.06 };
-const BUY_GAP: Record<Difficulty, number> = { easy: 3, medium: 1.5, hard: 0.8 };
+/** Misjudgement in goal/target scores (decision mistakes). */
+const NOISE: Record<Difficulty, number> = { easy: 0.3, medium: 0.15, hard: 0.08, pro: 0.03 };
+const BUY_GAP: Record<Difficulty, number> = { easy: 3, medium: 1.5, hard: 0.6, pro: 0.35 };
 /** Chance an easy bot buys sandbags instead of the piece it meant to. */
 const EASY_MISBUY = 0.1;
 /** A purchase that didn't go through (e.g. no room to carry it) is retried this many times, then left alone a while. */
@@ -52,12 +54,27 @@ const RAID_AT = 60;
 /** Sandbags carried into sudden death to climb above the tide, bought in the last minutes before it. */
 const TOWER_BAGS = 10, TOWER_PREP_SEC = 150;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
+/** A rival last seen inside their bunker this recently (and not dead since) is assumed still in there. */
+const HOLED_SEC = 120;
+/** Snipers go up a sandbag tower this long before sudden death. */
+const HIGH_GROUND_SEC = 75;
+/** Generator cash worth grabbing on the way out, and the level at which it is about to be wasted at the cap. */
+const COLLECT_BEFORE_LEAVING = 40, COLLECT_NEAR_CAP = 400;
+/** Grenades: throw range (outside the blast), minimum gap between throws, how stale a sighting may be. */
+const NADE_MIN = 6.5, NADE_MAX = 22, NADE_GAP = 3, NADE_SEEN_SEC = 2.5;
+/** Cash (carried + banked) at which a bot stocks up on grenades / a steel seal kit. */
+const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, hard: 450, pro: 400 };
+const STEEL_RICH = 800;
+/** Standing just outside a bunker wall (from its center). */
+const BUNKER_OUT = MAP.bunker.interior / 2 + MAP.bunker.wall + 1.2;
 
 /** What a goal wants this tick; aiming at enemies, weapons and safety are layered on top by think(). */
 type Act = {
   dir: Vec3 | null;
   face?: Vec3;
   shootAt?: Vec3;
+  /** Shoot `shootAt` even with an enemy in sight (e.g. the deck under someone crossing a bridge). */
+  shootFirst?: boolean;
   build?: BuildRequest;
   shop?: ShopItem;
   vault?: VaultAction;
@@ -112,6 +129,8 @@ export class Bot {
   private lastCoverAt = -Infinity;
   private towerYaw: number | null = null;
   private wander: { to: Vec3; until: number } | null = null;
+  private lastNadeAt = -Infinity;
+  private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
   private view!: BotView;
 
   constructor(readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality) {
@@ -147,6 +166,7 @@ export class Bot {
       this.stuckRef = null;
       this.retreat = null;
       this.pendingBuy = null;
+      this.nadePlan = null;
       this.nextScoreAt = -Infinity;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
@@ -164,7 +184,9 @@ export class Bot {
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage';
-    const act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
+    let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
+    // Never hang around inside my own bunker (one plug per door and I'm sealed in): step out.
+    if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) act = { ...act, ...this.leaveBunker(ctx) };
 
     // Aim: enemies first, then whatever the goal wants to look or shoot at, else along the walk.
     const eye = eyePos(me);
@@ -178,10 +200,22 @@ export class Bot {
       const ammo = w === 'fists' ? null : me.inv.weapons[w];
       return me.reloadUntil === 0 && me.busyUntil <= now && range <= WEAPONS[w].range * 0.95 && (w === 'fists' || !!ammo && ammo.mag > 0);
     };
-    if (enemy) {
+    let throwGrenade = false;
+    const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
+    if (act.shootAt && act.shootFirst) {
+      look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
+      fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
+    } else if (enemy) {
       const r = this.aim.track(now, dt, eye, add(enemy.pos, v3(0, CHEST, 0)), enemy.id, cur);
       look = r;
       fire = r.ready && r.onTarget && gunReady(ctx.enemyDist);
+    } else if (nade) {
+      look = turnToward(cur, nade, TURN_RATE, dt);
+      if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
+        throwGrenade = true;
+        this.lastNadeAt = now;
+        this.nadePlan = null;
+      }
     } else if (act.shootAt) {
       look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
@@ -216,7 +250,7 @@ export class Bot {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage'),
       fire, reload, interact, slot, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
-      vault: act.vault ?? null, placeCharge: !!act.placeCharge,
+      vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
     };
   }
 
@@ -326,14 +360,54 @@ export class Bot {
   }
 
   private needs(c: Ctx): Needs {
-    const blockers = c.view.sealed[c.home.index] ? this.blockers(c) : [];
+    const total = c.me.inv.cash + c.me.vault.cash;
+    const holed = this.holedUp(c);
+    const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
     return {
       scaffolds: this.scaffoldsNeeded(c),
       kit: c.openDoors.length,
-      charge: blockers.some((p) => isHard(p.kind)),
+      // A hard plug in my own doorway, or on the bunker a rival is hiding in: only a charge gets through.
+      charge: this.blockers(c).some((p) => isHard(p.kind)) || (!!holed && isHard(holed.plug.kind)),
       // Every 1 m of tower buys 20 s against the tide: the richer, the taller.
-      tower: c.view.now >= LIFECYCLE.suddenDeathAt - TOWER_PREP_SEC ? TOWER_BAGS + Math.min(4, Math.floor((c.me.inv.cash + c.me.vault.cash) / 250)) : 0,
+      tower: c.view.now >= LIFECYCLE.suddenDeathAt - TOWER_PREP_SEC ? TOWER_BAGS + Math.min(4, Math.floor(total / 250)) : 0,
+      grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
+      steel: skilled && total >= STEEL_RICH,
     };
+  }
+
+  /**
+   * My target is holed up in their own sealed bunker (seen going in, or respawned in there and not seen out since):
+   * the plug to break, softest first, then nearest.
+   */
+  private holedUp(c: Ctx): { door: Doorway; plug: PieceState } | null {
+    const { view, rival, rivalIsl } = c;
+    if (!rival || !rivalIsl || !rival.alive || view.suddenDeath || !view.sealed[rival.island]) return null;
+    const s = this.mem.seen.get(rival.id);
+    const died = this.mem.diedAt.get(rival.id);
+    const b = rivalIsl.bunker;
+    if (s && s.t > (died ?? -Infinity)) {
+      // Last seen going into (or at the door of) their bunker.
+      if (view.now - s.t > HOLED_SEC || (!insideBunker(b, s.pos) && dist2D(s.pos, b.center) > BUNKER_OUT)) return null;
+    } else if (died === undefined || view.now - died < LIFECYCLE.respawnSec + 2) {
+      return null;
+    } // else: died, respawned in their bunker (everyone spawns there) and hasn't been seen out of it since.
+
+    let best: { door: Doorway; plug: PieceState } | null = null, bestCost = Infinity;
+    for (const door of b.doorways) {
+      const plug = doorPieces(view.pieces, door)[0];
+      if (!plug) continue;
+      const cost = (isHard(plug.kind) ? 100 : 0) + dist2D(plug.pos, c.me.pos);
+      if (cost < bestCost) { bestCost = cost; best = { door, plug }; }
+    }
+    return best;
+  }
+
+  /** Where a rival believed to be inside their own (open) bunker was last seen, or null. */
+  private inTheirBunker(c: Ctx): Sighting | null {
+    if (!c.rival || !c.rivalIsl || !c.rival.alive) return null;
+    const s = this.mem.seen.get(c.rival.id);
+    if (!s || s.t < (this.mem.diedAt.get(c.rival.id) ?? -Infinity) || c.view.now - s.t > 30) return null;
+    return insideBunker(c.rivalIsl.bunker, s.pos) ? s : null;
   }
 
   /** Shopping plan counting what's in the vault too (it can be withdrawn on the way). */
@@ -408,9 +482,14 @@ export class Bot {
     switch (g) {
       case 'fleeTide': {
         const g0 = view.groundAt(me.pos.x, me.pos.z) ?? me.pos.y;
-        if (!view.suddenDeath) return 0;
+        const up = c.on >= 0 && g0 - view.map[c.on].groundY > 0.6;
+        if (!view.suddenDeath) {
+          // Snipers take the high ground before sudden death and shoot from up there.
+          if (t.range <= 0.7 || view.now < LIFECYCLE.suddenDeathAt - HIGH_GROUND_SEC) return 0;
+          return up ? 1.6 : (me.inv.pieces.sandbags ?? 0) >= 4 && c.on >= 0 ? 1.0 : 0;
+        }
         // Up on a tower: stay there (stepping off means a fall, then the tide).
-        if (g0 - (c.on >= 0 ? view.map[c.on].groundY : view.waterY) > 0.6) return 1.6;
+        if (up || (c.on < 0 && g0 - view.waterY > 0.6)) return 1.6;
         return g0 - view.waterY < 2.5 || (me.inv.pieces.sandbags ?? 0) > 0 ? 1.2 : 0;
       }
       case 'fight': {
@@ -428,11 +507,31 @@ export class Bot {
         const outgunned = !gun && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4;
         return outgunned ? 0.95 + 0.2 * t.caution : 0;
       }
-      case 'defend':
+      case 'defend': {
         if (trapped) return 2;
-        if (!view.sealed[home.index] || view.suddenDeath) return 0;
+        if (view.suddenDeath) return 0;
+        const blockers = this.blockers(c);
+        if (!blockers.length) return 0;
         // Nothing that can clear steel/metal: better to go earn a charge than to stand at the door.
-        return (gun || me.inv.charges > 0 || this.blockers(c).some((p) => !isHard(p.kind)) ? 0.85 : 0.1) + 0.1 * t.caution;
+        if (view.sealed[home.index]) return (gun || me.inv.charges > 0 || blockers.some((p) => !isHard(p.kind)) ? 0.85 : 0.1) + 0.1 * t.caution;
+        // One plugged doorway is most of a seal: clear it before going out, if I have what it takes.
+        const p = blockers[0];
+        const can = !isHard(p.kind) ? gun || p.kind === 'sandbags' || p.kind === 'wood' : me.inv.charges > 0 || (p.kind === 'metal' && !!me.inv.weapons.rifle);
+        return c.homeReach && can ? 0.7 + 0.15 * t.caution : 0;
+      }
+      case 'breach': {
+        // A rival hiding in their sealed bunker: blow (or shoot) a plug and go in after them.
+        const h = this.holedUp(c);
+        if (!h || !c.reach) return 0;
+        const can = isHard(h.plug.kind) ? me.inv.charges > 0 : gun;
+        return can ? 0.8 + 0.2 * t.opportunism : 0;
+      }
+      case 'heal': {
+        // Health comes back slowly out of combat: low and away from home, go back and recover.
+        if (view.suddenDeath || c.enemy || c.on === home.index || !c.homeReach) return 0;
+        const low = 0.35 + 0.25 * t.caution - 0.15 * t.aggression;
+        return hp < low ? 0.75 + (low - hp) : 0;
+      }
       case 'guard': {
         if (!c.homeReach || view.suddenDeath) return 0;
         const s = this.intruder(c);
@@ -454,7 +553,12 @@ export class Bot {
       case 'collect': {
         if (!c.homeReach) return 0;
         const stored = view.generators[home.index];
-        return (stored >= COLLECT_AT ? 0.45 + 0.1 * t.greed + Math.min(stored, 500) / 1000 : 0.15) - away;
+        let s = stored >= COLLECT_AT ? 0.45 + 0.1 * t.greed + Math.min(stored, 500) / 1000 : 0.15;
+        // Don't leave cash at an unguarded generator (anyone can take it), and don't let it hit the cap.
+        const leaving = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
+        if (c.on === home.index && stored >= COLLECT_BEFORE_LEAVING && leaving && !c.enemy) s = Math.max(s, 0.72);
+        if (stored >= COLLECT_NEAR_CAP) s = Math.max(s, 0.8);
+        return s - away;
       }
       case 'shop': {
         if (!c.homeReach) return 0;
@@ -476,7 +580,8 @@ export class Bot {
         if (!c.reach || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
-        if (rivalDown) return 0.3;
+        // Respawn window with no kit to seal: wait at their door for the unarmed respawn.
+        if (rivalDown) return gun && sealKit(me.inv) === 0 ? 0.35 + 0.3 * t.opportunism : 0.3;
         if (!gun) return 0.1;
         const upgraded = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
         return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution));
@@ -494,8 +599,11 @@ export class Bot {
         if (!gun || c.on !== home.index || view.suddenDeath) return 0;
         const deck = this.incomingDeck(c);
         if (!deck) return 0;
-        const threat = this.intruder(c) ? 0.3 : 0;
-        return 0.15 + 0.5 * t.builder * t.caution + threat - (c.rival && c.reach ? 0.2 * t.aggression : 0);
+        // Someone out on the bridge: drop the deck under them (water) or strand them; an attacker who came
+        // over it can't run home either.
+        const crossing = this.crossing(c) ? 0.65 : 0;
+        const threat = this.intruder(c) ? (c.enemy ? 0.1 : 0.3) : 0;
+        return 0.15 + 0.5 * t.builder * t.caution + threat + crossing - (c.rival && c.reach ? 0.2 * t.aggression : 0);
       }
       case 'loot': {
         const bag = this.nearestLoot(c);
@@ -541,6 +649,8 @@ export class Bot {
       case 'cut': return this.doCut(c);
       case 'loot': return this.doLoot(c);
       case 'raid': return this.doRaid(c);
+      case 'breach': return this.doBreach(c);
+      case 'heal': return this.goTo(c.home.vault, 2.0);
       case 'fight': return this.doFight(c);
       case 'disengage': return this.doDisengage(c);
       case 'fleeTide': return this.doFleeTide(c);
@@ -619,6 +729,14 @@ export class Bot {
     if (seen && c.rival.alive && seen.island >= 0 && seen.island !== c.rival.island && (seen.island === c.on || this.nav.hop(c.src, seen.island) !== null))
       return this.goTo(seen.pos, 3);
     const b = c.rivalIsl.bunker;
+    // They went into their bunker: take the open doorway that sees inside (grenade it, shoot what comes out).
+    const inside = c.on === c.rivalIsl.index ? this.inTheirBunker(c) : null;
+    const door = inside ? b.doorways.filter((d) => !doorBlocked(c.view.pieces, d))
+      .sort((x, y) => dist2D(x.center, c.me.pos) - dist2D(y.center, c.me.pos))[0] : undefined;
+    if (door) {
+      const walk = this.goTo(add(door.center, scale(forward(door.yaw), 4.5)), 1.0);
+      return walk.dir ? walk : { dir: null, face: v3(b.center.x, b.center.y + CHEST, b.center.z) };
+    }
     if (!this.wander || now >= this.wander.until || dist2D(this.wander.to, b.center) > 12) {
       const front = b.doorways[0];
       const base = add(front.center, scale(forward(front.yaw), 7));
@@ -657,22 +775,100 @@ export class Bot {
     if (!target) { this.nextScoreAt = c.view.now; return IDLE; }
     const door = c.home.bunker.doorways.find((d) => doorPieces(c.view.pieces, d).includes(target));
     if (!door) throw new Error(`Bot ${this.id}: blocker ${target.id} matches no doorway`);
-    const center = v3(target.pos.x, target.pos.y + PIECES[target.kind].h / 2, target.pos.z);
-    const inside = dist2D(c.me.pos, c.home.bunker.center) < 2;
-    if (isHard(target.kind) && c.me.inv.charges > 0) {
-      const spot = add(door.center, scale(forward(door.yaw), inside ? -1.2 : 1.6));
-      const walk = this.goTo(spot, 0.4);
-      if (walk.dir) return walk;
-      const facing = Math.abs(wrapAngle(c.me.yaw - lookAt(eyePos(c.me), center).yaw)) < 0.1;
-      if (facing) this.retreat = { from: center, until: c.view.now + 3.5 };
-      return { dir: null, face: center, placeCharge: facing };
-    }
+    const inside = insideBunker(c.home.bunker, c.me.pos);
+    if (isHard(target.kind) && c.me.inv.charges > 0) return this.blast(c, door, target, inside);
     const fists = !ownsGun(c.me.inv);
     // Trapped inside with nothing else to try: punch anyway (a human would).
     if (fists && isHard(target.kind) && !this.trapped(c)) { this.nextScoreAt = c.view.now; return IDLE; }
-    const spot = inside ? c.home.bunker.center : add(door.center, scale(forward(door.yaw), fists ? 1.4 : 3));
-    const walk = this.goTo(spot, fists ? 0.3 : 1.0);
+    return this.breakPlug(door, target, inside, fists);
+  }
+
+  /** Shoot (or punch) a plug from in front of its doorway, on my side of it. */
+  private breakPlug(door: Doorway, plug: PieceState, inside: boolean, fists: boolean): Act {
+    const center = v3(plug.pos.x, plug.pos.y + PIECES[plug.kind].h / 2, plug.pos.z);
+    // Fists reach 2 m: stand right at the doorway.
+    const back = inside ? (fists ? -0.7 : -1.6) : fists ? 1.4 : 3;
+    const walk = this.goTo(add(door.center, scale(forward(door.yaw), back)), fists ? 0.3 : 1.0);
     return walk.dir ? walk : { dir: null, shootAt: center };
+  }
+
+  /** Walk up to a hard plug, put a charge on it, and get clear before it goes off. */
+  private blast(c: Ctx, door: Doorway, plug: PieceState, inside: boolean): Act {
+    const center = v3(plug.pos.x, plug.pos.y + PIECES[plug.kind].h / 2, plug.pos.z);
+    const spot = add(door.center, scale(forward(door.yaw), inside ? -1.2 : 1.6));
+    const walk = this.goTo(spot, 0.4);
+    if (walk.dir) return walk;
+    const facing = Math.abs(wrapAngle(c.me.yaw - lookAt(eyePos(c.me), center).yaw)) < 0.1;
+    if (facing && c.me.busyUntil <= c.view.now) {
+      this.retreat = { from: center, until: c.view.now + 3.5 };
+      return { dir: null, face: center, placeCharge: true };
+    }
+    return { dir: null, face: center };
+  }
+
+  private doBreach(c: Ctx): Act {
+    const h = this.holedUp(c);
+    if (!h) { this.nextScoreAt = c.view.now; return IDLE; }
+    if (isHard(h.plug.kind)) {
+      if (c.me.inv.charges <= 0) { this.nextScoreAt = c.view.now; return IDLE; }
+      return this.blast(c, h.door, h.plug, false);
+    }
+    return this.breakPlug(h.door, h.plug, false, !ownsGun(c.me.inv));
+  }
+
+  /** Out through the nearest open doorway of my bunker. */
+  private leaveBunker(c: Ctx): Act {
+    const b = c.home.bunker;
+    const open = b.doorways.filter((d) => !doorBlocked(c.view.pieces, d));
+    if (!open.length) return IDLE;
+    const door = open.reduce((a, d) => (dist2D(d.center, c.me.pos) < dist2D(a.center, c.me.pos) ? d : a));
+    return this.goTo(add(door.center, scale(forward(door.yaw), 2.5)), 0.6);
+  }
+
+  /** A visible enemy out on a bridge coming toward my island. */
+  private crossing(c: Ctx): boolean {
+    const e = c.enemy;
+    return !!e && islandAt(c.view.map, e.pos) < 0 && dist2D(e.pos, c.home.center) < c.home.radius + MAP.gap;
+  }
+
+  /**
+   * Yaw/pitch for a grenade at a rival who just ducked out of sight (lobbed high over their cover), or at one
+   * holed up in their bunker while I stand at an open doorway (thrown flat through it). Null if there's no such throw.
+   */
+  private grenadePlan(c: Ctx): Angles | null {
+    const { view, me } = c;
+    const now = view.now;
+    if (me.inv.grenades <= 0 || now - this.lastNadeAt < NADE_GAP || view.suddenDeath && c.on < 0) { this.nadePlan = null; return null; }
+    if (this.nadePlan && now < this.nadePlan.until) return this.nadePlan;
+    this.nadePlan = null;
+    const eye = eyePos(me);
+    for (const o of view.others) {
+      if (!o.alive) continue;
+      const s = this.mem.seen.get(o.id);
+      if (!s || s.t < (this.mem.diedAt.get(o.id) ?? -Infinity)) continue;
+      const age = now - s.t, d = dist2D(me.pos, s.pos);
+      const isl = s.island >= 0 ? view.map[s.island] : null;
+      let low = false;
+      if (isl && insideBunker(isl.bunker, s.pos)) {
+        // Through a doorway I'm standing in front of.
+        if (age > 30) continue;
+        const door = isl.bunker.doorways.find((dw) => {
+          const rel = flat(sub(me.pos, dw.center)), out = forward(dw.yaw);
+          const ahead = rel.x * out.x + rel.z * out.z;
+          return !doorBlocked(view.pieces, dw) && ahead > 1.5 && ahead < 10 && Math.abs(rel.x * out.z - rel.z * out.x) < 0.5;
+        });
+        if (!door) continue;
+        low = true;
+      } else if (age > NADE_SEEN_SEC || age < 0.3 || d < NADE_MIN || d > NADE_MAX) continue;
+      const a = throwAngles(eye, v3(s.pos.x, s.pos.y + 0.3, s.pos.z), low);
+      if (!a) continue;
+      // Thrown by hand: as accurate as this player's aim.
+      const cone = AIM[this.difficulty].coneRad * (low ? 0.5 : 1);
+      const r = this.rng() * cone, th = this.rng() * 2 * Math.PI;
+      this.nadePlan = { yaw: a.yaw + Math.cos(th) * r, pitch: a.pitch + Math.sin(th) * r, until: now + 1.2 };
+      return this.nadePlan;
+    }
+    return null;
   }
 
   /** Someone was seen on my island: get back to the bunker front and watch where they were. */
@@ -693,7 +889,7 @@ export class Bot {
     const toDeck = norm(flat(sub(deck.pos, c.home.center)));
     const spot = add(c.home.center, scale(toDeck, c.home.radius - 6));
     const walk = this.goTo(v3(spot.x, c.home.groundY, spot.z), 1.5);
-    return walk.dir ? walk : { dir: null, shootAt: center };
+    return walk.dir ? walk : { dir: null, shootAt: center, shootFirst: this.crossing(c) };
   }
 
   private doLoot(c: Ctx): Act {
@@ -753,7 +949,8 @@ export class Bot {
         const kind = TALL.slice().reverse().find((k) => (me.inv.pieces[k] ?? 0) > 0)!;
         const pos = add(me.pos, scale(to, 1.6));
         const rotY = yawOf(to);
-        if (c.view.canPlace(kind, pos, rotY).ok) {
+        const blocksMyDoor = c.home.bunker.doorways.some((d) => dist2D(d.center, pos) < 2.5);
+        if (!blocksMyDoor && c.view.canPlace(kind, pos, rotY).ok) {
           this.lastCoverAt = now;
           return { dir: null, build: { kind, pos, rotY, free: true } };
         }
@@ -779,7 +976,10 @@ export class Bot {
     if (!from) { this.nextScoreAt = c.view.now; return IDLE; }
     const away = norm(flat(sub(me.pos, from)));
     if (c.homeReach) {
-      const home = this.goTo(c.home.bunker.center, 1.5);
+      // Behind my bunker, not inside it (inside, one plug per door seals me in).
+      const b = c.home.bunker;
+      const behind = add(b.center, scale(norm(flat(sub(b.center, from))), BUNKER_OUT));
+      const home = this.goTo(v3(behind.x, c.home.groundY, behind.z), 1.5);
       if (home.dir && home.dir.x * away.x + home.dir.z * away.z > -0.2) return { ...home, sprint: true };
     }
     const cover = c.enemy ? this.coverFrom(c, c.enemy) : null;
@@ -843,4 +1043,26 @@ export class Bot {
 }
 
 const flat = (p: Vec3): Vec3 => v3(p.x, 0, p.z);
+
+/**
+ * Aim for a grenade to land at `to` (same launch as combat.throwGrenade: throwSpeed along the aim plus 3 m/s up,
+ * gravity integrated per tick). `low`: flattest arc (through a doorway), else the high lob that drops in behind cover.
+ * Null when out of range or the flight would outlast the fuse.
+ */
+export function throwAngles(eye: Vec3, to: Vec3, low: boolean): Angles | null {
+  const d = dist2D(eye, to), dy = to.y - eye.y;
+  const yaw = lookAt(eye, to).yaw;
+  const heightAt = (pitch: number) => {
+    const vx = GRENADE.throwSpeed * Math.cos(pitch), vy = GRENADE.throwSpeed * Math.sin(pitch) + 3;
+    const tt = d / vx;
+    return { y: vy * tt - (PLAYER.gravity * tt * (tt + DT)) / 2, t: tt, falling: vy - PLAYER.gravity * tt < 0 };
+  };
+  for (let i = 0; i <= 90; i++) {
+    const pitch = low ? -0.6 + i * 0.02 : 1.35 - i * 0.02;
+    const h = heightAt(pitch);
+    if (h.t > GRENADE.fuseSec - 0.1) continue;
+    if (h.y >= dy && (low || h.falling)) return { yaw, pitch };
+  }
+  return null;
+}
 const laneOff = (l: Lane, p: Vec3) => Math.abs((p.x - l.origin.x) * l.dir.z - (p.z - l.origin.z) * l.dir.x);

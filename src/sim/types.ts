@@ -2,7 +2,7 @@ export type Vec3 = { x: number; y: number; z: number };
 
 export type PieceKind = 'sandbags' | 'wood' | 'metal' | 'steel' | 'scaffold' | 'ramp' | 'container';
 export type WeaponKind = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rifle';
-export type Difficulty = 'easy' | 'medium' | 'hard';
+export type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
 
 export type GunAmmo = { mag: number; spare: number };
 

@@ -1,4 +1,4 @@
-import { AMMO_BOX, MAP, PIECES, SEAL, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, GRENADE, MAP, PIECES, SEAL, WEAPONS } from '../constants';
 import { buy } from '../economy';
 import type { Doorway } from '../map';
 import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
@@ -58,8 +58,11 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
   return bags >= 2 ? { kind: 'sandbags', level: 0 } : null;
 }
 
-/** `tower`: sandbags wanted for climbing above the sudden-death tide. */
-export type Needs = { scaffolds: number; kit: number; charge: boolean; tower?: number };
+/**
+ * `tower`: sandbags wanted for climbing above the sudden-death tide. `grenades`: how many to carry.
+ * `steel`: rich enough that the seal kit should be steel.
+ */
+export type Needs = { scaffolds: number; kit: number; charge: boolean; tower?: number; grenades?: number; steel?: boolean };
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
 export type ShopStyle = {
@@ -86,7 +89,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     if (GUNS.some((g) => inv.weapons[g])) return cash >= AMMO_BOX.price ? 'ammo' : null;
     return cash >= WEAPONS.pistol.price ? 'pistol' : null;
   }
-  if (needs.charge && inv.charges === 0) return cash >= 250 ? 'charge' : null;
+  if (needs.charge && inv.charges === 0) return cash >= CHARGE.price ? 'charge' : null;
   if ((inv.pieces.sandbags ?? 0) < (needs.tower ?? 0)) return cash >= PIECES.sandbags.price ? 'sandbags' : null;
   const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
@@ -94,14 +97,16 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   if (sealKit(inv) < needs.kit) {
-    if (style.steel && cash >= 2 * PIECES.steel.price) return 'steel';
-    const wantMetal = difficulty === 'hard' ? cash >= PIECES.metal.price
+    if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price) return 'steel';
+    const skilled = difficulty === 'hard' || difficulty === 'pro';
+    const wantMetal = skilled ? cash >= PIECES.metal.price
       : (difficulty === 'medium' || style.metal) && cash >= 2 * PIECES.metal.price;
     if (wantMetal) return 'metal';
     return cash >= PIECES.wood.price ? 'wood' : null;
   }
   if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
+  if (inv.grenades < (needs.grenades ?? 0)) return cash >= GRENADE.price ? 'grenade' : null;
   if (style.closeGun && !inv.weapons.shotgun && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
   if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
