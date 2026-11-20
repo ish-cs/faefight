@@ -38,23 +38,28 @@ async function setup() {
 }
 
 const givePistol = (p: PlayerState) => { p.inv.weapons.pistol = { mag: 12, spare: 36 }; p.equipped = 'pistol'; };
+/** Level aim from the eye lands on the other player's head; this dips it to the chest at 8 m. */
+const CHEST = -0.05;
 
 describe('combat', () => {
-  test('pistol hit deals 20', async () => {
+  test('pistol body hit deals 20', async () => {
     const { ctx, a, b } = await setup();
     givePistol(a);
-    tryFire(ctx, a, 0);
+    a.pitch = CHEST;
+    const hit = tryFire(ctx, a, 0).find((e) => e.type === 'hit')!;
     expect(b.hp).toBe(80);
+    expect(hit.data.part).toBe('body');
   });
   test('fire rate limits shots in the same tick', async () => {
     const { ctx, a, b } = await setup();
     givePistol(a);
+    a.pitch = CHEST;
     tryFire(ctx, a, 0);
     tryFire(ctx, a, 0);
     expect(b.hp).toBe(80);
     expect(a.inv.weapons.pistol!.mag).toBe(11);
   });
-  test('mag empties after 12 and auto-reload refills 1.2 s after the last shot', async () => {
+  test('mag empties after 12 and the empty reload refills 1.9 s after the last shot', async () => {
     const { ctx, a } = await setup();
     givePistol(a);
     let last = 0;
@@ -63,9 +68,9 @@ describe('combat', () => {
     expect(w.mag).toBe(0);
     // Empty mag auto-reloads from the last shot; a manual reload request mid-reload is ignored.
     tryReload(a, last + 0.5);
-    tickReload(a, last + 1.0);
+    tickReload(a, last + 1.8);
     expect(w.mag).toBe(0);
-    tickReload(a, last + 1.21);
+    tickReload(a, last + 1.91);
     expect(w).toEqual({ mag: 12, spare: 24 });
   });
   test('invulnerable target takes no damage', async () => {

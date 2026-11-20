@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { PLAYER } from '../../sim/constants';
 import type { MatchEvent, PlayerState, WeaponKind } from '../../sim/types';
+import { reloadClock, reloadPose, type ReloadPose } from '../firstPerson';
 import { chooseClip } from './animState';
 import { HAND_BONE, loadCharacters, type CharacterAssets } from './loader';
 import { buildMuzzleFlash, buildWeapon } from './weapons';
@@ -15,6 +16,7 @@ const FLASH_MS = 55;
 const SPINE = ['Abdomen', 'Torso', 'Chest'] as const;
 const SPINE_SHARE = [0.25, 0.35, 0.4];
 const UPPER_ARM = 'UpperArmR'; // GLTFLoader-sanitised "UpperArm.R"
+const UPPER_ARM_L = 'UpperArmL';
 const LOW_READY_RAD = 0.7; // armed idle: aim pose with the gun arm lowered this much
 const LOW_READY_RATE = 8; // 1/s easing in/out of low ready
 
@@ -38,6 +40,10 @@ export type AvatarFrame = {
   blinkHidden: boolean; // invulnerability blink
   /** Shield 0..100, drawn as a thin blue bar over the name tag (everyone's is visible). */
   shield: number;
+  /** Sights up (holds the aim pose). */
+  ads?: boolean;
+  /** Reload choreography for this frame (null when not reloading). */
+  reload?: ReloadPose | null;
 };
 
 /** Name tag sprite (white text on the island colour), drawn above remote players. */
@@ -102,6 +108,8 @@ export class Avatar {
   /** Spine rotations as the mixer left them, before the aim bend (unkeyed bones would otherwise accumulate it). */
   private spineBase: THREE.Quaternion[] = [];
   private upperArm: THREE.Bone | undefined;
+  private upperArmL: THREE.Bone | undefined;
+  private gun: THREE.Group | null = null;
   private lowReady = 0;
   private hand: THREE.Object3D | null = null;
   private gripLocal: THREE.Matrix4 | null = null;
@@ -195,6 +203,8 @@ export class Avatar {
     this.spine = SPINE.map((n) => model.getObjectByName(n) as THREE.Bone | undefined);
     this.upperArm = model.getObjectByName(UPPER_ARM) as THREE.Bone | undefined;
     if (this.upperArm) this.spine.push(this.upperArm); // restored each frame like the spine
+    this.upperArmL = model.getObjectByName(UPPER_ARM_L) as THREE.Bone | undefined;
+    if (this.upperArmL) this.spine.push(this.upperArmL);
     this.spineBase = this.spine.map((b) => (b ? b.quaternion.clone() : new THREE.Quaternion()));
     this.hand = model.getObjectByName(HAND_BONE)!;
     this.gripLocal = assets.gripLocal;
@@ -212,12 +222,21 @@ export class Avatar {
 
   onHit(now: number) { this.flinchUntil = now + FLINCH_S * 1000; }
 
+  /** World position of this avatar's muzzle or ejection port (null with fists / hidden). */
+  gunPoint(which: 'muzzle' | 'eject', out: THREE.Vector3): THREE.Vector3 | null {
+    const local = this.gun?.userData[which] as THREE.Vector3 | undefined;
+    if (!this.gun || !local || !this.group.visible) return null;
+    this.gun.updateWorldMatrix(true, false);
+    return out.copy(local).applyMatrix4(this.gun.matrixWorld);
+  }
+
   private setWeapon(kind: WeaponKind) {
     if (kind === this.weaponKind) return;
     this.weaponKind = kind;
     if (this.weapon) { this.weapon.parent?.remove(this.weapon); this.weapon = null; }
     this.flash.parent?.remove(this.flash);
     const gun = buildWeapon(kind);
+    this.gun = gun;
     if (!gun) return;
     const holder = new THREE.Group();
     if (this.hand && this.gripLocal) {
@@ -264,6 +283,18 @@ export class Avatar {
 
     this.setWeapon(f.alive ? f.equipped : this.weaponKind ?? 'fists');
     this.flash.visible = now < this.flashUntil;
+    if (f.ads) this.aimUntil = Math.max(this.aimUntil, now + 100);
+    // Reload: tilt the gun in the hand, swap the visible mag/shell/rocket on the sim's beats.
+    const r = f.alive ? f.reload ?? null : null;
+    if (this.gun) {
+      this.gun.rotation.set(r ? -r.tilt * 0.35 : 0, 0, r ? r.tilt * 0.7 : 0);
+      const mag = this.gun.userData.mag as THREE.Mesh | undefined, home = this.gun.userData.magHome as THREE.Vector3 | undefined;
+      if (mag && home) {
+        mag.position.copy(home);
+        if (r) { mag.position.y += r.magY; mag.position.z += r.magZ; }
+        mag.visible = r ? r.magShow : f.equipped !== 'shotgun';
+      }
+    }
     if (this.tag) this.tag.visible = f.alive;
     if (this.shieldTag) {
       this.shieldTag.sprite.visible = f.alive;
@@ -275,7 +306,7 @@ export class Avatar {
     this.smoothVel.lerp(f.vel, 1 - Math.exp(-VEL_SMOOTH_RATE * dt));
     const { name, ts } = chooseClip({
       alive: f.alive, vel: this.smoothVel, yaw: f.yaw, equipped: f.equipped,
-      flinching: now < this.flinchUntil, punching: now < this.punchUntil, aiming: now < this.aimUntil,
+      flinching: now < this.flinchUntil, punching: now < this.punchUntil, aiming: now < this.aimUntil && !r,
     });
     this.fadeTo(name, ts);
     this.spine.forEach((b, i) => b?.quaternion.copy(this.spineBase[i]));
@@ -292,6 +323,8 @@ export class Avatar {
       const wantLow = name === 'Idle_Gun_Pointing' && now >= this.aimUntil ? 1 : 0;
       this.lowReady += (wantLow - this.lowReady) * Math.min(1, LOW_READY_RATE * dt);
       if (this.lowReady > 0.01) this.bend(this.upperArm, -LOW_READY_RAD * this.lowReady);
+      // Off hand drops to the magazine during the swap.
+      if (r && r.hand > 0) this.bend(this.upperArmL, -0.45 * r.hand);
     }
   }
 
@@ -323,6 +356,8 @@ export class CharacterSystem {
   private assets: CharacterAssets | null = null;
   private lastNow = performance.now();
   private tmpMotion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  private snapTime = -1;
+  private snapAt = 0;
   /** Player whose avatar is hidden (the local player in first person); -1 = none. */
   hiddenId = -1;
   /** Resolves once the models are in (or failed — then the capsule fallback is used). */
@@ -352,6 +387,10 @@ export class CharacterSystem {
     return a;
   }
 
+  gunPoint(id: number, which: 'muzzle' | 'eject', out: THREE.Vector3): THREE.Vector3 | null {
+    return this.avatars.get(id)?.gunPoint(which, out) ?? null;
+  }
+
   onEvent(e: MatchEvent) {
     const now = performance.now();
     if (e.type === 'shot') this.avatars.get(e.data.by as number)?.onShot((e.data.weapon as WeaponKind) ?? 'pistol', now);
@@ -368,6 +407,7 @@ export class CharacterSystem {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastNow) / 1000);
     this.lastNow = now;
+    if (simTime !== this.snapTime) { this.snapTime = simTime; this.snapAt = now; }
     const m = this.tmpMotion;
     for (const p of players) {
       const a = this.avatar(p, humanId);
@@ -377,6 +417,11 @@ export class CharacterSystem {
       a.update({
         pos: m.pos, vel: m.vel, yaw: p.id === humanId ? localYaw : m.yaw, pitch: m.pitch, alive: p.alive, equipped: p.equipped,
         blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0, shield: p.shield ?? 0,
+        ads: p.ads,
+        reload: (() => {
+          const c = reloadClock(p, simTime + Math.min(0.1, (now - this.snapAt) / 1000));
+          return c ? reloadPose(p.equipped, c.elapsed, c.duration, c.magStart, c.beats) : null;
+        })(),
       }, dt, now);
       if (p.id === this.hiddenId) a.group.visible = false;
     }

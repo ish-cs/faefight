@@ -5,15 +5,19 @@ import type { MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim
 /**
  * What the host sends a remote client. Same as Snapshot except: pieces are omitted when unchanged
  * since that client's last update, events cover every tick since then, other players' inventories,
- * vaults, hotbars and gun locks are left out (the decoder fills them in empty; `equipped` is still sent
- * so their gun renders), and floats are rounded. Everyone's shield IS sent: it is shown on name tags.
+ * vaults, hotbars, gun locks and spread bookkeeping are left out (the decoder fills them in empty; `equipped` is
+ * still sent so their gun renders), and floats are rounded. Everyone's shield IS sent: it is shown on name tags.
  */
-type Private = 'inv' | 'vault' | 'hotbar' | 'locked';
+type Private = 'inv' | 'vault' | 'hotbar' | 'locked' | 'bloom' | 'lastShotAt' | 'burst' | 'reloadUntil' | 'reloadSec' | 'reloadMag' | 'ads';
 export type NetPlayer = Omit<PlayerState, Private> & Partial<Pick<PlayerState, Private>>;
-export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players'> & { pieces?: PieceState[]; players: NetPlayer[] };
+/** A live projectile on the wire: [id, kind (0 grenade, 1 charge, 2 rocket), x, y, z, vx, vy, vz]. */
+export type NetProjectile = [number, number, number, number, number, number, number, number];
+const PROJ_KINDS = ['grenade', 'charge', 'rocket'] as const;
+export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players' | 'projectiles'> & { pieces?: PieceState[]; players: NetPlayer[]; proj?: NetProjectile[] };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+const r1v = (v: Vec3): Vec3 => ({ x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10, z: Math.round(v.z * 10) / 10 });
 const rv = (v: Vec3): Vec3 => ({ x: r2(v.x), y: r2(v.y), z: r2(v.z) });
 
 /** Keep at most this many ticks of events for a client that stopped taking (e.g. a stalled link). */
@@ -53,6 +57,12 @@ export class SnapshotEncoder {
       players: s.players.map((p) => this.player(p, p.id === forPlayerId)),
       events,
     };
+    delete (out as Partial<Snapshot>).projectiles;
+    // Live grenades / charges / rockets, every update so everyone sees them fly (compact tuples; omitted when none).
+    if (s.projectiles?.length) out.proj = s.projectiles.map((e): NetProjectile => {
+      const p = rv(e.pos), v = r1v(e.vel);
+      return [e.id, PROJ_KINDS.indexOf(e.kind), p.x, p.y, p.z, v.x, v.y, v.z];
+    });
     delete (out as Partial<Snapshot>).pieces;
     if (this.sentPiecesKey.get(forPlayerId) !== this.piecesKey) {
       this.sentPiecesKey.set(forPlayerId, this.piecesKey);
@@ -65,13 +75,19 @@ export class SnapshotEncoder {
     // Your own position/velocity go out unrounded: the client replays its movement from them (prediction).
     const out: NetPlayer = {
       ...p, pos: own ? { ...p.pos } : rv(p.pos), vel: own ? { ...p.vel } : rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp), shield: Math.ceil(p.shield), healLeft: Math.ceil(p.healLeft),
+      bloom: r2(p.bloom),
     };
     if (!own) {
       delete out.inv; delete out.vault; delete out.hotbar; delete out.locked;
+      // Spread/recoil bookkeeping only drives your own crosshair.
+      delete out.bloom; delete out.lastShotAt; delete out.burst;
       // Host-side bookkeeping a remote client never reads for other players (keeps 8 players under budget).
       const o = out as Partial<PlayerState>;
       delete o.mv; delete o.busyUntil; delete o.nextFireAt; delete o.lastDamagedAt; delete o.healAt;
-    }
+      // Reload/aim state only matters while it's happening (others' reload animation and sounds).
+      if (p.reloadUntil === 0) { delete o.reloadUntil; delete o.reloadSec; delete o.reloadMag; }
+      if (!p.ads) delete o.ads;
+    } else out.lastShotAt = r3(p.lastShotAt);
     return out;
   }
 }
@@ -84,7 +100,11 @@ export class SnapshotDecoder {
     const players = n.players.map((p): PlayerState => ({
       ...p, inv: p.inv ?? emptyInventory(), vault: p.vault ?? emptyInventory(), hotbar: p.hotbar ?? emptyHotbar(), locked: p.locked ?? [],
       busyUntil: p.busyUntil ?? 0, nextFireAt: p.nextFireAt ?? 0, lastDamagedAt: p.lastDamagedAt ?? 0, healAt: p.healAt ?? null,
+      bloom: p.bloom ?? 0, lastShotAt: p.lastShotAt ?? -1e9, burst: p.burst ?? 0,
+      reloadUntil: p.reloadUntil ?? 0, reloadSec: p.reloadSec ?? 0, reloadMag: p.reloadMag ?? 0, ads: p.ads ?? false,
     }));
-    return { ...n, players, pieces: this.pieces };
+    const { proj, ...rest } = n;
+    const projectiles = (proj ?? []).map(([id, k, x, y, z, vx, vy, vz]) => ({ id, kind: PROJ_KINDS[k] ?? 'grenade', pos: { x, y, z }, vel: { x: vx, y: vy, z: vz } }));
+    return { ...rest, players, pieces: this.pieces, projectiles };
   }
 }
