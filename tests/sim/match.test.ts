@@ -130,3 +130,20 @@ describe('bot vs bot', () => {
     }
   }, 300_000);
 });
+
+describe('setBot', () => {
+  test('a human seat handed to a bot starts acting on its own', async () => {
+    const m = await Match.create({ players: [{ name: 'you', isBot: false }, { name: 'friend', isBot: false }] });
+    const start = m.tick(new Map()).players[1].pos;
+    m.setBot(2, 'medium');
+    let snap = m.tick(new Map());
+    for (let i = 0; i < 90; i++) snap = m.tick(new Map());
+    expect(m.humanIds()).toEqual([1]);
+    expect(snap.players[1].isBot).toBe(true);
+    expect(dist2D(snap.players[1].pos, start)).toBeGreaterThan(1);
+  });
+  test('unknown player id throws', async () => {
+    const m = await Match.create({ players: [{ name: 'a', isBot: false }, { name: 'b', isBot: false }] });
+    expect(() => m.setBot(9, 'easy')).toThrow();
+  });
+});

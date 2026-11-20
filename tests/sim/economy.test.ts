@@ -78,6 +78,15 @@ describe('vault', () => {
     expect(p.inv.cash).toBe(30);
     expect(p.vault.cash).toBe(0);
   });
+  test('negative or non-finite amounts are rejected', () => {
+    const p = player(10);
+    expect(vaultTransfer(p, { deposit: { cash: -500 } }).ok).toBe(false);
+    expect(vaultTransfer(p, { withdraw: { cash: NaN } }).ok).toBe(false);
+    expect(vaultTransfer(p, { deposit: { pieces: { steel: -3 } } }).ok).toBe(false);
+    expect(p.inv.cash).toBe(10);
+    expect(p.vault.cash).toBe(0);
+    expect(p.inv.pieces.steel).toBeUndefined();
+  });
   test('deposit and withdraw cash and gear', () => {
     const p = player(200);
     buy(p, { buy: 'pistol' });

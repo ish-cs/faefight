@@ -25,6 +25,8 @@ export interface MatchApi {
   tick(inputs: Map<number, PlayerInput>): Snapshot;
   /** Validate a build request for the ghost preview without placing it. */
   previewBuild(playerId: number, req: BuildRequest): Placement;
+  /** Hand a seat to a bot (a friend disconnected mid-match). */
+  setBot(playerId: number, difficulty: Difficulty): void;
   /** Debug helpers (dev/e2e only). */
   debugTeleport(playerId: number, pos: Vec3): void;
   debugGive(playerId: number, inv: Partial<Inventory>): void;
