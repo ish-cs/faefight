@@ -7,9 +7,9 @@ const DEG = Math.PI / 180;
 export type AimProfile = { reactSec: number; coneRad: number; turnRate: number };
 
 export const AIM: Record<Difficulty, AimProfile> = {
-  easy: { reactSec: 0.35, coneRad: 6 * DEG, turnRate: 7 },
-  medium: { reactSec: 0.25, coneRad: 3.5 * DEG, turnRate: 10 },
-  hard: { reactSec: 0.16, coneRad: 1.8 * DEG, turnRate: 14 },
+  easy: { reactSec: 0.8, coneRad: 14 * DEG, turnRate: 4 },
+  medium: { reactSec: 0.5, coneRad: 8 * DEG, turnRate: 6 },
+  hard: { reactSec: 0.3, coneRad: 4.5 * DEG, turnRate: 9 },
 };
 
 /** Losing sight longer than this makes the next sighting a fresh reaction. */
