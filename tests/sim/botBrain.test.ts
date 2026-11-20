@@ -88,7 +88,7 @@ describe('dodging', () => {
 });
 
 describe('plan layer', () => {
-  const fact = (id: number, over: Partial<RivalFacts> = {}): PlanInput['rivals'][number] => ({
+  const fact = (id: number, over: Partial<PlanInput['rivals'][number]> = {}): PlanInput['rivals'][number] => ({
     id, reach: true, scaffolds: 0, dist: 60, respawning: false, sinceDeath: Infinity, sealed: false, seenHp: null,
     grudge: 0, busy: false, kills: 0, leaderKills: 0, onMyIsland: false, away: false,
     island: id, openDoors: 3, generator: 0, guarded: true, ...over,

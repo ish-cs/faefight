@@ -11,7 +11,11 @@ import { Bot as LegacyBot } from '../../tests/fixtures/legacyBots/bot';
 
 /** A seat: the current bot with some params, or the frozen pre-training bot. */
 export type SeatSpec = { kind: 'new'; params: BotParams; difficulty: Difficulty } | { kind: 'legacy'; difficulty: Difficulty };
-export type MatchSpec = { seed: number; seats: SeatSpec[]; maxSec: number };
+export type MatchSpec = {
+  seed: number; seats: SeatSpec[]; maxSec: number;
+  /** Start from a mined scenario (replay pipeline) instead of a fresh match; see hooks.ts. */
+  scenario?: string;
+};
 
 export type SeatResult = {
   /** 1 = winner; eliminated players ranked by elimination order; survivors at the time limit share the top places. */
@@ -42,6 +46,7 @@ export function makeBrain(spec: SeatSpec, id: number, rng: () => number): BotBra
 }
 
 export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
+  if (spec.scenario) throw new Error(`runMatch: scenario starts (${spec.scenario}) need state restore from scripts/replays, which isn't available yet`);
   const n = spec.seats.length;
   const m = await Match.create(
     { players: spec.seats.map((s) => ({ name: '', isBot: true, difficulty: s.difficulty })), seed: spec.seed },

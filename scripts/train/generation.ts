@@ -5,6 +5,7 @@
  */
 import { decode, encode, type BotParams } from '../../src/sim/bots/params';
 import { mulberry32, sample, update, type EsConfig, type EsState } from './es';
+import { imitationPenalty, seatStats, type HumanTarget } from './hooks';
 import { seatFitness, type MatchResult, type MatchSpec, type SeatSpec } from './runMatch';
 
 export type TrainConfig = {
@@ -16,6 +17,11 @@ export type TrainConfig = {
   players: number;
   maxSec: number;
   seed: number;
+  /** 1v1s per candidate against the frozen pre-training bot (the endgame and the human-vs-bot case), and their weight. */
+  duels?: number;
+  duelWeight?: number;
+  /** Optional: pull play statistics toward human data (fitness −= weight × imitation penalty). */
+  imitation?: { weight: number; target: HumanTarget };
 };
 
 export type Runner = (specs: MatchSpec[]) => Promise<MatchResult[]>;
@@ -23,6 +29,8 @@ export type Runner = (specs: MatchSpec[]) => Promise<MatchResult[]>;
 export type GenStats = {
   gen: number;
   games: number;
+  /** Candidates' 1v1 win rate against the old bot (null without duels). */
+  duelWinRate: number | null;
   /** Mean / best candidate fitness. */
   meanFit: number;
   bestFit: number;
@@ -64,10 +72,14 @@ export async function runGeneration(
     for (let k = 0; k < fieldSeats; k++) seats.push({ field: k === 0 ? 'champion' : k === 1 && hall.length ? 'hall' : 'legacy' });
     plans.push(shuffle(seats, rng));
   }
+  const nFfa = plans.length;
+  // Duels: each candidate 1v1 against the frozen old bot, seats alternating.
+  for (let c = 0; c < lambda; c++)
+    for (let d = 0; d < (cfg.duels ?? 0); d++) plans.push(d % 2 ? [{ field: 'legacy' }, { cand: c }] : [{ cand: c }, { field: 'legacy' }]);
   const hallPick = plans.map(() => (hall.length ? hall[Math.floor(rng() * hall.length)] : champion));
   const specs: MatchSpec[] = plans.map((seats, g) => ({
-    seed: cfg.seed * 100003 + st.gen * 1009 + g,
-    maxSec: cfg.maxSec,
+    seed: cfg.seed * 100003 + st.gen * 1009 + (g < nFfa ? g : 500 + Math.floor((g - nFfa) / 2)),
+    maxSec: g < nFfa ? cfg.maxSec : Math.max(cfg.maxSec, 25 * 60),
     seats: seats.map((s): SeatSpec => {
       if ('cand' in s) return { kind: 'new', params: cands[s.cand], difficulty: 'pro' };
       if (s.field === 'legacy') return { kind: 'legacy', difficulty: 'pro' };
@@ -77,10 +89,17 @@ export async function runGeneration(
   const results = await run(specs);
   const sum = new Array<number>(lambda).fill(0), cnt = new Array<number>(lambda).fill(0);
   const fsum: Record<string, number> = {}, fcnt: Record<string, number> = {};
+  let duelWins = 0, duels = 0;
   results.forEach((r, g) => plans[g].forEach((s, seat) => {
-    const f = seatFitness(r, seat);
-    if ('cand' in s) { sum[s.cand] += f; cnt[s.cand]++; } else { fsum[s.field] = (fsum[s.field] ?? 0) + f; fcnt[s.field] = (fcnt[s.field] ?? 0) + 1; }
+    const duel = g >= nFfa;
+    const w = duel ? (cfg.duelWeight ?? 1) : 1;
+    const f = seatFitness(r, seat, specs[g].maxSec) - (cfg.imitation ? cfg.imitation.weight * imitationPenalty(seatStats(r, seat), cfg.imitation.target) : 0);
+    if ('cand' in s) {
+      sum[s.cand] += w * f; cnt[s.cand] += w;
+      if (duel) { duels++; if (r.winner === seat + 1) duelWins++; }
+    } else if (!duel) { fsum[s.field] = (fsum[s.field] ?? 0) + f; fcnt[s.field] = (fcnt[s.field] ?? 0) + 1; }
   }));
+  const ffa = results.slice(0, nFfa);
   const fitness = sum.map((s, i) => {
     if (!cnt[i]) throw new Error(`train: candidate ${i} played no games`);
     return s / cnt[i];
@@ -91,12 +110,13 @@ export async function runGeneration(
   const stats: GenStats = {
     gen: st.gen,
     games: results.length,
+    duelWinRate: duels ? duelWins / duels : null,
     meanFit: fitness.reduce((a, b) => a + b, 0) / lambda,
     bestFit: Math.max(...fitness),
     field,
-    decisive: results.filter((r) => r.decisive).length / results.length,
-    avgMinutes: results.reduce((a, r) => a + r.time, 0) / results.length / 60,
-    msPerTick: results.reduce((a, r) => a + r.msPerTick, 0) / results.length,
+    decisive: ffa.filter((r) => r.decisive).length / ffa.length,
+    avgMinutes: ffa.reduce((a, r) => a + r.time, 0) / ffa.length / 60,
+    msPerTick: ffa.reduce((a, r) => a + r.msPerTick, 0) / ffa.length,
     sigma: next.sigma.reduce((a, b) => a + b, 0) / next.sigma.length,
   };
   return { next, stats, candidates: cands, fitness };

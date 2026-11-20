@@ -3,7 +3,7 @@
  * Self-play training for the bots' strategy/tactics weights (BotParams).
  *
  *   npx tsx scripts/train-bots.ts [--minutes 60] [--workers N] [--lambda 14] [--games 5] [--max-sec 1080]
- *                                 [--seed 1] [--eval-every 5] [--eval-games 28] [--resume] [--dir .train]
+ *                                 [--seed 1] [--duels 2] [--duel-weight 1.5] [--eval-every 5] [--eval-games 28] [--resume] [--dir .train]
  *
  * Many headless 8-bot FFAs in parallel (worker_threads, one sim per worker), all bots at PRO skill.
  * Optimizer: separable evolution strategy (scripts/train/es.ts). Each generation seats the candidates against a
@@ -18,6 +18,7 @@ import path from 'node:path';
 import { HAND_PARAMS, PARAM_KEYS, decode, encode, sanitize, type BotParams } from '../src/sim/bots/params';
 import { DEFAULT_ES, initEs, type EsState } from './train/es';
 import { headToHead, runGeneration, type TrainConfig } from './train/generation';
+import { loadHumanTarget, loadRecorder } from './train/hooks';
 import { Pool } from './train/pool';
 
 const args = process.argv.slice(2);
@@ -43,6 +44,8 @@ const cfg: TrainConfig = {
   players: opt('players', 8),
   maxSec: opt('max-sec', 18 * 60),
   seed: opt('seed', 1),
+  duels: opt('duels', 2),
+  duelWeight: opt('duel-weight', 1.5),
 };
 const TRAINED = path.resolve('src/sim/bots/trained-params.json');
 
@@ -65,6 +68,13 @@ function writeChampion(p: BotParams, note: string) {
   fs.writeFileSync(TRAINED, JSON.stringify(out, null, 2) + '\n');
 }
 
+// Optional data hooks (scripts/train/hooks.ts): human statistics as an imitation term, champion replays.
+const humanFile = str('human-stats', '');
+if (humanFile) cfg.imitation = { weight: opt('imitation-weight', 0.1), target: loadHumanTarget(humanFile) };
+const replayDir = str('replays', '');
+const recorder = replayDir ? await loadRecorder() : null;
+if (replayDir && !recorder) throw new Error('--replays: scripts/replays (recordHeadlessMatch) is not in this checkout yet');
+
 const pool = new Pool(workers);
 const t0 = Date.now();
 const deadline = t0 + minutes * 60_000;
@@ -85,7 +95,7 @@ try {
     genMs = Date.now() - g0;
     const line = { ...stats, totalGames: saved.games, wallMin: (Date.now() - t0) / 60_000, genSec: genMs / 1000 };
     fs.appendFileSync(logPath, JSON.stringify({ type: 'gen', ...line }) + '\n');
-    console.log(`gen ${stats.gen}: fit mean ${stats.meanFit.toFixed(3)} best ${stats.bestFit.toFixed(3)} · field ${Object.entries(stats.field).map(([k, v]) => `${k} ${v.toFixed(3)}`).join(' ')} · decisive ${(100 * stats.decisive).toFixed(0)}% · ${stats.avgMinutes.toFixed(1)} min · σ ${stats.sigma.toFixed(3)} · ${(genMs / 1000).toFixed(0)} s`);
+    console.log(`gen ${stats.gen}: fit mean ${stats.meanFit.toFixed(3)} best ${stats.bestFit.toFixed(3)} · field ${Object.entries(stats.field).map(([k, v]) => `${k} ${v.toFixed(3)}`).join(' ')} · duels vs old ${stats.duelWinRate === null ? '-' : `${(100 * stats.duelWinRate).toFixed(0)}%`} · decisive ${(100 * stats.decisive).toFixed(0)}% · ${stats.avgMinutes.toFixed(1)} min · σ ${stats.sigma.toFixed(3)} · ${(genMs / 1000).toFixed(0)} s`);
 
     if (saved.es.gen % evalEvery === 0) {
       const champ = decode(saved.es.mean);
@@ -97,6 +107,14 @@ try {
       fs.appendFileSync(logPath, JSON.stringify({ type: 'eval', ...ev, wallMin: (Date.now() - t0) / 60_000 }) + '\n');
       console.log(`  eval gen ${ev.gen}: champion vs hand-tuned 4v4 → champion wins ${(100 * h.share).toFixed(0)}% · fitness ${h.fitA.toFixed(3)} vs ${h.fitB.toFixed(3)}`);
       writeChampion(champ, 'ES mean after self-play (scripts/train-bots.ts)');
+      if (recorder) {
+        // An 8-PRO match with the champion just written as the default params, saved as a replay.
+        const file = path.join(replayDir, `gen${saved.es.gen}.json`);
+        const rep = await recorder({ players: Array.from({ length: cfg.players }, () => ({ name: '', isBot: true, difficulty: 'pro' })), seed: 900_000 + saved.es.gen }, 900_000 + saved.es.gen, cfg.maxSec * 30);
+        fs.mkdirSync(replayDir, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(rep));
+        console.log(`  replay → ${file}`);
+      }
     }
     fs.writeFileSync(statePath, JSON.stringify(saved));
   }
