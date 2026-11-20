@@ -52,7 +52,8 @@ export interface CoreDeps {
     replays(since?: string): Promise<{ newFiles: string[]; allFiles: string[]; newest?: string }>;
     errors(since?: string): Promise<{ reports: ClientReport[]; newest?: string }>;
   };
-  analyze(files: string[]): Promise<Analysis>;
+  /** All cached replays feed the human statistics; only `fresh` ones are re-simulated for invariants. */
+  analyze(all: string[], fresh: string[]): Promise<Analysis>;
   train(o: { budgetMin: number; workers: number; replayFiles: string[] }): Promise<TrainResult>;
   series(candidatePath: string, o: { seeds: number; workers: number }): Promise<SeriesResult>;
   /** Write the candidate over the champion; returns the changed repo files. */
@@ -76,9 +77,10 @@ export async function runAutoImprove(deps: CoreDeps, opts: RunOptions): Promise<
   if (!lock) { log('ABORT: another auto-improve run holds the lock'); return { outcome: 'abort', reason: 'locked' }; }
   let installed: string[] = [];
   try {
+    // A dry run writes nothing to the repo, so it only warns about these.
     const branch = await deps.git.branch();
-    if (branch !== 'main') return abort(log, `not on main (on ${branch})`);
-    if (!(await deps.git.isClean())) return abort(log, 'working tree not clean');
+    if (branch !== 'main') { if (!opts.dryRun) return abort(log, `not on main (on ${branch})`); log(`warning: not on main (on ${branch})`); }
+    if (!(await deps.git.isClean())) { if (!opts.dryRun) return abort(log, 'working tree not clean'); log('warning: working tree not clean'); }
 
     const state = await deps.state.load();
     const health = await deps.health.load().catch(() => emptyHealth());
@@ -88,7 +90,7 @@ export async function runAutoImprove(deps: CoreDeps, opts: RunOptions): Promise<
     const errs = await deps.sync.errors(state.lastErrorAt);
     log(`downloaded ${rep.newFiles.length} new replays (${rep.allFiles.length} cached), ${errs.reports.length} new error reports`);
 
-    const analysis = await deps.analyze(rep.allFiles);
+    const analysis = await deps.analyze(rep.allFiles, rep.newFiles);
     log(`analysis: ${analysis.summary}`);
     ingestClient(health, errs.reports, runAt);
     ingestSim(health, analysis.findings, runAt);

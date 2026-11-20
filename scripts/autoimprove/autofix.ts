@@ -29,7 +29,8 @@ export type GateInput = {
 export type GateVerdict = { accept: boolean; reason: string; lines: number };
 
 export function evaluateFixGate(g: GateInput): GateVerdict {
-  const code = g.changes.filter((c) => c.path !== g.reproPath);
+  const fixtures = g.reproPath.replace(/[^/]+$/, 'fixtures/');
+  const code = g.changes.filter((c) => c.path !== g.reproPath && !(c.status === 'A' && c.path.startsWith(fixtures)));
   const lines = code.reduce((s, c) => s + c.added + c.removed, 0);
   const no = (reason: string): GateVerdict => ({ accept: false, reason, lines });
   if (!g.claudeOk) return no('claude run failed');
