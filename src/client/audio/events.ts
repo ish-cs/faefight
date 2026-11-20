@@ -154,6 +154,8 @@ export class SoundDirector {
           break;
         }
         case 'sealed':
+          // Every seal is a big moment: a heavy non-positional boom for everyone, plus the alarm if it's yours.
+          out.push({ sound: 'explosion', kind: 'charge', pos: null, gain: 1.6 });
           if (me && d.island === me.island) out.push({ sound: 'alarm', pos: null, gain: 0.8 });
           break;
         case 'eliminated':

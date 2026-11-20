@@ -162,11 +162,11 @@ describe('SoundDirector: events → cues', () => {
     expect(sounds(d.update(snap(2, ps, [['kill', { victim: ME, killer: BOT, inWater: true }]])))).toEqual(['death', 'splash']);
   });
 
-  it('alarm only for YOUR island sealing; stingers for win/lose/draw/eliminated; horn; escape', () => {
+  it('every seal booms for everyone, alarm only for YOUR island; stingers for win/lose/draw/eliminated; horn; escape', () => {
     const d = director();
     const ps = [player(ME, at(0)), player(BOT, at(5))];
-    expect(sounds(d.update(snap(1, ps, [['sealed', { island: 1 }]])))).toEqual([]);
-    expect(sounds(d.update(snap(1.1, ps, [['sealed', { island: 0 }]])))).toEqual(['alarm']);
+    expect(sounds(d.update(snap(1, ps, [['sealed', { island: 1 }]])))).toEqual(['explosion:charge']);
+    expect(sounds(d.update(snap(1.1, ps, [['sealed', { island: 0 }]])))).toEqual(['explosion:charge', 'alarm']);
     expect(sounds(d.update(snap(1.2, ps, [['eliminated', { player: ME }], ['eliminated', { player: BOT }]])))).toEqual(['eliminated']);
     expect(sounds(d.update(snap(1.3, ps, [['win', { winner: ME }]])))).toEqual(['win']);
     expect(sounds(d.update(snap(1.4, ps, [['win', { winner: BOT }]])))).toEqual(['lose']);
