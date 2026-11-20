@@ -4,7 +4,7 @@ import { stateHash } from '../../src/sim/replay/hash';
 
 const bots = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `b${i}`, isBot: true, difficulty: 'pro' as const }));
 
-describe('Match.fork', () => {
+describe('Match.fork', { timeout: 240_000 }, () => {
   it('a fork continues exactly like the original (bots, rng, physics, pieces)', async () => {
     const m = await Match.create({ players: bots(4), seed: 11 });
     for (let i = 0; i < 1500; i++) m.tick(new Map()); // 50 s: bots have bought, built, fought

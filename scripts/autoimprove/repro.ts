@@ -1,15 +1,12 @@
 /// <reference types="node" />
 /**
- * Generated reproduction tests for sim invariant signatures. A self-play finding replays its exact
- * MatchSpec (seed + seats); a human-replay finding re-runs the uploaded replay (copied next to the
- * test as a fixture). Either way the test asserts the signature does not occur, so it fails while the
+ * Generated reproduction tests for sim invariant signatures found in uploaded replays: the test
+ * re-runs the replay (copied next to the test as a fixture). Either way the test asserts the signature does not occur, so it fails while the
  * bug exists and passes once it is fixed.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Signature } from './health';
-
-const TICK_HZ = 30;
 
 export function reproTestSource(sig: Signature, reproPath: string, fixtureRel?: string): string | null {
   const repro = sig.sample.repro;
@@ -22,29 +19,13 @@ export function reproTestSource(sig: Signature, reproPath: string, fixtureRel?: 
     `// Detail when found: ${(sig.sample.message ?? '').replace(/\n/g, ' ').slice(0, 200)}`,
     "import { expect, test } from 'vitest';",
   ];
-  if (repro.type === 'seed') {
-    const spec = repro.setup as { maxSec: number };
-    // Stop a little after the tick it was seen at (whole match for "never ends").
-    const maxSec = signature.startsWith('neverEnds') ? spec.maxSec : Math.min(spec.maxSec, Math.ceil(tick / TICK_HZ) + 10);
-    return [
-      ...header,
-      `import { runMatch, type MatchSpec } from '${up}/scripts/train/runMatch';`,
-      '',
-      `const SIG = ${JSON.stringify(signature)};`,
-      `const SPEC = ${JSON.stringify({ ...spec, maxSec })} as MatchSpec;`,
-      '',
-      `test(\`self-play seed ${repro.seed}: no \${SIG}\`, async () => {`,
-      '  const r = await runMatch(SPEC);',
-      '  expect((r.violations ?? []).filter((v) => v.signature === SIG)).toEqual([]);',
-      '}, 900_000);',
-      '',
-    ].join('\n');
-  }
+  // Self-play (seed) findings come from the bot trainer, which runs elsewhere and keeps its own repros.
+  if (repro.type === 'seed') return null;
   if (!fixtureRel) return null;
   return [
     ...header,
     "import { fileURLToPath } from 'node:url';",
-    `import { replayViolations } from '${up}/scripts/autoimprove/trainer';`,
+    `import { replayViolations } from '${up}/scripts/autoimprove/learning';`,
     '',
     `const SIG = ${JSON.stringify(signature)};`,
     '',

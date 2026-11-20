@@ -1,9 +1,11 @@
 /// <reference types="node" />
 /**
- * Nightly autonomous bot improvement + bug hunting (see scripts/autoimprove/core.ts for the flow).
+ * Nightly data pull + learning dataset + bug hunting (see scripts/autoimprove/core.ts for the flow).
+ * It never trains bots: it rebuilds the dataset the trainer (run elsewhere) reads from
+ * .autoimprove/learning/ (see scripts/autoimprove/learning.ts).
  *
- *   pnpm auto-improve [--dry-run] [--budget 60] [--workers N] [--seeds 40] [--no-deploy] [--no-autofix]
- *                     [--source <dir>] [--repo <dir>] [--state-dir <dir>] [--max-generations N]
+ *   pnpm auto-improve [--dry-run] [--no-deploy] [--no-autofix] [--source <dir>] [--api <url>]
+ *                     [--repo <dir>] [--state-dir <dir>]
  *
  * Data comes from the deployed admin API (FAEFIGHT_API_BASE + REPLAY_ADMIN_KEY from .env.local) or a
  * local directory laid out like the Blob store (--source). Logs: .autoimprove/logs/<date>.log.
@@ -30,7 +32,6 @@ export function loadEnvFile(file: string): Record<string, string> {
 export async function main(argv: string[]): Promise<RunResult> {
   const has = (f: string) => argv.includes(`--${f}`);
   const val = (f: string) => { const i = argv.indexOf(`--${f}`); return i < 0 ? undefined : argv[i + 1]; };
-  const num = (f: string, d: number) => { const v = val(f); if (v === undefined) return d; const n = Number(v); if (!Number.isFinite(n) || n <= 0) throw new Error(`--${f} needs a positive number, got ${v}`); return n; };
 
   const repo = path.resolve(val('repo') ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
   const p = paths(repo, val('state-dir') ? path.resolve(val('state-dir')!) : undefined);
@@ -42,26 +43,24 @@ export async function main(argv: string[]): Promise<RunResult> {
     fs.appendFileSync(logFile, line + '\n');
   };
 
-  // Leave the machine usable: half the cores at most (cap 6) and lowest scheduling priority.
-  const workers = num('workers', Math.min(6, Math.max(1, Math.floor(os.cpus().length / 2) - 1)));
+  // Leave the machine usable: lowest scheduling priority.
   try { os.setPriority(19); } catch { /* not permitted: keep going */ }
 
   const env = { ...loadEnvFile(path.join(repo, '.env.local')), ...process.env };
   const source = val('source')
     ? new DirSource(path.resolve(val('source')!))
-    : new HttpSource((env.FAEFIGHT_API_BASE ?? 'https://faefight.vercel.app').replace(/\/$/, ''), env.REPLAY_ADMIN_KEY ?? '');
+    : new HttpSource((val('api') ?? env.FAEFIGHT_API_BASE ?? 'https://faefight.vercel.app').replace(/\/$/, ''), env.REPLAY_ADMIN_KEY ?? '',
+      // A protected preview deployment: pass its access cookie (from a share link) in FAEFIGHT_API_COOKIE.
+      env.FAEFIGHT_API_COOKIE ? (url, init) => fetch(url, { ...init, headers: { ...(init?.headers as Record<string, string>), cookie: env.FAEFIGHT_API_COOKIE! } }) : fetch);
 
   const opts: RunOptions = {
     ...DEFAULT_OPTIONS,
     dryRun: has('dry-run'),
-    budgetMin: num('budget', DEFAULT_OPTIONS.budgetMin),
-    workers,
-    minSeeds: num('seeds', DEFAULT_OPTIONS.minSeeds),
     deploy: !has('no-deploy'),
     autofix: !has('no-autofix'),
   };
   log(`auto-improve start: repo ${repo}, source ${source.name}, ${JSON.stringify(opts)}`);
-  const deps = systemDeps({ p, source, log, workers, maxGenerations: val('max-generations') ? num('max-generations', 1) : undefined });
+  const deps = systemDeps({ p, source, log });
   const result = await runAutoImprove(deps, opts);
   log(`auto-improve done: ${JSON.stringify(result).slice(0, 1500)}`);
   fs.appendFileSync(path.join(p.logs, 'runs.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...result }) + '\n');

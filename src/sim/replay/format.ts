@@ -1,7 +1,7 @@
 import type { IslandLayout } from '../map';
 import type { MatchSetup } from '../matchApi';
 import type { MoveCmd } from '../movement';
-import type { BuildRequest, Difficulty, Inventory, PlayerInput, Vec3 } from '../types';
+import type { BuildRequest, Difficulty, Inventory, PieceKind, PlayerInput, Vec3 } from '../types';
 
 /**
  * A recorded match: enough to re-run it exactly (setup + seed + what every human fed the sim each tick +
@@ -51,6 +51,8 @@ export type TickInput = { id: number; input: PlayerInput; moves?: MoveCmd[] };
 /** Things done to the match between ticks; replayed before tick `tick` (= ticks already run). */
 export type ReplayOp =
   | { k: 'setBot'; id: number; difficulty: Difficulty }
+  /** A botified seat handed back to its returning human (reconnect). */
+  | { k: 'setHuman'; id: number }
   /** A build preview (it may sync the collision world, so it's part of the run). */
   | { k: 'preview'; id: number; req: BuildRequest }
   | { k: 'teleport'; id: number; pos: Vec3 }
@@ -59,7 +61,8 @@ export type ReplayOp =
   | { k: 'potionShops'; positions: Vec3[] }
   | { k: 'eliminate'; id: number }
   | { k: 'kill'; id: number }
-  | { k: 'give'; id: number; inv: Partial<Inventory> };
+  | { k: 'give'; id: number; inv: Partial<Inventory> }
+  | { k: 'piece'; kind: PieceKind; pos: Vec3; rotY: number };
 
 /**
  * Event log entry: [tick, type, data]. Types: kill, hit, sealed, unsealed, eliminated, win, suddenDeath, trapped,
@@ -86,6 +89,21 @@ export type Replay = {
   seconds: SecondSummary[];
 };
 
+const CHATTY = /chat/i;
+
+/**
+ * Drop anything chat-like (event types, header tags) from a recording before it is encoded: recordings
+ * are uploaded and must never carry chat text. The recorder's event list never includes chat; this is
+ * the guard that keeps it that way.
+ */
+export function withoutChat<T extends { header: ReplayHeader; events: LogEvent[] }>(r: T): T {
+  const events = r.events.some(([, type]) => CHATTY.test(type)) ? r.events.filter(([, type]) => !CHATTY.test(type)) : r.events;
+  const tags = r.header.tags;
+  const cleanTags = tags && Object.keys(tags).some((k) => CHATTY.test(k)) ? Object.fromEntries(Object.entries(tags).filter(([k]) => !CHATTY.test(k))) : tags;
+  if (events === r.events && cleanTags === tags) return r;
+  return { ...r, events, header: { ...r.header, tags: cleanTags } };
+}
+
 /** List row for the Replays screen (stored next to the bytes so listing never decodes a replay). */
 export type ReplayMeta = {
   id: string;
@@ -100,7 +118,7 @@ export type ReplayMeta = {
   size: number;
 };
 
-export function metaOf(r: Replay, size: number): ReplayMeta {
+export function metaOf(r: Pick<Replay, 'header' | 'footer'>, size: number): ReplayMeta {
   const setup = r.header.setup as { map?: unknown };
   const mapName = typeof setup.map === 'string' ? setup.map : `${r.header.players.length} islands`;
   return {

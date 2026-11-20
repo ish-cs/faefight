@@ -44,7 +44,7 @@ function healthWith(): HealthState {
   const h = emptyHealth();
   ingestSim(h, [{ signature: 'stuck', kind: 'stuck', detail: 'player 2 stuck', tick: 900, repro: { type: 'seed', seed: 7, setup: { seed: 7, maxSec: 1080, seats: [] } } }], '2026-11-20T03:00:00Z');
   ingestSim(h, [{ signature: 'stuck', kind: 'stuck', detail: 'again', tick: 950, repro: { type: 'seed', seed: 8, setup: { seed: 8, maxSec: 1080, seats: [] } } }], '2026-11-20T03:01:00Z');
-  ingestClient(h, [{ build: 'b', kind: 'error', message: 'x is undefined', stack: 'TypeError\n    at hud (https://x/assets/hud-12345678.js:3:4)' }], '2026-11-20T03:00:00Z');
+  ingestClient(h, [{ build: 'b', kind: 'error', message: 'x is undefined', stack: 'TypeError\n    at hud (https://x/assets/hud-12345678.js:3:4)', count: 2 }], '2026-11-20T03:00:00Z');
   return h;
 }
 
@@ -137,13 +137,18 @@ describe('auto-fix loop', () => {
 });
 
 describe('repro tests and signatures', () => {
-  it('generates a seed repro that replays the exact self-play spec', () => {
+  it('a self-play (seed) finding has no repro here: the trainer runs elsewhere', () => {
     const h = healthWith();
-    const src = reproTestSource(h.signatures['sim:stuck'], 'tests/sim/repro/sim-stuck.test.ts')!;
-    expect(src).toContain("from '../../../scripts/train/runMatch'");
+    expect(reproTestSource(h.signatures['sim:stuck'], 'tests/sim/repro/sim-stuck.test.ts')).toBeNull();
+  });
+
+  it('generates a replay repro that re-runs the uploaded replay fixture', () => {
+    const h = healthWith();
+    const sig = { ...h.signatures['sim:stuck'], sample: { ...h.signatures['sim:stuck'].sample, repro: { type: 'replay' as const, file: '/c/r1.faereplay' } } };
+    const src = reproTestSource(sig, 'tests/sim/repro/sim-stuck.test.ts', 'fixtures/sim-stuck.faereplay')!;
+    expect(src).toContain("from '../../../scripts/autoimprove/learning'");
     expect(src).toContain('const SIG = "stuck"');
-    expect(src).toContain('"seed":7');
-    expect(src).toContain('"maxSec":40'); // 900 ticks = 30 s, +10 s
+    expect(src).toContain('"fixtures/sim-stuck.faereplay"');
   });
 
   it('client errors have no generated repro', () => {
@@ -154,5 +159,14 @@ describe('repro tests and signatures', () => {
 
   it('slugs are filesystem-safe', () => {
     expect(slugOf('client:error:x is undefined hud@hud-*.js')).toBe('client-error-x-is-undefined-hud-hud-js');
+  });
+});
+
+describe('fix candidates', () => {
+  it('a one-off client error is noise; a deterministic sim finding is enough on its own', () => {
+    const h = emptyHealth();
+    ingestClient(h, [{ build: 'b', kind: 'error', message: 'once' }], '2026-11-20T03:00:00Z');
+    ingestSim(h, [{ signature: 'belowMap', kind: 'belowMap', detail: 'd', tick: 5, repro: { type: 'seed', seed: 1, setup: {} } }], '2026-11-20T03:00:00Z');
+    expect(fixCandidates(h, new Date('2026-11-20T04:00:00Z')).map((s) => s.signature)).toEqual(['sim:belowMap']);
   });
 });

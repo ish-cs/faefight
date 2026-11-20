@@ -11,13 +11,14 @@ import type { CoreDeps, State } from './core';
 import { emptyHealth, type ClientReport, type HealthState } from './health';
 import { writeReproTest } from './repro';
 import { listLocal, syncPrefix, type DataSource } from './sources';
-import { analyzeReplays, seriesVsChampion, trainCandidate } from './trainer';
+import { analyzeReplays } from './learning';
 
-export type Paths = { repo: string; state: string; logs: string; cache: string; worktrees: string };
+/** learning: the dataset the bot trainer (run elsewhere) reads; see learning.ts. */
+export type Paths = { repo: string; state: string; logs: string; cache: string; worktrees: string; learning: string };
 
 export function paths(repo: string, stateDir?: string): Paths {
   const state = stateDir ?? path.join(repo, '.autoimprove');
-  return { repo, state, logs: path.join(state, 'logs'), cache: path.join(state, 'cache'), worktrees: path.join(state, 'worktrees') };
+  return { repo, state, logs: path.join(state, 'logs'), cache: path.join(state, 'cache'), worktrees: path.join(state, 'worktrees'), learning: path.join(state, 'learning') };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -84,15 +85,15 @@ export function acquireLock(file: string): { release(): void } | null {
 const readJson = <T>(file: string, def: T): T => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) as T; } catch { return def; } };
 const writeJson = (file: string, v: unknown) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(v, null, 2) + '\n'); };
 
-const TRAINING_LOG_HEADER = `# Bot training log
+const RUN_LOG_HEADER = `# Auto-improve log
 
-One row per nightly \`scripts/auto-improve.ts\` run (launchd \`com.faefight.autoimprove\`). A candidate ships only if it wins ≥ 60% of a mirrored 1v1 series against the current champion over ≥ 40 seeds and every test passes.
+One row per nightly \`scripts/auto-improve.ts\` run (launchd \`com.faefight.autoimprove\`): uploaded data pulled, learning dataset rebuilt for the bot trainer, invariant findings, auto-fixes.
 
-| When | Replays used | Games simulated | Win rate vs old | Deployed | Result |
-|---|---|---|---|---|---|
+| When | Replays | Error reports | Learning dataset | Invariant findings | Fixes merged | Deployed |
+|---|---|---|---|---|---|---|
 `;
 
-export type SystemOpts = { p: Paths; source: DataSource; log: (m: string) => void; workers: number; seed?: number; maxGenerations?: number; e2ePort?: number };
+export type SystemOpts = { p: Paths; source: DataSource; log: (m: string) => void; e2ePort?: number };
 
 export function systemDeps(o: SystemOpts): CoreDeps {
   const { p, log } = o;
@@ -104,28 +105,11 @@ export function systemDeps(o: SystemOpts): CoreDeps {
     git: {
       branch: () => git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']),
       isClean: async () => (await git(repo, ['status', '--porcelain'])) === '',
-      async commitBranchAndMerge(branch, files, message) {
-        await git(repo, ['checkout', '-b', branch], log);
-        try {
-          await git(repo, ['add', '--', ...files], log);
-          await git(repo, ['commit', '-m', message], log);
-        } finally {
-          await git(repo, ['checkout', 'main'], log);
-        }
-        try {
-          await git(repo, ['merge', '--no-ff', branch, '-m', `Merge ${branch}`], log);
-        } catch (e) {
-          await git(repo, ['merge', '--abort']).catch(() => {});
-          throw e;
-        }
-        return git(repo, ['rev-parse', '--short', 'HEAD']);
-      },
       async commitOnMain(files, message) {
         await git(repo, ['add', '--', ...files], log);
         if ((await git(repo, ['diff', '--cached', '--name-only'])) === '') return;
         await git(repo, ['commit', '-m', message], log);
       },
-      async revert(files) { if (files.length) await git(repo, ['checkout', '--', ...files], log); },
     },
     state: {
       load: async () => readJson<State>(path.join(p.state, 'state.json'), {}),
@@ -151,19 +135,8 @@ export function systemDeps(o: SystemOpts): CoreDeps {
       },
     },
     async analyze(all, fresh) {
-      const a = await analyzeReplays(all, fresh, p.state, log);
+      const a = await analyzeReplays(all, fresh, p.learning, log);
       return { replays: a.replays, scenarios: a.scenarios, findings: a.findings, summary: a.summary };
-    },
-    async train({ budgetMin, workers }) {
-      const target = path.join(p.state, 'human-target.json');
-      return trainCandidate({ budgetMin, workers, outFile: path.join(p.state, 'candidate.json'), humanTargetFile: fs.existsSync(target) ? target : null,
-        seed: o.seed ?? Math.floor(Date.now() / 86_400_000), log, maxGenerations: o.maxGenerations });
-    },
-    series: (candidatePath, { seeds, workers }) => seriesVsChampion(candidatePath, seeds, workers),
-    async installCandidate(candidatePath) {
-      const rel = 'src/sim/bots/trained-params.json';
-      fs.copyFileSync(candidatePath, path.join(repo, rel));
-      return [rel];
     },
     checks: () => fullChecks(repo, log, { e2e: false }).then((c) => ({ ok: c.tests && c.tsc, failed: !c.tests ? 'pnpm test' : !c.tsc ? 'tsc' : undefined })),
     autofix: async (health) => {
@@ -176,10 +149,10 @@ export function systemDeps(o: SystemOpts): CoreDeps {
       const url = r.out.match(/https:\/\/\S+\.vercel\.app/g)?.pop() ?? '';
       return { ok: r.code === 0, detail: r.code === 0 ? `${sha} ${url}` : `exit ${r.code}: ${r.out.slice(-300)}` };
     },
-    async appendTrainingLog(row) {
-      const rel = 'docs/bot-training-log.md';
+    async appendRunLog(row) {
+      const rel = 'docs/auto-improve-log.md';
       const file = path.join(repo, rel);
-      if (!fs.existsSync(file)) fs.writeFileSync(file, TRAINING_LOG_HEADER);
+      if (!fs.existsSync(file)) fs.writeFileSync(file, RUN_LOG_HEADER);
       fs.appendFileSync(file, row + '\n');
       return rel;
     },

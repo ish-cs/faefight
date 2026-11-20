@@ -20,6 +20,7 @@
     "@playwright/test": "^1.65.1",
     "@types/node": "^26.6.6",
     "@types/three": "^0.187.0",
+    "fake-indexeddb": "^6.2.8",
     "tsx": "^4.23.15",
     "typescript": "5",
     "vite": "^8.3.8",

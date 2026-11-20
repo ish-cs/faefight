@@ -81,11 +81,17 @@ function bump(h: HealthState, sig: string, source: Signature['source'], n: numbe
   if (!s.sample.repro && sample.repro) s.sample = sample;
 }
 
-/** Signatures worth an automatic fix attempt: not attempted in the last `cooldownDays`, most frequent first. */
+/** Client errors seen fewer times than this are noise (one browser extension, one flaky GPU), not worth a fix run. */
+export const MIN_CLIENT_COUNT = 2;
+
+/**
+ * Signatures worth an automatic fix attempt: not attempted in the last `cooldownDays`, most frequent
+ * first. Sim findings are deterministic, so one is enough; client errors need MIN_CLIENT_COUNT.
+ */
 export function fixCandidates(h: HealthState, now: Date, cooldownDays = 7): Signature[] {
   const recent = new Set(h.attempts.filter((a) => now.getTime() - Date.parse(a.at) < cooldownDays * 86_400_000).map((a) => a.signature));
   return Object.values(h.signatures)
-    .filter((s) => !recent.has(s.signature) && s.signature !== 'client:longframe')
+    .filter((s) => !recent.has(s.signature) && s.signature !== 'client:longframe' && (s.source === 'sim' || s.count >= MIN_CLIENT_COUNT))
     .sort((a, b) => b.count - a.count || (a.lastSeen < b.lastSeen ? 1 : -1));
 }
 

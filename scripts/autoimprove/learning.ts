@@ -1,25 +1,31 @@
 /// <reference types="node" />
 /**
- * Bridges the auto-improve run to the replay pipeline (src/sim/replay) and the self-play trainer
- * (scripts/train): human statistics from uploaded replays (→ the trainer's imitation term), invariant
- * re-simulation of those replays, a bounded training run seeded from the current champion, and the
- * candidate-vs-champion acceptance series.
+ * Turns uploaded replays (src/sim/replay) into learning data for the bot trainer, and re-simulates them
+ * with the sim invariant checker. Nothing here trains: training is run and coordinated elsewhere and
+ * reads the dataset this writes (see `analyzeReplays` → `<outDir>/`):
+ *
+ *   human-target.json  mean/std of human per-minute rates (kills, deaths, seals, eliminations): the
+ *                      trainer's imitation target. Absent with fewer than 5 human player-matches.
+ *   human-stats.json   decision statistics from `extractStats` (scripts/replays/extract.ts).
+ *   scenarios.json     "where a bot lost to a human" starting states from `mineScenarios`.
+ *   manifest.json      which replays fed this dataset, and when it was written.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_PARAMS, decode, encode, sanitize, type BotParams } from '../../src/sim/bots/params';
 import { Bot } from '../../src/sim/bots/bot';
 import { InvariantChecker, violationSignature } from '../../src/sim/invariants';
 import { decodeReplay } from '../../src/sim/replay/codec';
 import type { Replay } from '../../src/sim/replay/format';
 import { ReplayRunner } from '../../src/sim/replay/runner';
 import type { PlayerInput } from '../../src/sim/types';
-import { DEFAULT_ES, initEs } from '../train/es';
-import { headToHead, runGeneration, type TrainConfig } from '../train/generation';
-import { STAT_KEYS, type HumanTarget, type PlayStats } from '../train/hooks';
-import { Pool } from '../train/pool';
-import type { MatchResult, MatchSpec } from '../train/runMatch';
+import { extractStats, mineScenarios, type LoadedReplay } from '../replays/extract';
 import type { SimFinding } from './health';
+
+/** Per-player, per-match statistics (rates per minute in the match). */
+export type PlayStats = { killsPerMin: number; deathsPerMin: number; sealsPerMin: number; elimsPerMin: number };
+export const STAT_KEYS: (keyof PlayStats)[] = ['killsPerMin', 'deathsPerMin', 'sealsPerMin', 'elimsPerMin'];
+/** Human reference: mean and spread of each statistic. */
+export type HumanTarget = { mean: PlayStats; std: PlayStats };
 
 // ---------------------------------------------------------------------------------------------
 // Human data
@@ -102,88 +108,50 @@ export async function checkReplay(file: string, replay: Replay, opts: { untilTic
 }
 
 export async function analyzeReplays(all: string[], fresh: string[], outDir: string, log: (m: string) => void) {
-  const samples: PlayStats[] = [];
+  fs.mkdirSync(outDir, { recursive: true });
   const findings: SimFinding[] = [];
-  let ok = 0, bad = 0;
+  let bad = 0;
   const freshSet = new Set(fresh);
+  // A match can be uploaded twice (an unfinished copy when the tab was hidden, then the final one):
+  // keep the longest recording per replay id. Decoded one at a time to bound memory.
+  const best = new Map<string, { file: string; ticks: number; stats: PlayStats[] }>();
   for (const file of all) {
     let replay: Replay;
     try { replay = await decodeReplay(new Uint8Array(fs.readFileSync(file))); } catch (e) { bad++; log(`skip ${path.basename(file)}: ${(e as Error).message}`); continue; }
-    ok++;
-    samples.push(...humanStats(replay));
-    if (freshSet.has(file)) {
-      try { findings.push(...(await checkReplay(file, replay))); } catch (e) { log(`re-sim ${path.basename(file)} failed: ${(e as Error).message}`); }
-    }
+    const prev = best.get(replay.header.id);
+    if (!prev || replay.ticks.length > prev.ticks) best.set(replay.header.id, { file, ticks: replay.ticks.length, stats: humanStats(replay) });
+  }
+  const samples = [...best.values()].flatMap((b) => b.stats);
+  const ok = best.size;
+  for (const { file } of best.values()) {
+    if (!freshSet.has(file)) continue;
+    try { findings.push(...(await checkReplay(file, await decodeReplay(new Uint8Array(fs.readFileSync(file)))))); } catch (e) { log(`re-sim ${path.basename(file)} failed: ${(e as Error).message}`); }
   }
   const target = humanTarget(samples);
   const targetFile = path.join(outDir, 'human-target.json');
   if (target) fs.writeFileSync(targetFile, JSON.stringify(target, null, 2));
   else if (fs.existsSync(targetFile)) fs.rmSync(targetFile);
+  // Decision statistics + "where a bot lost to a human" scenarios (scripts/replays/extract.ts) for the trainer.
+  const loaded: LoadedReplay[] = [];
+  for (const { file } of best.values()) loaded.push({ file, replay: await decodeReplay(new Uint8Array(fs.readFileSync(file))) });
+  const stats = extractStats(loaded);
+  const scenarios = mineScenarios(loaded);
+  fs.writeFileSync(path.join(outDir, 'human-stats.json'), JSON.stringify(stats.human, null, 2));
+  fs.writeFileSync(path.join(outDir, 'scenarios.json'), JSON.stringify(scenarios));
+  fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify({
+    writtenAt: new Date().toISOString(),
+    replays: [...best.values()].map((b) => path.basename(b.file)),
+    humanPlayerMatches: samples.length,
+    scenarios: scenarios.length,
+    humanTarget: target !== null,
+  }, null, 2));
   return {
     replays: ok,
-    scenarios: samples.length,
+    scenarios: scenarios.length,
     findings,
-    summary: `${ok} replays decoded (${bad} bad), ${samples.length} human player-matches${target ? ' → imitation target written' : ' (too few for an imitation target)'}, ${findings.length} invariant findings in ${fresh.length} new replays`,
+    summary: `${ok} matches from ${all.length} files (${bad} bad), ${stats.human.players} human players, ${scenarios.length} scenarios, ${samples.length} human player-matches${target ? ' → imitation target written' : ' (too few for an imitation target)'}, ${findings.length} invariant findings in ${fresh.length} new replays`,
     targetFile: target ? targetFile : null,
   };
-}
-
-// ---------------------------------------------------------------------------------------------
-// Training + series
-// ---------------------------------------------------------------------------------------------
-
-export type TrainOpts = { budgetMin: number; workers: number; outFile: string; humanTargetFile: string | null; seed: number; log: (m: string) => void; maxGenerations?: number };
-
-/** Findings from self-play results (each reproducible from its MatchSpec). */
-function collect(specs: MatchSpec[], results: MatchResult[], into: Map<string, SimFinding>) {
-  results.forEach((r, i) => {
-    for (const v of r.violations ?? []) {
-      if (!into.has(v.signature)) into.set(v.signature, { signature: v.signature, kind: v.signature.split(':')[0], detail: v.detail, tick: v.tick, repro: { type: 'seed', seed: specs[i].seed, setup: specs[i] } });
-    }
-  });
-}
-
-export async function trainCandidate(o: TrainOpts): Promise<{ candidatePath: string; games: number; findings: SimFinding[] }> {
-  const cfg: TrainConfig = { es: { ...DEFAULT_ES }, games: 5, candSeats: 5, players: 8, maxSec: 18 * 60, seed: o.seed, duels: 2, duelWeight: 1.5 };
-  if (o.humanTargetFile) cfg.imitation = { weight: 0.1, target: JSON.parse(fs.readFileSync(o.humanTargetFile, 'utf8')) as HumanTarget };
-  const champion: BotParams = { ...DEFAULT_PARAMS };
-  let es = initEs(encode(champion), cfg.es);
-  const hall: BotParams[] = [];
-  const pool = new Pool(o.workers);
-  const findings = new Map<string, SimFinding>();
-  const run = async (specs: MatchSpec[]) => { const r = await pool.run(specs); collect(specs, r, findings); return r; };
-  let games = 0;
-  const deadline = Date.now() + o.budgetMin * 60_000;
-  try {
-    let genMs = 0;
-    while (Date.now() + genMs < deadline && (o.maxGenerations === undefined || es.gen < o.maxGenerations)) {
-      const g0 = Date.now();
-      const { next, stats } = await runGeneration(es, decode(es.mean), hall, cfg, run);
-      if (es.gen % 3 === 0) { hall.push(decode(es.mean)); if (hall.length > 8) hall.shift(); }
-      es = next;
-      games += stats.games;
-      genMs = Date.now() - g0;
-      o.log(`gen ${stats.gen}: fit mean ${stats.meanFit.toFixed(3)} best ${stats.bestFit.toFixed(3)} · duels vs old ${stats.duelWinRate === null ? '-' : `${(100 * stats.duelWinRate).toFixed(0)}%`} · ${(genMs / 1000).toFixed(0)} s`);
-    }
-  } finally {
-    await pool.close();
-  }
-  const out = { note: 'auto-improve candidate (scripts/auto-improve.ts)', trainedAt: new Date().toISOString(), generations: es.gen, games, params: sanitize(decode(es.mean)) };
-  fs.writeFileSync(o.outFile, JSON.stringify(out, null, 2) + '\n');
-  return { candidatePath: o.outFile, games, findings: [...findings.values()] };
-}
-
-/** Candidate vs current champion, 1v1 at PRO, each seed mirrored. Draws count half. */
-export async function seriesVsChampion(candidatePath: string, seeds: number, workers: number): Promise<{ winRate: number; seeds: number; games: number }> {
-  const cand = sanitize((JSON.parse(fs.readFileSync(candidatePath, 'utf8')) as { params: Record<string, number> }).params);
-  const pool = new Pool(workers);
-  try {
-    const list = Array.from({ length: seeds }, (_, i) => 700_000 + i);
-    const h = await headToHead({ kind: 'new', params: cand, difficulty: 'pro' }, { kind: 'new', params: { ...DEFAULT_PARAMS }, difficulty: 'pro' }, list, 2, 25 * 60, pool.run);
-    return { winRate: h.share, seeds, games: h.results.length };
-  } finally {
-    await pool.close();
-  }
 }
 
 /** For generated repro tests: signatures a replay file produces up to `untilTick` (divergence ignored). */

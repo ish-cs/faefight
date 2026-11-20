@@ -8,6 +8,7 @@ import { stateHash } from './hash';
 export function applyOp(m: Match, op: ReplayOp): void {
   switch (op.k) {
     case 'setBot': m.setBot(op.id, op.difficulty); break;
+    case 'setHuman': m.setHuman(op.id); break;
     case 'preview': m.previewBuild(op.id, op.req); break;
     case 'teleport': m.debugTeleport(op.id, op.pos); break;
     case 'hp': m.debugSetHp(op.id, op.hp); break;
@@ -16,6 +17,7 @@ export function applyOp(m: Match, op: ReplayOp): void {
     case 'eliminate': m.debugEliminate(op.id); break;
     case 'kill': m.debugKill(op.id); break;
     case 'give': m.debugGive(op.id, op.inv); break;
+    case 'piece': m.debugPlacePiece(op.kind, op.pos, op.rotY); break;
     default: throw new Error(`applyOp: unknown op ${(op as { k: string }).k}`);
   }
 }

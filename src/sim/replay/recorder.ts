@@ -3,7 +3,7 @@ import type { MatchSetup } from '../matchApi';
 import type { MoveCmd } from '../movement';
 import { NO_INPUT, type PlayerInput, type PlayerState, type Snapshot } from '../types';
 import { encodeReplay, TickWriter } from './codec';
-import { HASH_EVERY, REPLAY_FORMAT, type LogEvent, type ReplayHeader, type ReplayKind, type ReplayOp, type SecondSummary, type TickInput } from './format';
+import { HASH_EVERY, REPLAY_FORMAT, withoutChat, type LogEvent, type ReplayHeader, type ReplayKind, type ReplayOp, type SecondSummary, type TickInput } from './format';
 import { stateHash } from './hash';
 
 export type RecorderOpts = {
@@ -135,10 +135,9 @@ export class Recorder {
       winner: last?.winner ?? null,
       unfinished: last?.winner == null,
     };
-    const bytes = await encodeReplay({
-      header: this.header, footer, ticks: this.ticks, ops: this.ops, hashes: this.hashes, events: this.events, seconds: this.seconds,
-    });
-    return { bytes, header: this.header, footer };
+    const { header, events } = withoutChat({ header: this.header, events: this.events });
+    const bytes = await encodeReplay({ header, footer, ticks: this.ticks, ops: this.ops, hashes: this.hashes, events, seconds: this.seconds });
+    return { bytes, header, footer };
   }
 }
 

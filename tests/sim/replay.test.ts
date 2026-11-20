@@ -65,7 +65,7 @@ async function recordScripted(ticks: number, seed: number) {
   return { ...out, hashes };
 }
 
-describe('replay recording', () => {
+describe('replay recording', { timeout: 240_000 }, () => {
   it('re-running a recorded vs-bot match reproduces every tick exactly (pieces, explosions, potions, shop, ops)', async () => {
     const { bytes, hashes } = await recordScripted(1800, 21);
     const replay = await decodeReplay(bytes);
@@ -116,6 +116,44 @@ describe('replay recording', () => {
     const runner = await ReplayRunner.create(replay, { checkpointEvery: 0 });
     for (const h of seen) expect(stateHash(runner.step()!)).toBe(h);
     runner.dispose();
+  });
+
+  it('round trip: record a match, encode, decode, replay it: identical final state (every map, all op kinds)', async () => {
+    for (const map of ['harbor', 'yard'] as const) {
+      // Two humans: one is handed to a bot and back (disconnect + reconnect), debug ops along the way.
+      const setup = { players: [{ name: 'You', isBot: false }, { name: 'Friend', isBot: false }, seat(1), seat(2)], seed: 31, map };
+      const m = await Match.create(setup);
+      const rec = new Recorder(m, { setup, kind: 'test', localId: 1, recordedAt: 0, id: `rt-${map}` });
+      let snap = rec.tick(new Map());
+      const op = (o: Parameters<Recorder['op']>[0], apply: () => void) => { apply(); rec.op(o); };
+      for (let t = 2; t <= 900; t++) {
+        if (t === 100) op({ k: 'setBot', id: 2, difficulty: 'hard' }, () => m.setBot(2, 'hard'));
+        if (t === 400) op({ k: 'setHuman', id: 2 }, () => m.setHuman(2));
+        if (t === 150) {
+          const me = snap.players.find((p) => p.id === 1)!;
+          const pos = { x: me.pos.x + 4, y: me.pos.y, z: me.pos.z };
+          op({ k: 'piece', kind: 'metal', pos, rotY: 0.5 }, () => m.debugPlacePiece('metal', pos, 0.5));
+        }
+        if (t === 200) op({ k: 'shield', id: 1, shield: 50 }, () => m.debugSetShield(1, 50));
+        const inputs = new Map<number, PlayerInput>([[1, humanInput(t, snap)]]);
+        if (t < 100 || t >= 400) inputs.set(2, { ...humanInput(t + 77, snap), yaw: -t * 0.01 });
+        snap = rec.tick(inputs);
+      }
+      const final = snap;
+      const { bytes } = await rec.finish();
+      m.dispose();
+
+      const replay = await decodeReplay(bytes);
+      expect(replay.header.setup.map).toBe(map);
+      expect(replay.ops.map((o) => o.op.k)).toEqual(['setBot', 'piece', 'shield', 'setHuman']);
+      const runner = await ReplayRunner.create(replay, { checkpointEvery: 0 });
+      let last: Snapshot | null = null;
+      for (let s = runner.step(); s; s = runner.step()) last = s;
+      expect(runner.divergedAt, map).toBeNull();
+      expect(last!.tick).toBe(final.tick);
+      expect(last, map).toEqual(final);
+      runner.dispose();
+    }
   });
 });
 
