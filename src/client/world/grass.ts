@@ -92,7 +92,7 @@ export class Grass {
       for (const [x, z] of spots) this.addClump(isl, rng, x, z, isl.groundY, rng.rr(0.8, 1.2));
       for (let k = 0; k < 14; k++) this.addClump(isl, rng, rng.rr(-bd.hw + 2, bd.hw - 2), bd.z0 + rng.rr(0.6, 1.4), bd.top, rng.rr(0.7, 1.1));
       // weeds in the slab joints (every 4.5 m) and hairline cracks: small tufts, avoiding the bunker footprint
-      for (let k = 0; k < 150; k++) {
+      for (let k = 0; k < 280; k++) {
         const along = rng.rr(-R, R), line = -R + 4.5 * Math.floor(rng.rr(1, (2 * R) / 4.5));
         const [x, z] = rng.rnd() < 0.5 ? [line, along] : [along, line];
         if (Math.hypot(x, z) > R - 1.2) continue;
