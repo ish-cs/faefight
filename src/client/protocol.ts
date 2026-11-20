@@ -20,7 +20,9 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'hp'; hp: number }
   | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
-  | { type: 'debug'; cmd: 'potionShop'; x: number; z: number };
+  | { type: 'debug'; cmd: 'potionShop'; x: number; z: number }
+  /** Perf testing: n pieces on rings around (x, z), placement rules skipped. */
+  | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number };
 
 /** worker → main thread */
 export type FromWorker =
