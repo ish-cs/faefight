@@ -49,7 +49,8 @@ test('host + join by code, bot seat, movement, chat, leaver becomes a bot', asyn
   // A adds seat 3, makes it an easy bot, starts.
   await a.getByTestId('add-seat').click();
   await expect(a.getByTestId('start-match')).toBeDisabled();
-  await a.getByTestId('seat-select-2').selectOption('bot-easy');
+  await a.getByTestId('seat-slider-2').locator('.stop-easy').click();
+  await expect(a.getByTestId('seat-slider-2')).toHaveAttribute('data-value', 'easy');
   await expect(b.getByTestId('seat-2')).toContainText('bot · easy');
   if (SHOTS) { await a.screenshot({ path: `${SHOTS}/lobby-host.png` }); await b.screenshot({ path: `${SHOTS}/lobby-join.png` }); }
   await a.getByTestId('start-match').click();

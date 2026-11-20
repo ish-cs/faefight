@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test, vi } from 'vitest';
 import type { HostSession as HostSessionT } from '../../src/client/session';
 import { LoopbackTransport } from '../../src/net/loopback';
 import { NET_VERSION } from '../../src/net/protocol';
+import { NO_INPUT } from '../../src/sim/types';
 
 let HostSession: typeof HostSessionT;
 beforeAll(async () => {
@@ -39,6 +40,7 @@ describe('HostSession', () => {
     const { host, link } = await hostWithFriend();
     const posted: any[] = [];
     (host as any).started = true;
+    (host as any).seatIds = [1, 2];
     (host as any).worker = { postMessage: (m: any) => posted.push(m) };
     const req = { kind: 'wood', pos: { x: 0, y: 2, z: 0 }, rotY: 0, free: false };
     for (let i = 0; i < 200; i++) link.send({ t: 'preview', req, key: i });
@@ -46,6 +48,67 @@ describe('HostSession', () => {
     const previews = posted.filter((m) => m.type === 'preview').length;
     expect(previews).toBeGreaterThan(0);
     expect(previews).toBeLessThanOrEqual(30);
+  });
+
+  test('/spectate in the lobby: host seat excluded from MatchSetup, friends renumbered', async () => {
+    const { host, link, got } = await hostWithFriend();
+    host.addSeat();
+    host.setSeat(2, { kind: 'bot', difficulty: 'hard' });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const r = host.toggleSpectate();
+    expect(r.handoff).toBe(false);
+    await flush();
+    const lobbyMsg = got.filter((m) => m.t === 'lobby').at(-1);
+    expect(lobbyMsg.slots[0]).toMatchObject({ isHost: true, spectator: true });
+    const posted: any[] = [];
+    const { setup, humanId } = host.start({ postMessage: (m) => posted.push(m) });
+    expect(humanId).toBe(0);
+    expect(setup.players.map((p) => p.name)).toEqual(['Bob', (host.lobby.slots()[2] as any).name]);
+    expect(host.hostPlayer).toBeNull();
+    // Bob (seat 1) is player 1 now: his start message and his inputs use that id.
+    host.onMap([] as any, [4, 6]);
+    await flush();
+    expect(got.find((m) => m.t === 'start')).toMatchObject({ playerId: 1, island: 4 });
+    link.send({ t: 'input', input: NO_INPUT });
+    await flush(); await flush();
+    const inputs = posted.filter((m) => m.type === 'remoteInput');
+    expect(inputs.length).toBeGreaterThan(0);
+    expect(inputs[0].playerId).toBe(1);
+    // Toggling mid-match while already spectating only affects the next match.
+    expect(host.toggleSpectate()).toEqual({ text: 'You can rejoin as a player next match.', handoff: false });
+    expect(posted.some((m) => m.type === 'botify')).toBe(false);
+    expect(host.restart({ postMessage: () => {} }).humanId).toBe(1);
+    info.mockRestore();
+  });
+
+  test('/spectate mid-match hands the host player to a bot; again → rejoin next match', async () => {
+    const { host } = await hostWithFriend();
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const posted: any[] = [];
+    const chat: string[] = [];
+    (host as any).ev.chat = (_: string, text: string) => chat.push(text);
+    host.addSeat();
+    host.setSeat(2, { kind: 'bot', difficulty: 'medium' });
+    expect(host.start({ postMessage: (m) => posted.push(m) }).humanId).toBe(1);
+    const r = host.toggleSpectate();
+    expect(r.handoff).toBe(true);
+    expect(posted).toContainEqual({ type: 'botify', playerId: 1 });
+    expect(chat.some((t) => /spectating/.test(t))).toBe(true);
+    expect(host.hostPlayer).toBeNull();
+    const again = host.toggleSpectate();
+    expect(again).toEqual({ text: 'You can rejoin as a player next match.', handoff: false });
+    expect(posted.filter((m) => m.type === 'botify')).toHaveLength(1);
+    // Rematch: the host plays again (it asked to); a third toggle would have kept it spectating.
+    expect(host.restart({ postMessage: () => {} }).humanId).toBe(1);
+    host.toggleSpectate(); // hand off again in the rematch
+    const re = host.restart({ postMessage: () => {} });
+    expect(re.humanId).toBe(0);
+    expect(re.setup.players.map((p) => p.name)).toEqual(['Bob', (host.lobby.slots()[2] as any).name]);
+    // Too few seats left to keep spectating: the host is put back in rather than failing the rematch.
+    host.toggleSpectate(); host.toggleSpectate(); // (spectating stays on for the next match)
+    host.lobby.removeSeat(2);
+    expect(host.restart({ postMessage: () => {} }).humanId).toBe(1);
+    info.mockRestore();
   });
 
   test('a flood of malformed messages logs only a few warnings', async () => {
