@@ -8,7 +8,7 @@
 import type { IslandLayout } from '../../sim/map';
 import type { Snapshot, Vec3 } from '../../sim/types';
 import { type Cue, type Env, SoundDirector } from './events';
-import { clank, gull, heartbeat, type Kit, playRecipe } from './sfx';
+import { clank, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
 import {
   audibility, DEFAULT_LIMITS, dist, distanceCutoff, echoSend, heartbeatInterval, MAX_DISTANCE, muffleCutoff,
   REF_DISTANCE, ROLLOFF, VoiceLimiter, waveLevel,
@@ -53,6 +53,8 @@ export class AudioSystem {
   private nextBeatAt = 0;
   private stats_ = { played: 0, bySound: {} as Record<string, number> };
   private listeners = new Set<() => void>();
+  /** Rocket motor loops, by projectile id, each on its own positional chain. */
+  private flights = new Map<number, { ch: Chain; loop: { stop(): void } }>();
 
   constructor() {
     this.applySettings(settings.get().audio);
@@ -233,6 +235,39 @@ export class AudioSystem {
   /** UI-originated sounds (e.g. opening the vault). */
   ui(sound: 'vault' | 'tick', gain = 0.8) {
     this.play({ sound, pos: null, gain });
+  }
+
+  /** Your own handling sounds that the sim doesn't report (raising the sights). */
+  local(sound: 'ads') {
+    this.play({ sound, pos: null, gain: 0.7, own: true });
+  }
+
+  /** Per frame: a motor loop follows every rocket in the air; it stops when the rocket is gone. */
+  rockets(list: { id: number; pos: Vec3 }[]) {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.kit) return;
+    const seen = new Set<number>();
+    for (const r of list) {
+      seen.add(r.id);
+      let f = this.flights.get(r.id);
+      const d = dist(r.pos, this.listener);
+      if (!f) {
+        const ch = this.chain(r.pos, d);
+        ch.input.gain.value = 0.9;
+        f = { ch, loop: rocketLoop(this.kit, ch.input) };
+        this.flights.set(r.id, f);
+        this.count('rocketLoop');
+      }
+      const p = f.ch.panner;
+      p.positionX.value = r.pos.x; p.positionY.value = r.pos.y; p.positionZ.value = r.pos.z;
+      f.ch.air.frequency.value = distanceCutoff(d);
+    }
+    for (const [id, f] of this.flights) {
+      if (seen.has(id)) continue;
+      f.loop.stop();
+      setTimeout(() => this.releaseChain(f.ch), 400);
+      this.flights.delete(id);
+    }
   }
 
   /** Feed every snapshot in order (events are per snapshot). */

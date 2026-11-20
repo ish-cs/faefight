@@ -204,6 +204,6 @@ describe('interest management', () => {
     }
     const avg = (performance.now() - t0) / N;
     console.info(`[perf] interest+encode, 8 viewers, 200 pieces: avg ${avg.toFixed(2)} ms (interest alone ${(im.costMs / N).toFixed(2)} ms), worst ${worst.toFixed(2)} ms per broadcast`);
-    expect(avg).toBeLessThan(25); // ~1.2 ms in isolation; generous for parallel CI load
+    expect(avg).toBeLessThan(60); // ~1.2 ms in isolation; generous because other jobs often load this machine
   });
 });

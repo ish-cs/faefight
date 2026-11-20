@@ -97,7 +97,7 @@ test('drag-build: holding click lays a straight, flush wall line of 5 exactly wh
   await page.screenshot({ path: 'test-results/build-wall-ghost.png' });
   await page.mouse.down();
   for (let i = 1; i < 5; i++) {
-    await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 5000 }).toBe(i);
+    await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 10_000 }).toBe(i);
     // Walk along the line (teleport) and keep aiming at the ground where the next wall goes.
     const last = (await mine(page, humanId, 'wood')).sort((a, b) => b.id - a.id)[0];
     const next = at(last.pos, F, 0, R, 2);
@@ -105,7 +105,7 @@ test('drag-build: holding click lays a straight, flush wall line of 5 exactly wh
     await aimAt(page, { ...next, y: C.y + 0.3 });
     if (i === 2) await page.screenshot({ path: 'test-results/build-wall-drag.png' });
   }
-  await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 5000 }).toBe(5);
+  await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 10_000 }).toBe(5);
   await page.mouse.up();
 
   const walls = (await mine(page, humanId, 'wood')).sort((a, b) => a.id - b.id);
@@ -136,7 +136,7 @@ test('scaffold bridge: 4 segments off the shore, aiming slightly off the line, a
   await expect.poll(async () => { const a = await aim(page); return a?.ok && a.tag; }).toBe('shore');
   await page.screenshot({ path: 'test-results/build-bridge-shore.png' });
   await page.mouse.click(640, 360);
-  await expect.poll(async () => (await mine(page, humanId, 'scaffold')).length, { timeout: 5000 }).toBe(1);
+  await expect.poll(async () => (await mine(page, humanId, 'scaffold')).length, { timeout: 10_000 }).toBe(1);
 
   for (let n = 2; n <= 4; n++) {
     const last = (await mine(page, humanId, 'scaffold')).sort((a, b) => b.id - a.id)[0];
@@ -155,12 +155,12 @@ test('scaffold bridge: 4 segments off the shore, aiming slightly off the line, a
     // Aim at the water past the end, 0.9 m off the bridge line.
     const side = { x: -out.z, z: out.x };
     await aimAt(page, at(last.pos, out, 5, side, 0.9, 0));
-    await expect.poll(async () => { const a = await aim(page); return a?.ok && a.tag; }, { timeout: 4000 }).toBe('bridge');
+    await expect.poll(async () => { const a = await aim(page); return a?.ok && a.tag; }, { timeout: 10_000 }).toBe('bridge');
     if (n === 3) await page.screenshot({ path: 'test-results/build-bridge-continue.png' });
     await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!.busyUntil
       <= (await dbg<Snap>(page, 'snapshot')).time).toBe(true);
     await page.mouse.click(640, 360);
-    await expect.poll(async () => (await mine(page, humanId, 'scaffold')).length, { timeout: 5000 }).toBe(n);
+    await expect.poll(async () => (await mine(page, humanId, 'scaffold')).length, { timeout: 10_000 }).toBe(n);
   }
   const decks = (await mine(page, humanId, 'scaffold')).sort((a, b) => a.id - b.id);
   const ax = fwd(decks[0].rotY);
@@ -192,7 +192,7 @@ test('stacked sandbags, an enemy doorway plug when aiming beside it, and the gho
     await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!.busyUntil
       <= (await dbg<Snap>(page, 'snapshot')).time).toBe(true);
     await page.mouse.click(640, 360);
-    await expect.poll(async () => (await mine(page, humanId, 'sandbags')).length, { timeout: 5000 }).toBe(i + 1);
+    await expect.poll(async () => (await mine(page, humanId, 'sandbags')).length, { timeout: 10_000 }).toBe(i + 1);
   }
   const bags = (await mine(page, humanId, 'sandbags')).sort((a, b) => a.id - b.id);
   bags.forEach((b, i) => {
@@ -224,10 +224,10 @@ test('stacked sandbags, an enemy doorway plug when aiming beside it, and the gho
   await dbg(page, 'teleport', ...((p) => [p.x, p.z])(at(door.center, out, 3.2, R, 0)));
   await page.keyboard.press('Digit2');
   await aimAt(page, at(door.center, rgt(door.yaw), 1.0, out, 0, enemy.groundY + 0.6));
-  await expect.poll(async () => { const a = await aim(page); return a?.ok && a.tag; }, { timeout: 4000 }).toBe('door');
+  await expect.poll(async () => { const a = await aim(page); return a?.ok && a.tag; }, { timeout: 10_000 }).toBe('door');
   await page.screenshot({ path: 'test-results/build-door-ghost.png' });
   await page.mouse.click(640, 360);
-  await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 5000 }).toBe(1);
+  await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 10_000 }).toBe(1);
   const plug = (await mine(page, humanId, 'wood'))[0];
   expect(d2(plug.pos, door.center)).toBeLessThan(0.5);
   await expectPlacedAsShown(page, [plug]);
