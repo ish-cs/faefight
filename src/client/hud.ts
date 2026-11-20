@@ -4,6 +4,7 @@ import type { Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot,
 import { dist2D } from '../sim/vec';
 import { PIECE_ORDER } from './input';
 import { ISLAND_COLORS, ISLAND_NAMES } from './render';
+import { endState } from './endState';
 
 const GUNS = ['pistol', 'smg', 'shotgun', 'rifle'] as const;
 const LABEL: Record<string, string> = {
@@ -197,18 +198,13 @@ export class Hud {
     }
     if (!ctx.buildMode) this.center.classList.remove('small');
 
-    const won = snap.winner !== null && snap.winner === this.humanId;
-    const lost = (snap.winner !== null && snap.winner !== this.humanId) || me.eliminated;
-    if (won || lost) {
-      if (this.endScreen.dataset.state !== (won ? 'won' : 'lost')) {
-        this.endScreen.dataset.state = won ? 'won' : 'lost';
+    const end = endState(snap.winner, this.humanId, me.eliminated, snap.players);
+    if (end) {
+      if (this.endScreen.dataset.state !== end.state) {
+        this.endScreen.dataset.state = end.state;
         const btn = el('button', 'btn', 'Back to menu');
         btn.onclick = () => this.act.backToMenu();
-        this.endScreen.replaceChildren(
-          el('div', 'end-title', won ? 'VICTORY' : me.eliminated ? 'ELIMINATED' : 'DEFEAT'),
-          el('div', 'end-sub', won ? 'Last one standing.' : snap.winner !== null ? `${snap.players.find((p) => p.id === snap.winner)?.name ?? 'Someone'} wins.` : 'Your bunker was sealed when you died.'),
-          btn,
-        );
+        this.endScreen.replaceChildren(el('div', 'end-title', end.title), el('div', 'end-sub', end.sub), btn);
         this.endScreen.style.display = 'flex';
       }
     }

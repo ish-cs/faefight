@@ -70,7 +70,7 @@ export const LIFECYCLE = {
   respawnSec: 3,
   invulnSec: 3,
   suddenDeathAt: 900,
-  tideRate: 0.15,
+  tideRate: 0.05,
   lootPickupRadius: 1.5,
 };
 
