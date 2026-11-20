@@ -19,7 +19,7 @@ export class World {
   private water: THREE.Mesh | null = null;
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
-  constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.Camera, private collidables: THREE.Object3D[]) {
+  constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
     this.sky = new SkyLighting(gpu, scene, camera);
     installQualityToggle(this.sky);
     scene.add(this.pieces.root);
@@ -42,8 +42,8 @@ export class World {
 
   syncPieces(pieces: PieceState[]) { this.pieces.sync(pieces); }
 
-  render(waterY: number, focus: THREE.Vector3) {
+  render(waterY: number, _focus?: THREE.Vector3) {
     if (this.water) this.water.position.y = waterY;
-    this.sky.render(focus);
+    this.sky.render(); // cascaded shadows follow the camera themselves
   }
 }

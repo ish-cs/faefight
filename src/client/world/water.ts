@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
-import { color, float, max, min, mix, normalize, positionWorld, smoothstep, texture, time, transformNormalToView, uniform, vec2, vec3 } from 'three/tsl';
+import { cameraPosition, color, dot, float, max, min, mix, normalize, positionWorld, pow, reflect, smoothstep, texture, time, transformNormalToView, uniform, vec2, vec3 } from 'three/tsl';
 import type { IslandLayout } from '../../sim/map';
+import { SUN_DIR } from './sky';
 
 const NORMALS_URL = `${import.meta.env.BASE_URL}assets/textures/waternormals.jpg`;
 
@@ -14,7 +15,6 @@ export function buildWater(map: IslandLayout[]): THREE.Mesh {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
 
   const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.07, metalness: 0 });
-  mat.envMapIntensity = 0.55; // keep sky reflections from bleaching the turquoise
   mat.name = 'ocean';
   const p = positionWorld.xz;
   const t = time;
@@ -23,7 +23,8 @@ export function buildWater(map: IslandLayout[]): THREE.Mesh {
   const s3 = texture(tex, p.mul(0.012).add(vec2(t.mul(-0.003), t.mul(0.004)))).xyz;
   const n = s1.add(s2).add(s3).mul(2 / 3).sub(1); // average of three [-1,1] normals
   const strength = 0.55;
-  mat.normalNode = transformNormalToView(normalize(vec3(n.x.mul(strength), n.z, n.y.mul(strength))));
+  const nWorld = normalize(vec3(n.x.mul(strength), n.z, n.y.mul(strength)));
+  mat.normalNode = transformNormalToView(nWorld);
 
   // distance to the nearest island quay wall
   const rim = map.map((isl) => p.sub(uniform(new THREE.Vector2(isl.center.x, isl.center.z))).length().sub(isl.radius));
@@ -34,6 +35,13 @@ export function buildWater(map: IslandLayout[]): THREE.Mesh {
   const foam = float(1).sub(smoothstep(0.15, 0.9, near.add(foamNoise.mul(0.5)))).mul(0.85);
   mat.colorNode = mix(base, color(0xeaf6f4), foam);
   mat.roughnessNode = mix(float(0.06), float(0.6), foam);
+
+  // Sun glints: a very tight extra lobe around the sun's mirror direction written as emissive, so the sparkle on
+  // the wave facets catches bloom (the regular GGX highlight stays as the broad sheen).
+  const toEye = normalize(cameraPosition.sub(positionWorld));
+  const r = reflect(toEye.negate(), nWorld);
+  const glint = pow(max(dot(r, uniform(SUN_DIR.clone())), 0), 1400).mul(float(1).sub(foam));
+  mat.emissiveNode = color(0xfff0d8).mul(glint.mul(60));
 
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000).rotateX(-Math.PI / 2), mat);
   mesh.name = 'ocean';
