@@ -106,16 +106,10 @@ export function buildIslands(map: IslandLayout[], teamColors: number[]): Islands
       solid.add(M.concrete, boxUV(bx.half.x * 2, bx.half.y * 2, bx.half.z * 2, 3), m, 0xd8d2c4);
     }
     const BL = new THREE.Matrix4().compose(new THREE.Vector3(b.center.x, groundY, b.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
-    dress.add(M.concrete, boxUV(9, 0.04, 9, 3), BL.clone().multiply(mat(0, 0.02, 0)), 0xa59f92, false);
-    dress.add(M.matte, new THREE.PlaneGeometry(4, 4).rotateX(-Math.PI / 2), BL.clone().multiply(mat(0, 0.045, 0)), 0x4a4741, false);
-    // steel door frames (inside the wall thickness) + team stripe painted on the walls
+    dress.add(M.concrete, boxUV(9, 0.04, 9, 3), BL.clone().multiply(mat(0, 0.02, 0)), 0xe6e0d2, false);
+    dress.add(M.matte, new THREE.PlaneGeometry(4, 4).rotateX(-Math.PI / 2), BL.clone().multiply(mat(0, 0.045, 0)), 0x8f8a7f, false);
+    // team stripe painted on the walls
     const team = teamColors[isl.index % teamColors.length];
-    const off = 2 + 0.15;
-    for (const d of [0, Math.PI / 2, -Math.PI / 2]) {
-      const DF = BL.clone().multiply(mat(0, 0, 0, 0, d, 0));
-      for (const sx of [-1, 1]) dress.add(M.dark, new THREE.BoxGeometry(0.06, 2.2, 0.32), DF.clone().multiply(mat(sx * 0.83, 1.1, -off)), 0x55595c, false);
-      dress.add(M.dark, new THREE.BoxGeometry(1.72, 0.06, 0.32), DF.clone().multiply(mat(0, 2.23, -off)), 0x55595c, false);
-    }
     for (const d of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
       const DF = BL.clone().multiply(mat(0, 0, 0, 0, d, 0));
       for (const sx of [-1, 1]) dress.add(M.paint, new THREE.PlaneGeometry(1.3, 0.22).rotateY(Math.PI), DF.clone().multiply(mat(sx * 1.6, 1.6, -2.305)), team, false);
@@ -260,10 +254,31 @@ function distantIslands(b: StaticBatch, map: IslandLayout[]) {
   const M = mats();
   const rng = makeRng(4242);
   const ring = Math.hypot(map[0].center.x, map[0].center.z);
-  const dome = new THREE.SphereGeometry(1, 32, 12, 0, Math.PI * 2, 0, Math.PI / 2);
-  for (let i = 0; i < 9; i++) {
-    const a = (i / 9) * Math.PI * 2 + rng.rr(-0.2, 0.2);
-    const d = ring + rng.rr(420, 700), s = rng.rr(60, 130);
-    b.add(M.terrain, dome, mat(Math.cos(a) * d, -3, Math.sin(a) * d, 0, rng.rr(0, 6), 0, s * 1.8, s * rng.rr(0.25, 0.42), s), new THREE.Color(0x3f6b3a).multiplyScalar(rng.rr(0.8, 1.1)), false, false);
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + rng.rr(-0.25, 0.25);
+    const d = ring + rng.rr(380, 650), s = rng.rr(55, 120), peak = s * rng.rr(0.22, 0.4);
+    const seg = 18, ang = 40, pos: number[] = [], col: number[] = [], idx: number[] = [];
+    const ph = rng.rr(0, 6), ph2 = rng.rr(0, 6);
+    for (let r = 0; r <= seg; r++) for (let k = 0; k <= ang; k++) {
+      const t = r / seg, th = (k / ang) * Math.PI * 2;
+      const wob = 1 + 0.18 * Math.sin(th * 3 + ph) + 0.08 * Math.sin(th * 7 + ph2);
+      const x = Math.cos(th) * t * wob, z = Math.sin(th) * t * wob * 0.6;
+      const hump = Math.pow(Math.max(0, 1 - t * t), 1.4) * (0.75 + 0.25 * Math.sin(th * 2 + ph2) * t + 0.15 * Math.sin(th * 5 + ph) * t);
+      const y = r === seg ? -0.04 : hump;
+      pos.push(x * s * 1.6, y * peak, z * s * 1.6);
+      const beach = t > 0.88 ? 1 : 0;
+      const c = beach ? [0.78, 0.72, 0.56] : [0.2 + 0.08 * rng.rnd(), 0.36 + 0.08 * rng.rnd(), 0.17];
+      col.push(...c);
+    }
+    for (let r = 0; r < seg; r++) for (let k = 0; k < ang; k++) {
+      const p0 = r * (ang + 1) + k, p1 = p0 + 1, p2 = p0 + ang + 1, p3 = p2 + 1;
+      idx.push(p0, p1, p2, p1, p3, p2);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    b.add(M.terrain, geo, mat(Math.cos(a) * d, -1, Math.sin(a) * d, 0, rng.rr(0, 6), 0), 0xffffff, false, false);
   }
 }

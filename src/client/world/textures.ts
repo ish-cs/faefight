@@ -55,8 +55,12 @@ function cached<T extends THREE.Texture>(key: string, make: () => T): T {
 /** Tileable weathered concrete (≈3 m per tile). */
 export const concreteTex = () => cached('concrete', () => canvasTex(512, 512, (g, w, h) => {
   g.fillStyle = '#b0a99b'; g.fillRect(0, 0, w, h);
-  blotches(g, w, h, 80, '84,78,66', 15, 80, 0.22);
-  blotches(g, w, h, 30, '232,228,216', 15, 60, 0.14);
+  blotches(g, w, h, 140, '84,78,66', 8, 50, 0.1);
+  blotches(g, w, h, 40, '232,228,216', 8, 40, 0.08);
+  for (let i = 0; i < 6; i++) { // formwork tie holes in a grid
+    for (let j = 0; j < 6; j++) { g.fillStyle = 'rgba(60,56,50,0.5)'; g.beginPath(); g.arc(40 + i * 86, 40 + j * 86, 3, 0, 7); g.fill(); }
+  }
+  g.fillStyle = 'rgba(70,64,56,0.25)'; g.fillRect(0, 255, w, 2); // pour line
   for (let i = 0; i < 10; i++) { g.fillStyle = `rgba(80,74,64,${rr(0.04, 0.12)})`; g.fillRect(rnd() * w, 0, rr(2, 6), rr(40, 220)); }
   speckle(g, w, h, 24);
 }));
@@ -130,7 +134,8 @@ export const burlapTex = () => cached('burlap', () => canvasTex(128, 128, (g, w,
 
 export const steelTex = () => cached('steel', () => canvasTex(256, 256, (g, w, h) => {
   g.fillStyle = '#727a80'; g.fillRect(0, 0, w, h);
-  blotches(g, w, h, 22, '125,70,38', 6, 36, 0.5);
+  blotches(g, w, h, 14, '125,70,38', 10, 50, 0.28);
+  blotches(g, w, h, 30, '90,96,100', 10, 60, 0.25);
   for (let i = 0; i < 70; i++) {
     g.strokeStyle = `rgba(205,210,215,${rr(0.05, 0.22)})`;
     g.beginPath(); const x = rnd() * w, y = rnd() * h; g.moveTo(x, y); g.lineTo(x + rr(-30, 30), y + rr(-8, 8)); g.stroke();
@@ -217,33 +222,49 @@ export function islandTopTex(R: number) {
     const s = w / (2 * R); // px per metre
     const P = (m: number) => (m + R) * s;
     // base concrete
-    g.fillStyle = '#b4ad9f'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#a7a092'; g.fillRect(0, 0, w, h);
     blotches(g, w, h, 260, '86,80,68', 20, 140, 0.16);
     blotches(g, w, h, 120, '236,232,220', 20, 100, 0.12);
     // slab joints every 4.5 m
-    g.strokeStyle = 'rgba(70,64,55,0.55)'; g.lineWidth = 2.5;
+    g.strokeStyle = 'rgba(70,64,55,0.32)'; g.lineWidth = 1.6;
     for (let m = -R; m <= R; m += 4.5) {
       g.beginPath(); g.moveTo(P(m), 0); g.lineTo(P(m), h); g.stroke();
       g.beginPath(); g.moveTo(0, P(m)); g.lineTo(w, P(m)); g.stroke();
     }
     // sand + grass beds in the back corners (flat, purely visual)
-    const bed = (cx: number, cz: number, rx: number, rz: number, col: string, edge: string) => {
+    // sand + grass beds in the back corners (flat, purely visual): noisy outlines, soft edges, grain
+    const blob = (cx: number, cz: number, rx: number, rz: number, fill: string, soft: number) => {
       g.save(); g.translate(P(cx), P(cz));
-      g.fillStyle = edge; g.beginPath(); g.ellipse(0, 0, rx * s + 6, rz * s + 6, 0, 0, 7); g.fill();
-      g.fillStyle = col; g.beginPath(); g.ellipse(0, 0, rx * s, rz * s, 0, 0, 7); g.fill();
-      g.restore();
+      g.filter = `blur(${soft}px)`;
+      g.fillStyle = fill; g.beginPath();
+      const ph = rnd() * 6;
+      for (let k = 0; k <= 64; k++) {
+        const a = (k / 64) * Math.PI * 2;
+        const r = 1 + 0.16 * Math.sin(a * 3 + ph) + 0.07 * Math.sin(a * 7 + ph * 2) + rr(-0.03, 0.03);
+        const x = Math.cos(a) * rx * s * r, y = Math.sin(a) * rz * s * r;
+        if (k === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      }
+      g.fill(); g.filter = 'none'; g.restore();
     };
     for (const sx of [-1, 1]) {
-      bed(sx * 13, 9, 4.2, 3.2, '#e2cc98', '#8f877a');
-      bed(sx * 12.5, 9.3, 2.6, 1.9, '#6f9a45', '#d7c28f');
+      blob(sx * 13, 9, 4.6, 3.4, 'rgba(214,196,150,0.95)', 10);
+      for (let k = 0; k < 400; k++) { // sand grain + pebbles
+        const a = rnd() * 7, r = Math.sqrt(rnd());
+        g.fillStyle = `rgba(${rnd() < 0.5 ? '120,105,80' : '245,235,205'},${rr(0.2, 0.5)})`;
+        g.fillRect(P(sx * 13 + Math.cos(a) * 3.8 * r), P(9 + Math.sin(a) * 2.8 * r), rr(1, 3), rr(1, 3));
+      }
+      blob(sx * 12.6, 9.4, 2.7, 2.0, 'rgba(98,128,58,0.9)', 6);
+      for (let k = 0; k < 1500; k++) { // grass blades
+        const a = rnd() * 7, r = Math.sqrt(rnd());
+        const x = P(sx * 12.6 + Math.cos(a) * 2.4 * r), y = P(9.4 + Math.sin(a) * 1.75 * r);
+        g.strokeStyle = `rgba(${rr(60, 120) | 0},${rr(110, 160) | 0},${rr(40, 70) | 0},0.7)`;
+        g.lineWidth = 1; g.beginPath(); g.moveTo(x, y); g.lineTo(x + rr(-3, 3), y + rr(-5, -1)); g.stroke();
+      }
     }
-    bed(0, 5, 3.4, 1.6, '#dcc592', '#8f877a');
-    // crane rails across the quay (two embedded steel rails)
-    g.fillStyle = 'rgba(70,70,72,0.85)';
-    for (const x of [-17.2, -15.6, 15.6, 17.2]) g.fillRect(P(x) - 3, 0, 6, h);
+    blob(0, 5.2, 3.2, 1.5, 'rgba(206,190,146,0.85)', 9);
     // oil stains / tyre marks
-    blotches(g, w, h, 40, '40,38,34', 10, 50, 0.35);
-    g.strokeStyle = 'rgba(40,38,34,0.18)'; g.lineWidth = 9;
+    blotches(g, w, h, 40, '40,38,34', 10, 50, 0.22);
+    g.strokeStyle = 'rgba(40,38,34,0.07)'; g.lineWidth = 7;
     for (let i = 0; i < 8; i++) {
       g.beginPath(); const x = P(rr(-14, 14)), y = P(rr(-14, 10));
       g.moveTo(x, y); g.bezierCurveTo(x + rr(-200, 200), y + rr(-200, 200), x + rr(-300, 300), y + rr(-300, 300), x + rr(-400, 400), y + rr(-400, 400)); g.stroke();

@@ -27,7 +27,7 @@ function make() {
     awning: std('awning', { map: awningTex(), roughness: 0.8, side: THREE.DoubleSide }),
     leaf: std('leaf', { map: leafBlobTex(), roughness: 0.95 }),
     terrain: std('terrain', { roughness: 1 }),
-    glow: std('glow', { color: 0x0c2a10, emissive: 0x39ff6a, emissiveIntensity: 6, roughness: 0.4 }),
+    glow: std('glow', { color: 0x0c2a10, emissive: 0x2bff5a, emissiveIntensity: 2.2, roughness: 0.4 }),
   };
 }
 /** Shared static-world materials. All use vertex colours as a per-part tint (white = untinted). */
