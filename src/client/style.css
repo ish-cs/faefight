@@ -89,6 +89,10 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .hud .seals { display: flex; gap: 8px; }
 .hud .seal-chip { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 4px 10px; background: var(--glass); border: 1px solid var(--line); border-radius: 999px; backdrop-filter: blur(12px); }
 .hud .seal-chip .dot { width: 9px; height: 9px; border-radius: 50%; }
+/* Names stay on one line; long ones are cut with an ellipsis. */
+.hud .seal-chip { white-space: nowrap; }
+.hud .seal-chip .name { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud .seal-chip .dot { flex: none; }
 .hud .seal-chip .state { color: var(--accent); font-weight: 700; letter-spacing: 0.6px; }
 .hud .seal-chip.sealed .state { color: var(--danger); }
 .hud .banner { font-size: 14px; font-weight: 600; color: #fff; background: rgba(255, 77, 77, 0.75); padding: 5px 14px; border-radius: 999px; }
