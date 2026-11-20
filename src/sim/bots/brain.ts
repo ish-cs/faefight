@@ -71,6 +71,10 @@ export type BrainInput = {
   insuranceDue: number;
   /** Carried cash beyond what my shopping plan needs (what a trip to the vault would deposit). */
   bankable: number;
+  /** Within a few steps of my vault. */
+  nearVault: boolean;
+  /** I carry what it takes to clear every plug in my doorways (gun for soft, charge/rocket for hard). */
+  canClearHome: boolean;
   intruder: boolean;
   homeSealed: boolean;
   homePlugged: boolean;
@@ -236,8 +240,9 @@ export class Brain {
 
     // ---- bank cash (death drops everything carried).
     if (!inp.suddenDeath && (inp.insuranceDue > 0 || inp.bankable >= 100))
-      add('bank', p.planBank * (inp.insuranceDue > 0 ? 1.2 : Math.min(1.5, inp.bankable / 400)) * (visible ? 0.3 : 1),
-        inp.insuranceDue > 0 ? 'keep rebuy money in the vault' : `carrying $${inp.carried} I don't need right now`, [
+      // Danger near and the vault right here: two seconds to save it all from a death.
+      add('bank', p.planBank * (inp.insuranceDue > 0 ? 1.2 : Math.min(1.5, inp.bankable / 400)) * (visible ? (inp.nearVault ? 2.5 : 0.3) : 1),
+        inp.insuranceDue > 0 ? 'keep rebuy money in the vault' : visible && inp.nearVault ? `enemy around and I carry ${inp.carried}: bank it first` : `carrying ${inp.carried} I don't need right now`, [
           { label: 'deposit at the vault', act: 'bank', done: inp.bankable < 40 && inp.insuranceDue === 0 },
         ]);
 
@@ -251,9 +256,10 @@ export class Brain {
       ]);
 
     // ---- defend home.
-    const threat = (inp.intruder ? 1 : 0) + (inp.homeSealed ? 1.2 : inp.homePlugged ? 0.6 : 0) + (inp.incomingBridge ? 0.3 : 0);
+    const threat = (inp.intruder ? 1 : 0) + (inp.homeSealed ? 1.2 : inp.homePlugged ? 0.9 : 0) + (inp.incomingBridge ? 0.3 : 0);
     if (threat > 0 && !inp.suddenDeath)
       add('defend', p.planDefend * threat, inp.homeSealed ? 'my bunker is sealed: clear it while alive' : inp.intruder ? 'someone is on my island' : inp.homePlugged ? 'a plug in my doorway' : 'a bridge leads into my island', [
+        { label: 'get a charge (a hard plug blocks my door)', act: 'shop', done: inp.canClearHome },
         { label: 'clear my doorways', act: 'defend', done: !inp.homePlugged && !inp.homeSealed },
         { label: 'hunt the intruder', act: 'guard', done: !inp.intruder },
         { label: 'cut the bridge in', act: 'cut', done: !inp.incomingBridge },
@@ -263,19 +269,29 @@ export class Brain {
     for (const r of inp.rivals) {
       const base = rivalScore(r, p);
       const window = r.respawning || r.protectedNow || r.away;
+      // Leaving home with a plugged doorway is half a seal on myself: clear it first.
+      const homeClear = { label: 'clear my own doorway first', act: 'defend' as Goal, done: !inp.homePlugged };
       const toBridge = (label: string) => [
         { label: 'get a gun', act: 'shop' as Goal, done: inp.gun },
-        { label: `carry ${r.scaffolds} scaffolds`, act: 'shop' as Goal, done: r.reach || inp.scaffolds >= r.scaffolds },
+        homeClear,
+        // Death drops everything carried: bank what the trip doesn't need before leaving home.
+        { label: 'bank spare cash before leaving', act: 'bank' as Goal, done: !home || r.reach && inp.on === r.island || inp.bankable < 100 && inp.insuranceDue === 0 },
+        // Scaffolds I can afford now; with no cash, lay what I carry and come back for more.
+        { label: `carry ${r.scaffolds} scaffolds`, act: 'shop' as Goal, done: r.reach || inp.scaffolds >= r.scaffolds || (inp.scaffolds > 0 && total < PIECES.scaffold.price) },
         { label, act: 'bridge' as Goal, done: r.reach },
       ];
+      const kitStep = { label: `get a seal kit (${KIT_NAME(r.openDoors, total >= 3 * PIECES.metal.price)})`, act: 'shop' as Goal, done: inp.kit >= r.openDoors };
+      // A bridge is a road into their island and mine: lay it up to the last deck, finish it only with a kit in hand.
+      const partBridge = { label: `bridge toward ${r.name}'s island`, act: 'bridge' as Goal, done: r.reach || (r.scaffolds <= 1 && inp.kit < r.openDoors) || inp.scaffolds === 0 };
       if (!r.sealed && r.openDoors > 0 && !inp.suddenDeath) {
         const why = r.respawning ? `${r.name} is respawning` : r.protectedNow ? `${r.name} just respawned` : r.away ? `${r.name} is away from home` :
           r.seenHp !== null && r.seenHp < 50 ? `${r.name} is hurt` : r.busy ? `${r.name} is busy fighting` : `${r.name} is the best target`;
         const kitNote = inp.kit >= r.openDoors ? `I have ${inp.kit} plugs` : `need ${r.openDoors} plugs`;
         add('seal', p.planSeal * base * (inp.endgame ? 1.4 : 1) + (r.respawning || r.protectedNow ? 0.4 : 0), `${why}, ${kitNote}`, [
-          toBridge(`bridge to ${r.name}'s island`)[0],
-          { label: `get a seal kit (${KIT_NAME(r.openDoors, total >= 3 * PIECES.metal.price)})`, act: 'shop', done: inp.kit >= r.openDoors },
-          ...toBridge(`bridge to ${r.name}'s island`).slice(1),
+          ...toBridge(`bridge to ${r.name}'s island`).slice(0, 2),
+          ...(inp.kit >= r.openDoors || total >= 3 * PIECES.wood.price ? [] : [partBridge]),
+          kitStep,
+          ...toBridge(`bridge to ${r.name}'s island`).slice(2),
           { label: `cross to ${r.name}'s bunker`, act: 'attack', done: inp.on === r.island },
           { label: `wait for ${r.name}'s window (down, away or respawning)`, act: 'attack', done: window },
           { label: `plug ${r.name}'s doors`, act: 'seal', done: r.sealed },

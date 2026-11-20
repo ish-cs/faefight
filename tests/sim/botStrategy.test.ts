@@ -176,7 +176,7 @@ describe('human tactics', () => {
         }
         step(view, inp);
       }
-      if (!deposited) console.log(archetype, [...new Set(goals)]);
+      if (!deposited) console.log(archetype, [...new Set(goals)], bot.debug.thought);
       expect(deposited, archetype).toBeGreaterThanOrEqual(200);
     }
   });

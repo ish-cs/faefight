@@ -502,12 +502,20 @@ export class Bot {
       enemy: c.enemy ? { id: c.enemy.id, dist: c.enemyDist, hp: c.enemy.hp + (c.enemy.shield ?? 0), weapon: c.enemy.equipped } : null,
       armedNear: c.armedNear, underFire: !!c.fire,
       kit: sealKit(inv), carried: inv.cash, banked: me.vault.cash, insuranceDue: this.insuranceDue(me),
-      bankable: Math.max(0, Math.floor(inv.cash - shoppingPlan(me, this.needs(c), this.difficulty, this.style).spent - 25)),
+      nearVault: dist2D(me.pos, home.vault) < 6, canClearHome: this.blockers(c).every((p) => this.canClear(c, p)),
+      bankable: Math.max(0, Math.floor(inv.cash - this.keepFor(c) - 25)),
       intruder: !!this.intruder(c), homeSealed: view.sealed[home.index], homePlugged: this.blockers(c).length > 0,
       incomingBridge: !!this.incomingDeck(c),
       killedBy: killed ? { id: killed.id, ago: now - killed.t } : null,
       seller: this.nearestSeller(c) !== null, wantShields: this.wantShields(me), endgame: this.endgame(c),
     };
+  }
+
+  /** Cash my shopping plan needs; with an enemy in sight only the essentials (no grenades/medkits shopping now). */
+  private keepFor(c: Ctx): number {
+    const needs = this.needs(c);
+    if (c.enemy) { needs.grenades = 0; needs.medkits = 0; }
+    return shoppingPlan(c.me, needs, this.difficulty, this.style).spent;
   }
 
   private wantShields(me: PlayerState): boolean {
@@ -750,7 +758,7 @@ export class Bot {
         const leavingSoon = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
         if (leavingSoon && this.insuranceDue(me) > 0 && !(c.enemy && c.enemyDist < 8)) return 0.8;
         if (me.inv.cash < 100) return 0;
-        const keep = shoppingPlan(me, this.needs(c), this.difficulty, this.style).spent + 25;
+        const keep = this.keepFor(c) + 25;
         const excess = me.inv.cash - keep;
         if (excess < 80) return 0;
         const close = c.enemy && c.enemyDist < 8;
@@ -933,7 +941,7 @@ export class Bot {
     const me = c.me;
     const walk = this.goTo(c.home.vault, 1.8);
     if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > c.view.now) return walk;
-    const keep = shoppingPlan(me, this.needs(c), this.difficulty, this.style).spent + 25;
+    const keep = this.keepFor(c) + 25;
     const cash = Math.max(Math.floor(me.inv.cash - keep), this.insuranceDue(me));
     if (cash <= 0) { this.nextScoreAt = c.view.now; return walk; }
     this.nextScoreAt = c.view.now + 1.2;
