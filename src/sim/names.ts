@@ -32,5 +32,5 @@ export function nickname(rng: () => number, taken: Set<string>): string {
   throw new Error(`nickname: no free name after 200 tries (${taken.size} taken)`);
 }
 
-/** Setup names that are placeholders for a bot seat ("", "Bot", "Bot (hard)") get a nickname instead. */
-export const isPlaceholderBotName = (name: string) => /^\s*(Bot(\s*\(.*\))?)?\s*$/.test(name);
+/** Setup names that are placeholders for a bot seat ("", "Bot", "Bot (hard)", "Bot (easy) 2") get a nickname instead. */
+export const isPlaceholderBotName = (name: string) => /^\s*(Bot(\s*\(.*\))?(\s*\d+)?)?\s*$/.test(name);
