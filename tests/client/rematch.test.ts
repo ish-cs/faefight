@@ -22,7 +22,7 @@ function fakeWorker() {
 
 function snap(tick: number, pieces: PieceState[] = [], events: MatchEvent[] = [], winner: number | null = null): Snapshot {
   const players = [1, 2, 3].map((id) => newPlayer(id, `p${id}`, id === 3, id - 1, v3(id * 10, 2, 0)));
-  return { time: tick / 30, tick, players, pieces, loot: [], generators: [], sealed: [false, false, false], waterY: 0, suddenDeath: false, winner, events };
+  return { time: tick / 30, tick, players, pieces, loot: [], generators: [], genLevels: [1, 1, 1], sealed: [false, false, false], waterY: 0, suddenDeath: false, winner, events };
 }
 
 async function join(t: LoopbackTransport, code: string, name: string) {

@@ -29,6 +29,8 @@ export type BotView = {
   pieces: PieceState[];
   /** Uncollected cash sitting at each island's generator, indexed by island. */
   generators: number[];
+  /** Generator level (1-4) of each island, indexed by island (public: shown on each generator). */
+  genLevels?: number[];
   /** Whether each island's bunker is currently sealed, indexed by island. */
   sealed: boolean[];
   /** Hits against me in the last few seconds. */

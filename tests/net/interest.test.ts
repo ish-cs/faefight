@@ -17,7 +17,7 @@ const bunkerLocal = (map: IslandLayout[], i: number, x: number, z: number): Vec3
 function snapOf(players: PlayerState[], opts: Partial<Snapshot> = {}): Snapshot {
   return {
     time: 10, tick: 300, players, pieces: [], loot: [],
-    generators: players.map((p) => ({ island: p.island, stored: 321 })),
+    generators: players.map((p) => ({ island: p.island, stored: 321 })), genLevels: players.map(() => 1),
     sealed: players.map(() => false), waterY: 0, suddenDeath: false, winner: null, events: [], ...opts,
   };
 }

@@ -1,7 +1,7 @@
-import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, MEDKIT, PIECES, PLAYER, POTIONS, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
+import { AMMO_BOX, CHARGE, GENERATOR_LEVELS, GENERATOR_MAX_LEVEL, GRENADE, LOCK_PRICE_MULT, MEDKIT, PIECES, PLAYER, POTIONS, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
 import { addKind, canAdd, countOf, isHotbarItem, isPotionItem, removeIfEmpty, syncFromInventory } from './hotbar';
 import { SHOP_LABEL, shopFor, type ShopKind } from './potions';
-import type { HotbarItem, Inventory, PieceKind, PlayerState, PotionKind, ShopAction, VaultAction, WeaponKind } from './types';
+import type { GunKind, HotbarItem, Inventory, LockItem, PieceKind, PlayerState, PotionKind, ShopAction, ShopItem, VaultAction, WeaponKind } from './types';
 
 export type Result = { ok: true } | { ok: false; reason: string };
 const fail = (reason: string): Result => ({ ok: false, reason });
@@ -10,9 +10,15 @@ export function emptyInventory(): Inventory {
   return { cash: 0, weapons: {}, pieces: {}, grenades: 0, charges: 0, medkits: 0, potions: {} };
 }
 
-export function tickGenerator(stored: number, dt: number, active: boolean): number {
+/** Rate and cap of a generator at `level` (1..GENERATOR_MAX_LEVEL; out-of-range clamps). */
+export function generatorSpec(level: number): { rate: number; cap: number } {
+  return GENERATOR_LEVELS[Math.max(0, Math.min(GENERATOR_MAX_LEVEL, Math.floor(level) || 1) - 1)];
+}
+
+export function tickGenerator(stored: number, dt: number, active: boolean, level = 1): number {
   if (!active) return stored;
-  return Math.min(ECONOMY.generatorCap, stored + ECONOMY.generatorRate * dt);
+  const { rate, cap } = generatorSpec(level);
+  return Math.min(cap, stored + rate * dt);
 }
 
 export function collect(player: PlayerState, gen: { stored: number }): number {
@@ -26,7 +32,25 @@ const GUNS = ['pistol', 'smg', 'shotgun', 'rifle'] as const;
 const isGun = (k: string): k is (typeof GUNS)[number] => (GUNS as readonly string[]).includes(k);
 const isPiece = (k: string): k is PieceKind => k in PIECES;
 
+/** The gun a `lock:<gun>` shop item locks, or null for any other item. */
+export function lockedGunOf(item: ShopItem): GunKind | null {
+  if (!item.startsWith('lock:')) return null;
+  const g = item.slice(5);
+  return isGun(g) ? g : null;
+}
+/** Upgrades and locks are sold only at the buyer's own island's shop. */
+export const isHomeOnly = (item: ShopItem): boolean => item === 'genUpgrade' || lockedGunOf(item) !== null;
+export const lockItem = (g: GunKind): LockItem => `lock:${g}`;
+export const lockPrice = (g: GunKind): number => WEAPONS[g].price * LOCK_PRICE_MULT;
+
+/** Price of the next generator level from `level`, or null at max. */
+export function genUpgradePrice(level: number): number | null {
+  return level >= GENERATOR_MAX_LEVEL ? null : GENERATOR_LEVELS[Math.max(1, level)].price;
+}
+
 export function priceOf(item: ShopAction['buy']): number {
+  const locked = lockedGunOf(item);
+  if (locked) return lockPrice(locked);
   if (isPotionItem(item)) return POTIONS[item].price;
   if (isGun(item)) return WEAPONS[item].price;
   if (isPiece(item)) return PIECES[item].price;
@@ -36,8 +60,15 @@ export function priceOf(item: ShopAction['buy']): number {
   return CHARGE.price;
 }
 
-export function buy(player: PlayerState, action: ShopAction): Result {
+/**
+ * Buys at the player's own shop. `genLevels` (generator level by island) is needed for a generator
+ * upgrade, which raises the buyer's own island.
+ */
+export function buy(player: PlayerState, action: ShopAction, genLevels?: number[]): Result {
   const item = action.buy;
+  if (item === 'genUpgrade') return upgradeGenerator(player, genLevels);
+  const lockGun = lockedGunOf(item);
+  if (lockGun) return lock(player, lockGun);
   const price = priceOf(item);
   if (player.inv.cash < price) return fail(`need $${price}, carrying $${player.inv.cash}`);
   const inv = player.inv;
@@ -70,11 +101,51 @@ export function buy(player: PlayerState, action: ShopAction): Result {
   return { ok: true };
 }
 
-/** Buying at a particular counter: the home shop or a potion seller each sell only their own stock. */
-export function buyAt(player: PlayerState, at: ShopKind, action: ShopAction): Result {
+function upgradeGenerator(player: PlayerState, genLevels: number[] | undefined): Result {
+  if (!genLevels) return fail('no generator to upgrade');
+  const level = genLevels[player.island] ?? 1;
+  const price = genUpgradePrice(level);
+  if (price === null) return fail('generator already at max level');
+  if (player.inv.cash < price) return fail(`need $${price}, carrying $${player.inv.cash}`);
+  player.inv.cash -= price;
+  genLevels[player.island] = level + 1;
+  return { ok: true };
+}
+
+function lock(player: PlayerState, gun: GunKind): Result {
+  if (!player.inv.weapons[gun]) return fail(`buy a ${gun} before locking it`);
+  if (player.locked.includes(gun)) return fail(`${gun} already locked`);
+  const price = lockPrice(gun);
+  if (player.inv.cash < price) return fail(`need $${price}, carrying $${player.inv.cash}`);
+  player.inv.cash -= price;
+  player.locked.push(gun);
+  return { ok: true };
+}
+
+/**
+ * Respawn: hands back every locked gun not already held, with a full mag and one spare, into the first
+ * free hotbar slots (call on an emptied hotbar so they come first). A gun with no free slot is skipped.
+ */
+export function grantLockedGuns(player: PlayerState): void {
+  for (const g of GUNS) {
+    if (!player.locked.includes(g) || player.inv.weapons[g]) continue;
+    if (addKind(player.hotbar, g) < 0) {
+      console.warn(`grantLockedGuns: hotbar full, player ${player.id} respawns without locked ${g}`);
+      continue;
+    }
+    const mag = WEAPONS[g].mag;
+    player.inv.weapons[g] = { mag, spare: mag };
+  }
+}
+
+/**
+ * Buying at a particular counter: the home shop (any island's NPC) or a potion seller each sell only
+ * their own stock. `genLevels` is passed through for generator upgrades.
+ */
+export function buyAt(player: PlayerState, at: ShopKind, action: ShopAction, genLevels?: number[]): Result {
   const sells = shopFor(action.buy);
   if (sells !== at) return fail(`${SHOP_LABEL[action.buy] ?? action.buy} is only sold at ${sells === 'potion' ? 'the potion seller' : 'your home shop'}`);
-  return buy(player, action);
+  return buy(player, action, genLevels);
 }
 
 /** Checks `from` holds everything `req` asks for. Weapon entries in `req` are matched by key only. */

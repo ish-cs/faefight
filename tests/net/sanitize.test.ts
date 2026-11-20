@@ -58,6 +58,13 @@ describe('sanitizeInput', () => {
     expect(sanitizeInput({ ...NO_INPUT, vault: { withdraw: { medkits: 'lots' } } })!.vault).toBeNull();
     expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'medkit' } })!.shop).toEqual({ buy: 'medkit' });
   });
+  test('shop accepts generator upgrades and gun locks only in their exact forms', () => {
+    expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'genUpgrade' } })!.shop).toEqual({ buy: 'genUpgrade' });
+    for (const g of ['pistol', 'smg', 'shotgun', 'rifle'])
+      expect(sanitizeInput({ ...NO_INPUT, shop: { buy: `lock:${g}` } })!.shop).toEqual({ buy: `lock:${g}` });
+    for (const bad of ['lock:fists', 'lock:', 'lock:tank', 'lock:pistol ', 'LOCK:pistol', 'genUpgrade2', { lock: 'pistol' }, 'lock:__proto__'])
+      expect(sanitizeInput({ ...NO_INPUT, shop: { buy: bad } })!.shop).toBeNull();
+  });
   test('drink is a strict boolean; potions are shop items and vault counts', () => {
     expect(sanitizeInput({ ...NO_INPUT, drink: true })!.drink).toBe(true);
     for (const bad of ['yes', 1, {}, null, undefined]) expect(sanitizeInput({ ...NO_INPUT, drink: bad })!.drink).toBe(false);

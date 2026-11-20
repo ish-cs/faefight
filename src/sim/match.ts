@@ -1,4 +1,4 @@
-import { buyAt, collect, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
+import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX } from './constants';
@@ -136,7 +136,7 @@ export class Match implements MatchApi {
 
     this.events.push(...tickExplosives(this.ctx, now));
     this.collapseUnsupported(now);
-    for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath);
+    for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
@@ -257,9 +257,11 @@ export class Match implements MatchApi {
 
     if (input.interact)
       for (const g of this.s.generators) if (near(this.map[g.island].generator)) collect(p, g);
-    // Shop NPCs serve anyone standing at them, on any island (vaults stay owner-only); potions only at the potion seller.
+    // Shop NPCs serve anyone standing at them, on any island (vaults stay owner-only); potions only at the
+    // potion seller; generator upgrades and gun locks only at your own island's shop.
     if (input.shop) {
-      if (this.map.some((i) => near(i.shop))) buyAt(p, 'home', input.shop);
+      if (near(isl.shop)) buyAt(p, 'home', input.shop, this.s.genLevels);
+      else if (this.map.some((i) => near(i.shop))) { if (!isHomeOnly(input.shop.buy)) buyAt(p, 'home', input.shop); }
       else if (this.potionShops.some((sh) => near(sh.pos))) buyAt(p, 'potion', input.shop);
     }
     if (input.vault && near(isl.vault) && vaultTransfer(p, input.vault).ok) p.busyUntil = now + ECONOMY.vaultSec;
@@ -382,6 +384,7 @@ export class Match implements MatchApi {
       map: this.map,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),
+      genLevels: [...this.s.genLevels],
       sealed: [...this.sealed],
       hurt: this.hits.filter((h) => h.target === self.id).map(({ t, by, amount }) => ({ t, by, amount })),
       shots: this.shots.filter((s) => s.by !== self.id && dist(s.from, eye) <= SIGHT_RANGE),
@@ -403,6 +406,7 @@ export class Match implements MatchApi {
       pieces: [...this.s.pieces.values()],
       loot: [...this.s.loot.values()],
       generators: this.s.generators,
+      genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,

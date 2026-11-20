@@ -1,5 +1,5 @@
-import { AMMO_BOX, MAP, PIECES, POTIONS, SEAL, WEAPONS } from '../constants';
-import { buy } from '../economy';
+import { AMMO_BOX, GENERATOR_MAX_LEVEL, MAP, PIECES, POTIONS, SEAL, WEAPONS } from '../constants';
+import { buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
 import { canAdd, countOf } from '../hotbar';
 import { uselessReason } from '../potions';
 import type { Doorway } from '../map';
@@ -60,8 +60,8 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
   return bags >= 2 ? { kind: 'sandbags', level: 0 } : null;
 }
 
-/** `tower`: sandbags wanted for climbing above the sudden-death tide. */
-export type Needs = { scaffolds: number; kit: number; charge: boolean; tower?: number };
+/** `tower`: sandbags wanted for climbing above the sudden-death tide. `genLevel`: my generator's level (unknown = no upgrades). */
+export type Needs = { scaffolds: number; kit: number; charge: boolean; tower?: number; genLevel?: number };
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
 export type ShopStyle = {
@@ -77,6 +77,8 @@ export type ShopStyle = {
   steel: boolean;
   /** Extra wood walls carried for throwing down cover. */
   coverWood: number;
+  /** Upgrade the generator as soon as the essentials are covered (economists, turtles). */
+  invest?: boolean;
 };
 export const PLAIN_STYLE: ShopStyle = { upgradeFirst: false, longGun: false, closeGun: false, metal: false, steel: false, coverWood: 0 };
 
@@ -102,11 +104,17 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     if (wantMetal) return 'metal';
     return cash >= PIECES.wood.price ? 'wood' : null;
   }
+  const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
+  if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
   if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
   if (style.closeGun && !inv.weapons.shotgun && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
   if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
+  // Rich: invest in the generator, then lock the favourite gun so a death doesn't leave me unarmed.
+  if (genPrice !== null && cash >= 3 * genPrice) return 'genUpgrade';
+  const fav = GUNS.find((g) => inv.weapons[g]);
+  if (fav && !p.locked.includes(fav) && cash >= 2 * lockPrice(fav)) return lockItem(fav);
   return null;
 }
 
@@ -118,10 +126,14 @@ export function shoppingPlan(
 ): { items: ShopItem[]; covered: boolean; spent: number } {
   const sim = structuredClone(p);
   const items: ShopItem[] = [];
+  const n = { ...needs };
+  const levels: number[] = [];
   for (let i = 0; i < 30; i++) {
-    const item = nextPurchase(sim, needs, difficulty, style);
+    levels[p.island] = n.genLevel ?? GENERATOR_MAX_LEVEL;
+    const item = nextPurchase(sim, n, difficulty, style);
     if (!item) break;
-    const r = buy(sim, { buy: item });
+    const r = buy(sim, { buy: item }, levels);
+    n.genLevel = levels[p.island];
     if (!r.ok) {
       console.warn(`shoppingPlan: chose ${item} but buy failed: ${r.reason}`);
       break;
@@ -130,7 +142,7 @@ export function shoppingPlan(
   }
   const spent = p.inv.cash - sim.inv.cash;
   sim.inv.cash = Infinity;
-  const left = nextPurchase(sim, needs, difficulty, style);
+  const left = nextPurchase(sim, n, difficulty, style);
   return { items, covered: left === null || !ESSENTIAL.includes(left), spent };
 }
 

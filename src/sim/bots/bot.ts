@@ -125,6 +125,7 @@ export class Bot {
       metal: t.builder > 0.6,
       steel: t.patience > 0.75 && t.greed > 0.75,
       coverWood: t.builder > 0.6 ? 2 : 0,
+      invest: t.patience > 0.75,
     };
     this.aim = new Aim(AIM[difficulty], rng);
   }
@@ -341,6 +342,7 @@ export class Bot {
       charge: blockers.some((p) => isHard(p.kind)),
       // Every 1 m of tower buys 20 s against the tide: the richer, the taller.
       tower: c.view.now >= LIFECYCLE.suddenDeathAt - TOWER_PREP_SEC ? TOWER_BAGS + Math.min(4, Math.floor((c.me.inv.cash + c.me.vault.cash) / 250)) : 0,
+      genLevel: c.view.genLevels?.[c.home.index],
     };
   }
 

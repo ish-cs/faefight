@@ -22,7 +22,10 @@ export type Inventory = {
 /** Something that occupies a hotbar slot (amounts live in the inventory). */
 export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit' | PotionKind;
 
-export type ShopItem = PieceKind | Exclude<WeaponKind, 'fists'> | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind;
+export type GunKind = Exclude<WeaponKind, 'fists'>;
+/** `genUpgrade`: next level of your own island's generator. `lock:<gun>`: respawn with that gun from now on. */
+export type LockItem = `lock:${GunKind}`;
+export type ShopItem = PieceKind | GunKind | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind | 'genUpgrade' | LockItem;
 export type ShopAction = { buy: ShopItem };
 export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> };
 
@@ -81,6 +84,8 @@ export type PlayerState = {
   lastDamagedAt: number;
   inv: Inventory;
   vault: Inventory;
+  /** Guns bought back on every respawn (full mag + one spare). Private: only sent to their owner. */
+  locked: GunKind[];
   /** Nine slots of item kinds held; counts are in `inv`. */
   hotbar: (HotbarItem | null)[];
   /** Selected hotbar slot (0-8). */
@@ -118,6 +123,8 @@ export type Snapshot = {
   pieces: PieceState[];
   loot: LootBag[];
   generators: { island: number; stored: number }[];
+  /** Generator level (1-4) of each island, by island index. */
+  genLevels: number[];
   sealed: boolean[];
   waterY: number;
   suddenDeath: boolean;
