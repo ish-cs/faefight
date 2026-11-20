@@ -12,6 +12,7 @@ import type { MatchSetup } from '../sim/matchApi';
 import type { BuildRequest, Difficulty, Inventory, PlayerInput, Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
 import { ThirdPersonCamera } from './camera';
+import { DamageFx } from './damageFx';
 import { ChatUi } from './chatUi';
 import { Hud } from './hud';
 import { InputAccumulator } from './inputAccum';
@@ -357,6 +358,8 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     canvas.focus();
   };
 
+  const fxPos = new THREE.Vector3();
+  const damageFx = new DamageFx(app);
   const hud = new Hud(app, {
     buy: (item) => input.queue({ shop: { buy: item } }),
     vault: (a) => input.queue({ vault: a }),
@@ -474,6 +477,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       menu.remove();
       canvas.focus();
     }
+    damageFx.onSnapshot(s, humanId);
     hud.update(s, { buildMode: input.buildMode, buildKind: input.buildKind, ghostOk: input.buildMode ? (preview?.result.ok ?? null) : null, free: input.free });
     chat.enabled = !hud.ended && !dead;
     if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
@@ -581,6 +585,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
         nextSendAt = Math.max(nextSendAt + 1000 / backend.inputHz, now - 1000 / backend.inputHz);
       }
     }
+    damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     renderer.render(input.yaw);
     requestAnimationFrame(frame);
   };

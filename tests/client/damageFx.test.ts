@@ -1,0 +1,37 @@
+import { describe, expect, test } from 'vitest';
+import { damageNumbers, hitDirection } from '../../src/client/damageFx';
+import type { MatchEvent } from '../../src/sim/types';
+
+const hit = (target: number, by: number, amount: number): MatchEvent => ({ t: 1, type: 'hit', data: { target, by, amount } });
+
+describe('damageNumbers', () => {
+  test('only shows damage dealt by me', () => {
+    expect(damageNumbers([hit(2, 1, 20), hit(1, 2, 30)], 1)).toEqual([{ target: 2, amount: 20 }]);
+  });
+  test('combines shotgun pellets on the same target into one number', () => {
+    const evs = Array.from({ length: 7 }, () => hit(3, 1, 8));
+    expect(damageNumbers(evs, 1)).toEqual([{ target: 3, amount: 56 }]);
+  });
+  test('separate targets stay separate, rounded', () => {
+    expect(damageNumbers([hit(2, 1, 12.4), hit(3, 1, 30.6)], 1)).toEqual([{ target: 2, amount: 12 }, { target: 3, amount: 31 }]);
+  });
+  test('ignores other events', () => {
+    expect(damageNumbers([{ t: 1, type: 'shot', data: { by: 1 } }], 1)).toEqual([]);
+  });
+});
+
+describe('hitDirection', () => {
+  // Camera yaw convention: yaw 0 looks toward -Z. Result: 0 = attacker straight ahead, +PI/2 = to my right, PI = behind.
+  test('attacker straight ahead is 0', () => {
+    expect(hitDirection({ x: 0, z: 0 }, { x: 0, z: -10 }, 0)).toBeCloseTo(0);
+  });
+  test('attacker to the right is +90°', () => {
+    expect(hitDirection({ x: 0, z: 0 }, { x: 10, z: 0 }, 0)).toBeCloseTo(Math.PI / 2);
+  });
+  test('attacker behind is 180°', () => {
+    expect(Math.abs(hitDirection({ x: 0, z: 0 }, { x: 0, z: 10 }, 0))).toBeCloseTo(Math.PI);
+  });
+  test('turning the camera left makes a fixed attacker swing right', () => {
+    expect(hitDirection({ x: 0, z: 0 }, { x: 0, z: -10 }, Math.PI / 2)).toBeCloseTo(Math.PI / 2);
+  });
+});
