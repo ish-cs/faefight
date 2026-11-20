@@ -12,7 +12,7 @@ export type ToWorker =
 
 /** worker → main thread */
 export type FromWorker =
-  | { type: 'map'; map: IslandLayout[]; humanId: number }
+  | { type: 'map'; map: IslandLayout[]; humanId: number; humanIsland: number }
   | { type: 'snapshot'; snap: Snapshot }
   | { type: 'preview'; result: Placement }
   | { type: 'error'; message: string };

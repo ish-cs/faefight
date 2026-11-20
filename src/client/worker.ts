@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { Match } from './fakeMatch'; // TODO(integration): switch to ../sim/match
+import { Match } from '../sim/match';
 import { TICK_HZ } from '../sim/constants';
 import type { MatchApi } from '../sim/matchApi';
 import { NO_INPUT, type PlayerInput } from '../sim/types';
@@ -64,7 +64,9 @@ async function start(difficulty: 'easy' | 'medium' | 'hard') {
   if (ids.length !== 1) throw new Error(`worker: expected 1 human, got ${ids.length}`);
   humanId = ids[0];
   groundYFor = (x, z) => m.map.find((i) => Math.hypot(i.center.x - x, i.center.z - z) <= i.radius)?.groundY ?? m.map[0].groundY;
-  post({ type: 'map', map: m.map, humanId });
+  const me = m.tick(new Map()).players.find((p) => p.id === humanId);
+  if (!me) throw new Error(`worker: human ${humanId} missing from snapshot`);
+  post({ type: 'map', map: m.map, humanId, humanIsland: me.island });
   startLoop();
 }
 

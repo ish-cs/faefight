@@ -182,7 +182,7 @@ async function startGame(difficulty: Difficulty, menu: HTMLElement) {
       map = m.map;
       humanId = m.humanId;
       renderer.setMap(map, humanId);
-      hud.setMap(map, humanId);
+      hud.setMap(map, humanId, m.humanIsland);
     } else if (m.type === 'snapshot') {
       const first = !snap;
       snap = m.snap;

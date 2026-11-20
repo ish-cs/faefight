@@ -88,14 +88,14 @@ export class Hud {
     parent.append(this.root);
   }
 
-  setMap(map: IslandLayout[], humanId: number) {
+  setMap(map: IslandLayout[], humanId: number, humanIsland: number) {
     this.map = map;
     this.humanId = humanId;
     this.seals.replaceChildren(...map.map((isl) => {
       const chip = el('div', 'seal-chip');
       const dot = el('span', 'dot');
       dot.style.background = hex(ISLAND_COLORS[isl.index % 8]);
-      chip.append(dot, el('span', 'name', isl.index === map[humanId]?.index ? 'You' : ISLAND_NAMES[isl.index % 8]), el('span', 'state', 'OPEN'));
+      chip.append(dot, el('span', 'name', isl.index === humanIsland ? 'You' : ISLAND_NAMES[isl.index % 8]), el('span', 'state', 'OPEN'));
       return chip;
     }));
     this.pieces.replaceChildren(...PIECE_ORDER.map((k, i) => {

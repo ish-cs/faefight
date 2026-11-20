@@ -32,6 +32,10 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   const me0 = snap0.players.find((p) => p.id === humanId)!;
   const home = map[me0.island];
 
+  // The seal chip labelled "You" (chips are in island order) is the human's own island.
+  const chipNames = await page.locator('.seal-chip .name').allTextContents();
+  expect(chipNames.indexOf('You')).toBe(me0.island);
+
   // Give cash and stand next to our own shop (1.5 m toward the island centre).
   // debugGive may add or set; either way we end up with more than the starting $50.
   await dbg(page, 'give', { cash: 100 });
