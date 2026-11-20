@@ -96,6 +96,8 @@ export class Renderer {
     if (e.type === 'shot') {
       const from = e.data.from as Vec3 | undefined, to = e.data.to as Vec3 | undefined;
       if (from && to) this.addTracer(from, to, e.data.by === this.humanId);
+    } else if (e.type === 'pieceHit' || e.type === 'destroyed') {
+      this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : 4);
