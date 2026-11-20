@@ -16,7 +16,7 @@ export const AIM: Record<Difficulty, AimProfile> = {
   hard: { reactSec: 0.24, coneRad: 3 * DEG, turnRate: 11, maxTurn: 11 },
   // Human pro: ~0.2 s reaction, ~2° error that tightens to ~1.4° while tracking (still misses at range),
   // fast smooth tracking, flicks capped at ~690°/s.
-  pro: { reactSec: 0.2, coneRad: 2 * DEG, turnRate: 14, maxTurn: 12 },
+  pro: { reactSec: 0.18, coneRad: 1.5 * DEG, turnRate: 16, maxTurn: 12 },
 };
 
 /** Losing sight longer than this makes the next sighting a fresh reaction. */

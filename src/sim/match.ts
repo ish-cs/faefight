@@ -12,7 +12,7 @@ import { newPlayer } from './player';
 import { isPlaceholderBotName, nickname } from './names';
 import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
-import type { BuildRequest, Difficulty, Inventory, MatchEvent, PlayerInput, PlayerState, Snapshot, Vec3, WeaponKind } from './types';
+import type { BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { add, clone, dist, dist2D, forward, norm, right, scale, sub, v3 } from './vec';
 
@@ -175,6 +175,16 @@ export class Match implements MatchApi {
     const p = this.s.pieces.get(pieceId);
     if (!p) throw new Error(`Match.debugDamagePiece: no piece ${pieceId}`);
     if (damagePiece(p, amount, 'explosive')) this.ctx.onPieceDestroyed(pieceId);
+  }
+
+  /** Put a piece exactly here, skipping placement rules (tests). */
+  debugPlacePiece(kind: PieceKind, pos: Vec3, rotY: number, owner = 0): number {
+    const id = this.s.nextId++;
+    const piece = { id, kind, owner, pos: clone(pos), rotY, hp: PIECES[kind].hp };
+    this.s.pieces.set(id, piece);
+    this.physics.addPiece(piece);
+    this.sealDirty = true;
+    return id;
   }
 
   debugTeleport(playerId: number, pos: Vec3): void {

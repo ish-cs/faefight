@@ -1,4 +1,4 @@
-import { AMMO_BOX, CHARGE, GRENADE, MAP, PIECES, SEAL, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, GRENADE, MAP, MEDKIT, PIECES, SEAL, WEAPONS } from '../constants';
 import { buy } from '../economy';
 import type { Doorway } from '../map';
 import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
@@ -59,10 +59,12 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
 }
 
 /**
- * `tower`: sandbags wanted for climbing above the sudden-death tide. `grenades`: how many to carry.
+ * `tower`: sandbags wanted for climbing above the sudden-death tide. `grenades`/`medkits`: how many to carry.
  * `steel`: rich enough that the seal kit should be steel.
  */
-export type Needs = { scaffolds: number; kit: number; charge: boolean; tower?: number; grenades?: number; steel?: boolean };
+export type Needs = {
+  scaffolds: number; kit: number; charge: boolean; tower?: number; grenades?: number; medkits?: number; steel?: boolean;
+};
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
 export type ShopStyle = {
@@ -107,6 +109,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
   if (inv.grenades < (needs.grenades ?? 0)) return cash >= GRENADE.price ? 'grenade' : null;
+  if (inv.medkits < (needs.medkits ?? 0)) return cash >= MEDKIT.price ? 'medkit' : null;
   if (style.closeGun && !inv.weapons.shotgun && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
   if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
