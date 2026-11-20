@@ -207,7 +207,7 @@ export class Boats {
 
 /** Where gulls sit: harbor bollards, warehouse ridges, light masts, island rim bollards (world space). */
 export function gullPerches(map: IslandLayout[], backdrop: (isl: IslandLayout) => { hw: number; z0: number; top: number }) {
-  const out: { p: THREE.Vector3; yaw: number; roof: boolean }[] = [];
+  const out: { p: THREE.Vector3; yaw: number; roof: boolean; stay?: boolean }[] = [];
   const rng = makeRng(4477);
   for (const isl of map) {
     const c = Math.cos(isl.bunker.facingYaw), s = Math.sin(isl.bunker.facingYaw);
@@ -215,7 +215,7 @@ export function gullPerches(map: IslandLayout[], backdrop: (isl: IslandLayout) =
     const { hw, z0, top } = backdrop(isl);
     const yaw = isl.bunker.facingYaw;
     // quay bollards (islands.ts buildBackdrop: x = -hw + 3 + 7k at z0 + 0.6, head ≈ 0.5 m)
-    for (let x = -hw + 3, k = 0; x < hw - 1; x += 7, k++) if (k % 3 === 1) out.push({ p: W(x, top + 0.5, z0 + 0.6), yaw: yaw + Math.PI + rng.rr(-0.8, 0.8), roof: false });
+    for (let x = -hw + 3, k = 0; x < hw - 1; x += 7, k++) if (k % 3 === 1) out.push({ p: W(x, top + 0.46, z0 + 0.6), yaw: yaw + Math.PI + rng.rr(-0.8, 0.8), roof: false });
     // warehouse ridge (30 m long at x = -0.38 hw, z0 + 24; ridge ≈ 12 m)
     for (let k = 0; k < 4; k++) out.push({ p: W(-hw * 0.38 + rng.rr(-13, 13), top + 10 + Math.tan(0.22) * 9 + 0.12, z0 + 24), yaw: yaw + rng.rr(-0.4, 0.4) + (k % 2) * Math.PI, roof: true });
     // light-mast heads
@@ -223,7 +223,7 @@ export function gullPerches(map: IslandLayout[], backdrop: (isl: IslandLayout) =
     // island rim bollards (islands.ts: 14 around the coping at R - 0.45)
     for (const k of [2, 9]) {
       const a = ((k + 0.5) / 14) * Math.PI * 2;
-      out.push({ p: W(Math.sin(a) * (isl.radius - 0.45), isl.groundY + 0.5, Math.cos(a) * (isl.radius - 0.45)), yaw: a + rng.rr(-0.5, 0.5), roof: false });
+      out.push({ p: W(Math.sin(a) * (isl.radius - 0.45), isl.groundY + 0.46, Math.cos(a) * (isl.radius - 0.45)), yaw: a + rng.rr(-0.5, 0.5), roof: false, stay: k === 2 });
     }
   }
   return out;
@@ -242,7 +242,10 @@ type Gull = {
  * per-instance flap amount (0 = folded), transforms are a handful of matrices on the CPU.
  */
 export class Gulls {
+  /** flying gulls (perched ones are a child mesh with folded wings) */
   readonly mesh: THREE.InstancedMesh;
+  private perched: THREE.InstancedMesh;
+  private zero = new THREE.Matrix4().makeScale(0, 0, 0);
   private birds: Gull[] = [];
   private flap: THREE.InstancedBufferAttribute;
   private m = new THREE.Matrix4();
@@ -252,18 +255,23 @@ export class Gulls {
   private c = new THREE.Vector3();
   private s = new THREE.Vector3(1, 1, 1);
 
-  constructor(map: IslandLayout[], perches: { p: THREE.Vector3; yaw: number; roof: boolean }[]) {
+  constructor(map: IslandLayout[], perches: { p: THREE.Vector3; yaw: number; roof: boolean; stay?: boolean }[]) {
     const g = new THREE.BufferGeometry();
-    // body + head + two swept wings (x = span), nose toward -Z
+    // diamond body, pyramid head + beak, two swept wings (x = span), tail fan; nose toward -Z
     const P = [
-      0, 0, -0.35, 0.07, 0, 0.1, -0.07, 0, 0.1, 0, 0.07, 0.05, // body (3 tris)
-      0.06, 0, -0.05, 0.75, 0.06, 0.08, 0.06, 0, 0.12, // right wing
-      -0.06, 0, -0.05, -0.06, 0, 0.12, -0.75, 0.06, 0.08, // left wing
-      0, 0.12, -0.32, 0.035, 0.06, -0.3, -0.035, 0.06, -0.3, 0, 0.06, -0.45, // head + beak
-      0, 0, 0.1, 0.06, 0.01, 0.28, -0.06, 0.01, 0.28, // tail
+      0, 0.03, -0.26, 0, 0.03, 0.3, 0, 0.1, 0, 0, -0.05, 0, -0.075, 0.03, 0, 0.075, 0.03, 0, // 0-5 body
+      0.05, 0.05, -0.06, 0.75, 0.08, 0.08, 0.05, 0.05, 0.12, // 6-8 right wing
+      -0.05, 0.05, -0.06, -0.05, 0.05, 0.12, -0.75, 0.08, 0.08, // 9-11 left wing
+      0, 0.14, -0.25, -0.045, 0.05, -0.22, 0.045, 0.05, -0.22, 0, 0.065, -0.4, 0, 0.09, -0.12, // 12-16 head
+      0, 0.03, 0.2, 0.07, 0.04, 0.36, -0.07, 0.04, 0.36, // 17-19 tail
     ];
     g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
-    g.setIndex([0, 1, 2, 0, 3, 1, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 10, 12, 13, 10, 13, 11, 14, 15, 16]);
+    g.setIndex([
+      0, 2, 5, 0, 4, 2, 0, 5, 3, 0, 3, 4, 1, 5, 2, 1, 2, 4, 1, 3, 5, 1, 4, 3,
+      6, 7, 8, 9, 10, 11,
+      12, 13, 15, 12, 15, 14, 12, 14, 16, 12, 16, 13, 13, 15, 14, 13, 14, 16,
+      17, 18, 19,
+    ]);
     g.computeVertexNormals();
     const rng = makeRng(3131);
     const ring = Math.hypot(map[0].center.x, map[0].center.z);
@@ -285,7 +293,7 @@ export class Gulls {
     }
     // perched: roofs mostly just sit; bollard birds land and take off again on a loop
     perches.forEach((pc, i) => {
-      const lander = !pc.roof || i % 5 === 0;
+      const lander = !pc.stay && (!pc.roof || i % 5 === 0);
       this.birds.push({
         cx: pc.p.x + rng.rr(-14, 14), cz: pc.p.z + rng.rr(-14, 14), r: rng.rr(8, 14), y: pc.p.y + rng.rr(8, 16), w: rng.rr(0.25, 0.4) * (rng.rnd() < 0.5 ? -1 : 1), ph: rng.rr(0, 6),
         mode: lander ? 'land' : 'sit', perch: { p: pc.p, yaw: pc.yaw }, ...fresh(), period: rng.rr(40, 70), off: rng.rr(0, 70), yaw: pc.yaw,
@@ -304,11 +312,32 @@ export class Gulls {
     // white body, grey mantle, black wingtips, yellow beak
     let col = mix(vec3(0.92, 0.92, 0.9), vec3(0.55, 0.58, 0.62), smoothstep(0.12, 0.25, span));
     col = mix(col, vec3(0.1, 0.1, 0.11), smoothstep(0.5, 0.68, span));
-    m.colorNode = mix(col, vec3(0.9, 0.7, 0.15), step(positionGeometry.z, -0.38));
+    m.colorNode = mix(col, vec3(0.9, 0.7, 0.15), step(positionGeometry.z, -0.33));
     this.mesh = new THREE.InstancedMesh(g, m, this.birds.length);
     this.mesh.name = 'gulls';
     this.mesh.frustumCulled = false;
     this.mesh.castShadow = false;
+    // perched birds: same body, wings folded back along the flanks (wingtips over the tail)
+    const gs = new THREE.BufferGeometry();
+    const PS = P.slice();
+    PS.splice(7 * 3, 3, 0.085, 0.085, 0.4);
+    PS.splice(11 * 3, 3, -0.085, 0.085, 0.4);
+    PS.splice(6 * 3, 3, 0.08, 0.07, -0.1);
+    PS.splice(9 * 3, 3, -0.08, 0.07, -0.1);
+    gs.setAttribute('position', new THREE.Float32BufferAttribute(PS, 3));
+    gs.setIndex(g.getIndex());
+    gs.computeVertexNormals();
+    const ms = new THREE.MeshStandardNodeMaterial({ roughness: 0.8, side: THREE.DoubleSide });
+    ms.name = 'gullPerched';
+    const pz = positionGeometry.z, py = positionGeometry.y;
+    let cs = mix(vec3(0.92, 0.92, 0.9), vec3(0.55, 0.58, 0.62), step(0.065, py).mul(step(-0.12, pz)).mul(step(0.03, abs(positionGeometry.x))));
+    cs = mix(cs, vec3(0.1, 0.1, 0.11), step(0.3, pz).mul(step(0.06, py)));
+    ms.colorNode = mix(cs, vec3(0.9, 0.7, 0.15), step(pz, -0.33));
+    this.perched = new THREE.InstancedMesh(gs, ms, this.birds.length);
+    this.perched.name = 'gulls:perched';
+    this.perched.frustumCulled = false;
+    this.perched.castShadow = true;
+    this.mesh.add(this.perched);
     this.update(0);
   }
 
@@ -321,9 +350,9 @@ export class Gulls {
     this.birds.forEach((b, i) => {
       let flap = 1, bank = -Math.sign(b.w) * 0.35, sx = 1, pitch = 0;
       if (b.mode === 'sit' && b.perch) {
-        this.v.copy(b.perch.p);
+        this.v.copy(b.perch.p).setY(b.perch.p.y + 0.02);
         b.yaw = b.perch.yaw + Math.sin(t * 0.3 + b.ph) * 0.3 * Math.max(0, Math.sin(t * 0.13 + b.ph * 3)); // looks around
-        flap = 0; bank = 0; sx = 0.32;
+        flap = 0; bank = 0; sx = 0.16;
       } else if (b.mode === 'land' && b.perch) {
         const u = ((t + b.off) % b.period) / b.period;
         const C = this.circle(b, t, this.c);
@@ -333,8 +362,8 @@ export class Gulls {
           this.v.lerpVectors(C, b.perch.p, e);
           flap = k > 0.85 ? 1 : 0.15; bank = 0; pitch = -0.25 * (1 - e);
         } else if (u < 0.93) { // perched
-          this.v.copy(b.perch.p);
-          flap = 0; bank = 0; sx = 0.32;
+          this.v.copy(b.perch.p).setY(b.perch.p.y + 0.02);
+          flap = 0; bank = 0; sx = 0.16;
         } else { // take off
           const k = (u - 0.93) / 0.07, e = k * k * (3 - 2 * k);
           this.v.lerpVectors(b.perch.p, C, e);
@@ -348,10 +377,15 @@ export class Gulls {
       b.last.copy(this.v);
       this.e.set(pitch, b.yaw, bank, 'YXZ');
       this.q.setFromEuler(this.e);
-      this.mesh.setMatrixAt(i, this.m.compose(this.v, this.q, this.s.set(1.1 * sx, 1.1, 1.1)));
+      const sitting = sx < 1;
+      // perched: stockier (a sitting gull is short and round; the flight shape is long and flat)
+      this.m.compose(this.v, this.q, sitting ? this.s.set(1.15, 1.9, 0.78) : this.s.set(1.1, 1.1, 1.1));
+      this.mesh.setMatrixAt(i, sitting ? this.zero : this.m);
+      this.perched.setMatrixAt(i, sitting ? this.m : this.zero);
       this.flap.setX(i, flap);
     });
     this.mesh.instanceMatrix.needsUpdate = true;
+    this.perched.instanceMatrix.needsUpdate = true;
     this.flap.needsUpdate = true;
   }
 }
