@@ -16,6 +16,8 @@ import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
+import { errors, installErrorReporting } from './telemetry/errors';
+import { telemetryEnabled } from './telemetry/config';
 import { reloadClock } from './firstPerson';
 import { ChatUi } from './chatUi';
 import { loadGameModules, preloadGame } from './gameModules';
@@ -140,7 +142,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     buffered: false,
     inputHz: null,
     connect(sink) {
-      worker.onerror = (e) => { console.error('[worker] crashed', e.message); sink.fatal('Simulation crashed', e.message); };
+      worker.onerror = (e) => { console.error('[worker] crashed', e.message); errors?.report('worker', e.message, `at ${e.filename}:${e.lineno}:${e.colno}`); sink.fatal('Simulation crashed', e.message); };
       worker.onmessage = (e: MessageEvent<FromWorker>) => {
         const m = e.data;
         if (m.type === 'map') {
@@ -154,6 +156,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
           else session?.onPreview(m.playerId, m.result, m.key);
         } else if (m.type === 'error') {
           console.error(`[worker] ${m.message}`);
+          errors?.report('worker', m.message);
           toast(m.message);
         }
       };
@@ -603,6 +606,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   app.prepend(canvas);
   loading.progress('gpu', 0, 'Starting WebGPU');
   const renderer = await Renderer.create(canvas);
+  const prevLost = renderer.gpu.onDeviceLost.bind(renderer.gpu);
+  renderer.gpu.onDeviceLost = (info) => { errors?.report('gpu', `device lost: ${info.message} (${info.reason ?? 'unknown'})`); prevLost(info); };
   loading.progress('gpu', 1, 'Starting the simulation');
   console.info(`[render] backend: ${renderer.backend}`);
   scope.begin(); // window/document listeners from here on are removed by destroy()
@@ -860,6 +865,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   function showFatal(titleText: string, detail: string) {
     if (dead) return;
+    if (titleText === 'Simulation crashed') errors?.report('fatal', `${titleText}: ${detail}`);
     reveal();
     input.enabled = false;
     chat.enabled = false;
@@ -1164,6 +1170,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderer.world.sky.setDynamicScale(dynRes.scale);
     }
     frameMs.push(now - last);
+    errors?.frame(now - last);
     if (frameMs.length > 600) frameMs.shift();
     last = now;
     fpsFrames++;
@@ -1329,6 +1336,7 @@ async function boot() {
     events: () => loading.events,
     screen: loading, // screenshots drive it directly (tests/visual/settingsShots.mjs)
   };
+  if (telemetryEnabled()) installErrorReporting();
   if (isMobileDevice(currentDevice())) {
     // Phones and tablets: a card instead of the game, and nothing of the game is loaded.
     console.info('[main] mobile device: showing the computer-only card');
