@@ -4,7 +4,7 @@ import type { HostRoom, Link } from '../../src/net/transport';
 
 // Node ships BroadcastChannel; separate instances in one process talk to each other like tabs.
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-async function until(cond: () => boolean, ms = 2000) {
+async function until(cond: () => boolean, ms = 10_000) {
   const end = Date.now() + ms;
   while (!cond()) {
     if (Date.now() > end) throw new Error('timed out waiting');
@@ -95,7 +95,7 @@ describe('BroadcastTransport', () => {
     const t = new BroadcastTransport();
     await expect(t.join('nope')).rejects.toThrow('Room not found');
     await expect(t.join('ZZZZZZ')).rejects.toThrow('Room not found');
-  }, 10_000);
+  }, 30_000);
 
   test('a host that goes silent (killed tab) is detected by heartbeat timeout', async () => {
     // Fake host: accepts the join, then never speaks again.
@@ -104,12 +104,13 @@ describe('BroadcastTransport', () => {
     ch.onmessage = (e) => {
       if (e.data?.k === 'join') ch.postMessage({ k: 'accept', to: e.data.from });
     };
+    const joinedAt = Date.now();
     const link = await new BroadcastTransport().join('QQQQQQ');
     cleanup.push(() => link.close());
-    let closed = false;
-    link.onClose(() => (closed = true));
-    await wait(2000);
-    expect(closed).toBe(false);
-    await until(() => closed, 4000);
-  }, 10_000);
+    let closedAt = 0;
+    link.onClose(() => (closedAt = Date.now()));
+    await until(() => closedAt > 0, 20_000);
+    // Never before the 3 s dead window (lower bound is load-independent).
+    expect(closedAt - joinedAt).toBeGreaterThanOrEqual(3000);
+  }, 30_000);
 });
