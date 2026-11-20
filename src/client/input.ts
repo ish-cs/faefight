@@ -1,22 +1,23 @@
 import { BUILD } from '../sim/constants';
 import { HOTBAR_SIZE, isPieceItem } from '../sim/hotbar';
 import type { HotbarItem, PieceKind, PlayerInput } from '../sim/types';
+import { type Action, isAction, isHeld, keymapSuspended, slotForCode } from './keymap';
+import { settings } from './settings/store';
 
 export const PIECE_ORDER: PieceKind[] = ['sandbags', 'wood', 'metal', 'steel', 'scaffold', 'ramp', 'container'];
 /** Wheel travel (px) per hotbar step: one mouse notch is ~100, trackpads send many small deltas. */
 const WHEEL_STEP = 50;
 
-const SENS_KEY = 'faefight.sensitivity';
 const BASE_RAD_PER_PX = 0.0022;
 const PITCH_LIMIT = 1.35;
 const ROT_STEP = (BUILD.rotStepDeg * Math.PI) / 180;
 
+/** Mouse sensitivity multiplier (Settings → Controls). */
 export function loadSensitivity(): number {
-  const v = Number(localStorage.getItem(SENS_KEY));
-  return Number.isFinite(v) && v > 0 ? v : 1;
+  return settings.get().controls.sensitivity;
 }
 export function saveSensitivity(v: number) {
-  localStorage.setItem(SENS_KEY, String(v));
+  settings.update((s) => { s.controls.sensitivity = v; });
 }
 
 export type InputHooks = {
@@ -26,7 +27,7 @@ export type InputHooks = {
   place(): void;
   /** Pointer lock gained/lost. */
   lockChange(locked: boolean): void;
-  /** Tab: hotbar edit mode (pointer released to drag slots) opened/closed. */
+  /** Reorder key (I by default): hotbar edit mode (pointer released to drag slots) opened/closed. */
   inventoryChange(open: boolean): void;
 };
 
@@ -38,12 +39,11 @@ export class InputController {
   selected = 0;
   /** What sits in the selected slot, per the latest snapshot (set by main each frame). */
   held: HotbarItem | null = null;
-  /** Tab mode: pointer released so hotbar slots can be dragged. */
+  /** Reorder mode: pointer released so hotbar slots can be dragged. */
   inventory = false;
   buildRot = 0;
   /** False while a menu or panel is open: game keys and mouse are ignored. */
   enabled = false;
-  sensitivity = loadSensitivity();
   private keys = new Set<string>();
   private fireHeld = false;
   private oneShot: Partial<PlayerInput> = {};
@@ -89,7 +89,7 @@ export class InputController {
     this.selected = i;
   }
 
-  /** Tab: release the pointer to drag hotbar slots; Tab again (or a click on the game) recaptures. */
+  /** Reorder key: release the pointer to drag hotbar slots; the key again (or a click on the game) recaptures. */
   setInventory(open: boolean) {
     if (open === this.inventory) return;
     this.inventory = open;
@@ -100,7 +100,12 @@ export class InputController {
   }
 
   get free() {
-    return this.keys.has('AltLeft') || this.keys.has('AltRight');
+    return this.enabled && isHeld('freePlace', this.keys);
+  }
+
+  /** Live from Settings → Controls. */
+  get sensitivity() {
+    return settings.get().controls.sensitivity;
   }
 
   requestLock() {
@@ -111,7 +116,6 @@ export class InputController {
   }
 
   setSensitivity(v: number) {
-    this.sensitivity = v;
     saveSensitivity(v);
   }
 
@@ -138,47 +142,48 @@ export class InputController {
 
   private onMouseMove(e: MouseEvent) {
     if (!this.enabled || !this.locked) return;
-    const k = BASE_RAD_PER_PX * this.sensitivity;
+    const c = settings.get().controls;
+    const k = BASE_RAD_PER_PX * c.sensitivity;
     this.yaw -= e.movementX * k;
-    this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - e.movementY * k));
+    this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - e.movementY * k * (c.invertY ? -1 : 1)));
   }
 
   private onKey(e: KeyboardEvent, down: boolean) {
-    if (e.code === 'AltLeft' || e.code === 'AltRight') e.preventDefault();
-    // Space/Tab are ours in game (jump, hotbar edit mode); with a panel open they press/move between buttons as usual.
-    if ((e.code === 'Space' || e.code === 'Tab') && this.enabled) e.preventDefault();
+    if (!down) this.keys.delete(e.code); // releases always count, even with the settings panel open
+    if (keymapSuspended()) return; // settings panel open / capturing a key
+    if (isAction('freePlace', e.code)) e.preventDefault();
+    // Jump/scoreboard keys (Space/Tab by default) are ours in game; with a panel open they press/move between buttons as usual.
+    if ((isAction('jump', e.code) || isAction('scoreboard', e.code) || e.code === 'Tab') && this.enabled) e.preventDefault();
     if (!down) { this.keys.delete(e.code); return; }
     if (!this.enabled) return;
     const first = !e.repeat;
     this.keys.add(e.code);
     if (!first) return;
-    const digit = /^Digit([1-9])$/.exec(e.code);
-    if (digit) { this.select(Number(digit[1]) - 1); return; }
-    switch (e.code) {
-      case 'KeyQ':
-        // Ctrl+Q (or Shift+Q, Mac-friendly) drops the whole stack.
-        if (e.ctrlKey) e.preventDefault();
-        this.oneShot.drop = e.ctrlKey || e.shiftKey ? 'stack' : 'one';
-        break;
-      case 'KeyZ': this.rotate(-1); break;
-      case 'KeyX': this.rotate(1); break;
-      case 'KeyE': this.hooks.interact(); break;
-      case 'KeyR': this.oneShot.reload = true; break;
-      case 'Tab': this.setInventory(!this.inventory); break;
-      case 'Space': this.oneShot.jump = true; break;
+    const slot = slotForCode(e.code);
+    if (slot >= 0 && slot < HOTBAR_SIZE) { this.select(slot); return; }
+    if (isAction('drop', e.code)) {
+      // Ctrl+drop (or Shift+drop, Mac-friendly) drops the whole stack.
+      if (e.ctrlKey) e.preventDefault();
+      this.oneShot.drop = e.ctrlKey || e.shiftKey ? 'stack' : 'one';
     }
+    if (isAction('rotateLeft', e.code)) this.rotate(-1);
+    if (isAction('rotateRight', e.code)) this.rotate(1);
+    if (isAction('interact', e.code)) this.hooks.interact();
+    if (isAction('reload', e.code)) this.oneShot.reload = true;
+    if (isAction('inventory', e.code)) this.setInventory(!this.inventory);
+    if (isAction('jump', e.code)) this.oneShot.jump = true;
   }
 
   /** Current input; one-shot actions are included once and then cleared. */
   sample(): PlayerInput {
-    const on = (c: string) => (this.enabled && this.keys.has(c) ? 1 : 0);
+    const on = (a: Action) => (this.enabled && isHeld(a, this.keys) ? 1 : 0);
     const input: PlayerInput = {
-      moveX: on('KeyD') - on('KeyA'),
-      moveZ: on('KeyW') - on('KeyS'),
+      moveX: on('right') - on('left'),
+      moveZ: on('forward') - on('back'),
       yaw: this.yaw,
       pitch: this.pitch,
-      jump: on('Space') === 1,
-      sprint: on('ShiftLeft') === 1 || on('ShiftRight') === 1,
+      jump: on('jump') === 1,
+      sprint: on('sprint') === 1,
       fire: this.enabled && this.fireHeld && !this.buildMode,
       reload: false, interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
       select: this.selected, drop: null, moveSlot: null, useMedkit: false,

@@ -2,19 +2,17 @@ import * as THREE from 'three/webgpu';
 import { emissive, mrt, output, pass } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
+import { activeKeymap, bindingLabel, isAction } from '../keymap';
+import { settings } from '../settings/store';
 
 export type Quality = 'low' | 'high';
-const QUALITY_KEY = 'faefight.quality';
 
+/** Persisted in Settings → Video. */
 export function loadQuality(): Quality {
-  try {
-    const q = localStorage.getItem(QUALITY_KEY);
-    if (q === 'low' || q === 'high') return q;
-  } catch { /* storage blocked: fall through to default */ }
-  return 'high';
+  return settings.get().video.quality;
 }
 function saveQuality(q: Quality) {
-  try { localStorage.setItem(QUALITY_KEY, q); } catch (err) { console.warn('[world/sky] could not persist quality preset', err); }
+  settings.update((s) => { s.video.quality = q; });
 }
 
 /** Sun ≈ 34° elevation, warm. */
@@ -32,6 +30,8 @@ const PRESETS: Record<Quality, { pixelRatio: number; shadowMap: number; shadowEx
 export class SkyLighting {
   readonly sun = new THREE.DirectionalLight(0xffe6c2, 4.2);
   quality: Quality;
+  /** Settings → Video resolution scale: multiplies the preset's pixel ratio (result clamped to 0.5–2). */
+  private resScale = settings.get().video.resolutionScale;
   private pipeline: THREE.RenderPipeline | null = null;
 
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, private camera: THREE.Camera) {
@@ -84,6 +84,17 @@ export class SkyLighting {
     console.info(`[world/sky] quality → ${q}`);
   }
 
+  setResolutionScale(s: number) {
+    if (s === this.resScale) return;
+    this.resScale = s;
+    this.applyPixelRatio();
+  }
+
+  private applyPixelRatio() {
+    const base = Math.min(window.devicePixelRatio, PRESETS[this.quality].pixelRatio);
+    this.gpu.setPixelRatio(Math.min(2, Math.max(0.5, base * this.resScale)));
+  }
+
   toggleQuality(): Quality {
     this.setQuality(this.quality === 'high' ? 'low' : 'high');
     return this.quality;
@@ -91,7 +102,7 @@ export class SkyLighting {
 
   private apply() {
     const p = PRESETS[this.quality];
-    this.gpu.setPixelRatio(Math.min(window.devicePixelRatio, p.pixelRatio));
+    this.applyPixelRatio();
     this.gpu.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is removed in WebGPURenderer; soften via radius
     this.sun.shadow.radius = p.shadowMap > 2048 ? 3 : 1;
     const sh = this.sun.shadow;
@@ -137,7 +148,7 @@ export function installQualityToggle(sky: SkyLighting) {
   let toast: HTMLDivElement | null = null;
   let hideAt = 0;
   window.addEventListener('keydown', (e) => {
-    if (e.code !== 'KeyP' || e.repeat) return;
+    if (!isAction('quality', e.code) || e.repeat) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     const q = sky.toggleQuality();
@@ -148,7 +159,7 @@ export function installQualityToggle(sky: SkyLighting) {
         + 'background:rgba(15,20,26,.72);color:#fff;font:600 13px "Helvetica Neue",Arial,sans-serif;letter-spacing:.06em;z-index:50;pointer-events:none';
       document.body.append(toast);
     }
-    toast.textContent = `GRAPHICS: ${q.toUpperCase()}  (P)`;
+    toast.textContent = `GRAPHICS: ${q.toUpperCase()}  (${bindingLabel(activeKeymap(), 'quality')})`;
     toast.style.display = 'block';
     hideAt = performance.now() + 1500;
     setTimeout(() => { if (toast && performance.now() >= hideAt) toast.style.display = 'none'; }, 1600);
