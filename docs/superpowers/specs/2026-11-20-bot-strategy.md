@@ -140,9 +140,11 @@ Measured (seeds alternate seats; 1v1s swing on one early kill, so 20 seeds):
 
 | Series | Result |
 |---|---|
-| PRO vs Hard 1v1, seeds 1–20 | PRO 16/20 (1–30: 23/30) |
-| Hard vs Medium 1v1, seeds 1–20 | Hard 17/20 (1–30: 26/30) |
-| 8 PRO FFA, seeds 1–3 | winners at 12.2 / 15.8 / 12.4 min · 46–55 kills · 7–9 seals · 6–7 pre-SD eliminations · 0.55–0.59 ms/tick |
-| Mixed FFA (2 each), seeds 1–3 | PRO / Hard / PRO win at 15.8 min · 21–40 kills · 6–7 seals · 6 pre-SD eliminations · 0.42–0.52 ms/tick |
+| PRO vs Hard 1v1, seeds 1–20 | PRO 15/20 (before shields/potions landed: 16/20, seeds 1–30 23/30) |
+| Hard vs Medium 1v1, seeds 1–20 | Hard 19/20 |
+| 8 PRO FFA, seeds 1–3 | winners at 15.1 / 13.7 / 15.2 min · 49–72 kills · 6–9 seals · 5–7 pre-SD eliminations · 0.51–0.72 ms/tick |
+| Mixed FFA (2 each), seeds 1–3 | draw / Hard / Medium at 15.7–15.8 min · 33–43 kills · 6–8 seals · 5–6 pre-SD eliminations · 0.50–0.59 ms/tick |
+
+Open: with shields in, 8-PRO FFAs mostly end just after sudden death starts (last two or three standing), not before.
 
 `MEASURE=1v1|ffa [A=pro B=hard SEEDS=1,2,3 TRACE=10] npx vitest run tests/sim/proMeasure.test.ts` reproduces these.
