@@ -1,5 +1,5 @@
 import { AMMO_BOX, CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRENADE, LIFECYCLE, MEDKIT, PIECES, WEAPONS } from '../sim/constants';
-import { generatorSpec, genUpgradePrice, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
+import { generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
 import type { IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem } from '../sim/hotbar';
 import type { GunKind, HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
@@ -233,7 +233,7 @@ export class Hud {
     if (!me || !me.alive) return null;
     const own = this.map[me.island];
     const r = ECONOMY.interactRadius;
-    if (own && dist2D(own.shop, me.pos) <= r) return 'shop';
+    if (this.map.some((m) => dist2D(m.shop, me.pos) <= r)) return 'shop'; // any island's shop NPC
     if (own && dist2D(own.vault, me.pos) <= r) return 'vault';
     if (this.map.some((m) => dist2D(m.generator, me.pos) <= r)) return 'generator';
     return null;
@@ -470,6 +470,8 @@ export class Hud {
     }
     setText(this.panel.querySelector('.panel-cash') as HTMLElement, `Carrying $${me.inv.cash}`);
     const genLevel = this.snap?.genLevels?.[me.island] ?? 1;
+    // Any island's shop NPC sells to you, but upgrades and locks only at your own.
+    const atHome = !!this.map[me.island] && dist2D(this.map[me.island].shop, me.pos) <= ECONOMY.interactRadius;
     for (const b of Array.from(this.panel.querySelectorAll<HTMLButtonElement>('.shop-item'))) {
       const item = b.dataset.item as ShopItem;
       const price = priceOf(item, genLevel);
@@ -499,6 +501,7 @@ export class Hud {
         const n = countOf(me.inv, item);
         if (n > 0) badge = `×${n}`;
       }
+      if (!atHome && isHomeOnly(item) && status !== 'Max' && status !== 'Locked') status = 'Home shop';
       const blocked = poor || status !== '';
       if (b.getAttribute('aria-disabled') !== String(blocked)) b.setAttribute('aria-disabled', String(blocked));
       b.classList.toggle('poor', poor && !status);

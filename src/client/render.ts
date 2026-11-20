@@ -3,14 +3,14 @@ import { GENERATOR_MAX_LEVEL, PLAYER } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout } from '../sim/map';
 import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
-import { CharacterSystem } from './characters/avatar';
+import { CharacterSystem, type Motion } from './characters/avatar';
+import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
 
 export { pieceGeometry };
 export const ISLAND_COLORS = [0xe0533d, 0x3d84e0, 0x3dbb6a, 0xe0b23d, 0xa65de0, 0x3dd0d0, 0xe07a3d, 0xd6d6d6];
 export const ISLAND_NAMES = ['Red', 'Blue', 'Green', 'Gold', 'Purple', 'Teal', 'Orange', 'White'];
 
-const TICK_MS = 1000 / 30;
 /** WebGPURenderer tone-maps everything on output (per-material toneMapped is ignored), so unlit
  *  overlay-ish things (labels, ghost, tracers) get their colour pre-boosted to read at full brightness. */
 const UNLIT_BOOST = 2.6;
@@ -29,10 +29,15 @@ export class Renderer {
   private waterY = 0;
   private map: IslandLayout[] = [];
   private humanId = 0;
-  private prev: Snapshot | null = null;
   private curr: Snapshot | null = null;
-  private currAt = 0;
-  private interpMs = TICK_MS;
+  /** Display-rate playback of other players: adaptive clock + per-player Hermite tracks (interp.ts). */
+  private clock = new RenderClock();
+  private tracks = new Map<number, PlayerTrack>();
+  private playT: number | null = null;
+  /** The local player's predicted render state (predict.ts), when prediction is running. */
+  private local: { pos: Vec3; vel: Vec3 } | null = null;
+  private motion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  private lastFrame = performance.now();
   /** Animated player avatars (src/client/characters). */
   readonly characters = new CharacterSystem(this.scene, (island) => ISLAND_COLORS[island % 8]);
   private loot = new Map<number, THREE.Mesh>();
@@ -97,15 +102,32 @@ export class Renderer {
     });
   }
 
-  /**
-   * Feed a new snapshot. Returns its events for the HUD. intervalMs = how long to interpolate from the
-   * previous snapshot to this one (one tick locally; the snapshot spacing for remote clients).
-   */
-  pushSnapshot(snap: Snapshot, intervalMs = TICK_MS): MatchEvent[] {
-    this.prev = this.curr ?? snap;
+  /** Every snapshot as soon as it arrives (before any event delay): drives player interpolation. */
+  ingest(snap: Snapshot) {
+    this.clock.push(snap.time, performance.now() / 1000);
+    for (const p of snap.players) {
+      let tr = this.tracks.get(p.id);
+      if (!tr) { tr = new PlayerTrack(); this.tracks.set(p.id, tr); }
+      tr.push({ t: snap.time, pos: p.pos, yaw: p.yaw, pitch: p.pitch });
+    }
+  }
+
+  /** Local player's predicted feet/velocity for this frame (null = use the interpolated snapshots). */
+  setLocal(state: { pos: Vec3; vel: Vec3 } | null) {
+    this.local = state;
+  }
+
+  /** Advance the interpolation clock; call once per frame before reading positions. */
+  beginFrame() {
+    this.playT = this.clock.advance(performance.now() / 1000);
+  }
+
+  /** Debug: current interpolation delay (s) behind the newest snapshot. */
+  get interpDelay() { return this.clock.delay; }
+
+  /** Feed a snapshot's discrete state (pieces, loot, events). Returns its events for the HUD. */
+  pushSnapshot(snap: Snapshot): MatchEvent[] {
     this.curr = snap;
-    this.currAt = performance.now();
-    this.interpMs = Math.max(1, intervalMs);
     this.waterY = snap.waterY;
     this.world.syncPieces(snap.pieces);
     this.syncLoot(snap);
@@ -176,20 +198,29 @@ export class Renderer {
     for (const [id, m] of this.loot) if (!seen.has(id)) { this.scene.remove(m); this.loot.delete(id); }
   }
 
-  /** Interpolated feet position for a player (between the last two snapshots). */
-  playerPos(id: number, out = new THREE.Vector3()): THREE.Vector3 | null {
-    if (!this.curr || !this.prev) return null;
-    const c = this.curr.players.find((p) => p.id === id);
-    if (!c) return null;
-    const a = this.prev.players.find((p) => p.id === id) ?? c;
-    const t = this.alpha();
-    const jump = Math.hypot(c.pos.x - a.pos.x, c.pos.y - a.pos.y, c.pos.z - a.pos.z) > 3; // teleport / respawn
-    if (jump) return out.set(c.pos.x, c.pos.y, c.pos.z);
-    return out.set(a.pos.x + (c.pos.x - a.pos.x) * t, a.pos.y + (c.pos.y - a.pos.y) * t, a.pos.z + (c.pos.z - a.pos.z) * t);
+  /** Display-rate motion of a player: predicted for the local player, else interpolated at the render clock. */
+  playerMotion(id: number, out: Motion): Motion | null {
+    if (id === this.humanId && this.local) {
+      const l = this.local;
+      out.pos.set(l.pos.x, l.pos.y, l.pos.z);
+      out.vel.set(l.vel.x, l.vel.y, l.vel.z);
+      return out;
+    }
+    const tr = this.tracks.get(id);
+    if (!tr || this.playT === null || !tr.sample(this.playT, this.sampleTmp)) return null;
+    const s = this.sampleTmp;
+    out.pos.set(s.pos.x, s.pos.y, s.pos.z);
+    out.vel.set(s.vel.x, s.vel.y, s.vel.z);
+    out.yaw = s.yaw;
+    out.pitch = s.pitch;
+    return out;
   }
+  private sampleTmp = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 };
 
-  private alpha() {
-    return Math.min(1, Math.max(0, (performance.now() - this.currAt) / this.interpMs));
+  /** Display-rate feet position for a player. */
+  playerPos(id: number, out = new THREE.Vector3()): THREE.Vector3 | null {
+    const m = this.playerMotion(id, this.motion);
+    return m ? out.copy(m.pos) : null;
   }
 
   setGhost(kind: PieceKind | null, pos?: Vec3, rotY = 0, ok = false) {
@@ -215,12 +246,12 @@ export class Renderer {
 
   render(localYaw: number) {
     const now = performance.now();
+    const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
+    this.lastFrame = now;
     const snap = this.curr;
     if (snap) {
-      const prev = this.prev;
-      this.characters.sync(snap.hidden?.length ? snap.players.filter((p) => !snap.hidden!.includes(p.id)) : snap.players, (id) => prev?.players.find((q) => q.id === id), this.alpha(), this.humanId,
-        localYaw, snap.time, (id, out) => this.playerPos(id, out));
-      for (const m of this.loot.values()) m.rotation.y += 0.02;
+      this.characters.sync(snap.hidden?.length ? snap.players.filter((p) => !snap.hidden!.includes(p.id)) : snap.players, this.humanId, localYaw, snap.time, (id, out) => this.playerMotion(id, out));
+      for (const m of this.loot.values()) m.rotation.y += 1.2 * dt;
     }
 
     for (const f of [...this.fx]) {

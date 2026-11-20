@@ -37,6 +37,8 @@ export function lockedGunOf(item: ShopItem): GunKind | null {
   const g = item.slice(5);
   return isGun(g) ? g : null;
 }
+/** Upgrades and locks are sold only at the buyer's own island's shop. */
+export const isHomeOnly = (item: ShopItem): boolean => item === 'genUpgrade' || lockedGunOf(item) !== null;
 export const lockItem = (g: GunKind): LockItem => `lock:${g}`;
 export const lockPrice = (g: GunKind): number => WEAPONS[g].price * LOCK_PRICE_MULT;
 

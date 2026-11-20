@@ -1,3 +1,4 @@
+import type { MoveCmd } from '../sim/movement';
 import { PIECES, WEAPONS } from '../sim/constants';
 import { validSlot } from '../sim/hotbar';
 import type { BuildRequest, GunKind, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
@@ -121,6 +122,29 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
   };
 }
 
+/** Most movement commands accepted in one message (~30 Hz sends carry 1–2 normally). */
+export const MAX_CMDS_PER_MSG = 8;
+const MAX_SEQ = 2 ** 31;
+
+/** Numbered movement commands; any malformed entry rejects the whole batch. */
+export function moveCmds(x: unknown): MoveCmd[] | null {
+  if (!Array.isArray(x) || x.length > MAX_CMDS_PER_MSG) return null;
+  const out: MoveCmd[] = [];
+  for (const c of x) {
+    if (!isObj(c) || !Number.isInteger(c.seq) || (c.seq as number) < 1 || (c.seq as number) > MAX_SEQ) return null;
+    if (typeof c.yaw !== 'number' || !Number.isFinite(c.yaw)) return null;
+    out.push({
+      seq: c.seq as number,
+      moveX: clamp(num(c.moveX), -1, 1),
+      moveZ: clamp(num(c.moveZ), -1, 1),
+      yaw: c.yaw,
+      jump: bool(c.jump),
+      sprint: bool(c.sprint),
+    });
+  }
+  return out;
+}
+
 export function sanitizeClientMsg(x: unknown): ClientMsg | null {
   if (!isObj(x)) return null;
   switch (x.t) {
@@ -131,7 +155,8 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
     }
     case 'input': {
       const input = sanitizeInput(x.input);
-      return input ? { t: 'input', input } : null;
+      const cmds = x.cmds === undefined ? [] : moveCmds(x.cmds);
+      return input && cmds ? { t: 'input', input, cmds } : null;
     }
     case 'preview': {
       const req = buildReq(x.req);
