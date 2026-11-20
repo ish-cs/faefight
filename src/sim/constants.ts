@@ -188,7 +188,11 @@ export const MAP = {
   waterY: 0,
   gap: 36,
   tideRate: LIFECYCLE.tideRate,
-  bunker: { interior: 4, wall: 0.3, height: 2.6, doorWidth: 1.6, doorHeight: 2.2 },
+  bunker: {
+    interior: 4, wall: 0.3, height: 2.6, doorWidth: 1.6, doorHeight: 2.2,
+    /** Firing slits: horizontal gaps (width × y0..y1 above the floor) in each door wall segment and the back wall. */
+    slit: { width: 0.6, y0: 1.35, y1: 1.53 },
+  },
 };
 
 /** Neutral center island stations (anyone may use them). */

@@ -211,14 +211,29 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
   };
 }
 
-/** Static, indestructible concrete boxes that make up a bunker (walls with door gaps, lintels, roof). */
-export function bunkerWallBoxes(b: Bunker): Box[] {
-  const { interior, wall, height, doorWidth, doorHeight } = MAP.bunker;
+/**
+ * Static, indestructible concrete boxes that make up a bunker (walls with door gaps, lintels, roof).
+ * With `slits` (default) every door-wall segment and the back wall have a firing slit: bullets and sight pass
+ * through, a player can't (see bunkerSlitBoxes for the plugs that stop players and explosives). Without slits the
+ * walls are whole boxes with the same footprints: what seal detection uses, so slits never change a seal.
+ */
+export function bunkerWallBoxes(b: Bunker, slits = true): Box[] {
+  return bunkerParts(b, slits).walls;
+}
+
+/** The firing slit openings as boxes: physics plugs them for players and explosives, never for bullets. */
+export function bunkerSlitBoxes(b: Bunker): Box[] {
+  return bunkerParts(b, true).slits;
+}
+
+function bunkerParts(b: Bunker, withSlits: boolean): { walls: Box[]; slits: Box[] } {
+  const { interior, wall, height, doorWidth, doorHeight, slit } = MAP.bunker;
   const outer = interior + 2 * wall;
-  const boxes: Box[] = [];
-  const push = (local: Vec3, half: Vec3) => {
+  const walls: Box[] = [];
+  const slits: Box[] = [];
+  const push = (out: Box[], local: Vec3, half: Vec3) => {
     const c = add(b.center, rotateY(local, b.facingYaw));
-    boxes.push({ center: c, half, rotY: b.facingYaw });
+    out.push({ center: c, half, rotY: b.facingYaw });
   };
   const off = interior / 2 + wall / 2;
   // Sides in bunker-local space: front (-Z), left (-X), right (+X) have doors; back (+Z) is solid.
@@ -233,19 +248,29 @@ export function bunkerWallBoxes(b: Bunker): Box[] {
     const base = scale(s.normal, off);
     const halfFor = (lenAlong: number, hy: number) =>
       s.normal.x !== 0 ? v3(wall / 2, hy, lenAlong / 2) : v3(lenAlong / 2, hy, wall / 2);
+    const box = (out: Box[], a: number, len: number, y0: number, y1: number) => {
+      const p = add(base, scale(along, a));
+      push(out, v3(p.x, (y0 + y1) / 2, p.z), halfFor(len, (y1 - y0) / 2));
+    };
+    /** A wall piece centred at `a` along the side, with one slit in its middle when slits are on. */
+    const piece = (a: number, len: number) => {
+      if (!withSlits) { box(walls, a, len, 0, height); return; }
+      box(walls, a, len, 0, slit.y0);
+      box(walls, a, len, slit.y1, height);
+      const side = (len - slit.width) / 2;
+      for (const sign of [-1, 1]) box(walls, a + sign * (slit.width / 2 + side / 2), side, slit.y0, slit.y1);
+      box(slits, a, slit.width, slit.y0, slit.y1);
+    };
     if (!s.door) {
-      push(v3(base.x, height / 2, base.z), halfFor(outer, height / 2));
+      // Back wall: two slits, as two halves.
+      for (const sign of [-1, 1]) piece(sign * outer / 4, outer / 2);
       continue;
     }
     const seg = (outer - doorWidth) / 2;
     const segOff = doorWidth / 2 + seg / 2;
-    for (const sign of [-1, 1]) {
-      const p = add(base, scale(along, sign * segOff));
-      push(v3(p.x, height / 2, p.z), halfFor(seg, height / 2));
-    }
-    const lintelH = height - doorHeight;
-    push(v3(base.x, doorHeight + lintelH / 2, base.z), halfFor(doorWidth, lintelH / 2));
+    for (const sign of [-1, 1]) piece(sign * segOff, seg);
+    box(walls, 0, doorWidth, doorHeight, height);
   }
-  push(v3(0, height + 0.1, 0), v3(outer / 2, 0.1, outer / 2));
-  return boxes;
+  push(walls, v3(0, height + 0.1, 0), v3(outer / 2, 0.1, outer / 2));
+  return { walls, slits };
 }

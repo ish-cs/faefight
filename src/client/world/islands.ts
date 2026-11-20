@@ -127,7 +127,7 @@ export function buildIslands(def: MapDef, teamColors: number[]): IslandsOut {
     const team = teamColors[isl.index % teamColors.length];
     for (const d of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
       const DF = BL.clone().multiply(mat(0, 0, 0, 0, d, 0));
-      for (const sx of [-1, 1]) dress.add(M.paint, new THREE.PlaneGeometry(1.3, 0.22).rotateY(Math.PI), DF.clone().multiply(mat(sx * 1.6, 1.6, -2.305)), team, false);
+      for (const sx of [-1, 1]) dress.add(M.paint, new THREE.PlaneGeometry(1.3, 0.22).rotateY(Math.PI), DF.clone().multiply(mat(sx * 1.6, 1.95, -2.305)), team, false);
     }
     const plate = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.3, 0.05), new THREE.MeshStandardNodeMaterial({ color: team, roughness: 0.5 }));
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));

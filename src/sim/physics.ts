@@ -1,6 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { HEAD, PIECES, PLAYER } from './constants';
-import { bunkerWallBoxes, type IslandLayout, type MapDef } from './map';
+import { bunkerSlitBoxes, bunkerWallBoxes, type IslandLayout, type MapDef } from './map';
 import type { PieceState, Vec3 } from './types';
 import { v3 } from './vec';
 
@@ -39,6 +39,8 @@ export class Physics {
   private cc: RAPIER.KinematicCharacterController;
   private entities = new Map<number, HitTarget>();
   private pieces = new Map<number, RAPIER.Collider>();
+  /** Collider handles of bunker firing-slit plugs (see raycast `throughSlits`). */
+  private readonly slits = new Set<number>();
   private pieceKinds = new Map<number, PieceState['kind']>();
   private players = new Map<number, RAPIER.Collider>();
   private dirty = true;
@@ -76,6 +78,8 @@ export class Physics {
     for (const isl of def.islands) {
       disc(isl.center, isl.radius, isl.groundY);
       for (const b of bunkerWallBoxes(isl.bunker)) ph.addStaticBox(b.center, b.half, b.rotY);
+      // Firing slits: plugged for players, grenades and rockets; bullets and sight rays pass (raycast throughSlits).
+      for (const b of bunkerSlitBoxes(isl.bunker)) ph.slits.add(ph.addStaticBox(b.center, b.half, b.rotY).handle);
       for (const key of ['generator', 'vault', 'shop'] as const) {
         const p = isl[key], h = PROP_HALF[key];
         ph.addStaticBox(v3(p.x, p.y + h.y, p.z), h, isl.bunker.facingYaw);
@@ -100,7 +104,7 @@ export class Physics {
     const desc = RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
       .setTranslation(center.x, center.y, center.z)
       .setRotation(quatY(rotY));
-    this.track(this.world.createCollider(desc), { type: 'world' });
+    return this.track(this.world.createCollider(desc), { type: 'world' });
   }
 
   addPiece(p: PieceState): void {
@@ -183,11 +187,13 @@ export class Physics {
     return this.players.has(id);
   }
 
-  raycast(origin: Vec3, dir: Vec3, maxDist: number, ignorePlayer?: number): RayHit | null {
+  /** `throughSlits`: bullets and line of sight pass bunker firing slits; everything else (explosives) is stopped. */
+  raycast(origin: Vec3, dir: Vec3, maxDist: number, ignorePlayer?: number, throughSlits = false): RayHit | null {
     this.sync();
     const ray = new RAPIER.Ray(origin, dir);
     const exclude = ignorePlayer !== undefined ? this.players.get(ignorePlayer) : undefined;
-    const h = this.world.castRay(ray, maxDist, true, undefined, undefined, exclude);
+    const h = this.world.castRay(ray, maxDist, true, undefined, undefined, exclude, undefined,
+      throughSlits ? (c) => !this.slits.has(c.handle) : undefined);
     if (!h) return null;
     const t = h.timeOfImpact;
     const hit = this.entities.get(h.collider.handle) ?? { type: 'world' as const };

@@ -433,7 +433,7 @@ export class Match implements MatchApi {
       const chest = v3(o.pos.x, o.pos.y + 1.2, o.pos.z);
       const d = dist(eye, chest);
       if (d > SIGHT_RANGE) continue;
-      const hit = this.physics.raycast(eye, norm(sub(chest, eye)), d + 0.5, self.id);
+      const hit = this.physics.raycast(eye, norm(sub(chest, eye)), d + 0.5, self.id, true); // sight passes firing slits
       if (hit?.hit.type === 'player' && hit.hit.id === o.id) enemies.push(o);
     }
     return {

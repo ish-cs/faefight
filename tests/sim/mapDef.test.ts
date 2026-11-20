@@ -175,6 +175,7 @@ describe('center island constants', () => {
     expect(CENTER.goldCap).toBe(1000);
   });
   test('bunker walls unchanged', () => {
-    expect(bunkerWallBoxes(buildMap(2)[0].bunker).length).toBe(11);
+    // 3 door walls × (2 slit segments × 4 boxes + lintel) + back wall (2 × 4) + roof
+    expect(bunkerWallBoxes(buildMap(2)[0].bunker).length).toBe(3 * 9 + 8 + 1);
   });
 });
