@@ -61,6 +61,8 @@ export const BUILD_TUNING = {
   slotBackoffSec: 30,
   /** Ahead by this much health+shield on the shooter: fight instead of building/hiding. */
   pushLead: 30,
+  /** A bridge tip where no deck fits: retry this often; after this long go round (alt lane) or leave it this long. */
+  bridgeRetrySec: 0.5, bridgeStuckSec: 4, bridgeHoldSec: 20,
   /** Hotbar slots building never takes (guns, medkits, grenades, potions need room too). */
   freeSlots: 2,
   /** Goal weights: covering under fire beats fighting in the open; fortifying is a calm-time job. */

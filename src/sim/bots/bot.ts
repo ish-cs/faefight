@@ -147,10 +147,14 @@ export class Bot {
   private fightSince: number | null = null;
   private lastPieceAt = -Infinity;
   private slots: Slot[] | null = null;
+  private buildMemo: { at: number; total: number; b: Partial<Record<PieceKind, number>> | undefined } | null = null;
   private slotBackoff = new Map<number, number>();
   /** Bridges: furthest deck reached per lane, islands I'm bridging to on the mirror lane (main one got cut), wall spacing. */
   private laneBest = new Map<string, number>();
   private alt = new Set<number>();
+  private bridgeStuck: { key: string; since: number; triedAt: number } | null = null;
+  private bridgeHoldUntil = -Infinity;
+  private mirrorCache = new Map<number, { at: number; f: { l: Lane; s: number; complete: boolean } }>();
   private lastWallS = new Map<string, number>();
   private wallsOnBridge: boolean;
   private towerYaw: number | null = null;
@@ -349,6 +353,14 @@ export class Bot {
    * of the last solid point coming out from my shore. Used for an alternate bridge when my main one got shot out.
    */
   private mirrorFrontier(to: number): { l: Lane; s: number; complete: boolean } {
+    const hit = this.mirrorCache.get(to);
+    if (hit && this.view.now - hit.at < 0.5) return hit.f;
+    const f = this.scanMirror(to);
+    this.mirrorCache.set(to, { at: this.view.now, f });
+    return f;
+  }
+
+  private scanMirror(to: number): { l: Lane; s: number; complete: boolean } {
     const map = this.view.map, home = this.view.self.island;
     const l = lane(map, to, home);
     for (let s = l.length - Math.sqrt(map[home].radius ** 2 - 9) + 2; s >= 0; s -= 0.25) {
@@ -459,6 +471,14 @@ export class Bot {
    * spare the cash: builders sooner), cover walls for fights, a ramp for high ground, side walls for a long bridge.
    */
   private buildNeeds(c: Ctx, total: number): Partial<Record<PieceKind, number>> | undefined {
+    // Asked several times per decision (shop plan, bank, scores): work it out once per tick.
+    if (this.buildMemo?.at === c.view.now && this.buildMemo.total === total) return this.buildMemo.b;
+    const b = this.computeBuildNeeds(c, total);
+    this.buildMemo = { at: c.view.now, total, b };
+    return b;
+  }
+
+  private computeBuildNeeds(c: Ctx, total: number): Partial<Record<PieceKind, number>> | undefined {
     const { me, view } = c;
     if (view.suddenDeath || !ownsGun(me.inv)) return undefined;
     const t = this.t, sk = BUILD_SKILL[this.difficulty];
@@ -690,7 +710,7 @@ export class Bot {
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
-        if (c.reach || !c.rivalIsl || have === 0) return 0;
+        if (c.reach || !c.rivalIsl || have === 0 || view.now < this.bridgeHoldUntil) return 0;
         // Bridges are one-way (see Nav.bridge): don't finish one before carrying a full seal kit.
         const need = this.scaffoldsNeeded(c);
         if (need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
@@ -880,12 +900,27 @@ export class Bot {
     }
     const rotY = yawOf(l.dir);
     // Butt the new deck against the end of the last one (it sits level with whatever its near end attaches to).
+    // Nothing fits (e.g. a gap shorter than a deck, something in the way): look again now and then, not every tick.
+    const st = this.bridgeStuck?.key === key ? this.bridgeStuck : null;
+    if (st && now - st.triedAt < BT.bridgeRetrySec) return { dir: null, face: ahead };
     for (const k of [2.0, 2.1, 2.2, 2.3, 2.4, 2.6]) {
       const p = at(k);
       const pos = v3(p.x, c.me.pos.y, p.z);
       if (!c.view.canPlace('scaffold', pos, rotY).ok) continue;
-      this.nav.invalidate();
+      this.nav.invalidate(); this.mirrorCache.clear();
+      this.bridgeStuck = null;
       return { dir: null, face: ahead, build: { kind: 'scaffold', pos, rotY, free: true } };
+    }
+    if (!st) this.bridgeStuck = { key, since: now, triedAt: now };
+    else {
+      st.triedAt = now;
+      // Stuck a while: skilled players go round on the other lane; anyone else leaves it for now.
+      if (now - st.since > BT.bridgeStuckSec) {
+        this.bridgeStuck = null;
+        if (!mirror && BUILD_SKILL[this.difficulty].altRoute) this.alt.add(to);
+        else { this.alt.delete(to); this.bridgeHoldUntil = now + BT.bridgeHoldSec; }
+        this.nextScoreAt = now;
+      }
     }
     return { dir: null, face: ahead };
   }
