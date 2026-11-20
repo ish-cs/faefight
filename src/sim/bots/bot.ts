@@ -24,6 +24,8 @@ const USE_RANGE = ECONOMY.interactRadius - 0.2;
 const COLLECT_AT = 40;
 const STUCK_SEC = 2, STUCK_DIST = 0.5, UNSTICK_SEC = 0.6;
 const TURN_RATE = 8;
+/** Beyond this, an enemy on another island isn't worth abandoning the current goal for. */
+const ENGAGE_RANGE = 25;
 const CHEST = 1.2;
 /** Net forward progress of one scaffold laid end-to-end. */
 const SCAFFOLD_STEP = 3.8;
@@ -200,9 +202,14 @@ export class Bot {
         const g0 = view.groundAt(me.pos.x, me.pos.z) ?? me.pos.y;
         return view.suddenDeath && g0 - view.waterY < 2.5 ? 1.2 : 0;
       }
-      case 'fight':
+      case 'fight': {
         if (!c.enemy) return 0;
+        // Someone across the water gets shot at anyway (aim/fire layer on every goal); only drop
+        // everything to fight when they're close or on the same island.
+        const sameIsland = islandAt(view.map, c.enemy.pos) === islandAt(view.map, me.pos);
+        if (!sameIsland && c.enemyDist > ENGAGE_RANGE) return 0.2;
         return gun || c.enemyDist < 8 ? 1 : 0.4;
+      }
       case 'defend':
         if (!view.sealed[home.index] || view.suddenDeath) return 0;
         return gun || me.inv.charges > 0 || this.blockers(c).some((p) => !isHard(p.kind)) ? 0.85 : 0.3;

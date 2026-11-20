@@ -107,3 +107,26 @@ describe('Match', () => {
     expect(snap.winner).toBe(1);
   });
 });
+
+describe('bot vs bot', () => {
+  test('bot vs bot match ends', async () => {
+    for (const difficulty of ['hard', 'easy'] as const) {
+      const m = await Match.create({ players: [
+        { name: 'a', isBot: true, difficulty }, { name: 'b', isBot: true, difficulty },
+      ], seed: 7 });
+      const counts: Record<string, number> = {};
+      let snap = m.tick(new Map());
+      const limit = 25 * 60 * 30;
+      for (let i = 0; i < limit && snap.winner === null; i++) {
+        snap = m.tick(new Map());
+        for (const e of snap.events) {
+          const key = e.type === 'kill' ? (e.data.killer == null ? 'drowned' : 'kill')
+            : e.type === 'sealed' && snap.suddenDeath ? 'forcedSeal' : e.type;
+          counts[key] = (counts[key] ?? 0) + 1;
+        }
+      }
+      expect(snap.winner, `${difficulty}: ${JSON.stringify(counts)} t=${snap.time.toFixed(0)}`).not.toBeNull();
+      expect((counts.sealed ?? 0) + (counts.kill ?? 0)).toBeGreaterThan(0);
+    }
+  }, 300_000);
+});

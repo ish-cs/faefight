@@ -8,6 +8,7 @@ import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics } from './physics';
 import { newPlayer } from './player';
 import type { BotView } from './bots/view';
+import { Bot } from './bots/bot';
 import type { BuildRequest, Difficulty, Inventory, MatchEvent, PlayerInput, PlayerState, Snapshot, Vec3 } from './types';
 import { NO_INPUT } from './types';
 import { add, clone, dist, dist2D, forward, norm, right, scale, sub, v3 } from './vec';
@@ -69,7 +70,10 @@ export class Match implements MatchApi {
     };
   }
 
-  static async create(setup: MatchSetup, opts: MatchOptions = {}): Promise<Match> {
+  static async create(
+    setup: MatchSetup,
+    opts: MatchOptions = { makeBot: (id, difficulty, rng) => new Bot(id, difficulty, rng) },
+  ): Promise<Match> {
     const n = setup.players.length;
     if (n < 2 || n > 8) throw new Error(`Match.create: need 2..8 players, got ${n}`);
     const map = buildMap(n);

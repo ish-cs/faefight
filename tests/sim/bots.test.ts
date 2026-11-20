@@ -343,3 +343,23 @@ describe('Bot navigation', () => {
     expect(dist2D(self.pos, gen)).toBeLessThan(2.5);
   });
 });
+
+describe('goal choice', () => {
+  test('an enemy seen across the water does not stop the bot from bridging', () => {
+    const l = lane(map, 0, 1);
+    const start = laneAt(l, 19.5);
+    const self = newPlayer(0, 'bot', true, 0, v3(start.x, map[0].groundY, start.z));
+    self.inv.cash = 0;
+    self.inv.weapons.pistol = { mag: 12, spare: 36 };
+    self.equipped = 'pistol';
+    self.inv.pieces.scaffold = 10;
+    self.inv.pieces.metal = 3;
+    const enemyAt = laneAt(l, l.length - 19.5);
+    const enemy = newPlayer(1, 'rival', false, 1, v3(enemyAt.x, map[1].groundY, enemyAt.z));
+    const view = makeView(self, { enemies: [enemy] });
+    const bot = new Bot(0, 'hard', mulberry32(3));
+    const goals = new Set<string>();
+    for (let i = 0; i < 3 * TICK_HZ; i++) { bot.think(view); view.now += 1 / TICK_HZ; goals.add(bot.currentGoal); }
+    expect(goals.has('fight')).toBe(false);
+  });
+});
