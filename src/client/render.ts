@@ -117,6 +117,7 @@ export class Renderer {
   /** Every snapshot as soon as it arrives (before any event delay): drives player interpolation. */
   ingest(snap: Snapshot) {
     this.clock.push(snap.time, performance.now() / 1000);
+    if (snap.time > this.newestSim) this.newestSim = snap.time;
     for (const p of snap.players) {
       let tr = this.tracks.get(p.id);
       if (!tr) { tr = new PlayerTrack(); this.tracks.set(p.id, tr); }
@@ -133,6 +134,13 @@ export class Renderer {
   beginFrame() {
     this.playT = this.clock.advance(performance.now() / 1000);
   }
+
+  /**
+   * Sim time of the other players shown this frame (sent with shots: lag compensation). Never past the
+   * newest snapshot: beyond it tracks only extrapolate/hold, so the host has nothing truer to rewind to.
+   */
+  get renderTime(): number | null { return this.playT === null ? null : Math.min(this.playT, this.newestSim); }
+  private newestSim = -Infinity;
 
   /** Debug: current interpolation delay (s) behind the newest snapshot. */
   get interpDelay() { return this.clock.delay; }

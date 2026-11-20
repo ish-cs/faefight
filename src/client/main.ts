@@ -928,6 +928,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       sample.pitch = Math.atan2(dy, Math.hypot(dx, dz));
       Object.assign(sample, moveForAim(sample.moveX, sample.moveZ, camYaw, sample.yaw));
     }
+    // Lag compensation: tell the host which moment of everyone else we were looking at when we fired.
+    const viewT = renderer.renderTime;
+    if (sample.fire && viewT !== null) sample.viewT = viewT;
     if (backend.inputHz === null) { backend.input(sample, unsent); unsent = []; }
     else {
       // Network: send at a fixed rate; taps between sends are accumulated, never lost.
