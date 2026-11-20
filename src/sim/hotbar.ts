@@ -1,5 +1,5 @@
 import { PIECES } from './constants';
-import type { HotbarItem, Inventory, PieceKind, WeaponKind } from './types';
+import type { HotbarItem, Inventory, PieceKind, PotionKind, WeaponKind } from './types';
 
 /**
  * The hotbar is the ordered list of item kinds a player holds; the amounts live in `inv`.
@@ -12,10 +12,12 @@ export type HotbarGun = Exclude<WeaponKind, 'fists'>;
 
 const GUNS: readonly HotbarGun[] = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'];
 const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
+export const POTION_KINDS: readonly PotionKind[] = ['shieldSmall', 'shieldBig', 'healPotion', 'speedPotion'];
 /** Order used when filling slots for kinds that arrived without a slot (e.g. debug grants). */
-export const HOTBAR_ITEMS: readonly HotbarItem[] = [...GUNS, ...PIECE_KINDS, 'grenade', 'charge', 'medkit'];
+export const HOTBAR_ITEMS: readonly HotbarItem[] = [...GUNS, ...PIECE_KINDS, 'grenade', 'charge', 'medkit', ...POTION_KINDS];
 
 export const isGunItem = (k: unknown): k is HotbarGun => (GUNS as readonly unknown[]).includes(k);
+export const isPotionItem = (k: unknown): k is PotionKind => (POTION_KINDS as readonly unknown[]).includes(k);
 export const isPieceItem = (k: unknown): k is PieceKind => (PIECE_KINDS as readonly unknown[]).includes(k);
 export const isHotbarItem = (k: unknown): k is HotbarItem => (HOTBAR_ITEMS as readonly unknown[]).includes(k);
 
@@ -29,6 +31,7 @@ export function countOf(inv: Inventory, kind: HotbarItem): number {
   if (kind === 'grenade') return inv.grenades;
   if (kind === 'charge') return inv.charges;
   if (kind === 'medkit') return inv.medkits;
+  if (isPotionItem(kind)) return inv.potions[kind] ?? 0;
   return inv.pieces[kind] ?? 0;
 }
 
@@ -96,7 +99,7 @@ export function equippedFor(bar: Hotbar, selected: number): WeaponKind {
 export function takeOut(inv: Inventory, kind: HotbarItem, amount: 'one' | 'stack'): Inventory | null {
   const have = countOf(inv, kind);
   if (have <= 0) return null;
-  const out: Inventory = { cash: 0, weapons: {}, pieces: {}, grenades: 0, charges: 0, medkits: 0 };
+  const out: Inventory = { cash: 0, weapons: {}, pieces: {}, grenades: 0, charges: 0, medkits: 0, potions: {} };
   if (isGunItem(kind)) {
     out.weapons[kind] = inv.weapons[kind];
     delete inv.weapons[kind];
@@ -106,6 +109,11 @@ export function takeOut(inv: Inventory, kind: HotbarItem, amount: 'one' | 'stack
   if (kind === 'grenade') { inv.grenades -= n; out.grenades = n; }
   else if (kind === 'charge') { inv.charges -= n; out.charges = n; }
   else if (kind === 'medkit') { inv.medkits -= n; out.medkits = n; }
+  else if (isPotionItem(kind)) {
+    const left = have - n;
+    if (left > 0) inv.potions[kind] = left; else delete inv.potions[kind];
+    out.potions[kind] = n;
+  }
   else {
     const left = have - n;
     if (left > 0) inv.pieces[kind] = left; else delete inv.pieces[kind];

@@ -19,9 +19,36 @@ const PROBE_DOWN = 4;
 /** How far past a scaffold's near end we look for what it attaches to. */
 const ATTACH_PROBE = 0.2;
 
+/** How much a new piece may sink into neighbours (per side, m) and how far it may be nudged to fit. */
+const OVERLAP_SLACK = 0.12;
+const NUDGES = [0.25, 0.5];
+
+/**
+ * Forgiving placement: pieces may touch or slightly overlap neighbours, and a spot that's a little
+ * blocked is nudged (≤ 0.5 m along the piece's own axes) to the nearest free spot. Never inside a player.
+ */
 export function validatePlacement(
   physics: Physics, kind: PieceKind, pos: Vec3, rotY: number, playerPos: Vec3,
 ): Placement {
+  const first = placeAt(physics, kind, pos, rotY, playerPos);
+  if (first.ok || first.reason !== 'blocked') return first;
+  // Only nudge when the piece's middle is clear (it just clips something at its edges).
+  const s = PIECES[kind];
+  const core = v3(s.w / 4, s.h / 4, Math.max(0.05, s.d / 4));
+  const coreCenter = v3(pos.x, pos.y + s.h / 2, pos.z);
+  if (physics.overlapsBox(coreCenter, core, rotY).some((h) => h.type !== 'world')) return first;
+  const tries: Vec3[] = [];
+  for (const d of NUDGES)
+    for (const [x, z] of [[d, 0], [-d, 0], [0, d], [0, -d], [d, d], [-d, d], [d, -d], [-d, -d]])
+      tries.push(add(pos, rotateY(v3(x, 0, z), rotY)));
+  for (const t of tries) {
+    const r = placeAt(physics, kind, t, rotY, playerPos);
+    if (r.ok) return r;
+  }
+  return first;
+}
+
+function placeAt(physics: Physics, kind: PieceKind, pos: Vec3, rotY: number, playerPos: Vec3): Placement {
   if (dist2D(pos, playerPos) > BUILD.reach || Math.abs(pos.y - playerPos.y) > BUILD.reach)
     return { ok: false, reason: 'too far' };
   const s = PIECES[kind];
@@ -49,9 +76,12 @@ export function validatePlacement(
     restY = Math.max(...ys.filter((y): y is number => y !== null));
   }
 
-  const half = v3(s.w / 2 - 0.02, s.h / 2 - 0.02, s.d / 2 - 0.02);
   const center = v3(pos.x, restY + s.h / 2 + 0.01, pos.z);
-  if (physics.overlapsBox(center, half, rotY).length > 0) return { ok: false, reason: 'blocked' };
+  const strict = v3(s.w / 2 - 0.02, s.h / 2 - 0.02, s.d / 2 - 0.02);
+  if (physics.overlapsBox(center, strict, rotY).some((h) => h.type === 'player')) return { ok: false, reason: 'blocked' };
+  const slack = (n: number) => Math.max(0.02, n / 2 - OVERLAP_SLACK);
+  const loose = v3(slack(s.w), s.h / 2 - 0.02, slack(s.d));
+  if (physics.overlapsBox(center, loose, rotY).some((h) => h.type !== 'player')) return { ok: false, reason: 'blocked' };
   return { ok: true, pos: v3(pos.x, restY, pos.z) };
 }
 

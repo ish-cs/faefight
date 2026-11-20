@@ -15,7 +15,7 @@ const reloading = (equipped: PlayerState['equipped'], magStart: number, start: n
   return p;
 };
 const snap = (time: number, players: PlayerState[]): Snapshot => ({
-  time, tick: Math.round(time * 30), players, pieces: [], loot: [], projectiles: [], generators: [], sealed: [false, false],
+  time, tick: Math.round(time * 30), players, pieces: [], loot: [], projectiles: [], generators: [], genLevels: [1, 1], sealed: [false, false],
   waterY: 0, suddenDeath: false, winner: null, events: [],
 });
 

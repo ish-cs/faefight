@@ -64,8 +64,9 @@ describe('isSealed performance', () => {
       id: 5000 + i, kind: 'steel', owner: 1, rotY: 0, hp: 1200,
       pos: v3(b.center.x + 30 + (i % 20), b.center.y, b.center.z + Math.floor(i / 20)),
     }));
-    const t0 = performance.now();
-    for (let i = 0; i < 20; i++) isSealed(b, far);
-    expect((performance.now() - t0) / 20).toBeLessThan(6); // was ~18 ms before culling; loose bound so a busy machine does not flake
+    // Fastest of 20 runs: a busy machine slows the average, not the best case (was ~18 ms before culling).
+    let best = Infinity;
+    for (let i = 0; i < 20; i++) { const t0 = performance.now(); isSealed(b, far); best = Math.min(best, performance.now() - t0); }
+    expect(best).toBeLessThan(2);
   });
 });

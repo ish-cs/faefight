@@ -1,4 +1,4 @@
-import type { PieceKind, WeaponKind } from './types';
+import type { PieceKind, PotionKind, WeaponKind } from './types';
 
 export const TICK_HZ = 30;
 export const DT = 1 / TICK_HZ;
@@ -105,6 +105,18 @@ export const BURST_RESET_SEC = 0.2;
 
 export const GRENADE = { price: 100, dmg: 100, radius: 4, fuseSec: 2.5, throwSpeed: 14 };
 export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
+/** Shield sits on top of health (blue bar). */
+export const SHIELD_MAX = 100;
+export const POTIONS: Record<PotionKind, { price: number; useSec: number }> = {
+  shieldSmall: { price: 50, useSec: 1 },
+  shieldBig: { price: 100, useSec: 2 },
+  healPotion: { price: 60, useSec: 1 },
+  speedPotion: { price: 120, useSec: 1 },
+};
+/** Small shields only top you up to 50; big ones go to 100 (the usual shooter rule). */
+export const SHIELD_POTIONS = { shieldSmall: { amount: 25, cap: 50 }, shieldBig: { amount: 50, cap: 100 } } as const;
+export const HEAL_POTION = { amount: 40, overSec: 4 };
+export const SPEED_POTION = { mult: 1.3, sec: 15 };
 export const CHARGE = { price: 250, pieceDmg: 1500, radius: 2, playerRadius: 1, playerDmg: 100, fuseSec: 3 };
 /**
  * Rocket: slow projectile, explodes on contact or after `fuseSec`. Player damage falls off with distance
@@ -135,6 +147,17 @@ export const ECONOMY = {
   interactRadius: 2.5,
   vaultSec: 1,
 };
+
+/** Generator upgrade levels (index 0 = level 1, the starting generator). Price = cost to reach that level. */
+export const GENERATOR_LEVELS = [
+  { price: 0, rate: ECONOMY.generatorRate, cap: ECONOMY.generatorCap },
+  { price: 150, rate: 8, cap: 700 },
+  { price: 400, rate: 12, cap: 1000 },
+  { price: 900, rate: 18, cap: 1500 },
+] as const;
+export const GENERATOR_MAX_LEVEL = GENERATOR_LEVELS.length;
+/** Locking a gun (respawn with it) costs this many times the gun. */
+export const LOCK_PRICE_MULT = 4;
 
 export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5 };
 

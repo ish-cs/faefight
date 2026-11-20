@@ -393,6 +393,39 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       note(k, out, t, 235.5, 2.2, 0.22, 'sawtooth', 1400);
       return note(k, out, t, 466, 2.2, 0.12, 'sawtooth', 1400);
     case 'footstep': return footstep(k, out, t, cue);
+    case 'shieldHit':
+      // Glassy energy ping: bright inharmonic ring + a short zap, no low thud (that's flesh).
+      noise(k, out, t, { type: 'highpass', freq: 5000 * p, dur: 0.03, peak: 0.45 });
+      tone(k, out, t, { type: 'triangle', f0: 1900 * p, f1: 1300 * p, dur: 0.09, peak: 0.35, attack: 0.001 });
+      return partials(k, out, t, 1250 * p, 0.25, [[1, 1, 0.22], [2.31, 0.6, 0.15], [3.73, 0.35, 0.1]]);
+    case 'shieldBreak': {
+      // Shatter: a crack, then a spray of glass shards and a falling zap.
+      noise(k, out, t, { type: 'highpass', freq: 2500, dur: 0.06, peak: 0.9 });
+      tone(k, out, t, { type: 'sawtooth', f0: 1600, f1: 180, dur: 0.35, peak: 0.25, lp: 3000, attack: 0.002 });
+      let len = 0.4;
+      for (let i = 0; i < 9; i++) {
+        const at = t + 0.02 + k.rnd() * 0.35;
+        len = Math.max(len, at - t + partials(k, out, at, 2400 + k.rnd() * 3200, 0.12 + k.rnd() * 0.1, [[1, 1, 0.08 + k.rnd() * 0.1], [2.7, 0.4, 0.05]]));
+      }
+      return len;
+    }
+    case 'drink': {
+      // Three gulps: low bandpassed bloops with a little rising pitch.
+      let len = 0;
+      for (let i = 0; i < 3; i++) {
+        const at = t + i * 0.22;
+        noise(k, out, at, { type: 'bandpass', freq: 450 * p, q: 3, dur: 0.07, peak: 0.35, attack: 0.01 });
+        len = at - t + tone(k, out, at, { f0: 170 * p, f1: 330 * p, dur: 0.1, peak: 0.45, attack: 0.008 });
+      }
+      return len;
+    }
+    case 'potionDone': {
+      // Rising sparkle; shields shimmer higher.
+      const base = cue.kind === 'shieldSmall' || cue.kind === 'shieldBig' ? 1047 : cue.kind === 'speedPotion' ? 880 : 784;
+      let len = 0;
+      [1, 1.25, 1.5, 2].forEach((r, i) => { len = i * 0.06 + partials(k, out, t + i * 0.06, base * r * p, 0.18, [[1, 1, 0.4], [2, 0.25, 0.2]]); });
+      return len;
+    }
     default: return 0;
   }
 }

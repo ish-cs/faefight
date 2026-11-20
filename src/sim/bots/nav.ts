@@ -13,6 +13,8 @@ const DETOURS = [0.4, -0.4, 0.8, -0.8, 1.2, -1.2, 1.6, -1.6];
 /** Highest step the character controller climbs without jumping (autostep 0.3 m). */
 const STEP_UP = 0.35;
 const BUNKER_HALF = MAP.bunker.interior / 2 + MAP.bunker.wall;
+/** Don't walk off anything higher than this when there's another way (falls over ~3.3 m hurt). */
+const MAX_DROP = 3;
 
 export type Lane = { from: number; to: number; origin: Vec3; dir: Vec3; length: number };
 export type Frontier = { s: number; complete: boolean };
@@ -91,7 +93,10 @@ export class Nav {
 
   constructor(private readonly ttl = 0.5) {}
 
-  begin(view: BotView) { this.view = view; }
+  /** Finished bridges between island pairs, memoised for the current tick. */
+  private bridges = new Map<number, Lane | null>();
+
+  begin(view: BotView) { this.view = view; this.bridges.clear(); }
   invalidate() { this.cache.clear(); }
 
   /** Scans a lane outward from its home island: last solid s, and whether it reaches the far island. */
@@ -116,16 +121,35 @@ export class Nav {
    * (e.g. built off a stack), so check the end on island a is enterable.
    */
   bridge(a: number, b: number): Lane | null {
+    const key = a * 64 + b;
+    const hit = this.bridges.get(key);
+    if (hit !== undefined) return hit;
+    let out: Lane | null = null;
     for (const l of [lane(this.view.map, a, b), lane(this.view.map, b, a)])
-      if (this.frontier(l).complete && this.enterable(l, a)) return l;
-    return null;
+      if (this.frontier(l).complete && this.enterable(l, a)) { out = l; break; }
+    this.bridges.set(key, out);
+    return out;
   }
 
-  /** Island to head for next from a toward b over finished bridges (b itself, or one stop on the way), or null. */
+  /**
+   * Island to head for next from a toward b over finished bridges (anyone's), or null.
+   * Breadth-first, so a route of several hops across other players' islands is found too.
+   */
   hop(a: number, b: number): number | null {
-    if (a === b || this.bridge(a, b)) return b;
-    for (let c = 0; c < this.view.map.length; c++)
-      if (c !== a && c !== b && this.bridge(a, c) && this.bridge(c, b)) return c;
+    if (a === b) return b;
+    const n = this.view.map.length;
+    const first = new Array<number>(n).fill(-1);
+    first[a] = a;
+    const queue = [a];
+    while (queue.length) {
+      const x = queue.shift()!;
+      for (let y = 0; y < n; y++) {
+        if (first[y] >= 0 || !this.bridge(x, y)) continue;
+        first[y] = x === a ? y : first[x];
+        if (y === b) return first[y];
+        queue.push(y);
+      }
+    }
     return null;
   }
 
@@ -189,25 +213,29 @@ export class Nav {
   }
 
   /**
-   * dir, or the nearest rotation of it whose path stays on solid (and, in sudden death, dry) ground; null if none.
+   * dir, or the nearest rotation of it whose path stays on solid (and, in sudden death, dry) ground without a
+   * drop that would hurt; null if none.
    * A surface well above our feet is a roof, wall or overhanging deck: over an island the land is still under it,
    * over water what is under it is unknown, so it is avoided.
    */
   safeDir(dir: Vec3): Vec3 | null {
     const me = this.view.self.pos;
-    const ok = (d: Vec3) => LOOK.every((k) => {
+    const ok = (d: Vec3, maxDrop: number) => LOOK.every((k) => {
       const p = v3(me.x + d.x * k, me.y, me.z + d.z * k);
       let floor = this.view.groundAt(p.x, p.z);
       if (floor !== null && floor - me.y > STEP_UP + 0.25) {
         const i = islandAt(this.view.map, p);
         floor = i >= 0 ? this.view.map[i].groundY : null;
       }
-      return floor !== null && !(this.view.suddenDeath && floor <= this.view.waterY + 0.05);
+      return floor !== null && me.y - floor <= maxDrop && !(this.view.suddenDeath && floor <= this.view.waterY + 0.05);
     });
-    if (ok(dir)) return dir;
-    for (const a of DETOURS) {
-      const d = rotateY(dir, a);
-      if (ok(d)) return d;
+    // Rather a hurtful drop than being stuck up there forever.
+    for (const maxDrop of [MAX_DROP, Infinity]) {
+      if (ok(dir, maxDrop)) return dir;
+      for (const a of DETOURS) {
+        const d = rotateY(dir, a);
+        if (ok(d, maxDrop)) return d;
+      }
     }
     return null;
   }

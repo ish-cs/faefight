@@ -41,7 +41,7 @@ test('V toggles first person (persisted) with a viewmodel', async ({ page }) => 
   await page.keyboard.press('KeyV');
   expect(await dbg<string>(page, 'cameraMode')).toBe('first');
   await expect(page.getByTestId('camera-toast')).toHaveText(/first person/i);
-  expect(await page.evaluate(() => localStorage.getItem('faefight.cameraMode'))).toBe('first');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('faefight.settings.v1')!).gameplay.cameraMode)).toBe('first');
   await page.waitForTimeout(1800); // toast gone, weapon raised
   await page.screenshot({ path: 'test-results/first-person.png' });
   console.log(`[fps] third person ${tpFps.toFixed(1)} · first person ${(await fps()).toFixed(1)}`);

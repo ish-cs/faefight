@@ -49,17 +49,30 @@ export function pelletDir(yaw: number, pitch: number, coneDeg: number, seed: num
   return aimDir(y, pt);
 }
 
+/** Extra hit-event detail: which body part, where it landed, what did it (client fx). */
 export type HitInfo = { part?: 'head' | 'body'; pos?: Vec3; weapon?: string };
 
+/**
+ * Every damage path (bullets, fists, grenades, charges, rockets, falls, debug) ends here. The shield soaks
+ * damage first and the overflow hits hp, unless `bypassShield` (falls). The hit event carries the total
+ * `amount`, the part the shield took (`shieldAmount`), whether it broke the shield to 0, and `info`.
+ */
 export function applyPlayerDamage(
-  ctx: CombatCtx, target: PlayerState, amount: number, attackerId: number | null, now: number, info: HitInfo = {},
+  ctx: CombatCtx, target: PlayerState, amount: number, attackerId: number | null, now: number,
+  opts: { bypassShield?: boolean } & HitInfo = {},
 ): MatchEvent[] {
   if (!target.alive || now < target.invulnUntil) return [];
-  target.hp -= amount;
+  const had = target.shield;
+  const shieldAmount = opts.bypassShield ? 0 : Math.min(had, amount);
+  target.shield = had - shieldAmount;
+  target.hp -= amount - shieldAmount;
   target.lastDamagedAt = now;
-  const out = [ev(now, 'hit', { target: target.id, by: attackerId, amount, ...info })];
+  const broke = had > 0 && target.shield <= 0;
+  const { bypassShield: _bypass, ...info } = opts;
+  const out = [ev(now, 'hit', { target: target.id, by: attackerId, amount, shieldAmount, broke, ...info })];
   if (target.hp <= 0) {
     target.hp = 0;
+    target.shield = 0;
     ctx.onKill(target.id, attackerId);
   }
   return out;

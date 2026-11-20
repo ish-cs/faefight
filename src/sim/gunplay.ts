@@ -1,4 +1,5 @@
 import { BURST_RESET_SEC, PLAYER, WEAPONS } from './constants';
+import type { MoveCmd } from './movement';
 import type { PlayerState, WeaponKind } from './types';
 
 /**
@@ -142,3 +143,10 @@ export function shellsLoadedBy(magStart: number, spare: number, elapsed: number)
 export function beatsBetween(beats: ReloadBeat[], from: number, to: number): ReloadBeat[] {
   return beats.filter((b) => b.t > from && b.t <= to);
 }
+
+// ---- aiming and movement (shared by the sim and the client's prediction) ---------------------------
+
+/** Sights up: no sprinting. */
+export const adsMoveCmd = (p: Pick<PlayerState, 'ads'>, cmd: MoveCmd): MoveCmd => (p.ads && cmd.sprint ? { ...cmd, sprint: false } : cmd);
+/** Sights up: walk at the weapon's ADS speed. */
+export const adsSpeed = (p: Pick<PlayerState, 'ads' | 'equipped'>): number => (p.ads ? WEAPONS[p.equipped].adsMove : 1);

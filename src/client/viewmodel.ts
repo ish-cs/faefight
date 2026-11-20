@@ -4,9 +4,10 @@ import { PLAYER } from '../sim/constants';
 import type { MatchEvent, PlayerState, Vec3, WeaponKind } from '../sim/types';
 import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import {
-  adsFov, angleDelta, approach, bobOffset, bobRate, FP_FOV, idleSway, loadCameraMode, PUNCH_SCALE, recoilKick, reloadClock,
-  reloadPose, saveCameraMode, toggleMode, type CameraMode,
+  adsFov, angleDelta, approach, bobOffset, bobRate, idleSway, PUNCH_SCALE, recoilKick, reloadClock, reloadPose, toggleMode, type CameraMode,
 } from './firstPerson';
+import { activeKeymap, bindingLabel, isAction } from './keymap';
+import { settings } from './settings/store';
 import { ISLAND_COLORS, type Renderer } from './render';
 import { SUN_DIR } from './world/sky';
 
@@ -107,7 +108,8 @@ function buildFistsRig(sleeve: THREE.Material): Rig {
 }
 
 export class FirstPersonView {
-  mode: CameraMode = loadCameraMode();
+  /** Persisted in Settings → Gameplay (V toggles it). */
+  get mode(): CameraMode { return settings.get().gameplay.cameraMode; }
   private scene = new THREE.Scene();
   private cam = new THREE.PerspectiveCamera(VM_FOV, 1, 0.01, 10);
   /** Motion offsets (sway/bob/recoil/lag) applied on top of each rig's rest pose. */
@@ -117,7 +119,6 @@ export class FirstPersonView {
   private kind: WeaponKind | null = null;
   private sleeve = new THREE.MeshStandardNodeMaterial({ color: 0x3a4048, roughness: 0.9, metalness: 0 });
   private sleeveIsland = -1;
-  private tpFov: number;
   private active = false;
   private quad: THREE.QuadMesh | null = null;
   private clearColor = new THREE.Color();
@@ -137,7 +138,6 @@ export class FirstPersonView {
   private lagPitch = 0;
   /** 0..1 eased aim-down-sights (drives FOV, viewmodel pose, sensitivity). */
   adsK = 0;
-  private kind_: WeaponKind = 'fists';
   private kickKind: WeaponKind = 'pistol';
   // Camera shake (visual only: applied after the aim ray is taken).
   private shakeAmp = 0;
@@ -146,14 +146,13 @@ export class FirstPersonView {
   private shakeT = 0;
 
   constructor(private renderer: Renderer, private enabled: () => boolean) {
-    this.tpFov = renderer.camera.fov;
     this.scene.add(this.cam);
     this.cam.add(this.motion);
     const sun = new THREE.DirectionalLight(0xffe6c2, 3.4);
     sun.position.copy(SUN_DIR).multiplyScalar(5);
     this.scene.add(sun, new THREE.HemisphereLight(0xcfe8ff, 0x8a7a58, 0.9));
     window.addEventListener('keydown', (e) => {
-      if (e.code !== 'KeyV' || e.repeat || !this.enabled()) return;
+      if (!isAction('camera', e.code) || e.repeat || !this.enabled()) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       this.setMode(toggleMode(this.mode));
@@ -161,10 +160,10 @@ export class FirstPersonView {
   }
 
   setMode(mode: CameraMode) {
-    this.mode = mode;
-    saveCameraMode(mode);
+    settings.update((s) => { s.gameplay.cameraMode = mode; });
     console.info(`[firstPerson] camera → ${mode}`);
-    this.toast(mode === 'first' ? 'FIRST PERSON  (V)' : 'THIRD PERSON  (V)');
+    const key = bindingLabel(activeKeymap(), 'camera');
+    this.toast(mode === 'first' ? `FIRST PERSON  (${key})` : `THIRD PERSON  (${key})`);
   }
 
   private toast(text: string) {
@@ -191,9 +190,9 @@ export class FirstPersonView {
   updateCamera(feet: THREE.Vector3, yaw: number, pitch: number, me: PlayerState, humanId: number): boolean {
     const cam = this.renderer.camera;
     this.active = this.mode === 'first' && me.alive;
-    this.kind_ = me.equipped;
+    const v = settings.get().video;
     // Aiming zooms both views (rifle 2x, others less).
-    const fov = adsFov(this.active ? FP_FOV : this.tpFov, me.equipped, me.alive ? this.adsK : 0);
+    const fov = adsFov(this.active ? v.fovFirst : v.fovThird, me.equipped, me.alive ? this.adsK : 0);
     if (Math.abs(cam.fov - fov) > 1e-3) { cam.fov = fov; cam.updateProjectionMatrix(); }
     this.renderer.characters.hiddenId = this.active ? humanId : -1;
     if (!this.active) return false;
@@ -289,7 +288,8 @@ export class FirstPersonView {
   }
 
   /** Animate and draw the viewmodel over the already-rendered frame. Call after Renderer.render. */
-  render(me: PlayerState | undefined, yaw: number, pitch: number, dt: number, simNow = 0) {
+  /** vel = the local player's predicted velocity (smoother than the sim's 30 Hz one), when known; simNow = sim clock (reloads). */
+  render(me: PlayerState | undefined, yaw: number, pitch: number, dt: number, vel?: Vec3, simNow = 0) {
     if (!this.active || !me) return;
     const now = performance.now();
     this.setWeapon(me.equipped, me.island);
@@ -297,8 +297,9 @@ export class FirstPersonView {
     this.t += dt;
 
     // Walk / run bob, faded in with speed and suppressed in the air.
-    const speed = Math.hypot(me.vel.x, me.vel.z);
-    const grounded = Math.abs(me.vel.y) < 0.8;
+    const v = vel ?? me.vel;
+    const speed = Math.hypot(v.x, v.z);
+    const grounded = Math.abs(v.y) < 0.8;
     this.moveK += ((grounded ? Math.min(1, speed / PLAYER.walk) : 0) - this.moveK) * approach(8, dt);
     this.phase += bobRate(speed) * dt;
     const bob = bobOffset(this.phase, speed);

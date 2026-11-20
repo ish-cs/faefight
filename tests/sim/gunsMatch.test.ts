@@ -66,7 +66,7 @@ describe('match: aiming, rockets, projectiles', () => {
     m.debugGive(1, { weapons: { rocket: { mag: 1, spare: 3 } } });
     let s = m.tick(inputs({ select: 0, pitch: 0.4 }));
     s = m.tick(inputs({ select: 0, pitch: 0.4, fire: true }));
-    expect(s.projectiles.map((p) => p.kind)).toEqual(['rocket']);
+    expect(s.projectiles!.map((p) => p.kind)).toEqual(['rocket']);
     expect(s.events.find((e) => e.type === 'shot')!.data.weapon).toBe('rocket');
     for (let i = 0; i < 100; i++) s = m.tick(inputs({ select: 0 }));
     expect(s.projectiles).toEqual([]);
@@ -84,7 +84,7 @@ describe('match: aiming, rockets, projectiles', () => {
     const { m } = await match();
     m.debugGive(1, { grenades: 1 });
     const s = m.tick(inputs({ throwGrenade: true }));
-    expect(s.projectiles.map((p) => p.kind)).toEqual(['grenade']);
+    expect(s.projectiles!.map((p) => p.kind)).toEqual(['grenade']);
   });
 });
 
