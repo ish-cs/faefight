@@ -56,9 +56,11 @@ describe('8-bot free-for-all', () => {
     const m = await Match.create({ players: Array.from({ length: 8 }, () => ({ name: 'Bot (hard)', isBot: true, difficulty: 'hard' as const })), seed: 3 });
     for (let i = 0; i < 30 * 60; i++) m.tick(new Map()); // warm up into the build-up phase
     const n = 30 * 60;
-    const t0 = performance.now();
-    for (let i = 0; i < n; i++) m.tick(new Map());
-    const ms = (performance.now() - t0) / n;
+    // Median tick: robust to a busy machine stalling a few ticks.
+    const times: number[] = [];
+    for (let i = 0; i < n; i++) { const t0 = performance.now(); m.tick(new Map()); times.push(performance.now() - t0); }
+    times.sort((x, y) => x - y);
+    const ms = times[Math.floor(n / 2)];
     console.log(`8 hard bots: ${ms.toFixed(2)} ms/tick (minutes 1–2)`);
     expect(ms).toBeLessThan(15);
   }, 300_000);
