@@ -1,5 +1,6 @@
 import { LIFECYCLE, MAP, PLAYER, SEAL } from './constants';
 import { emptyInventory, mergeInventory } from './economy';
+import { addKind, countOf, emptyHotbar, heldKinds, takeOut } from './hotbar';
 import type { IslandLayout } from './map';
 import type { Physics } from './physics';
 import { isSealed } from './seal';
@@ -39,8 +40,25 @@ const ev = (t: number, type: MatchEvent['type'], data: Record<string, unknown>):
 const PARKED = v3(0, -1000, 0);
 
 const isEmpty = (inv: Inventory) =>
-  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 &&
+  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 &&
   Object.keys(inv.weapons).length === 0 && Object.values(inv.pieces).every((n) => !n);
+
+/**
+ * Moves what fits from a loot bag into a player's inventory: cash always, kinds the player already
+ * holds, and new kinds while hotbar slots are free. Returns true when the bag is now empty.
+ */
+export function pickUp(p: PlayerState, bag: Inventory): boolean {
+  const got = emptyInventory();
+  got.cash = bag.cash;
+  bag.cash = 0;
+  mergeInventory(p.inv, got);
+  for (const kind of heldKinds(bag)) {
+    if (countOf(p.inv, kind) === 0 && addKind(p.hotbar, kind) < 0) continue;
+    const taken = takeOut(bag, kind, 'stack');
+    if (taken) mergeInventory(p.inv, taken);
+  }
+  return isEmpty(bag);
+}
 
 export function killPlayer(
   s: MatchStateCore, physics: Physics, victimId: number, now: number, inWater: boolean, killer: number | null = null,
@@ -53,6 +71,8 @@ export function killPlayer(
     s.loot.set(id, { id, pos: clone(p.pos), inv: p.inv });
   }
   p.inv = emptyInventory();
+  p.hotbar = emptyHotbar();
+  p.healAt = null;
   p.equipped = 'fists';
   p.reloadUntil = 0;
   p.hp = 0;
@@ -116,9 +136,8 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
     if (bag.pos.y < s.waterY) { s.loot.delete(bag.id); continue; }
     for (const p of s.players.values()) {
       if (!p.alive || dist(p.pos, bag.pos) > LIFECYCLE.lootPickupRadius) continue;
-      mergeInventory(p.inv, bag.inv);
-      s.loot.delete(bag.id);
-      break;
+      if (bag.noPickup && bag.noPickup.id === p.id && now < bag.noPickup.until) continue;
+      if (pickUp(p, bag.inv)) { s.loot.delete(bag.id); break; }
     }
   }
 
@@ -145,8 +164,15 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
   }
 
   for (const p of s.players.values()) {
-    if (!p.alive || p.breakoutUntil === null) continue;
+    if (!p.alive) continue;
     const bunker = map[p.island].bunker.center;
+    // Inside your own bunker while it's sealed (however you got there): the escape clock starts.
+    if (p.breakoutUntil === null && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
+      p.breakoutUntil = now + LIFECYCLE.breakoutSec;
+      out.push(ev(now, 'trapped', { player: p.id, until: p.breakoutUntil }));
+      continue;
+    }
+    if (p.breakoutUntil === null) continue;
     if (dist2D(p.pos, bunker) > SEAL.exitRadius) {
       p.breakoutUntil = null;
       out.push(ev(now, 'escaped', { player: p.id }));
