@@ -23,7 +23,7 @@ export type BuildSkill = {
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
   easy: { coverChance: 0.25, coverDelay: 1.4, gap: 1.6, misplace: 0.35, fort: 0.3, peekHide: 2.0, peekOut: 1.6, highGround: false, bridgeCover: false, altRoute: false },
   medium: { coverChance: 0.55, coverDelay: 0.8, gap: 0.8, misplace: 0.12, fort: 0.55, peekHide: 1.4, peekOut: 1.3, highGround: false, bridgeCover: true, altRoute: false },
-  hard: { coverChance: 0.85, coverDelay: 0.4, gap: 0.3, misplace: 0.03, fort: 0.85, peekHide: 0.9, peekOut: 1.1, highGround: true, bridgeCover: true, altRoute: true },
+  hard: { coverChance: 0.7, coverDelay: 0.5, gap: 0.3, misplace: 0.03, fort: 0.85, peekHide: 1.0, peekOut: 1.2, highGround: false, bridgeCover: true, altRoute: true },
   pro: { coverChance: 0.95, coverDelay: 0.22, gap: 0.05, misplace: 0, fort: 1, peekHide: 0.6, peekOut: 0.9, highGround: true, bridgeCover: true, altRoute: true },
 };
 
@@ -59,6 +59,8 @@ export const BUILD_TUNING = {
   highGroundRange: [8, 35] as const, highGroundAfter: 2.5, perchSec: 12,
   /** A fortification slot that won't place is left alone this long (repair waits for calm anyway). */
   slotBackoffSec: 30,
+  /** Ahead by this much health+shield on the shooter: fight instead of building/hiding. */
+  pushLead: 30,
   /** Hotbar slots building never takes (guns, medkits, grenades, potions need room too). */
   freeSlots: 2,
   /** Goal weights: covering under fire beats fighting in the open; fortifying is a calm-time job. */

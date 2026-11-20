@@ -3,7 +3,7 @@ import { buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
 import { canAdd, countOf } from '../hotbar';
 import { uselessReason } from '../potions';
 import type { Doorway } from '../map';
-import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, PotionKind, ShopItem, Vec3, WeaponKind } from '../types';
+import type { Difficulty, HotbarItem, Inventory, PieceKind, PieceState, PlayerState, PotionKind, ShopItem, Vec3, WeaponKind } from '../types';
 import { add, dist2D, forward, scale, v3 } from '../vec';
 
 export const GUNS: Exclude<WeaponKind, 'fists'>[] = ['rifle', 'smg', 'pistol', 'shotgun'];
@@ -105,7 +105,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
   const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
-  if (style.buildFirst) { const b = buildPurchase(inv, needs); if (b) return cash >= PIECES[b].price ? b : null; }
+  // Extras only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
+  const room = (k: HotbarItem) => countOf(inv, k) > 0 || canAdd(p.hotbar, k);
+  if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
     if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price) return 'steel';
@@ -115,14 +117,14 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     if (wantMetal) return 'metal';
     return cash >= PIECES.wood.price ? 'wood' : null;
   }
-  { const b = buildPurchase(inv, needs); if (b) return cash >= PIECES[b].price ? b : null; }
+  { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
   if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
-  if (inv.grenades < (needs.grenades ?? 0)) return cash >= GRENADE.price ? 'grenade' : null;
-  if (inv.medkits < (needs.medkits ?? 0)) return cash >= MEDKIT.price ? 'medkit' : null;
-  if (style.closeGun && !inv.weapons.shotgun && cash >= WEAPONS.shotgun.price) return 'shotgun';
+  if (inv.grenades < (needs.grenades ?? 0) && room('grenade')) return cash >= GRENADE.price ? 'grenade' : null;
+  if (inv.medkits < (needs.medkits ?? 0) && room('medkit')) return cash >= MEDKIT.price ? 'medkit' : null;
+  if (style.closeGun && !inv.weapons.shotgun && room('shotgun') && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
   if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
   // Rich: invest in the generator, then lock the favourite gun so a death doesn't leave me unarmed.
@@ -140,15 +142,18 @@ function reservedBagPlugs(inv: Inventory, needs: Needs): number {
 }
 
 /** Next building piece to buy (batch: everything the build list still lacks), or null when it's all carried. */
-function buildPurchase(inv: Inventory, needs: Needs): PieceKind | null {
+function buildPurchase(inv: Inventory, needs: Needs, room: (k: PieceKind) => boolean): PieceKind | null {
   const b = needs.build;
   if (!b) return null;
-  if ((inv.pieces.sandbags ?? 0) < (needs.tower ?? 0) + (b.sandbags ?? 0)) return 'sandbags';
-  if ((inv.pieces.ramp ?? 0) < (b.ramp ?? 0)) return 'ramp';
+  if ((inv.pieces.sandbags ?? 0) < (needs.tower ?? 0) + (b.sandbags ?? 0) && room('sandbags')) return 'sandbags';
+  if ((inv.pieces.ramp ?? 0) < (b.ramp ?? 0) && room('ramp')) return 'ramp';
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (b.scaffold ?? 0)) return 'scaffold';
   // Tall pieces: the seal kit comes out of them first.
   const spare = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0) - needs.kit;
-  if (spare < (b.metal ?? 0) + (b.wood ?? 0)) return (inv.pieces.metal ?? 0) < (b.metal ?? 0) ? 'metal' : 'wood';
+  if (spare < (b.metal ?? 0) + (b.wood ?? 0)) {
+    const k = (inv.pieces.metal ?? 0) < (b.metal ?? 0) ? 'metal' : 'wood';
+    if (room(k)) return k;
+  }
   return null;
 }
 

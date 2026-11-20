@@ -19,6 +19,8 @@ import {
 } from './plans';
 import type { BotView, OtherStatus } from './view';
 
+const OFF: string = (globalThis as any).process?.env?.BOTOFF ?? ''; // TEMP ablation
+if (OFF.includes('push')) BT.pushLead = Infinity;
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
   | 'fight' | 'disengage' | 'fleeTide' | 'heal' | 'cover' | 'fortify';
@@ -458,7 +460,7 @@ export class Bot {
    */
   private buildNeeds(c: Ctx, total: number): Partial<Record<PieceKind, number>> | undefined {
     const { me, view } = c;
-    if (view.suddenDeath || !ownsGun(me.inv)) return undefined;
+    if (view.suddenDeath || !ownsGun(me.inv) || OFF.includes('needs')) return undefined;
     const t = this.t, sk = BUILD_SKILL[this.difficulty];
     const b: Partial<Record<PieceKind, number>> = {};
     // Hotbar room: a new kind takes a slot; always leave BT.freeSlots open for guns, heals and the like.
@@ -730,11 +732,15 @@ export class Bot {
       }
       case 'cover': {
         const cv = this.cover;
+        if (OFF.includes('cover')) return 0;
         if (!cv || (c.enemy && c.enemyDist < 5)) return 0;
+        // Winning the trade (they're much lower): push the kill instead of hiding.
+        if (c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield - BT.pushLead) return 0;
         return BT.coverScore + 0.1 * t.builder;
       }
       case 'fortify': {
         if (view.suddenDeath || c.on !== home.index || c.danger || !gun || this.intruder(c)) return 0;
+        if (OFF.includes('fort')) return 0;
         const next = this.nextSlot(c);
         return next ? BT.fortifyScore + 0.3 * t.builder : 0;
       }
@@ -1249,6 +1255,10 @@ export class Bot {
     if (now < this.coverRollAt) return;
     this.coverRollAt = now + BT.coverRetrySec;
     if (dist2D(from, me.pos) < 5 || !this.wallKind(c)) return;
+    // Skilled players only build when they're losing the trade; a shooter they're well ahead of gets pushed.
+    const shooter = view.enemies.find((e) => e.id === by);
+    const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
+    if (skilled && shooter && shooter.hp + shooter.shield < me.hp + me.shield - BT.pushLead) return;
     const eye = add(from, v3(0, PLAYER.eyeHeight, 0)), chest = add(me.pos, v3(0, CHEST, 0));
     if (view.pieces.some((p) => dist2D(p.pos, me.pos) < 4 && shields(p, eye, chest))) return;
     const spot = this.coverFrom(c, { pos: from });
