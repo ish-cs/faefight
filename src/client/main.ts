@@ -33,6 +33,7 @@ import { settings } from './settings/store';
 import { VerticalSmoother } from './interp';
 import type { Predictor } from './predict';
 import { MAX_CMDS_PER_MSG } from '../net/sanitize';
+import { SealAnnouncer } from './announce';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -539,6 +540,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   const fxPos = new THREE.Vector3();
   const damageFx = new DamageFx(app);
+  const sealAnnouncer = new SealAnnouncer(app, (k) => {
+    canvas.style.setProperty('--shake', `${Math.round(6 + 10 * k)}px`);
+    canvas.classList.remove('shake');
+    void canvas.offsetWidth;
+    canvas.classList.add('shake');
+  });
   const hud = new Hud(app, {
     buy: (item) => input.queue({ shop: { buy: item } }),
     vault: (a) => input.queue({ vault: a }),
@@ -715,6 +722,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       maybeWarm();
     }
     damageFx.onSnapshot(s, humanId);
+    sealAnnouncer.onSnapshot(s, humanId);
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
     const wasEnded = hud.ended;

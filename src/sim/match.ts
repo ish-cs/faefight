@@ -1,7 +1,7 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, WEAPONS } from './constants';
+import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, SEAL } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMap, type IslandLayout } from './map';
@@ -373,8 +373,15 @@ export class Match implements MatchApi {
     this.sealDirty = false;
     this.map.forEach((isl, i) => {
       const sealed = islandSealed(this.s, this.map, i);
-      if (sealed !== this.sealed[i])
-        this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i } });
+      if (sealed !== this.sealed[i]) {
+        const owner = [...this.s.players.values()].find((p) => p.island === i)?.id ?? null;
+        // Credit the seal to whoever placed the newest piece around that bunker (null in sudden death).
+        let by: number | null = null, newest = -1;
+        if (sealed && !this.s.forcedSeal)
+          for (const pc of this.s.pieces.values())
+            if (pc.id > newest && dist2D(pc.pos, isl.bunker.center) <= SEAL.half) { newest = pc.id; by = pc.owner; }
+        this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i, owner, by } });
+      }
       this.sealed[i] = sealed;
     });
   }

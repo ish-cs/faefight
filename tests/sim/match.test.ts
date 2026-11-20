@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Match } from '../../src/sim/match';
-import { NO_INPUT, type PlayerInput } from '../../src/sim/types';
+import { NO_INPUT, type MatchEvent, type PlayerInput } from '../../src/sim/types';
 import { add, dist2D, forward, right, scale, v3 } from '../../src/sim/vec';
 
 const humans1v1 = { players: [{ name: 'you', isBot: false }, { name: 'friend', isBot: false }] };
@@ -89,6 +89,7 @@ describe('Match', () => {
     const m = await Match.create(humans1v1);
     const isl = m.map[1];
     m.debugGive(1, { pieces: { steel: 3 } });
+    const sealEvents: MatchEvent[] = [];
     for (const d of isl.bunker.doorways) {
       const f = forward(d.yaw);
       const stand = add(d.center, scale(f, 3));
@@ -96,11 +97,13 @@ describe('Match', () => {
       m.tick(new Map());
       const off = 0.15 + 0.075 + 0.05;
       const snap = m.tick(inputs(1, { build: { kind: 'steel', pos: add(d.center, scale(f, off)), rotY: d.yaw, free: true } }));
+      sealEvents.push(...snap.events.filter((e) => e.type === 'sealed'));
       for (let i = 0; i < 61; i++) m.tick(new Map());
       expect(snap.events.some((e) => e.type === 'placed')).toBe(true);
     }
     const sealedSnap = m.tick(new Map());
     expect(sealedSnap.sealed[1]).toBe(true);
+    expect(sealEvents.at(-1)?.data).toMatchObject({ island: 1, by: 1, owner: 2 });
     m.debugKill(2);
     let snap = sealedSnap;
     // 3 s respawn + 10 s to break out of the sealed bunker.
