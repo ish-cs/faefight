@@ -180,6 +180,16 @@ export class Physics {
     return out;
   }
 
+  /** Like raycast, but players are ignored (only the world and pieces): lag compensation tests them itself. */
+  raycastStatic(origin: Vec3, dir: Vec3, maxDist: number): RayHit | null {
+    this.sync();
+    const h = this.world.castRay(new RAPIER.Ray(origin, dir), maxDist, true, undefined, undefined, undefined, undefined,
+      (c) => this.entities.get(c.handle)?.type !== 'player');
+    if (!h) return null;
+    const t = h.timeOfImpact;
+    return { dist: t, point: v3(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t), hit: this.entities.get(h.collider.handle) ?? { type: 'world' } };
+  }
+
   /** Top surface y under (x, z) ignoring players, or null over open water. */
   isGroundAt(x: number, z: number): number | null {
     return this.surfaceBelow(x, 60, z, 120);

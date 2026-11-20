@@ -435,13 +435,16 @@ export class Hud {
       } else if (e.type === 'suddenDeath') {
         this.addFeed('Sudden death: generators stopped, tide rising', true);
       } else if (e.type === 'hit') {
-        if (e.data.by === this.humanId && e.data.target !== this.humanId) {
-          this.crosshair.classList.toggle('head', e.data.part === 'head');
-          this.flash(this.crosshair, 'hit');
-        }
+        if (e.data.by === this.humanId && e.data.target !== this.humanId && !e.data.echo) this.hitmarker(e.data.part === 'head');
         if (e.data.target === this.humanId) this.flash(this.damage, 'on');
       }
     }
+  }
+
+  /** Crosshair hitmarker (also shown straight away for a predicted hit). */
+  hitmarker(head: boolean) {
+    this.crosshair.classList.toggle('head', head);
+    this.flash(this.crosshair, 'hit');
   }
 
   private flash(node: HTMLElement, cls: string) {

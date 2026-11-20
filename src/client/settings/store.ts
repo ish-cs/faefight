@@ -30,7 +30,7 @@ export type CameraMode = 'third' | 'first';
 export type Settings = {
   v: 1;
   controls: { sensitivity: number; invertY: boolean; keys: Keymap };
-  video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; resolutionScale: number; frameCap: FrameCap };
+  video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean };
   audio: { master: number; effects: number; ambience: number; muted: boolean };
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode };
 };
@@ -46,7 +46,7 @@ export function defaultSettings(): Settings {
   return {
     v: 1,
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
-    video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, resolutionScale: 1, frameCap: 0 },
+    video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, resolutionScale: 1, frameCap: 0, dynamicResolution: true },
     audio: { master: 0.8, effects: 1, ambience: 1, muted: false },
     gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third' },
   };
@@ -84,6 +84,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       showFps: bool(v.showFps, d.video.showFps),
       resolutionScale: num(v.resolutionScale, LIMITS.resolutionScale[0], LIMITS.resolutionScale[1], d.video.resolutionScale),
       frameCap: oneOf(v.frameCap, FRAME_CAPS, d.video.frameCap),
+      dynamicResolution: bool(v.dynamicResolution, d.video.dynamicResolution),
     },
     audio: {
       master: num(a.master, 0, 1, d.audio.master),
