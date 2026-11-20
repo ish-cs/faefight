@@ -1,4 +1,5 @@
-import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, LIFECYCLE, MEDKIT, PIECES, WEAPONS } from '../sim/constants';
+import { CHARGE, ECONOMY, GRENADE, LIFECYCLE, MEDKIT, PIECES, WEAPONS } from '../sim/constants';
+import { ammoPerBox, ammoPrice, ammoTarget } from '../sim/economy';
 import type { IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem } from '../sim/hotbar';
 import type { HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
@@ -8,17 +9,18 @@ import { ISLAND_COLORS, ISLAND_NAMES } from './render';
 import { endState } from './endState';
 import { ICONS, iconGroup, type IconKind } from './icons';
 
-const GUNS = ['pistol', 'smg', 'shotgun', 'rifle'] as const;
+const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
 const LABEL: Record<string, string> = {
-  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
+  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
   ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit',
 };
 
-function priceOf(item: ShopItem): number {
+/** Shop price; an ammo box costs what the gun it would fill takes (rockets are dearer). */
+function priceOf(item: ShopItem, me?: PlayerState | null): number {
   if ((GUNS as readonly string[]).includes(item)) return WEAPONS[item as WeaponKind].price;
   if (item in PIECES) return PIECES[item as PieceKind].price;
-  if (item === 'ammo') return AMMO_BOX.price;
+  if (item === 'ammo') return ammoPrice(me ? ammoTarget(me) : undefined);
   if (item === 'grenade') return GRENADE.price;
   if (item === 'medkit') return MEDKIT.price;
   return CHARGE.price;
@@ -41,7 +43,7 @@ const fmtClock = (s: number) => {
 
 /** Short hotbar labels (slots are narrow). */
 const SHORT: Record<HotbarItem, string> = {
-  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
+  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
   grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit',
 };
@@ -53,6 +55,10 @@ export type HudContext = {
   free: boolean;
   /** Tab mode: pointer released so slots can be dragged. */
   inventory: boolean;
+  /** Crosshair gap (px) from the current spread cone; reload progress 0..1 or null; rifle scope up. */
+  spreadPx?: number;
+  reload?: number | null;
+  scoped?: boolean;
 };
 export type HudActions = {
   buy(item: ShopItem): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void;
@@ -90,6 +96,8 @@ export class Hud {
   private killfeed = el('div', 'killfeed');
   private center = el('div', 'center-msg');
   private crosshair = el('div', 'crosshair');
+  private reloadRing = el('div', 'reload-ring');
+  private scope = el('div', 'scope');
   private damage = el('div', 'damage-flash');
   private endScreen = el('div', 'end-screen');
   private fps = el('div', 'fps');
@@ -115,7 +123,12 @@ export class Hud {
     (this.heal.lastChild as HTMLElement).append(this.healFill);
     this.panel.dataset.testid = 'panel';
     this.buildHotbar();
-    this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.prompt, this.killfeed, this.crosshair, this.center,
+    // Four ticks that open with the spread cone, plus the hitmarker X.
+    for (const c of ['t', 'b', 'l', 'r', 'hm']) this.crosshair.append(el('i', c));
+    this.crosshair.dataset.testid = 'crosshair';
+    this.reloadRing.dataset.testid = 'reload-ring';
+    this.scope.dataset.testid = 'scope';
+    this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
       this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
     parent.append(this.root);
   }
@@ -264,6 +277,13 @@ export class Hud {
     this.heal.style.display = healing ? '' : 'none';
     if (healing) this.healFill.style.width = `${Math.round(100 * Math.min(1, Math.max(0, 1 - (me.healAt! - snap.time) / MEDKIT.useSec)))}%`;
     this.crosshair.classList.toggle('build', !!buildKind);
+    const gap = buildKind ? 4 : Math.round(Math.min(60, Math.max(3, ctx.spreadPx ?? 4)));
+    if (this.crosshair.style.getPropertyValue('--gap') !== `${gap}px`) this.crosshair.style.setProperty('--gap', `${gap}px`);
+    this.crosshair.classList.toggle('scoped', !!ctx.scoped);
+    this.scope.classList.toggle('on', !!ctx.scoped);
+    const rl = ctx.reload ?? null;
+    this.reloadRing.style.display = rl === null ? 'none' : '';
+    if (rl !== null) this.reloadRing.style.setProperty('--p', `${Math.round(rl * 360)}deg`);
 
     const left = LIFECYCLE.suddenDeathAt - snap.time;
     setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
@@ -337,7 +357,10 @@ export class Hud {
       } else if (e.type === 'suddenDeath') {
         this.addFeed('Sudden death: generators stopped, tide rising', true);
       } else if (e.type === 'hit') {
-        if (e.data.by === this.humanId) this.flash(this.crosshair, 'hit');
+        if (e.data.by === this.humanId && e.data.target !== this.humanId) {
+          this.crosshair.classList.toggle('head', e.data.part === 'head');
+          this.flash(this.crosshair, 'hit');
+        }
         if (e.data.target === this.humanId) this.flash(this.damage, 'on');
       }
     }
@@ -415,7 +438,7 @@ export class Hud {
           b.dataset.group = iconGroup(item as IconKind);
           const icon = el('span', 'sicon');
           icon.innerHTML = ICONS[item as IconKind];
-          b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'));
+          b.append(icon, el('span', 'iprice', `$${priceOf(item, me)}`), el('span', 'ibadge'), el('span', 'istatus'));
           b.onclick = () => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item); };
           row.append(b);
         }
@@ -433,14 +456,17 @@ export class Hud {
     setText(this.panel.querySelector('.panel-cash') as HTMLElement, `Carrying $${me.inv.cash}`);
     for (const b of Array.from(this.panel.querySelectorAll<HTMLButtonElement>('.shop-item'))) {
       const item = b.dataset.item as ShopItem;
-      const poor = me.inv.cash < priceOf(item);
+      const price = priceOf(item, me);
+      setText(b.querySelector('.iprice') as HTMLElement, `$${price}`);
+      const poor = me.inv.cash < price;
       let status = '';
       let badge = '';
       if ((GUNS as readonly string[]).includes(item) && me.inv.weapons[item as WeaponKind]) status = 'Owned';
       else if (isHotbarItem(item) && countOf(me.inv, item) === 0 && !canAdd(me.hotbar, item)) status = 'Hotbar full';
       else if (item === 'ammo') {
-        if (me.equipped === 'fists') status = 'Equip a gun';
-        else badge = `+${WEAPONS[me.equipped].mag * AMMO_BOX.mags}`;
+        const gun = ammoTarget(me);
+        if (!gun) status = 'Equip a gun';
+        else badge = `+${ammoPerBox(gun)}`;
       }
       if (!status && isHotbarItem(item) && !isGunItem(item)) {
         const n = countOf(me.inv, item);
@@ -453,7 +479,7 @@ export class Hud {
       b.dataset.status = status === 'Hotbar full' ? 'full' : status ? 'other' : '';
       setText(b.querySelector('.istatus') as HTMLElement, status);
       setText(b.querySelector('.ibadge') as HTMLElement, badge);
-      const label = `${LABEL[item]}, $${priceOf(item)}${status ? `, ${status}` : poor ? ', not enough cash' : ''}${badge ? `, ${badge}` : ''}`;
+      const label = `${LABEL[item]}, $${price}${status ? `, ${status}` : poor ? ', not enough cash' : ''}${badge ? `, ${badge}` : ''}`;
       if (b.getAttribute('aria-label') !== label) b.setAttribute('aria-label', label);
     }
   }

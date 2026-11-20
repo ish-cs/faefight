@@ -6,7 +6,8 @@ import type { Link } from '../net/transport';
 import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import { snapPlacement, type Placement } from '../sim/building';
-import { PLAYER, TICK_HZ } from '../sim/constants';
+import { PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
+import { spreadDeg } from '../sim/gunplay';
 import type { IslandLayout } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { BuildRequest, Difficulty, Inventory, PlayerInput, Snapshot } from '../sim/types';
@@ -15,6 +16,7 @@ import { AudioSystem } from './audio/engine';
 import { volumeControl } from './audio/ui';
 import { ThirdPersonCamera } from './camera';
 import { FirstPersonView } from './viewmodel';
+import { reloadClock } from './firstPerson';
 import { DamageFx } from './damageFx';
 import { ChatUi } from './chatUi';
 import { Hud } from './hud';
@@ -262,7 +264,7 @@ function showMenu() {
   const stored = Number(localStorage.getItem('faefight.sensitivity')) || 1;
   const keys = document.createElement('div');
   keys.className = 'keys';
-  keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire / place / throw · R reload · E interact · Enter chat · V first person · M mute<br>1–9 or wheel pick hotbar slot · Q drop (Ctrl/Shift+Q stack) · Tab drag to reorder · Z/X rotate piece · Alt free-place';
+  keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire / place / throw · Right-click aim · R reload · E interact · Enter chat · V first person · M mute<br>1–9 or wheel pick hotbar slot · Q drop (Ctrl/Shift+Q stack) · Tab drag to reorder · Z/X rotate piece · Alt free-place';
   card.append(play, online, status, sensitivityControl(null, stored), volumeControl(audio), keys);
   menu.append(card);
   app.append(menu);
@@ -339,6 +341,11 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   console.info(`[render] backend: ${renderer.backend}`);
   const camera = new ThirdPersonCamera(renderer.camera, () => renderer.collidables);
   const fpv = new FirstPersonView(renderer, () => input.enabled);
+  renderer.localGunPoint = (which, out) => fpv.gunPoint(which, out);
+  // Sim clock as of now: the latest snapshot's time plus how long ago it arrived (reload animation/beats).
+  let snapTime = 0, snapAt = performance.now();
+  const simNow = () => snapTime + Math.min(0.1, (performance.now() - snapAt) / 1000);
+  let adsWas = false;
 
   let map: IslandLayout[] = [];
   let humanId = 0;
@@ -488,11 +495,30 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   // Placement verdict for the ghost as it stands now (null while the sim's answer for it is pending).
   const ghostState = () => (preview && lastReq && preview.key === reqKey(lastReq) ? preview.result.ok : null);
 
+  /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
+  const gunHud = (me: Snapshot['players'][number] | undefined) => {
+    if (!me?.alive || me.equipped === 'fists') return { spreadPx: 4, reload: null, scoped: false };
+    const now = simNow();
+    const deg = spreadDeg(me.equipped, { ads: fpv.adsK > 0.5, bloom: me.bloom, lastShotAt: me.lastShotAt }, now,
+      { speed: Math.hypot(me.vel.x, me.vel.z), grounded: Math.abs(me.vel.y) < 0.5 });
+    const cam = renderer.camera;
+    const px = (Math.tan((deg * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (canvas.clientHeight / 2);
+    const c = reloadClock(me, now);
+    return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && fpv.adsK > 0.9 };
+  };
+
   const applySnapshot = (s: Snapshot, intervalMs?: number) => {
     const first = !snap;
     snap = s;
+    snapTime = s.time; snapAt = performance.now();
     hud.pushEvents(renderer.pushSnapshot(s, intervalMs));
-    fpv.onEvents(s.events, humanId);
+    const meSnap = s.players.find((p) => p.id === humanId);
+    fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
+    // My recoil: the sim reports each kick with the shot; it moves my real aim (I have to pull against it).
+    for (const e of s.events) {
+      const kick = e.data.kick as { pitch: number; yaw: number } | undefined;
+      if (e.type === 'shot' && e.data.by === humanId && kick && !first) input.addKick(kick.pitch, kick.yaw);
+    }
     audio.snapshot(s);
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
@@ -504,7 +530,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     damageFx.onSnapshot(s, humanId);
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
-    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, free: input.free, inventory: input.inventory });
+    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, free: input.free, inventory: input.inventory, ...gunHud(meNow) });
     chat.enabled = !hud.ended && !dead && !hud.panelOpen;
     if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
   };
@@ -538,6 +564,8 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
       input,
       cameraMode: () => fpv.mode,
+      cameraFov: () => renderer.camera.fov,
+      adsK: () => fpv.adsK,
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
     };
@@ -559,6 +587,13 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead ? '' : 'none';
 
     const me = snap?.players.find((p) => p.id === humanId);
+    input.applyKick(dt);
+    // Sights: right mouse with a gun, not while reloading (the sim agrees). Zoom slows mouse look to match.
+    const adsWant = !!me?.alive && input.ads && me.equipped !== 'fists' && me.reloadUntil === 0;
+    if (adsWant && !adsWas) audio.local('ads');
+    adsWas = adsWant;
+    fpv.setAds(adsWant, dt);
+    input.lookScale = me && me.equipped !== 'fists' ? 1 / (1 + (WEAPONS[me.equipped].adsZoom - 1) * fpv.adsK) : 1;
     if (me && renderer.playerPos(humanId, feet)) {
       if (!fpv.updateCamera(feet, input.yaw, input.pitch, me, humanId)) camera.update(feet, input.yaw, input.pitch, dt);
 
@@ -618,9 +653,11 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       }
     }
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
+    fpv.applyShake(dt); // visual only: the aim ray above was taken without it
     renderer.render(input.yaw);
-    fpv.render(me, input.yaw, input.pitch, dt);
+    fpv.render(me, input.yaw, input.pitch, dt, simNow());
     audio.frame(renderer.camera);
+    audio.rockets(renderer.gunFx.liveRockets());
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

@@ -1,7 +1,7 @@
 export type Vec3 = { x: number; y: number; z: number };
 
 export type PieceKind = 'sandbags' | 'wood' | 'metal' | 'steel' | 'scaffold' | 'ramp' | 'container';
-export type WeaponKind = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rifle';
+export type WeaponKind = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'rocket';
 export type Difficulty = 'easy' | 'medium' | 'hard';
 
 export type GunAmmo = { mag: number; spare: number };
@@ -32,6 +32,8 @@ export type PlayerInput = {
   jump: boolean;
   sprint: boolean;
   fire: boolean;
+  /** Aim down sights (held): tighter spread, zoom, slower move. */
+  ads: boolean;
   reload: boolean;
   interact: boolean;
   slot: WeaponKind | null;
@@ -79,7 +81,18 @@ export type PlayerState = {
   /** A medkit in use heals at this time (null when not healing). */
   healAt: number | null;
   reloadUntil: number;
+  /** Length of the reload in progress (s), for animation; 0 when not reloading. */
+  reloadSec: number;
+  /** Rounds in the gun when the reload started (tactical vs empty; the shotgun's shell count). */
+  reloadMag: number;
   nextFireAt: number;
+  /** Aiming down sights (sim-validated: needs a gun in hand, not sprinting or reloading). */
+  ads: boolean;
+  /** Spread bloom (deg) as of `lastShotAt`; it recovers over time (gunplay.ts). */
+  bloom: number;
+  lastShotAt: number;
+  /** Shots in the current burst (recoil climbs with it). */
+  burst: number;
   busyUntil: number;
 };
 
@@ -89,8 +102,11 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
+
+/** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
+export type Projectile = { id: number; kind: 'grenade' | 'charge' | 'rocket'; pos: Vec3; vel: Vec3 };
 
 export type Snapshot = {
   time: number;
@@ -98,6 +114,7 @@ export type Snapshot = {
   players: PlayerState[];
   pieces: PieceState[];
   loot: LootBag[];
+  projectiles: Projectile[];
   generators: { island: number; stored: number }[];
   sealed: boolean[];
   waterY: number;
@@ -107,7 +124,7 @@ export type Snapshot = {
 };
 
 export const NO_INPUT: PlayerInput = {
-  moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, fire: false, reload: false,
+  moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, fire: false, ads: false, reload: false,
   interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
   select: null, drop: null, moveSlot: null, useMedkit: false,
 };

@@ -75,6 +75,8 @@ export function killPlayer(
   p.healAt = null;
   p.equipped = 'fists';
   p.reloadUntil = 0;
+  p.reloadSec = 0;
+  p.ads = false;
   p.hp = 0;
   p.alive = false;
   p.vel = v3();

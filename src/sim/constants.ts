@@ -27,24 +27,95 @@ export const PIECES: Record<PieceKind, PieceSpec> = {
   container: { w: 6, h: 2.6, d: 2.4, hp: 2500, price: 300, placeSec: 3.0 },
 };
 
+/** Spread cone half-angles in degrees. Bloom grows per shot and recovers at `recover` deg/s. */
+export type SpreadSpec = {
+  base: number; ads: number; perShot: number; max: number; recover: number;
+  /** Added at full walk speed (scaled by speed), while sprinting, and while airborne. */
+  move: number; sprint: number; air: number;
+};
+/** Recoil per shot in degrees: `up` climbs (growing by `upGrow` per shot of a burst, capped at 10 shots), `side` jitters around `sideBias`. */
+export type RecoilSpec = { up: number; upGrow: number; side: number; sideBias: number };
+
 export type WeaponSpec = {
-  price: number; dmg: number; pellets: number; rps: number; mag: number; reloadSec: number; range: number;
+  price: number; dmg: number; pellets: number; rps: number; mag: number;
+  /** Tactical reload (rounds left); `reloadEmptySec` when empty (the bolt/slide has to be worked). Shotgun: per shell. */
+  reloadSec: number; reloadEmptySec: number;
+  /** A tactical reload keeps a round in the chamber: mag + 1. */
+  chamber: boolean;
+  range: number;
+  /** Full damage to `start` m, linear down to `minMult` at `end` m and beyond. */
+  falloff: { start: number; end: number; minMult: number };
+  spread: SpreadSpec;
+  recoil: RecoilSpec;
+  /** Aim-down-sights: FOV zoom factor and move-speed multiplier. */
+  adsZoom: number; adsMove: number;
 };
 
+const NO_SPREAD: SpreadSpec = { base: 0, ads: 0, perShot: 0, max: 0, recover: 1, move: 0, sprint: 0, air: 0 };
+const NO_FALLOFF = { start: 1e9, end: 1e9 + 1, minMult: 1 };
+
 export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
-  fists: { price: 0, dmg: 10, pellets: 1, rps: 2, mag: Infinity, reloadSec: 0, range: 2 },
-  pistol: { price: 50, dmg: 20, pellets: 1, rps: 3, mag: 12, reloadSec: 1.2, range: 60 },
-  smg: { price: 150, dmg: 12, pellets: 1, rps: 10, mag: 30, reloadSec: 1.8, range: 40 },
-  shotgun: { price: 200, dmg: 8, pellets: 10, rps: 1.2, mag: 6, reloadSec: 2.5, range: 20 },
-  rifle: { price: 300, dmg: 30, pellets: 1, rps: 5, mag: 25, reloadSec: 2.2, range: 120 },
+  fists: {
+    price: 0, dmg: 10, pellets: 1, rps: 2, mag: Infinity, reloadSec: 0, reloadEmptySec: 0, chamber: false, range: 2,
+    falloff: NO_FALLOFF, spread: NO_SPREAD, recoil: { up: 0, upGrow: 0, side: 0, sideBias: 0 }, adsZoom: 1, adsMove: 1,
+  },
+  pistol: {
+    price: 50, dmg: 20, pellets: 1, rps: 4, mag: 12, reloadSec: 1.5, reloadEmptySec: 1.9, chamber: true, range: 60,
+    falloff: { start: 15, end: 45, minMult: 0.6 },
+    spread: { base: 0.8, ads: 0.3, perShot: 0.9, max: 4, recover: 9, move: 1.4, sprint: 3, air: 5 },
+    recoil: { up: 1.3, upGrow: 0, side: 0.35, sideBias: 0 }, adsZoom: 1.3, adsMove: 0.75,
+  },
+  smg: {
+    price: 150, dmg: 12, pellets: 1, rps: 11, mag: 30, reloadSec: 2.0, reloadEmptySec: 2.5, chamber: true, range: 45,
+    falloff: { start: 10, end: 35, minMult: 0.5 },
+    spread: { base: 1.5, ads: 0.7, perShot: 0.3, max: 4.5, recover: 10, move: 1.0, sprint: 2.5, air: 4 },
+    recoil: { up: 0.42, upGrow: 0.04, side: 0.32, sideBias: -0.1 }, adsZoom: 1.35, adsMove: 0.8,
+  },
+  shotgun: {
+    // Tube-fed: loads shell by shell (reloadTime), so no chamber bonus.
+    price: 200, dmg: 9, pellets: 10, rps: 1.1, mag: 6, reloadSec: 0.45, reloadEmptySec: 0.45, chamber: false, range: 30,
+    falloff: { start: 6, end: 22, minMult: 0.2 },
+    spread: { base: 0.5, ads: 0.25, perShot: 1.0, max: 3, recover: 4, move: 0.8, sprint: 2, air: 3 },
+    recoil: { up: 4.2, upGrow: 0, side: 1.0, sideBias: 0 }, adsZoom: 1.2, adsMove: 0.75,
+  },
+  rifle: {
+    price: 300, dmg: 30, pellets: 1, rps: 6, mag: 25, reloadSec: 2.3, reloadEmptySec: 2.8, chamber: true, range: 150,
+    falloff: { start: 60, end: 150, minMult: 0.85 },
+    spread: { base: 2.2, ads: 0.12, perShot: 0.5, max: 5, recover: 7, move: 2.5, sprint: 5, air: 7 },
+    recoil: { up: 0.75, upGrow: 0.05, side: 0.4, sideBias: 0.15 }, adsZoom: 2, adsMove: 0.6,
+  },
+  rocket: {
+    // dmg = blast damage at the centre (see ROCKET); the projectile does the work.
+    price: 500, dmg: 110, pellets: 1, rps: 1, mag: 1, reloadSec: 3, reloadEmptySec: 3, chamber: false, range: 150,
+    falloff: NO_FALLOFF,
+    spread: { base: 0.6, ads: 0.2, perShot: 0, max: 0, recover: 1, move: 1.5, sprint: 3, air: 4 },
+    recoil: { up: 3.5, upGrow: 0, side: 0.6, sideBias: 0 }, adsZoom: 1.5, adsMove: 0.65,
+  },
 };
 export const SPARE_MAGS_ON_BUY = 3;
-export const AMMO_BOX = { price: 20, mags: 2 };
-export const SHOTGUN_SPREAD_DEG = 4;
+/** Ammo box: `mags` magazines for the gun in hand; rockets come `rockets` per box at `rocketPrice`. */
+export const AMMO_BOX = { price: 20, mags: 2, rocketPrice: 75, rockets: 1 };
+/** Shotgun pellet ring (deg) around the shot direction, hip / aimed. */
+export const SHOTGUN_SPREAD_DEG = 4.5;
+export const SHOTGUN_ADS_SPREAD_DEG = 3.2;
+/** Head sphere: centre above the feet and radius (m). Headshots do `mult` damage. */
+export const HEAD = { y: 1.62, r: 0.18, mult: 2 };
+/** A burst (recoil climb) resets once this long has passed after the gun could fire again. */
+export const BURST_RESET_SEC = 0.2;
 
 export const GRENADE = { price: 100, dmg: 100, radius: 4, fuseSec: 2.5, throwSpeed: 14 };
 export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
 export const CHARGE = { price: 250, pieceDmg: 1500, radius: 2, playerRadius: 1, playerDmg: 100, fuseSec: 3 };
+/**
+ * Rocket: slow projectile, explodes on contact or after `fuseSec`. Player damage falls off with distance
+ * to the body (full inside `fullRadius`; self-damage at `selfMult`, so a rocket jump costs about half your
+ * health); pieces take heavy explosive damage measured to their surface (a direct hit breaks steel).
+ * `knock`/`knockUp` = push (m/s) at the centre.
+ */
+export const ROCKET = {
+  speed: 35, gravity: 2.5, fuseSec: 3, radius: 4.5, fullRadius: 0.5, playerDmg: 110, selfMult: 0.5,
+  pieceDmg: 1300, knock: 9, knockUp: 3.5,
+};
 
 export type DamageSource = 'bullet' | 'fist' | 'explosive';
 export const PIECE_DMG_MULT: Record<PieceKind, { bullet: number; fist: number }> = {

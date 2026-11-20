@@ -5,14 +5,16 @@ import type { MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim
 /**
  * What the host sends a remote client. Same as Snapshot except: pieces are omitted when unchanged
  * since that client's last update, events cover every tick since then, other players' inventories,
- * vaults and hotbars are left out (the decoder fills them in empty; `equipped` is still sent so their
+ * vaults, hotbars and spread bookkeeping are left out (the decoder fills them in empty; `equipped` is still sent so their
  * gun renders), and floats are rounded.
  */
-export type NetPlayer = Omit<PlayerState, 'inv' | 'vault' | 'hotbar'> & Partial<Pick<PlayerState, 'inv' | 'vault' | 'hotbar'>>;
+type OwnOnly = 'inv' | 'vault' | 'hotbar' | 'bloom' | 'lastShotAt' | 'burst' | 'nextFireAt';
+export type NetPlayer = Omit<PlayerState, OwnOnly> & Partial<Pick<PlayerState, OwnOnly>>;
 export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players'> & { pieces?: PieceState[]; players: NetPlayer[] };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+const r1v = (v: Vec3): Vec3 => ({ x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10, z: Math.round(v.z * 10) / 10 });
 const rv = (v: Vec3): Vec3 => ({ x: r2(v.x), y: r2(v.y), z: r2(v.z) });
 
 /** Keep at most this many ticks of events for a client that stopped taking (e.g. a stalled link). */
@@ -50,6 +52,8 @@ export class SnapshotEncoder {
       waterY: r3(s.waterY),
       generators: s.generators.map((g) => ({ island: g.island, stored: Math.floor(g.stored) })),
       players: s.players.map((p) => this.player(p, p.id === forPlayerId)),
+      // Live grenades / charges / rockets, every update (few, small) so everyone sees them fly.
+      projectiles: s.projectiles.map((e) => ({ id: e.id, kind: e.kind, pos: rv(e.pos), vel: r1v(e.vel) })),
       events,
     };
     delete (out as Partial<Snapshot>).pieces;
@@ -61,8 +65,14 @@ export class SnapshotEncoder {
   }
 
   private player(p: PlayerState, own: boolean): NetPlayer {
-    const out: NetPlayer = { ...p, pos: rv(p.pos), vel: rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp) };
-    if (!own) { delete out.inv; delete out.vault; delete out.hotbar; }
+    const out: NetPlayer = {
+      ...p, pos: rv(p.pos), vel: rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp), bloom: r2(p.bloom),
+    };
+    if (!own) {
+      delete out.inv; delete out.vault; delete out.hotbar;
+      // Spread/recoil bookkeeping only drives your own crosshair.
+      delete out.bloom; delete out.lastShotAt; delete out.burst; delete out.nextFireAt;
+    } else out.lastShotAt = r3(p.lastShotAt);
     return out;
   }
 }
@@ -74,6 +84,7 @@ export class SnapshotDecoder {
     if (n.pieces) this.pieces = n.pieces;
     const players = n.players.map((p): PlayerState => ({
       ...p, inv: p.inv ?? emptyInventory(), vault: p.vault ?? emptyInventory(), hotbar: p.hotbar ?? emptyHotbar(),
+      bloom: p.bloom ?? 0, lastShotAt: p.lastShotAt ?? -1e9, burst: p.burst ?? 0, nextFireAt: p.nextFireAt ?? 0,
     }));
     return { ...n, players, pieces: this.pieces };
   }

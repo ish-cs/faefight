@@ -1,7 +1,7 @@
 import { buy, collect, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
-import { applyPlayerDamage, placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER } from './constants';
+import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
+import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, WEAPONS } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMap, type IslandLayout } from './map';
@@ -42,6 +42,8 @@ export class Match implements MatchApi {
   private events: MatchEvent[] = [];
   private explosives: Explosive[] = [];
   private grounded = new Map<number, boolean>();
+  /** Horizontal push from blasts (m/s), decaying; the move code otherwise sets horizontal speed outright. */
+  private knock = new Map<number, Vec3>();
   private bots = new Map<number, BotBrain>();
   private rng: () => number;
   private makeBot?: MatchOptions['makeBot'];
@@ -88,6 +90,15 @@ export class Match implements MatchApi {
         physics.removePiece(id);
         this.sealDirty = true;
         this.supportDirty = true;
+      },
+      grounded: (id) => this.grounded.get(id) ?? false,
+      onKnockback: (id, dv) => {
+        const p = this.s.players.get(id);
+        if (!p) return;
+        const k = this.knock.get(id) ?? v3();
+        this.knock.set(id, v3(k.x + dv.x, 0, k.z + dv.z));
+        p.vel.y = Math.max(p.vel.y, 0) + dv.y;
+        if (dv.y > 0) this.grounded.set(id, false);
       },
       onKill: (victim, killer) => {
         this.kills.push({ victim, killer });
@@ -208,6 +219,8 @@ export class Match implements MatchApi {
     if (validSlot(input.select)) p.selected = input.select;
     if (input.slot) this.selectWeapon(p, input.slot);
     this.syncHand(p);
+    // Sights need a gun in hand and no reload; aiming rules out sprinting (see move).
+    p.ads = input.ads && p.alive && p.equipped !== 'fists' && p.reloadUntil === 0;
 
     this.move(p, input);
     if (input.drop) this.drop(p, input.drop, now);
@@ -250,6 +263,11 @@ export class Match implements MatchApi {
     if (e !== p.equipped) {
       p.equipped = e;
       p.reloadUntil = 0;
+      p.reloadSec = 0;
+      p.reloadMag = 0;
+      p.ads = false;
+      p.burst = 0;
+      p.bloom = 0;
     }
   }
 
@@ -272,10 +290,17 @@ export class Match implements MatchApi {
     let dir = add(scale(forward(p.yaw), input.moveZ), scale(right(p.yaw), input.moveX));
     const l = Math.hypot(dir.x, dir.z);
     if (l > 1) dir = scale(dir, 1 / l);
-    const speed = input.sprint ? PLAYER.sprint : PLAYER.walk;
+    const speed = p.ads ? PLAYER.walk * WEAPONS[p.equipped].adsMove : input.sprint ? PLAYER.sprint : PLAYER.walk;
     const grounded = this.grounded.get(p.id) ?? false;
-    p.vel.x = dir.x * speed;
-    p.vel.z = dir.z * speed;
+    const kb = this.knock.get(p.id);
+    p.vel.x = dir.x * speed + (kb?.x ?? 0);
+    p.vel.z = dir.z * speed + (kb?.z ?? 0);
+    if (kb) {
+      // Blast push bleeds off fast on the ground, slowly in the air (so a rocket jump carries).
+      const keep = Math.exp(-(grounded ? 10 : 1.2) * DT);
+      kb.x *= keep; kb.z *= keep;
+      if (Math.hypot(kb.x, kb.z) < 0.05) this.knock.delete(p.id);
+    }
     p.vel.y = grounded && input.jump ? PLAYER.jumpVelocity : p.vel.y - PLAYER.gravity * DT;
     const r = this.physics.movePlayer(p.id, scale(p.vel, DT));
     p.pos = r.pos;
@@ -369,6 +394,7 @@ export class Match implements MatchApi {
       players: [...this.s.players.values()],
       pieces: [...this.s.pieces.values()],
       loot: [...this.s.loot.values()],
+      projectiles: projectiles(this.explosives),
       generators: this.s.generators,
       sealed: this.sealed,
       waterY: this.s.waterY,

@@ -14,7 +14,7 @@ const count = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x 
 
 const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 const WEAPON_KINDS = Object.keys(WEAPONS) as WeaponKind[];
-const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge', 'medkit'];
+const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'rocket', 'ammo', 'grenade', 'charge', 'medkit'];
 const oneOf = <T extends string>(list: readonly T[], x: unknown): T | null => (list.includes(x as T) ? (x as T) : null);
 
 function vec(x: unknown): Vec3 | null {
@@ -85,6 +85,7 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     jump: bool(x.jump),
     sprint: bool(x.sprint),
     fire: bool(x.fire),
+    ads: bool(x.ads),
     reload: bool(x.reload),
     interact: bool(x.interact),
     slot: oneOf(WEAPON_KINDS, x.slot),

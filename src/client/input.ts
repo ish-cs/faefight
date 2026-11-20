@@ -1,5 +1,5 @@
 import { BUILD } from '../sim/constants';
-import { HOTBAR_SIZE, isPieceItem } from '../sim/hotbar';
+import { HOTBAR_SIZE, isGunItem, isPieceItem } from '../sim/hotbar';
 import type { HotbarItem, PieceKind, PlayerInput } from '../sim/types';
 
 export const PIECE_ORDER: PieceKind[] = ['sandbags', 'wood', 'metal', 'steel', 'scaffold', 'ramp', 'container'];
@@ -44,17 +44,26 @@ export class InputController {
   /** False while a menu or panel is open: game keys and mouse are ignored. */
   enabled = false;
   sensitivity = loadSensitivity();
+  /** Mouse look multiplier on top of `sensitivity` (main sets it to the zoom while aiming). */
+  lookScale = 1;
   private keys = new Set<string>();
   private fireHeld = false;
+  private adsHeld = false;
+  /** Recoil still to be applied to the look angles (rad); fed in over a few frames. */
+  private kickPitch = 0;
+  private kickYaw = 0;
   private oneShot: Partial<PlayerInput> = {};
   private wheelAcc = 0;
 
   constructor(private canvas: HTMLCanvasElement, private hooks: InputHooks) {
     window.addEventListener('keydown', (e) => this.onKey(e, true));
     window.addEventListener('keyup', (e) => this.onKey(e, false));
-    window.addEventListener('blur', () => { this.keys.clear(); this.fireHeld = false; });
+    window.addEventListener('blur', () => { this.keys.clear(); this.fireHeld = false; this.adsHeld = false; });
     canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
-    window.addEventListener('mouseup', (e) => { if (e.button === 0) this.fireHeld = false; });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.fireHeld = false;
+      if (e.button === 2) this.adsHeld = false;
+    });
     window.addEventListener('mousemove', (e) => this.onMouseMove(e));
     canvas.addEventListener('wheel', (e) => {
       if (!this.enabled) return;
@@ -85,7 +94,7 @@ export class InputController {
 
   select(i: number) {
     if (!Number.isInteger(i) || i < 0 || i >= HOTBAR_SIZE) throw new Error(`InputController.select: bad slot ${i}`);
-    if (i !== this.selected) this.fireHeld = false;
+    if (i !== this.selected) { this.fireHeld = false; this.kickPitch = 0; this.kickYaw = 0; }
     this.selected = i;
   }
 
@@ -97,6 +106,31 @@ export class InputController {
     if (open) { if (document.pointerLockElement) document.exitPointerLock(); }
     else this.requestLock();
     this.hooks.inventoryChange(open);
+  }
+
+  /** Right mouse held with a gun in hand: aim down sights. */
+  get ads(): boolean {
+    return this.enabled && this.adsHeld && isGunItem(this.held);
+  }
+
+  /**
+   * Recoil from one of my shots (the sim reports it with the shot): it moves my real aim, so I have to
+   * pull down against it. Applied over ~50 ms so it reads as a kick, not a teleport.
+   */
+  addKick(pitch: number, yaw: number) {
+    this.kickPitch += pitch;
+    this.kickYaw += yaw;
+  }
+
+  /** Per frame: feed pending recoil into the look angles. */
+  applyKick(dt: number) {
+    if (this.kickPitch === 0 && this.kickYaw === 0) return;
+    const k = 1 - Math.exp(-dt * 45);
+    const dp = Math.abs(this.kickPitch) < 1e-5 ? this.kickPitch : this.kickPitch * k;
+    const dy = Math.abs(this.kickYaw) < 1e-5 ? this.kickYaw : this.kickYaw * k;
+    this.kickPitch -= dp; this.kickYaw -= dy;
+    this.yaw += dy;
+    this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch + dp));
   }
 
   get free() {
@@ -127,6 +161,7 @@ export class InputController {
     if (!this.enabled) return;
     if (this.inventory) { this.setInventory(false); return; }
     if (!this.locked) this.requestLock();
+    if (e.button === 2) { this.adsHeld = true; return; }
     if (e.button !== 0) return;
     if (this.buildMode) { this.hooks.place(); return; }
     if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
@@ -138,7 +173,7 @@ export class InputController {
 
   private onMouseMove(e: MouseEvent) {
     if (!this.enabled || !this.locked) return;
-    const k = BASE_RAD_PER_PX * this.sensitivity;
+    const k = BASE_RAD_PER_PX * this.sensitivity * this.lookScale;
     this.yaw -= e.movementX * k;
     this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - e.movementY * k));
   }
@@ -180,6 +215,7 @@ export class InputController {
       jump: on('Space') === 1,
       sprint: on('ShiftLeft') === 1 || on('ShiftRight') === 1,
       fire: this.enabled && this.fireHeld && !this.buildMode,
+      ads: this.ads,
       reload: false, interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
       select: this.selected, drop: null, moveSlot: null, useMedkit: false,
       ...this.oneShot,

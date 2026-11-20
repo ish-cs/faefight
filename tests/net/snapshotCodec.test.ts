@@ -11,7 +11,7 @@ function snap(tick: number, pieces: PieceState[], events: Snapshot['events'] = [
   b.vault.cash = 999;
   return {
     time: tick / 30, tick, players: [a, b], pieces, loot: [], generators: [{ island: 0, stored: 12.3456 }, { island: 1, stored: 0 }],
-    sealed: [false, false], waterY: 0, suddenDeath: false, winner: null, events,
+    sealed: [false, false], waterY: 0, suddenDeath: false, winner: null, events, projectiles: [],
   };
 }
 const steel = (hp = 1200): PieceState => ({ id: 5, kind: 'steel', owner: 1, pos: v3(1, 2, 3), rotY: 0.5, hp });
@@ -79,9 +79,20 @@ describe('snapshot codec', () => {
     expect(forA.players[1].hotbar).toEqual(Array(9).fill(null));
     expect(forA.players[1].equipped).toBe('rifle');
   });
+  test('in-flight projectiles are sent every update, rounded', () => {
+    const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();
+    const s = snap(1, []);
+    s.projectiles = [{ id: 7, kind: 'rocket', pos: v3(1.23456, 5.55555, -3.33333), vel: v3(34.567, -0.123, 1.99) }];
+    enc.push(s);
+    expect(dec.decode(enc.take(1)).projectiles).toEqual([{ id: 7, kind: 'rocket', pos: v3(1.23, 5.56, -3.33), vel: v3(34.6, -0.1, 2) }]);
+    enc.push({ ...s, tick: 2, projectiles: [] });
+    expect(dec.decode(enc.take(1)).projectiles).toEqual([]);
+  });
   test('an 8-player mid-match update fits the 60 KB/s budget at 15 Hz', () => {
     const enc = new SnapshotEncoder();
     const s = snap(1, Array.from({ length: 60 }, (_, i) => ({ ...steel(), id: i })));
+    // A busy moment: rockets and grenades in the air.
+    s.projectiles = Array.from({ length: 8 }, (_, i) => ({ id: 500 + i, kind: i % 2 ? 'rocket' : 'grenade', pos: v3(i * 3.33333, 9.87654, 1.11111), vel: v3(30.123, -1.5, 4.444) }));
     s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
     enc.push(s);
     enc.take(1);

@@ -4,12 +4,13 @@ import { sub, yawOf } from '../vec';
 
 const DEG = Math.PI / 180;
 
-export type AimProfile = { reactSec: number; coneRad: number; turnRate: number };
+/** recoilComp: share of each recoil kick pulled straight back down (0 = rides the climb, 1 = perfect). */
+export type AimProfile = { reactSec: number; coneRad: number; turnRate: number; recoilComp: number };
 
 export const AIM: Record<Difficulty, AimProfile> = {
-  easy: { reactSec: 0.8, coneRad: 14 * DEG, turnRate: 4 },
-  medium: { reactSec: 0.5, coneRad: 8 * DEG, turnRate: 6 },
-  hard: { reactSec: 0.3, coneRad: 4.5 * DEG, turnRate: 9 },
+  easy: { reactSec: 0.8, coneRad: 14 * DEG, turnRate: 4, recoilComp: 0.25 },
+  medium: { reactSec: 0.5, coneRad: 8 * DEG, turnRate: 6, recoilComp: 0.6 },
+  hard: { reactSec: 0.3, coneRad: 4.5 * DEG, turnRate: 9, recoilComp: 0.9 },
 };
 
 /** Losing sight longer than this makes the next sighting a fresh reaction. */
@@ -51,10 +52,13 @@ export class Aim {
   private err: Angles = { yaw: 0, pitch: 0 };
   private errGoal: Angles = { yaw: 0, pitch: 0 };
   private nextErrAt = 0;
+  /** What we aimed at last tick: the sim adds recoil on top, so `cur - last` is the kick to fight. */
+  private last: Angles | null = null;
 
   constructor(private readonly p: AimProfile, private readonly rng: () => number) {}
 
   track(now: number, dt: number, eye: Vec3, point: Vec3, id: number, cur: Angles): AimResult {
+    cur = this.compensate(cur);
     const fresh = id !== this.target || now - this.lastSeen > FORGET_SEC;
     if (fresh) { this.target = id; this.seenAt = now; this.nextErrAt = now; }
     this.lastSeen = now;
@@ -75,8 +79,17 @@ export class Aim {
     const aim = { yaw: cur.yaw + wrapAngle(want.yaw - cur.yaw) * t, pitch: cur.pitch + (want.pitch - cur.pitch) * t };
     const range = Math.hypot(point.x - eye.x, point.y - eye.y, point.z - eye.z);
     const tolerance = cone + Math.atan2(0.6, Math.max(range, 0.1));
+    this.last = { yaw: aim.yaw, pitch: aim.pitch };
     return { ...aim, ready: tracked >= this.p.reactSec - 1e-9, onTarget: angleBetween(aim, exact) <= tolerance };
   }
 
-  reset() { this.target = -1; this.lastSeen = -Infinity; }
+  /** Recoil compensation: pull back `recoilComp` of the kick the last shot added to our aim. */
+  compensate(cur: Angles): Angles {
+    const last = this.last;
+    if (!last) return cur;
+    const k = this.p.recoilComp;
+    return { yaw: cur.yaw - wrapAngle(cur.yaw - last.yaw) * k, pitch: cur.pitch - (cur.pitch - last.pitch) * k };
+  }
+
+  reset() { this.target = -1; this.lastSeen = -Infinity; this.last = null; }
 }

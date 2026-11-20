@@ -21,14 +21,29 @@ export function collect(player: PlayerState, gen: { stored: number }): number {
   return amount;
 }
 
-const GUNS = ['pistol', 'smg', 'shotgun', 'rifle'] as const;
+const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
 const isGun = (k: string): k is (typeof GUNS)[number] => (GUNS as readonly string[]).includes(k);
 const isPiece = (k: string): k is PieceKind => k in PIECES;
 
-function priceOf(item: ShopAction['buy']): number {
+/** The gun an ammo box would fill: the one in hand, else the first gun owned. */
+export function ammoTarget(player: PlayerState): Exclude<WeaponKind, 'fists'> | undefined {
+  return player.equipped !== 'fists' ? player.equipped : GUNS.find((g) => player.inv.weapons[g]);
+}
+
+/** Ammo box price for that gun (rockets cost more than a box of rounds). */
+export function ammoPrice(gun: WeaponKind | undefined): number {
+  return gun === 'rocket' ? AMMO_BOX.rocketPrice : AMMO_BOX.price;
+}
+
+/** Rounds one ammo box adds for that gun. */
+export function ammoPerBox(gun: Exclude<WeaponKind, 'fists'>): number {
+  return gun === 'rocket' ? AMMO_BOX.rockets : WEAPONS[gun].mag * AMMO_BOX.mags;
+}
+
+function priceOf(item: ShopAction['buy'], player: PlayerState): number {
   if (isGun(item)) return WEAPONS[item].price;
   if (isPiece(item)) return PIECES[item].price;
-  if (item === 'ammo') return AMMO_BOX.price;
+  if (item === 'ammo') return ammoPrice(ammoTarget(player));
   if (item === 'grenade') return GRENADE.price;
   if (item === 'medkit') return MEDKIT.price;
   return CHARGE.price;
@@ -36,7 +51,7 @@ function priceOf(item: ShopAction['buy']): number {
 
 export function buy(player: PlayerState, action: ShopAction): Result {
   const item = action.buy;
-  const price = priceOf(item);
+  const price = priceOf(item, player);
   if (player.inv.cash < price) return fail(`need $${price}, carrying $${player.inv.cash}`);
   const inv = player.inv;
   // A new kind needs a free hotbar slot; more of a kind you hold (or ammo) doesn't.
@@ -50,10 +65,10 @@ export function buy(player: PlayerState, action: ShopAction): Result {
     inv.pieces[item] = (inv.pieces[item] ?? 0) + 1;
   } else if (item === 'ammo') {
     // Ammo for the gun in hand; with fists out, for the first gun you own.
-    const gun = player.equipped !== 'fists' ? player.equipped : GUNS.find((g) => inv.weapons[g]);
+    const gun = ammoTarget(player);
     const ammo = gun ? inv.weapons[gun] : undefined;
     if (!gun || !ammo) return fail('you need a gun to buy ammo');
-    ammo.spare += WEAPONS[gun].mag * AMMO_BOX.mags;
+    ammo.spare += ammoPerBox(gun);
   } else if (item === 'grenade') {
     inv.grenades += 1;
   } else if (item === 'medkit') {
