@@ -311,6 +311,35 @@ describe('human aim (perception, all skills)', () => {
   });
 });
 
+describe('no hiding at home', () => {
+  test('a PRO bot spends under 25% of a 5-minute 1v1 within 8 m of its own bunker without a reason to', async () => {
+    for (const seed of [1, 2]) {
+      const bots = new Map<number, Bot>();
+      const m = await Match.create({ players: [{ name: '', isBot: true, difficulty: 'pro' }, { name: '', isBot: true, difficulty: 'pro' }], seed },
+        { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.set(id, b); return b; } });
+      let snap = m.tick(new Map());
+      const alive = new Map<number, number>(), near = new Map<number, number>();
+      for (let i = 0; i < 5 * 60 * TICK_HZ && snap.winner === null; i++) {
+        snap = m.tick(new Map());
+        for (const p of snap.players) {
+          if (!p.alive) continue;
+          alive.set(p.id, (alive.get(p.id) ?? 0) + 1);
+          const b = m.map[p.island].bunker.center;
+          const d = bots.get(p.id)!.debug;
+          // A reason to be there: defending home, breaking out, or getting out of my own bunker.
+          const reason = p.breakoutUntil !== null || d.action === 'defend' || d.goal === 'defend' || snap.sealed[p.island];
+          if (!reason && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) < 8) near.set(p.id, (near.get(p.id) ?? 0) + 1);
+        }
+      }
+      for (const [id, n] of alive) {
+        const share = (near.get(id) ?? 0) / n;
+        console.log(`seed ${seed} #${id}: ${(100 * share).toFixed(0)}% of the time near own bunker`);
+        expect(share).toBeLessThan(0.25);
+      }
+    }
+  }, 300_000);
+});
+
 describe('seal first', () => {
   test('a PRO bot eliminates a passive opponent in a 1v1 via a seal within ~5 minutes', async () => {
     for (const seed of [1, 2, 3]) {

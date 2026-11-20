@@ -34,12 +34,22 @@ describe('self-play training harness', () => {
   });
 
   test('fitness: eliminating someone via a seal is worth far more than kills', () => {
-    const base = { place: 2, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 600 };
+    const base = { place: 2, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 600, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0 };
     const r = (seat: typeof base): MatchResult => ({ seed: 1, winner: null, time: 600, decisive: false, msPerTick: 0, seats: [seat, { ...base, place: 1.5 }] });
     const killer = seatFitness(r({ ...base, kills: 10 }), 0), sealer = seatFitness(r({ ...base, seals: 1, elims: 1 }), 0);
     expect(sealer).toBeGreaterThan(killer + 0.3);
     const fast = { seed: 1, winner: 1, time: 300, decisive: true, msPerTick: 0, seats: [{ ...base, place: 1 }, { ...base, place: 2 }] };
     expect(seatFitness(fast, 0)).toBeGreaterThan(seatFitness({ ...fast, time: 900 }, 0));
+  });
+
+  test('fitness shaping: real fights and mission work beat plinking and hiding at home', () => {
+    const base = { place: 2, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 600, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0 };
+    const r = (seat: typeof base): MatchResult => ({ seed: 1, winner: null, time: 600, decisive: false, msPerTick: 0, seats: [seat, { ...base, place: 1.5 }] });
+    const plain = seatFitness(r(base), 0);
+    expect(seatFitness(r({ ...base, closeDmg: 150 }), 0)).toBeGreaterThan(plain + 0.15);
+    expect(seatFitness(r({ ...base, scaffolds: 10, plugs: 3 }), 0)).toBeGreaterThan(plain + 0.1);
+    expect(seatFitness(r({ ...base, longShots: 100, longHits: 5 }), 0)).toBeLessThan(plain - 0.15);
+    expect(seatFitness(r({ ...base, idleHome: 400 }), 0)).toBeLessThan(plain - 0.15);
   });
 
   test('imitation penalty is zero at the human mean and grows away from it', () => {

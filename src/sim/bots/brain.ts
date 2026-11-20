@@ -157,7 +157,7 @@ export class Brain {
       if (this.goal && c.kind === this.goal.kind && c.target === this.goal.target) curU = u;
       if (u > bestU) { bestU = u; best = c; }
     }
-    if (!best) throw new Error('Brain: no goal candidates (fortify is always one)');
+    if (!best) throw new Error('Brain: no goal candidates (a fallback is always added)');
     const cur = this.goal;
     const keep = !!cur && curU > -Infinity && !forced && (inp.now - cur.since < p.planMinSec || curU + p.planCommit >= bestU);
     const chosen = keep && cur ? { ...cands.find((c) => c.kind === cur.kind && c.target === cur.target)!, since: cur.since } : { ...best, since: inp.now };
@@ -246,14 +246,17 @@ export class Brain {
           { label: 'deposit at the vault', act: 'bank', done: inp.bankable < 40 && inp.insuranceDue === 0 },
         ]);
 
-    // ---- fortify: early on, build up and watch the bridges instead of wandering off.
+    // ---- fortify: early on, build up and cut bridges into my island. Once that's done there's nothing to sit at
+    // home for: the goal is complete and drops out (no hiding behind the bunker).
     const early = Math.max(0, 1 - inp.now / p.turtleUntil);
-    add('fortify', p.planTurtle * early * (inp.upgraded ? 0.4 : 1) * (inp.suddenDeath ? 0 : 1) * (inp.endgame ? 0.2 : 1) + 0.05,
-      inp.upgraded ? 'build up for a late push' : 'gear up before going anywhere', [
-        { label: 'gear up', act: 'shop', done: inp.upgraded },
-        { label: 'bank', act: 'bank', done: inp.bankable < 40 && inp.insuranceDue === 0 },
-        { label: inp.incomingBridge ? 'cut the bridge into my island' : 'collect and watch', act: inp.incomingBridge ? 'cut' : 'collect', done: false },
-      ]);
+    const fortify: StepInfo[] = [
+      { label: 'gear up', act: 'shop', done: inp.upgraded },
+      { label: 'bank', act: 'bank', done: inp.bankable < 40 && inp.insuranceDue === 0 },
+      { label: 'cut the bridge into my island', act: 'cut', done: !inp.incomingBridge },
+    ];
+    if (fortify.some((s) => !s.done))
+      add('fortify', p.planTurtle * early * (inp.upgraded ? 0.4 : 1) * (inp.suddenDeath ? 0 : 1) * (inp.endgame ? 0.2 : 1) + 0.05,
+        inp.upgraded ? 'build up for a late push' : 'gear up before going anywhere', fortify);
 
     // ---- defend home.
     const threat = (inp.intruder ? 1 : 0) + (inp.homeSealed ? 1.2 : inp.homePlugged ? 0.9 : 0) + (inp.incomingBridge ? 0.3 : 0);
@@ -323,6 +326,7 @@ export class Brain {
       add('center', p.planCenter, 'shields win fights and I can afford them', [
         { label: 'go to the potion seller and stock shields', act: 'potions', done: !inp.wantShields },
       ]);
+    if (!out.length) add('fortify', 0.01, 'nothing to go after right now', [{ label: 'collect', act: 'collect', done: false }]);
     return out;
   }
 }

@@ -346,7 +346,10 @@ export class Bot {
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
-      sprint: !!act.sprint && (!enemy || this.goal === 'disengage'),
+      // Sprint travelling to a goal, closing in, or getting away; never while shooting (it spoils the aim), and
+      // keep a little stamina back for an escape (when the movement code has stamina).
+      sprint: !!act.sprint && !fire && (!enemy || this.goal === 'disengage' || this.goal === 'fight' || this.brain.goal?.kind === 'retreat') &&
+        (staminaFrac(me) > 0.15 || this.goal === 'disengage'),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
       // Same spread rules as players: aim down sights for anything past close range.
@@ -1288,13 +1291,15 @@ export class Bot {
     const gapM = c.enemyDist - want;
     const radial = Math.abs(gapM) < 2 ? 0 : Math.sign(gapM);
     const dir = add(scale(to, radial), side);
+    // Well out of my range: sprint in to close (sprinting spoils aim, so not while in range).
+    const closing = radial > 0 && gapM > 6;
     // Chasing across water needs a route; otherwise just strafe in place.
     if (radial > 0 && !sameIsland) {
       const wp = this.nav.routeTo(e.pos);
-      if (wp) return { dir: norm(add(norm(flat(sub(wp, me.pos))), scale(side, 0.5))) };
+      if (wp) return { dir: norm(add(norm(flat(sub(wp, me.pos))), scale(side, 0.5))), sprint: closing };
       return { dir: norm(side) };
     }
-    return { dir: norm(dir) };
+    return { dir: norm(dir), sprint: closing };
   }
 
   /** Back off from whoever is hurting me: home to the bunker if that isn't toward them, else straight away. */
@@ -1371,6 +1376,12 @@ export class Bot {
 }
 
 const flat = (p: Vec3): Vec3 => v3(p.x, 0, p.z);
+
+/** Sprint stamina as a fraction (1 until the movement code has stamina; 0..1 or 0..100 either way). */
+function staminaFrac(p: PlayerState): number {
+  const s = (p as { stamina?: number }).stamina;
+  return s === undefined ? 1 : s > 1 ? s / 100 : s;
+}
 
 /**
  * Aim for a grenade to land at `to` (same launch as combat.throwGrenade: throwSpeed along the aim plus 3 m/s up,
