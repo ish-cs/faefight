@@ -54,6 +54,8 @@ export type PlayerState = {
   /** Set while trapped in a sealed bunker after respawning: eliminated at this time unless out. */
   breakoutUntil: number | null;
   invulnUntil: number;
+  /** Sim time of the last damage taken (regen waits after this). */
+  lastDamagedAt: number;
   inv: Inventory;
   vault: Inventory;
   equipped: WeaponKind;
