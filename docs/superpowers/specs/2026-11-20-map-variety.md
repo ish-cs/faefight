@@ -209,5 +209,11 @@ every map with bonus generators · potions sold by an NPC on the center island.
 - [x] Tests: harbor golden, fairness per template × 2..8 players, 9 m bunker clearance, ground probes, walk-grid
   reachability, center stations, cover indestructible, cosmetics breakable, Random no-repeat, yard bot soaks.
 
+- [x] **Bunker firing slits** (approved later the same day): a 0.6 × 0.18 m slit at 1.35–1.53 m in each door-wall
+  segment and two in the back wall (8 per bunker). `bunkerWallBoxes(b)` splits the walls around them; slit plugs
+  (`bunkerSlitBoxes`) block players, grenades and rockets, while bullets and bot/anti-ESP sight pass
+  (`Physics.raycast(..., throughSlits)`). `isSealed` and the bot escape grid use whole walls (`bunkerWallBoxes(b, false)`),
+  so seals are unchanged.
+
 Left for later phases: more templates (Caldera, Rig, Stilts), themes (dusk/storm/fog), pre-built walkways/links,
 seeded variation knobs, hazards.
