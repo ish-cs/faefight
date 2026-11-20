@@ -16,11 +16,15 @@ test('audio: context starts on click, sounds play while shooting, M mutes, no co
 
   await page.goto('/?debug=1');
   // Mute persisted before any AudioContext exists: M on the menu flips the stored setting.
+  const muted = () => page.evaluate(() => JSON.parse(localStorage.getItem('faefight.settings.v1') ?? '{}').audio?.muted);
   await page.keyboard.press('KeyM');
-  await expect(page.locator('label.sens', { hasText: 'Volume' }).locator('span')).toHaveText('Muted');
-  expect(await page.evaluate(() => localStorage.getItem('faefight.muted'))).toBe('1');
+  await expect.poll(muted).toBe(true);
+  await page.getByTestId('open-settings').click();
+  await page.getByTestId('settings-tab-audio').click();
+  await expect(page.getByTestId('set-mute')).toBeChecked();
+  await page.getByTestId('settings-close').click();
   await page.keyboard.press('KeyM');
-  await expect(page.locator('label.sens', { hasText: 'Volume' }).locator('span')).toHaveText(/%$/);
+  await expect.poll(muted).toBe(false);
 
   await page.getByTestId('play-medium').click();
   await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });

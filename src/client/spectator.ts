@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import type { Vec3 } from '../sim/types';
+import { type Action, isHeld, slotForCode } from './keymap';
 import { ThirdPersonCamera } from './camera';
 
 /** Free-fly speeds (m/s) and height limits for the spectator camera. */
@@ -71,8 +72,9 @@ export class Spectator {
       if (!this.active || !this.enabled() || typing(e)) return;
       this.keys.add(e.code);
       if (e.code === 'ControlLeft' || e.code === 'ControlRight') e.preventDefault();
-      const d = /^Digit([0-9])$/.exec(e.code);
-      if (d && !e.repeat) this.pendingDigit = Number(d[1]);
+      // Hotbar slot keys follow player 1–9; Digit0 = free fly.
+      const slot = slotForCode(e.code);
+      if (!e.repeat && (slot >= 0 || e.code === 'Digit0')) this.pendingDigit = slot >= 0 ? slot + 1 : 0;
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => this.keys.clear());
@@ -83,9 +85,10 @@ export class Spectator {
 
   private flyKeys(): FlyKeys {
     const k = (...c: string[]) => c.some((x) => this.keys.has(x));
+    const held = (a: Action) => isHeld(a, this.keys);
     return {
-      fwd: k('KeyW'), back: k('KeyS'), left: k('KeyA'), right: k('KeyD'), up: k('Space'),
-      down: k('KeyC', 'ControlLeft', 'ControlRight'), fast: k('ShiftLeft', 'ShiftRight'),
+      fwd: held('forward'), back: held('back'), left: held('left'), right: held('right'), up: held('jump'),
+      down: k('KeyC', 'ControlLeft', 'ControlRight'), fast: held('sprint'),
     };
   }
 

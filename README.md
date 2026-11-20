@@ -25,6 +25,10 @@ Pick a bot difficulty on the menu, then click the game to capture the mouse.
 | E | Collect cash at a generator · open your shop or vault · buy potions at the potion seller |
 | V | Toggle first / third person |
 | M | Mute / unmute sound |
+| P | Cycle graphics quality (low / high / ultra) |
+| Enter | Chat |
+
+Every key can be rebound in **Settings → Controls** (main menu or the pause card). Settings (controls, video, audio, gameplay) are stored in `localStorage` under `faefight.settings.v1`.
 
 Shield is the blue bar above health: it takes damage first (falls and water skip it), never regenerates, and is lost on death. Potions are sold only by the potion seller, never at your home shop:
 
