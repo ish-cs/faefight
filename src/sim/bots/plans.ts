@@ -58,10 +58,28 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
   return bags >= 2 ? { kind: 'sandbags', level: 0 } : null;
 }
 
-export type Needs = { scaffolds: number; kit: number; charge: boolean };
+/** `tower`: sandbags wanted for climbing above the sudden-death tide. */
+export type Needs = { scaffolds: number; kit: number; charge: boolean; tower?: number };
+
+/** Personal shopping taste (from personality): order and materials, never what is allowed. */
+export type ShopStyle = {
+  /** Buy the gun upgrade before bridging gear. */
+  upgradeFirst: boolean;
+  /** Go straight for the rifle (skip the SMG). */
+  longGun: boolean;
+  /** Add a shotgun for close quarters. */
+  closeGun: boolean;
+  /** Prefer metal plugs even when it means fewer spare dollars. */
+  metal: boolean;
+  /** Prefer steel plugs when rich. */
+  steel: boolean;
+  /** Extra wood walls carried for throwing down cover. */
+  coverWood: number;
+};
+export const PLAIN_STYLE: ShopStyle = { upgradeFirst: false, longGun: false, closeGun: false, metal: false, steel: false, coverWood: 0 };
 
 /** Next thing worth buying right now (null = nothing, or saving up for the top priority). */
-export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficulty): ShopItem | null {
+export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficulty, style: ShopStyle = PLAIN_STYLE): ShopItem | null {
   const inv = p.inv, cash = inv.cash;
   if (!ownsGun(inv)) {
     // Guns with no ammo left still count as owned: restock instead of re-buying.
@@ -69,27 +87,37 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     return cash >= WEAPONS.pistol.price ? 'pistol' : null;
   }
   if (needs.charge && inv.charges === 0) return cash >= 250 ? 'charge' : null;
+  if ((inv.pieces.sandbags ?? 0) < (needs.tower ?? 0)) return cash >= PIECES.sandbags.price ? 'sandbags' : null;
   const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
+  const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
+  if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   if (sealKit(inv) < needs.kit) {
-    const wantMetal = difficulty === 'hard' ? cash >= PIECES.metal.price : difficulty === 'medium' && cash >= 2 * PIECES.metal.price;
+    if (style.steel && cash >= 2 * PIECES.steel.price) return 'steel';
+    const wantMetal = difficulty === 'hard' ? cash >= PIECES.metal.price
+      : (difficulty === 'medium' || style.metal) && cash >= 2 * PIECES.metal.price;
     if (wantMetal) return 'metal';
     return cash >= PIECES.wood.price ? 'wood' : null;
   }
-  if (!inv.weapons.smg && !inv.weapons.rifle && cash >= WEAPONS.smg.price) return 'smg';
+  if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
+  if (style.closeGun && !inv.weapons.shotgun && cash >= WEAPONS.shotgun.price) return 'shotgun';
+  const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
+  if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
   return null;
 }
 
 const ESSENTIAL: ShopItem[] = ['pistol', 'charge', 'ammo', 'scaffold', 'metal', 'wood'];
 
-/** Purchases affordable now in order, and whether they cover every essential need. */
-export function shoppingPlan(p: PlayerState, needs: Needs, difficulty: Difficulty): { items: ShopItem[]; covered: boolean } {
+/** Purchases affordable now in order, what they cost, and whether they cover every essential need. */
+export function shoppingPlan(
+  p: PlayerState, needs: Needs, difficulty: Difficulty, style: ShopStyle = PLAIN_STYLE,
+): { items: ShopItem[]; covered: boolean; spent: number } {
   const sim = structuredClone(p);
   const items: ShopItem[] = [];
   for (let i = 0; i < 30; i++) {
-    const item = nextPurchase(sim, needs, difficulty);
+    const item = nextPurchase(sim, needs, difficulty, style);
     if (!item) break;
     const r = buy(sim, { buy: item });
     if (!r.ok) {
@@ -98,7 +126,8 @@ export function shoppingPlan(p: PlayerState, needs: Needs, difficulty: Difficult
     }
     items.push(item);
   }
+  const spent = p.inv.cash - sim.inv.cash;
   sim.inv.cash = Infinity;
-  const left = nextPurchase(sim, needs, difficulty);
-  return { items, covered: left === null || !ESSENTIAL.includes(left) };
+  const left = nextPurchase(sim, needs, difficulty, style);
+  return { items, covered: left === null || !ESSENTIAL.includes(left), spent };
 }

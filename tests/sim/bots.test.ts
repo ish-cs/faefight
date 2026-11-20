@@ -64,12 +64,12 @@ function canPlace(view: BotView, kind: PieceKind, pos: Vec3, rotY: number): Plac
 }
 
 const enemyStatus = (over: Partial<OtherStatus> = {}): OtherStatus =>
-  ({ id: 1, island: 1, alive: true, eliminated: false, respawnAt: null, ...over });
+  ({ id: 1, island: 1, alive: true, eliminated: false, respawnAt: null, kills: 0, ...over });
 
 function makeView(self: PlayerState, over: Partial<BotView> = {}): BotView {
   const view: BotView = {
     now: 100, self, enemies: [], others: [enemyStatus()], map, pieces: [],
-    generators: [0, 0], sealed: [false, false], waterY: 0, suddenDeath: false,
+    generators: [0, 0], sealed: [false, false], hurt: [], shots: [], feed: [], loot: [], waterY: 0, suddenDeath: false,
     groundAt: (x, z) => groundAt(view.pieces, x, z),
     canPlace: (k, p, r) => canPlace(view, k, p, r),
     ...over,
