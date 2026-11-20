@@ -7,6 +7,7 @@ export type LobbyActions = {
   setSeat(i: number, slot: Slot): void;
   addSeat(): void;
   removeSeat(i: number): void;
+  kick(i: number): void;
   start(): void;
   back(): void;
 };
@@ -98,6 +99,12 @@ export class LobbyUi {
         rm.disabled = slots.length <= 2;
         rm.onclick = () => a.removeSeat(i);
         row.append(sel, rm);
+      }
+      if (a && i > 0 && s.kind === 'human') {
+        const kick = el('button', 'btn small', 'Kick');
+        kick.dataset.testid = `kick-${i}`;
+        kick.onclick = () => a.kick(i);
+        row.append(kick);
       }
       return row;
     }));

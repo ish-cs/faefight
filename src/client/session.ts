@@ -22,6 +22,9 @@ export type HostEvents = {
  * Host side of an online match: owns the room and every link, seats joiners via the Lobby, and once
  * the match runs relays sanitized remote inputs/previews into the worker and snapshots back out.
  */
+const PREVIEWS_PER_SEC = 20;
+const WARN_EVERY_MS = 10_000;
+
 export class HostSession {
   readonly lobby: Lobby;
   private links = new Map<string, Link>(); // seated peers only
@@ -30,6 +33,9 @@ export class HostSession {
   private encoder = new SnapshotEncoder();
   private tickNo = 0;
   private limiter = new ChatLimiter();
+  /** Per-peer budgets: build previews (the ghost only re-asks when it moves) and malformed-message warnings. */
+  private previewBudget = new Map<string, { windowStart: number; n: number }>();
+  private warned = new Map<string, number>();
 
   private constructor(private room: HostRoom, readonly hostName: string, private ev: HostEvents) {
     this.lobby = new Lobby(hostName, HOST_PEER);
@@ -47,6 +53,16 @@ export class HostSession {
   setSeat(i: number, slot: Slot) { if (this.lobby.setSeat(i, slot)) this.broadcastLobby(); }
   addSeat() { if (this.lobby.addSeat()) this.broadcastLobby(); }
   removeSeat(i: number) { if (this.lobby.removeSeat(i)) this.broadcastLobby(); }
+  /** Remove a joined friend from the lobby. */
+  kick(seat: number) {
+    const slot = this.lobby.slots()[seat];
+    if (this.started || slot?.kind !== 'human' || slot.isHost) return;
+    const link = this.links.get(slot.peerId);
+    this.links.delete(slot.peerId);
+    this.lobby.removePeer(slot.peerId);
+    this.broadcastLobby();
+    if (link) { this.send(link, { t: 'ended', reason: 'kicked' }); setTimeout(() => link.close(), 200); }
+  }
   canStart() {
     const s = this.lobby.slots();
     return !this.started && s.length >= 2 && s.every((x) => x.kind !== 'open');
@@ -77,7 +93,14 @@ export class HostSession {
     link.onClose(() => { clearTimeout(helloTimer); if (seated) this.onLeave(link.peerId); });
     link.onMessage((raw) => {
       const msg = sanitizeClientMsg(raw);
-      if (!msg) { console.warn(`[host] dropped malformed message from ${link.peerId}`); return; }
+      if (!msg) {
+        const now = Date.now();
+        if (now - (this.warned.get(link.peerId) ?? -Infinity) > WARN_EVERY_MS) {
+          this.warned.set(link.peerId, now);
+          console.warn(`[host] dropping malformed messages from ${link.peerId}`);
+        }
+        return;
+      }
       if (!seated) {
         if (msg.t !== 'hello') return;
         clearTimeout(helloTimer);
@@ -99,13 +122,21 @@ export class HostSession {
           if (this.started) this.worker?.postMessage({ type: 'remoteInput', playerId, input: msg.input });
           break;
         case 'preview':
-          if (this.started) this.worker?.postMessage({ type: 'preview', playerId, req: msg.req, key: msg.key });
+          if (this.started && this.previewAllowed(link.peerId))
+            this.worker?.postMessage({ type: 'preview', playerId, req: msg.req, key: msg.key });
           break;
         case 'chat':
           this.relayChat(link.peerId, this.nameOf(seat), msg.text);
           break;
       }
     });
+  }
+
+  private previewAllowed(peerId: string) {
+    const now = Date.now();
+    const b = this.previewBudget.get(peerId);
+    if (!b || now - b.windowStart >= 1000) { this.previewBudget.set(peerId, { windowStart: now, n: 1 }); return true; }
+    return ++b.n <= PREVIEWS_PER_SEC;
   }
 
   private nameOf(seat: number) {

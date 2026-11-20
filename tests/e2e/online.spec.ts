@@ -41,6 +41,10 @@ test('host + join by code, bot seat, movement, chat, leaver becomes a bot', asyn
   await expect(a.getByTestId('seat-1')).toContainText('Bob');
   await expect(b.getByTestId('seat-0')).toContainText('Alice');
 
+  // The host sees a Kick button on the friend's seat (not on their own).
+  await expect(a.getByTestId('kick-1')).toBeVisible();
+  await expect(a.getByTestId('kick-0')).toHaveCount(0);
+
   // A adds seat 3, makes it an easy bot, starts.
   await a.getByTestId('add-seat').click();
   await expect(a.getByTestId('start-match')).toBeDisabled();

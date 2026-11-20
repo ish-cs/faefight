@@ -279,6 +279,7 @@ async function hostLobby(name: string, menu: HTMLElement) {
     setSeat: (i, slot: Slot) => session.setSeat(i, slot),
     addSeat: () => session.addSeat(),
     removeSeat: (i) => session.removeSeat(i),
+    kick: (i) => session.kick(i),
     start: () => {
       const backend = workerBackend((w) => session.start(w), session);
       const lobbyRoot = ui!.root;
