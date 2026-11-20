@@ -117,6 +117,7 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     jump: bool(x.jump),
     sprint: bool(x.sprint),
     fire: bool(x.fire),
+    ads: bool(x.ads),
     reload: bool(x.reload),
     interact: bool(x.interact),
     slot: oneOf(WEAPON_KINDS, x.slot),

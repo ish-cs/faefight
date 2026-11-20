@@ -21,6 +21,7 @@ export const ICONS: Record<IconKind, string> = {
   container: svg('<rect x="1.8" y="6" width="20.4" height="12.5" rx="1" fill="currentColor"/><path d="M5.5 8v8.5M9 8v8.5M12.5 8v8.5M16 8v8.5" stroke="#0e1218" stroke-width="1.2" opacity=".55"/><path d="M19.5 9v6.5" stroke="#0e1218" stroke-width="1.6"/>'),
   grenade: svg('<circle cx="12" cy="14" r="6.5" fill="currentColor"/><path d="M10 7h4v-2h-4zM14 6l4-2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 14h8M12 10v8" stroke="#0e1218" stroke-width="1" opacity=".45"/>'),
   charge: svg('<rect x="4" y="8" width="16" height="11" rx="2" fill="currentColor"/><path d="M12 8V4h5" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="16.5" cy="12" r="1.3" fill="#0e1218"/><path d="M6.5 15.5h7" stroke="#0e1218" stroke-width="1.4"/>'),
+  rocket: svg('<rect x="2" y="9" width="17" height="4.6" rx="1.4" fill="currentColor"/><path d="M19 9.4l3.6 1.9-3.6 1.9z" fill="currentColor"/><rect x=".8" y="8.2" width="2.6" height="6.2" rx=".6" fill="currentColor"/><path d="M8 13.6l-.8 4.6h2.6l.8-4.6M13 13.6v3.4h2.2v-3.4" fill="currentColor"/><rect x="7.5" y="6.2" width="4.5" height="2.4" rx=".6" fill="currentColor"/>'),
   genUpgrade: svg('<rect x="2.5" y="9" width="14" height="10" rx="1.5" fill="currentColor"/><path d="M4 21h11" stroke="currentColor" stroke-width="1.8"/><path d="M10.2 10.5 7.4 14.6h2.4l-1 3.4 3.2-4.6H9.6z" fill="#0e1218"/><path d="M19.5 16V4.5M16.2 7.8l3.3-3.3 3.3 3.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'),
   medkit: svg('<rect x="3" y="6" width="18" height="14" rx="3" fill="currentColor"/><path d="M9 6V4h6v2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 9.5v7M8.5 13h7" stroke="#0e1218" stroke-width="2.6"/>'),
   // Potions carry their own colours (blue shields, red heal, yellow speed) instead of currentColor.
@@ -37,7 +38,7 @@ export const LOCK_ICON = svg('<rect x="4.5" y="10.5" width="15" height="11" rx="
 export function iconGroup(k: IconKind): 'gun' | 'piece' | 'explosive' | 'medkit' | 'potion' | 'upgrade' {
   if (k === 'genUpgrade') return 'upgrade';
   if (k === 'shieldSmall' || k === 'shieldBig' || k === 'healPotion' || k === 'speedPotion') return 'potion';
-  if (k === 'pistol' || k === 'smg' || k === 'shotgun' || k === 'rifle' || k === 'ammo') return 'gun';
+  if (k === 'pistol' || k === 'smg' || k === 'shotgun' || k === 'rifle' || k === 'rocket' || k === 'ammo') return 'gun';
   if (k === 'grenade' || k === 'charge') return 'explosive';
   if (k === 'medkit') return 'medkit';
   return 'piece';

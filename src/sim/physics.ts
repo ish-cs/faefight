@@ -1,11 +1,23 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { PIECES, PLAYER } from './constants';
+import { HEAD, PIECES, PLAYER } from './constants';
 import { bunkerWallBoxes, type IslandLayout, type MapDef } from './map';
 import type { PieceState, Vec3 } from './types';
 import { v3 } from './vec';
 
 export type HitTarget = { type: 'player'; id: number } | { type: 'piece'; id: number } | { type: 'world' };
-export type RayHit = { dist: number; point: Vec3; hit: HitTarget };
+/** `part`: for player hits, whether the ray went through the head sphere (HEAD) or just the body. */
+export type RayHit = { dist: number; point: Vec3; hit: HitTarget; part?: 'head' | 'body' };
+
+/** Distance along a unit ray to a sphere, or null if it misses. */
+export function raySphere(o: Vec3, d: Vec3, c: Vec3, r: number): number | null {
+  const ox = o.x - c.x, oy = o.y - c.y, oz = o.z - c.z;
+  const b = ox * d.x + oy * d.y + oz * d.z;
+  const q = ox * ox + oy * oy + oz * oz - r * r;
+  const disc = b * b - q;
+  if (disc < 0) return null;
+  const t = -b - Math.sqrt(disc);
+  return t >= 0 ? t : q <= 0 ? 0 : null;
+}
 
 let initPromise: Promise<void> | null = null;
 const ensureInit = () => (initPromise ??= RAPIER.init());
@@ -178,11 +190,16 @@ export class Physics {
     const h = this.world.castRay(ray, maxDist, true, undefined, undefined, exclude);
     if (!h) return null;
     const t = h.timeOfImpact;
-    return {
-      dist: t,
-      point: v3(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t),
-      hit: this.entities.get(h.collider.handle) ?? { type: 'world' },
-    };
+    const hit = this.entities.get(h.collider.handle) ?? { type: 'world' as const };
+    const out: RayHit = { dist: t, point: v3(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t), hit };
+    if (hit.type === 'player') {
+      // The head sphere sits inside the capsule's top: the capsule is always hit first, so it's a headshot
+      // when the same ray also passes through the head just behind that entry point.
+      const c = h.collider.translation();
+      const head = raySphere(origin, dir, v3(c.x, c.y - PLAYER.height / 2 + HEAD.y, c.z), HEAD.r);
+      out.part = head !== null && head - t < HEAD.r * 2 ? 'head' : 'body';
+    }
+    return out;
   }
 
   /** Top surface y under (x, z) ignoring players, or null over open water. */

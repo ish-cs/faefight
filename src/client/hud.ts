@@ -1,5 +1,5 @@
-import { AMMO_BOX, CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, WEAPONS } from '../sim/constants';
-import { generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
+import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, WEAPONS } from '../sim/constants';
+import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
 import type { CenterIsland, IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem, isPotionItem } from '../sim/hotbar';
 import type { GunKind, HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
@@ -8,10 +8,11 @@ import { PIECE_ORDER } from './input';
 import { ISLAND_COLORS, ISLAND_NAMES } from './render';
 import { endState } from './endState';
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
+import { chipState } from './chipState';
 
-const GUNS = ['pistol', 'smg', 'shotgun', 'rifle'] as const;
+const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
 const LABEL: Record<string, string> = {
-  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
+  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
   ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit',
   shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
@@ -23,14 +24,17 @@ function supplyPrompt(c: Snapshot['center']): string {
   return `E  Take ${parts.join(' + ')}`;
 }
 
-/** Shop price; a generator upgrade's depends on your generator's level (0 once maxed). */
-function priceOf(item: ShopItem, genLevel = 1): number {
+/**
+ * Shop price; a generator upgrade's depends on your generator's level (0 once maxed); an ammo box costs
+ * what the gun it would fill takes (rockets are dearer).
+ */
+function priceOf(item: ShopItem, genLevel = 1, me?: PlayerState | null): number {
   if (item === 'genUpgrade') return genUpgradePrice(genLevel) ?? 0;
   const locks = lockedGunOf(item);
   if (locks) return lockPrice(locks);
   if ((GUNS as readonly string[]).includes(item)) return WEAPONS[item as WeaponKind].price;
   if (item in PIECES) return PIECES[item as PieceKind].price;
-  if (item === 'ammo') return AMMO_BOX.price;
+  if (item === 'ammo') return ammoPrice(me ? ammoTarget(me) : undefined);
   if (item === 'grenade') return GRENADE.price;
   if (item === 'medkit') return MEDKIT.price;
   if (isPotionItem(item)) return POTIONS[item].price;
@@ -60,7 +64,7 @@ const fmtClock = (s: number) => {
 
 /** Short hotbar labels (slots are narrow). */
 const SHORT: Record<HotbarItem, string> = {
-  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
+  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
   grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit',
   shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed',
@@ -73,6 +77,10 @@ export type HudContext = {
   free: boolean;
   /** I (inventory) mode: pointer released so slots can be dragged. */
   inventory: boolean;
+  /** Crosshair gap (px) from the current spread cone; reload progress 0..1 or null; rifle scope up. */
+  spreadPx?: number;
+  reload?: number | null;
+  scoped?: boolean;
 };
 export type HudActions = {
   buy(item: ShopItem): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void;
@@ -121,6 +129,8 @@ export class Hud {
   private killfeed = el('div', 'killfeed');
   private center = el('div', 'center-msg');
   private crosshair = el('div', 'crosshair');
+  private reloadRing = el('div', 'reload-ring');
+  private scope = el('div', 'scope');
   private damage = el('div', 'damage-flash');
   private endScreen = el('div', 'end-screen');
   private fps = el('div', 'fps');
@@ -155,7 +165,12 @@ export class Hud {
     (this.drinkBox.lastChild as HTMLElement).append(this.drinkFill);
     this.panel.dataset.testid = 'panel';
     this.buildHotbar();
-    this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.crosshair, this.center,
+    // Four ticks that open with the spread cone, plus the hitmarker X.
+    for (const c of ['t', 'b', 'l', 'r', 'hm']) this.crosshair.append(el('i', c));
+    this.crosshair.dataset.testid = 'crosshair';
+    this.reloadRing.dataset.testid = 'reload-ring';
+    this.scope.dataset.testid = 'scope';
+    this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
       this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
     parent.append(this.root);
   }
@@ -340,6 +355,13 @@ export class Hud {
       this.drinkFill.style.width = `${Math.round(100 * Math.min(1, Math.max(0, 1 - (drink.doneAt - snap.time) / POTIONS[drink.kind].useSec)))}%`;
     }
     this.crosshair.classList.toggle('build', !!buildKind);
+    const gap = buildKind ? 4 : Math.round(Math.min(60, Math.max(3, ctx.spreadPx ?? 4)));
+    if (this.crosshair.style.getPropertyValue('--gap') !== `${gap}px`) this.crosshair.style.setProperty('--gap', `${gap}px`);
+    this.crosshair.classList.toggle('scoped', !!ctx.scoped);
+    this.scope.classList.toggle('on', !!ctx.scoped);
+    const rl = ctx.reload ?? null;
+    this.reloadRing.style.display = rl === null ? 'none' : '';
+    if (rl !== null) this.reloadRing.style.setProperty('--p', `${Math.round(rl * 360)}deg`);
 
     const left = LIFECYCLE.suddenDeathAt - snap.time;
     setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
@@ -349,8 +371,10 @@ export class Hud {
 
     Array.from(this.seals.children).forEach((chip, i) => {
       const sealed = !!snap.sealed[i];
-      chip.classList.toggle('sealed', sealed);
-      setText(chip.querySelector('.state') as HTMLElement, sealed ? 'SEALED' : 'OPEN');
+      const out = !!snap.players.find((p) => p.island === i)?.eliminated;
+      chip.classList.toggle('sealed', sealed && !out);
+      chip.classList.toggle('out', out);
+      setText(chip.querySelector('.state') as HTMLElement, chipState(sealed, out));
       // Other islands are labelled with their owner's name (a leaver's seat stays theirs, now bot-run).
       const owner = i === me.island ? null : snap.players.find((p) => p.island === i);
       if (owner) setText(chip.querySelector('.name') as HTMLElement, owner.name);
@@ -424,7 +448,10 @@ export class Hud {
       } else if (e.type === 'suddenDeath') {
         this.addFeed('Sudden death: generators stopped, tide rising', true);
       } else if (e.type === 'hit') {
-        if (e.data.by === this.humanId) this.flash(this.crosshair, 'hit');
+        if (e.data.by === this.humanId && e.data.target !== this.humanId) {
+          this.crosshair.classList.toggle('head', e.data.part === 'head');
+          this.flash(this.crosshair, 'hit');
+        }
         if (e.data.target === this.humanId) this.flash(this.damage, 'on');
       }
     }
@@ -535,7 +562,8 @@ export class Hud {
     const atHome = !!this.map[me.island] && dist2D(this.map[me.island].shop, me.pos) <= ECONOMY.interactRadius;
     for (const b of Array.from(this.panel.querySelectorAll<HTMLButtonElement>('.shop-item'))) {
       const item = b.dataset.item as ShopItem;
-      const price = priceOf(item, genLevel);
+      const price = priceOf(item, genLevel, me);
+      setText(b.querySelector('.iprice') as HTMLElement, `$${price}`);
       const poor = me.inv.cash < price;
       const lockGun = lockedGunOf(item);
       let status = '';
@@ -555,8 +583,9 @@ export class Hud {
       } else if ((GUNS as readonly string[]).includes(item) && me.inv.weapons[item as WeaponKind]) status = 'Owned';
       else if (isHotbarItem(item) && countOf(me.inv, item) === 0 && !canAdd(me.hotbar, item)) status = 'Hotbar full';
       else if (item === 'ammo') {
-        if (me.equipped === 'fists') status = 'Equip a gun';
-        else badge = `+${WEAPONS[me.equipped].mag * AMMO_BOX.mags}`;
+        const gun = ammoTarget(me);
+        if (!gun) status = 'Equip a gun';
+        else badge = `+${ammoPerBox(gun)}`;
       }
       if (!status && isHotbarItem(item) && !isGunItem(item)) {
         const n = countOf(me.inv, item);

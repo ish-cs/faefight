@@ -24,7 +24,7 @@ Every map has a neutral **center island**, reachable only by bridging to it. Any
 | Key | Action |
 |---|---|
 | WASD / Shift / Space | Move / sprint / jump |
-| Mouse | Aim (click to capture) · LMB fire / place / throw · R reload |
+| Mouse | Aim (click to capture) · LMB fire / place / throw · RMB aim down sights (zoom; rifle 2x scope) · R reload |
 | 1–9 / wheel | Select hotbar slot: a gun to shoot, a piece to build (click places), a grenade/charge (click throws/places), a medkit (click: +50 HP after 2 s), a potion (click to drink), an empty slot for fists |
 | Q / Ctrl+Q (or Shift+Q) | Drop one from the selected slot / drop the whole stack |
 | I | Inventory: release the mouse and drag hotbar slots to reorder (I again or click the game to resume) |
@@ -48,6 +48,8 @@ Shield is the blue bar above health: it takes damage first (falls and water skip
 | Speed | $120 | 1 s | 30% faster for 15 s (one at a time) |
 
 You can't drink a potion that would do nothing.
+
+Guns behave like guns: spread grows as you fire, move or jump and tightens when you aim down sights; recoil climbs your aim and you pull it back down; headshots do double damage; damage falls off with range (the rifle keeps most of it). A reload with rounds left keeps one in the chamber and is quicker than an empty one; the shotgun loads shell by shell (fire to stop early). The $500 rocket launcher fires a slow rocket that blows up on contact: it breaks steel close up, hurts everyone nearby (you too: rocket jumps cost about half your health) and knocks people back.
 
 Bought items go into the first free hotbar slot (9 slots, like Minecraft). With a full hotbar you can only buy more of what you already hold.
 

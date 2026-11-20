@@ -111,6 +111,57 @@ const GUNS: Record<string, GunSpec> = {
   rifle: { crack: [4000, 0.03, 1.1], body: [1800, 1.5, 0.1, 0.6], thump: [140, 45, 0.18, 0.9], tail: [800, 1.0, 0.2] },
 };
 
+/** Rocket launch: a hard pop, then the motor's rushing whoosh as it leaves. */
+function rocketLaunch(k: Kit, out: AudioNode, t: number, cue: Cue): number {
+  const p = jitter(k.rnd(), 0.05);
+  noise(k, out, t, { type: 'highpass', freq: 1500, dur: 0.05, peak: 0.9 });
+  tone(k, out, t, { f0: 120 * p, f1: 40, dur: 0.3, peak: cue.own ? 1.4 : 1.0, attack: 0.002 });
+  noise(k, out, t, { type: 'lowpass', freq: 900, dur: 0.35, peak: 0.9 });
+  return noise(k, out, t + 0.02, { type: 'bandpass', freq: 600 * p, freqEnd: 2600, q: 0.9, dur: 0.9, peak: 0.8, attack: 0.06 });
+}
+
+/** Reload / handling sounds: `kind` = "weapon:beat". Small, close, mechanical. */
+function handling(k: Kit, out: AudioNode, t: number, cue: Cue): number {
+  const [weapon, beat] = (cue.kind ?? 'pistol:magIn').split(':');
+  const p = jitter(k.rnd(), 0.06);
+  const heavy = weapon === 'rifle' ? 0.85 : weapon === 'smg' ? 1 : weapon === 'pistol' ? 1.25 : 1;
+  switch (beat) {
+    case 'release': // mag catch
+      noise(k, out, t, { type: 'highpass', freq: 4200 * p, dur: 0.012, peak: 0.6 });
+      return tone(k, out, t, { f0: 2400 * p * heavy, dur: 0.02, peak: 0.25, attack: 0.001 });
+    case 'magOut': // mag slides out
+      if (weapon === 'rocket') return noise(k, out, t, { type: 'bandpass', freq: 700, q: 1.2, dur: 0.18, peak: 0.35, attack: 0.03 });
+      noise(k, out, t, { type: 'bandpass', freq: 1700 * p * heavy, q: 3, dur: 0.07, peak: 0.45, attack: 0.01 });
+      return 0.05 + tone(k, out, t + 0.05, { f0: 520 * heavy, f1: 380, dur: 0.05, peak: 0.25, attack: 0.001 });
+    case 'magIn': // scrape in, then the firm seat
+      // (The animation's seat jolt lands with the click, ~40 ms after the beat.)
+      noise(k, out, t, { type: 'bandpass', freq: 1500 * p * heavy, q: 2.5, dur: 0.03, peak: 0.3, attack: 0.005 });
+      noise(k, out, t + 0.04, { type: 'bandpass', freq: 3200 * p, q: 1.5, dur: 0.025, peak: 0.85 });
+      return 0.04 + tone(k, out, t + 0.04, { f0: 900 * heavy * p, f1: 520, dur: 0.045, peak: 0.6, attack: 0.001 });
+    case 'rack': { // slide/bolt back, then slams forward
+      noise(k, out, t, { type: 'bandpass', freq: 2600 * p, q: 2, dur: 0.05, peak: 0.55 });
+      const at = t + (weapon === 'pistol' ? 0.07 : 0.11);
+      noise(k, out, at, { type: 'highpass', freq: 3000, dur: 0.03, peak: 0.9 });
+      return at - t + tone(k, out, at, { f0: 600 * heavy * p, f1: 300, dur: 0.06, peak: 0.6, attack: 0.001 });
+    }
+    case 'shell': // a shell thumbed into the tube
+      noise(k, out, t, { type: 'bandpass', freq: 1300 * p, q: 2, dur: 0.05, peak: 0.45, attack: 0.008 });
+      return tone(k, out, t + 0.01, { f0: 340 * p, f1: 260, dur: 0.05, peak: 0.45, attack: 0.001 });
+    case 'pump': { // chk-chk
+      noise(k, out, t, { type: 'bandpass', freq: 1100 * p, q: 1.5, dur: 0.06, peak: 0.8 });
+      tone(k, out, t, { f0: 210 * p, f1: 150, dur: 0.07, peak: 0.6, attack: 0.001 });
+      noise(k, out, t + 0.14, { type: 'bandpass', freq: 1500 * p, q: 1.5, dur: 0.05, peak: 0.9 });
+      return 0.14 + tone(k, out, t + 0.14, { f0: 260 * p, f1: 170, dur: 0.07, peak: 0.7, attack: 0.001 });
+    }
+    case 'load': // a rocket shoved home: heavy clunk
+      tone(k, out, t, { f0: 95 * p, f1: 48, dur: 0.22, peak: 1.0, attack: 0.002 });
+      noise(k, out, t, { type: 'lowpass', freq: 700, dur: 0.14, peak: 0.7 });
+      return partials(k, out, t, 310 * p, 0.35, [[1, 1, 0.3], [2.7, 0.5, 0.18], [5.1, 0.3, 0.1]]);
+    default:
+      return noise(k, out, t, { type: 'highpass', freq: 3000, dur: 0.02, peak: 0.4 });
+  }
+}
+
 function gunshot(k: Kit, out: AudioNode, t: number, cue: Cue, d: number): number {
   const p = jitter(k.rnd(), 0.05);
   if (cue.kind === 'fists') {
@@ -119,6 +170,7 @@ function gunshot(k: Kit, out: AudioNode, t: number, cue: Cue, d: number): number
     tone(k, out, h, { f0: 120 * p, f1: 50, dur: 0.1, peak: 0.8 });
     return Math.max(0.25, noise(k, out, h, { type: 'lowpass', freq: 400, dur: 0.06, peak: 0.6 }) + 0.09);
   }
+  if (cue.kind === 'rocket') return rocketLaunch(k, out, t, cue);
   const g = GUNS[cue.kind ?? 'pistol'] ?? GUNS.pistol;
   const own = !!cue.own;
   const far = !own && d > 30;
@@ -136,7 +188,7 @@ function gunshot(k: Kit, out: AudioNode, t: number, cue: Cue, d: number): number
 }
 
 function explosion(k: Kit, out: AudioNode, t: number, cue: Cue): number {
-  const big = cue.kind === 'charge';
+  const big = cue.kind === 'charge' || cue.kind === 'rocket';
   const p = jitter(k.rnd(), 0.06);
   noise(k, out, t, { type: 'highpass', freq: 1200, dur: 0.08, peak: 1.0 });
   tone(k, out, t, { f0: (big ? 62 : 78) * p, f1: 22, dur: big ? 1.7 : 1.3, peak: 1.4, attack: 0.004 });
@@ -241,6 +293,13 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
   const p = jitter(k.rnd(), 0.04);
   switch (cue.sound) {
     case 'shot': return gunshot(k, out, t, cue, d);
+    case 'reload': return handling(k, out, t, cue);
+    case 'dry': // hammer on an empty chamber
+      noise(k, out, t, { type: 'highpass', freq: 5200 * p, dur: 0.01, peak: 0.6 });
+      return tone(k, out, t, { f0: 1700 * p, f1: 1300, dur: 0.018, peak: 0.35, attack: 0.001 });
+    case 'ads': // cloth + a soft grip shift as the sights come up
+      noise(k, out, t, { type: 'bandpass', freq: 900 * p, q: 0.8, dur: 0.1, peak: 0.22, attack: 0.03 });
+      return 0.06 + noise(k, out, t + 0.06, { type: 'bandpass', freq: 2600 * p, q: 3, dur: 0.012, peak: 0.12 });
     case 'impact':
       noise(k, out, t, { type: 'bandpass', freq: 2500 * p, q: 2, dur: 0.04, peak: 0.8 });
       noise(k, out, t, { type: 'lowpass', freq: 800 * p, dur: 0.08, peak: 0.6 });
@@ -403,4 +462,35 @@ export function heartbeat(k: Kit, out: AudioNode, t: number): number {
   tone(k, out, t, { f0: 62, f1: 40, dur: 0.12, peak: 0.9 });
   noise(k, out, t, { type: 'lowpass', freq: 120, dur: 0.08, peak: 0.5 });
   return 0.18 + tone(k, out, t + 0.18, { f0: 55, f1: 38, dur: 0.1, peak: 0.65 });
+}
+
+/**
+ * Rocket motor: a looping band-passed roar. Returns a stop function (fades out) and a rate setter.
+ * Played through a positional chain that the engine moves with the rocket.
+ */
+export function rocketLoop(k: Kit, out: AudioNode): { stop(): void } {
+  const { ctx, white } = k;
+  const s = ctx.createBufferSource();
+  s.buffer = white;
+  s.loop = true;
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.6;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 400;
+  const g = ctx.createGain();
+  const t = ctx.currentTime;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.55, t + 0.08);
+  s.connect(bp).connect(g);
+  s.connect(lp).connect(g);
+  g.connect(out);
+  s.start(t, k.rnd() * 2);
+  return {
+    stop() {
+      const now = ctx.currentTime;
+      g.gain.cancelScheduledValues(now);
+      g.gain.setTargetAtTime(0, now, 0.04);
+      s.stop(now + 0.3);
+    },
+  };
 }
