@@ -62,6 +62,9 @@ export type PlayerState = {
   hp: number;
   alive: boolean;
   eliminated: boolean;
+  /** Scoreboard: kills credited to this player (not suicides or environment deaths) and times died. */
+  kills: number;
+  deaths: number;
   respawnAt: number | null;
   /** Set while trapped in a sealed bunker after respawning: eliminated at this time unless out. */
   breakoutUntil: number | null;
