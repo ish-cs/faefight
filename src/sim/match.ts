@@ -303,6 +303,11 @@ export class Match implements MatchApi {
     }
     if (input.vault && near(isl.vault) && vaultTransfer(p, input.vault).ok) p.busyUntil = now + ECONOMY.vaultSec;
     if (input.reload) tryReload(p, now);
+    // Attacking ends spawn protection at once.
+    if ((input.fire || input.throwGrenade || input.placeCharge) && (p.spawnProtected || p.invulnUntil > now)) {
+      p.invulnUntil = Math.min(p.invulnUntil, now);
+      p.spawnProtected = false;
+    }
     if (input.fire) {
       this.rewindT = this.rewindTime(p, input, now);
       try { this.events.push(...tryFire(this.ctx, p, now)); } finally { this.rewindT = null; }

@@ -6,7 +6,8 @@ import { WireDecoder } from '../net/wire';
 import type { Link } from '../net/transport';
 import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
-import { snapPlacement, type Placement } from '../sim/building';
+import type { Placement } from '../sim/building';
+import { BuildAim, type AimOutcome } from './buildAim';
 import { DT, HEAD, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
@@ -40,7 +41,6 @@ import { aimDirection, ShotPredictor } from './shotPredict';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
-const GHOST_AHEAD = 3;
 const AIM_RANGE = 120;
 /** Already-sent movement commands repeated in each network input message. */
 const REDUNDANT_CMDS = 2;
@@ -529,11 +529,19 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let map: IslandLayout[] = [];
   let humanId = 0;
   let snap: Snapshot | null = null;
-  let preview: { key: string; result: Placement } | null = null;
-  const previewKeys = new Map<number, string>(); // numeric wire key → request key
-  let previewSeq = 0;
-  let previewSentKey = '';
-  let lastReq: BuildRequest | null = null;
+  // Build aiming runs locally every frame against the predictor's collision world (no server round
+  // trip): the ghost colour is always current and a click sends exactly the spot the ghost shows.
+  const buildAim = new BuildAim();
+  let aim: AimOutcome | null = null;
+  /** Newest snapshot as received (not delayed by the interpolation buffer): busy state, pieces. */
+  let latest: Snapshot | null = null;
+  /** A sent build not yet confirmed by a 'placed' event (one at a time, so drag-build can't double-place). */
+  let buildPending: { at: number } | null = null;
+  /** A click that couldn't place yet (busy placing the last piece) still counts for a moment. */
+  let placeWantedAt = -Infinity;
+  let lastSnapKey = '';
+  const debugPreviews = new Map<number, (r: Placement) => void>();
+  let debugPreviewSeq = 0;
   let wasLocked = false;
   let paused: HTMLElement | null = null;
   let dead: HTMLElement | null = null;
@@ -581,13 +589,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       if (station === 'shop' || station === 'potions' || station === 'vault') openPanel(station);
       else input.queue({ interact: true });
     },
-    place: () => {
-      const me = snap?.players.find((p) => p.id === humanId);
-      if (!lastReq || !me || !me.alive) return;
-      if ((me.inv.pieces[lastReq.kind] ?? 0) <= 0) return;
-      if (!preview || preview.key !== reqKey(lastReq) || !preview.result.ok) return;
-      input.queue({ build: lastReq });
-    },
+    place: () => { placeWantedAt = performance.now(); tryPlace(); },
     lockChange: (locked) => {
       if (locked) {
         wasLocked = true; paused?.remove(); paused = null; hint.style.display = 'none';
@@ -699,10 +701,25 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   }, { capture: true });
   window.addEventListener('resize', () => renderer.resize());
 
-  const reqKey = (r: BuildRequest) => `${r.kind}|${r.pos.x.toFixed(2)}|${r.pos.y.toFixed(2)}|${r.pos.z.toFixed(2)}|${r.rotY.toFixed(3)}|${r.free}`;
+  const SNAP_LABEL: Record<string, string> = { bridge: 'snap: bridge', shore: 'snap: bridge start', gap: 'snap: fill gap',
+    beside: 'snap: in line', stack: 'snap: stack', door: 'snap: plug doorway', ramp: 'snap: ramp up' };
+  const ghostState = () => (aim ? aim.ok : null);
+  const buildNote = () => (!aim ? null : !aim.ok ? `✕ ${aim.reason}` : SNAP_LABEL[aim.tag] ?? null);
 
-  // Placement verdict for the ghost as it stands now (null while the sim's answer for it is pending).
-  const ghostState = () => (preview && lastReq && preview.key === reqKey(lastReq) ? preview.result.ok : null);
+  /** Place from the current ghost if it's valid, we have the piece and aren't still placing the last one. */
+  function tryPlace(): boolean {
+    const now = performance.now();
+    if (buildPending && now - buildPending.at > 1500) buildPending = null; // lost / rejected
+    if (!aim?.ok || !aim.req || buildPending) return false;
+    const me = latest?.players.find((p) => p.id === humanId);
+    if (!me || !me.alive || (me.inv.pieces[aim.req.kind] ?? 0) <= 0) return false;
+    if (me.busyUntil > latest!.time) return false;
+    input.queue({ build: aim.req });
+    buildPending = { at: now };
+    placeWantedAt = -Infinity;
+    renderer.pulseGhost();
+    return true;
+  }
 
   /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
   const gunHud = (me: Snapshot['players'][number] | undefined) => {
@@ -720,7 +737,6 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const shots = new ShotPredictor();
   /** Debug: when own shots were shown (predicted) and when the host's shot events reached the effects (old path). */
   const shotTimes = { predicted: [] as number[], applied: [] as number[] };
-  let latest: Snapshot | null = null; // newest snapshot (ammo/reload for prediction), ahead of the event buffer
   const applySnapshot = (s: Snapshot) => {
     const first = !snap;
     if (DEBUG) for (const e of s.events) if (e.type === 'shot' && e.data.by === humanId) shotTimes.applied.push(performance.now());
@@ -749,7 +765,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
     const wasEnded = hud.ended;
-    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, free: input.free, inventory: input.inventory, ...gunHud(meNow) });
+    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory, ...gunHud(meNow) });
     if (hud.ended && !wasEnded) spectateChosen = false; // a (new) result popped the end screen up
     scoreboard.update(s, scoreOpts());
     chat.enabled = !hud.ended && !dead && !hud.panelOpen;
@@ -774,15 +790,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       predictor?.onSnapshot(s);
       latest = s;
       shots.reconcile(s.events, humanId, performance.now());
+      if (buildPending && s.events.some((e) => e.type === 'placed' && (e.data as { by?: number }).by === humanId)) buildPending = null;
       renderer.ingest(s);
       if (buffer) buffer.push(s); else applySnapshot(s);
     },
-    preview: (result, key) => {
-      const k = previewKeys.get(key);
-      if (k === undefined) return;
-      previewKeys.delete(key);
-      preview = { key: k, result };
-    },
+    // Ghost validation is local now (buildAim); the sim's preview only answers debug cross-checks.
+    preview: (result, key) => { debugPreviews.get(key)?.(result); debugPreviews.delete(key); },
     chat: (from, text) => chat.add(from, text),
     fatal: showFatal,
   });
@@ -819,6 +832,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderScale: () => ({ dyn: dynRes.scale, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: dynRes.smoothedMs }),
       interpDelay: () => renderer.interpDelay,
       shotPredict: () => ({ ...shots.stats, inFlight: shots.inFlight, times: shotTimes }),
+      /** Current build ghost: snap tag, ghost/rest position, rotation, validity (+ reason) and the exact request a click sends. */
+      buildAim: () => aim,
+      /** The sim's own verdict for a build request (round trip), to cross-check the local ghost. */
+      serverPreview: (req: BuildRequest) => new Promise<Placement>((res) => { const k = ++debugPreviewSeq; debugPreviews.set(k, res); backend.preview(req, k); }),
     };
   }
 
@@ -857,6 +874,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   // ---- frame loop ----
   const feet = new THREE.Vector3();
+  const aimDir = new THREE.Vector3();
   const sendAcc = new InputAccumulator();
   let nextSendAt = 0;
   let last = performance.now();
@@ -932,7 +950,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       spectator.enter(renderer.camera.position);
       renderer.characters.hiddenId = humanId;
       renderer.setGhost(null);
-      lastReq = null;
+      aim = null;
       spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId, players: snap!.players,
         posOf: (id, out) => renderer.playerPos(id, out) });
     } else spectator.exit();
@@ -950,36 +968,28 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const view = viewFeet.set(feet.x, eyeY.update(feet.y, predicting ? predicted.vel.y : null, dt), feet.z);
       if (!fpv.updateCamera(view, input.yaw, input.pitch, me, humanId)) camera.update(view, input.yaw, input.pitch, dt);
 
-      // Build ghost (holding a piece): ~3 m ahead on the ground, snapped like the sim snaps it, validated by the sim.
+      // Build ghost (holding a piece): where the crosshair points (or a nearby snap spot), validated
+      // locally every frame against the predictor's world with the sim's own rules.
       input.held = me.hotbar[input.selected] ?? null;
       const buildKind = input.buildKind;
-      if (buildKind && me.alive) {
-        const fx = -Math.sin(input.yaw), fz = -Math.cos(input.yaw);
-        const req: BuildRequest = {
-          kind: buildKind,
-          pos: { x: feet.x + fx * GHOST_AHEAD, y: me.pos.y, z: feet.z + fz * GHOST_AHEAD },
-          rotY: input.yaw + input.buildRot,
-          free: input.free,
-        };
-        const snapped = snapPlacement(req.pos, req.rotY, req.free);
-        req.pos = snapped.pos;
-        req.rotY = snapped.rotY;
-        lastReq = req;
-        const key = reqKey(req);
-        if (key !== previewSentKey) {
-          previewSentKey = key;
-          const wire = ++previewSeq;
-          previewKeys.set(wire, key);
-          if (previewKeys.size > 64) previewKeys.delete(previewKeys.keys().next().value!); // lost replies
-          backend.preview(req, wire);
-        }
-        const have = (me.inv.pieces[req.kind] ?? 0) > 0;
-        const fresh = preview && preview.key === key ? preview.result : null;
-        const ok = !!fresh?.ok && have;
-        renderer.setGhost(req.kind, fresh?.ok ? fresh.pos : req.pos, req.rotY, ok);
+      if (buildKind && me.alive && predictor) {
+        const cam = renderer.camera;
+        cam.getWorldDirection(aimDir);
+        aim = buildAim.update({
+          physics: predictor.world, kind: buildKind,
+          ray: { eye: { x: cam.position.x, y: cam.position.y, z: cam.position.z }, dir: { x: aimDir.x, y: aimDir.y, z: aimDir.z } },
+          player: { x: feet.x, y: feet.y, z: feet.z }, yaw: input.yaw, buildRot: input.buildRot, free: input.free,
+          humanId, pieces: (latest ?? snap!).pieces, islands: map, myIsland: me.island,
+        });
+        if (!(me.inv.pieces[buildKind] ?? 0)) { aim.ok = false; aim.reason = 'none left'; aim.req = null; }
+        const snapKey = aim.tag === 'aim' ? '' : `${aim.tag}${aim.ghost.x.toFixed(1)}${aim.ghost.z.toFixed(1)}`;
+        if (snapKey && snapKey !== lastSnapKey && aim.ok) audio.ui('tick', 0.15);
+        lastSnapKey = snapKey;
+        renderer.setGhost(buildKind, aim.ghost, aim.rotY, aim.ok, aim.ok ? aim.anchor : null);
+        if (input.clickHeld || now - placeWantedAt < 350) tryPlace();
       } else {
         renderer.setGhost(null);
-        lastReq = null;
+        aim = null;
       }
     }
 

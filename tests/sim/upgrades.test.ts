@@ -171,7 +171,7 @@ describe('gun lock', () => {
     const me = snap.players[0];
     expect(me.alive).toBe(true);
     expect(me.inv.weapons.smg).toEqual({ mag: WEAPONS.smg.mag, spare: WEAPONS.smg.mag });
-    expect(me.inv.weapons.pistol).toBeUndefined();
+    expect(me.inv.weapons.pistol).toEqual({ mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag }); // everyone respawns with a pistol
     expect(me.hotbar[0]).toBe('smg');
     expect(me.locked).toEqual(['smg']);
   });
