@@ -61,7 +61,10 @@ export class SnapshotEncoder {
   }
 
   private player(p: PlayerState, own: boolean): NetPlayer {
-    const out: NetPlayer = { ...p, pos: rv(p.pos), vel: rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp) };
+    // Your own position/velocity go out unrounded: the client replays its movement from them (prediction).
+    const out: NetPlayer = {
+      ...p, pos: own ? { ...p.pos } : rv(p.pos), vel: own ? { ...p.vel } : rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp),
+    };
     if (!own) { delete out.inv; delete out.vault; delete out.hotbar; }
     return out;
   }

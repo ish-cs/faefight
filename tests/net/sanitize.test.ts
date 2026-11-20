@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { sanitizeClientMsg, sanitizeInput } from '../../src/net/sanitize';
+import { MAX_CMDS_PER_MSG, sanitizeClientMsg, sanitizeInput } from '../../src/net/sanitize';
 import { NO_INPUT } from '../../src/sim/types';
 
 describe('sanitizeInput', () => {
@@ -78,6 +78,18 @@ describe('sanitizeClientMsg', () => {
     const req = { kind: 'wood', pos: { x: 1, y: 2, z: 3 }, rotY: 0, free: true };
     expect(sanitizeClientMsg({ t: 'preview', req, key: 3 })).toEqual({ t: 'preview', req, key: 3 });
     expect(sanitizeClientMsg({ t: 'preview', req: { ...req, kind: 'x' }, key: 3 })).toBeNull();
+  });
+  test('input carries numbered movement commands, sanitized', () => {
+    const cmd = { seq: 5, moveX: 3, moveZ: -1, yaw: 0.25, jump: 1, sprint: true, extra: 'x' };
+    const r = sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: [cmd] });
+    expect(r).toEqual({ t: 'input', input: NO_INPUT, cmds: [{ seq: 5, moveX: 1, moveZ: -1, yaw: 0.25, jump: false, sprint: true }] });
+    // Missing cmds (older shape) → empty list; bad seq / yaw / too many → whole message dropped.
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT })).toEqual({ t: 'input', input: NO_INPUT, cmds: [] });
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: [{ ...cmd, seq: 1.5 }] })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: [{ ...cmd, seq: 0 }] })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: [{ ...cmd, yaw: NaN }] })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: Array(MAX_CMDS_PER_MSG + 1).fill(cmd) })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'input', input: NO_INPUT, cmds: 'lots' })).toBeNull();
   });
   test('unknown types are dropped', () => {
     expect(sanitizeClientMsg({ t: 'admin', cmd: 'win' })).toBeNull();
