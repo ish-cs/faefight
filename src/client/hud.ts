@@ -51,7 +51,7 @@ export type HudContext = {
   selected: number;
   ghostOk: boolean | null;
   free: boolean;
-  /** Tab mode: pointer released so slots can be dragged. */
+  /** I (inventory) mode: pointer released so slots can be dragged. */
   inventory: boolean;
 };
 export type HudActions = {
@@ -60,6 +60,8 @@ export type HudActions = {
   select(slot: number): void;
   /** Hotbar slot dragged onto another. */
   moveSlot(from: number, to: number): void;
+  /** End-screen buttons (default: Back to menu). over = the match has a result (not just you eliminated). */
+  endButtons?(over: boolean): HTMLElement[];
 };
 
 export class Hud {
@@ -301,11 +303,17 @@ export class Hud {
 
     const end = endState(snap.winner, this.humanId, me.eliminated, snap.players);
     if (end) {
-      if (this.endScreen.dataset.state !== end.state) {
+      // Re-shown when the match result changes (e.g. eliminated mid-match, then someone wins).
+      const key = `${end.state}|${snap.winner}`;
+      if (this.endScreen.dataset.key !== key) {
+        this.endScreen.dataset.key = key;
         this.endScreen.dataset.state = end.state;
+        this.endScreen.dataset.testid = 'end-screen';
         const btn = el('button', 'btn', 'Back to menu');
         btn.onclick = () => this.act.backToMenu();
-        this.endScreen.replaceChildren(el('div', 'end-title', end.title), el('div', 'end-sub', end.sub), btn);
+        const buttons = el('div', 'end-buttons');
+        buttons.append(...(this.act.endButtons?.(snap.winner !== null) ?? [btn]));
+        this.endScreen.replaceChildren(el('div', 'end-title', end.title), el('div', 'end-sub', end.sub), buttons);
         this.endScreen.style.display = 'flex';
       }
     }
@@ -317,6 +325,11 @@ export class Hud {
 
   get ended() {
     return this.endScreen.style.display === 'flex';
+  }
+
+  /** Hide / bring back the end screen (spectating after elimination or the match end). */
+  setEndVisible(v: boolean) {
+    if (this.endScreen.dataset.key) this.endScreen.style.display = v ? 'flex' : 'none';
   }
 
   pushEvents(events: MatchEvent[]) {

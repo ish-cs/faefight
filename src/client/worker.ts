@@ -85,7 +85,9 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         if (!match) throw new Error('debug before start');
         if (msg.cmd === 'teleport') match.debugTeleport(humanId, { x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z });
         else if (msg.cmd === 'hp') match.debugSetHp(humanId, msg.hp);
-        else match.debugGive(humanId, msg.inv);
+        else if (msg.cmd === 'eliminate') match.debugEliminate(msg.playerId);
+        else if (msg.cmd === 'kill') match.debugKill(msg.playerId);
+        else if (msg.cmd === 'give') match.debugGive(humanId, msg.inv);
         break;
     }
   } catch (err) {
