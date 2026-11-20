@@ -20,7 +20,7 @@ function quayWall() {
   m.name = 'quayWall';
   const y = positionWorld.y;
   const s = pbrSample('concrete_wall', vec2(uv().x, y.div(6)), 'shift');
-  applyPbr(m, s, { tint: 0xe0e2e6, gain: 1.7, macro: 0.18, normalScale: 1.2 });
+  applyPbr(m, s, { lum: 0.237, tint: 0xa8a49c, macro: 0.18, normalScale: 1.2 });
   const top = MAP.groundY;
   const band = texture(seawallTex(), vec2(0.5, y.sub(top - 16).div(16))).rgb.div(vec3(0.7, 0.67, 0.61));
   const wet = float(1).sub(smoothstep(0.1, 0.9, y.sub(MAP.waterY))); // splash zone above the waterline
@@ -44,7 +44,7 @@ let M: ReturnType<typeof make> | null = null;
 function make() {
   return {
     /** bunker walls, coping, cast concrete */
-    concrete: pbrMaterial('concrete', 'concrete_wall', { tint: 0xe6e6e6, gain: 1.75, macro: 0.15, untile: 'shift' }),
+    concrete: pbrMaterial('concrete', 'concrete_wall', { lum: 0.237, tint: 0xb4b0a8, macro: 0.15, untile: 'shift' }),
     /** flat paving (quay slab) */
     slab: pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1 }),
     asphalt: pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1 }),
@@ -58,7 +58,7 @@ function make() {
     frond: frondMaterial(),
     bark: std('bark', { map: barkTex(), roughness: 0.95 }),
     /** painted steel (crane, drums, trims): repainted rusty-paint set, triplanar (the plain boxes have 0..1 UVs) */
-    paint: pbrMaterial('paint', 'painted_metal', { lum: 0.069, lumPow: 0.45, triplanar: 0.35, normalScale: 0.1, roughMul: 0.9, metalness: 0.2 }),
+    paint: pbrMaterial('paint', 'painted_metal', { lum: 0.069, lumPow: 0.3, triplanar: 0.35, normalScale: 0.1, roughMul: 0.9, metalness: 0.2 }),
     matte: std('matte', { roughness: 0.9 }),
     corr: pbrMaterial('corr', 'corrugated', { lum: 0.44, uvScale: [2, 1], normalScale: 1.2, metalness: 0.35, roughMul: 0.95, macro: 0.12, untile: 'shift' }),
     awning: std('awning', { map: awningTex(), roughness: 0.8, side: THREE.DoubleSide }),

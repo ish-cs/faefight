@@ -220,12 +220,13 @@ export function islandSurface(R: number, d: IslandDecor) {
       // litter: cigarette butts, bottle caps, paper scraps
       for (const c of d.clutter) {
         if (c.kind !== 'litter') continue;
-        for (let k = 0; k < 14; k++) {
-          const x = P(c.x + rr(-0.8, 0.8)), y = P(c.z + rr(-0.8, 0.8));
+        for (let k = 0; k < 9; k++) {
+          const x = P(c.x + rr(-1, 1)), y = P(c.z + rr(-1, 1));
           g.save(); g.translate(x, y); g.rotate(rnd() * 7);
           const t = rnd();
-          g.fillStyle = t < 0.4 ? 'rgba(235,228,210,0.9)' : t < 0.6 ? 'rgba(200,120,40,0.9)' : t < 0.8 ? 'rgba(170,30,30,0.85)' : 'rgba(60,90,140,0.85)';
-          if (t < 0.4) g.fillRect(-4, -1.2, 8, 2.4); else if (t < 0.8) { g.beginPath(); g.arc(0, 0, 1.8, 0, 7); g.fill(); } else g.fillRect(-6, -4, 12, 8);
+          // cigarette butts, bottle caps, a crumpled wrapper — sun-faded
+          g.fillStyle = t < 0.5 ? 'rgba(214,206,186,0.85)' : t < 0.75 ? 'rgba(150,110,60,0.8)' : t < 0.9 ? 'rgba(130,60,50,0.75)' : 'rgba(120,130,140,0.7)';
+          if (t < 0.5) g.fillRect(-1.8, -0.6, 3.6, 1.2); else if (t < 0.9) { g.beginPath(); g.arc(0, 0, 1.2, 0, 7); g.fill(); } else g.fillRect(-3, -2, 6, 4);
           g.restore();
         }
       }
