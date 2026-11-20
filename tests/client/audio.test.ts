@@ -14,7 +14,7 @@ function player(id: number, pos: Vec3, extra: Partial<PlayerState> = {}): Player
   return {
     id, name: `p${id}`, isBot: id !== ME, island: id - 1, pos, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, hp: 100,
     alive: true, eliminated: false, respawnAt: null, breakoutUntil: null, invulnUntil: 0, lastDamagedAt: 0,
-    inv: { ...emptyInventory(), cash: 50 }, vault: emptyInventory(), equipped: 'fists', reloadUntil: 0, nextFireAt: 0, busyUntil: 0,
+    inv: { ...emptyInventory(), cash: 50 }, vault: emptyInventory(), hotbar: Array(9).fill(null), selected: 0, equipped: 'fists', healAt: null, reloadUntil: 0, nextFireAt: 0, busyUntil: 0,
     ...extra,
   };
 }

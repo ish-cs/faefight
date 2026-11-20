@@ -14,9 +14,13 @@ export type Inventory = {
   pieces: Partial<Record<PieceKind, number>>;
   grenades: number;
   charges: number;
+  medkits: number;
 };
 
-export type ShopItem = PieceKind | Exclude<WeaponKind, 'fists'> | 'ammo' | 'grenade' | 'charge';
+/** Something that occupies a hotbar slot (amounts live in the inventory). */
+export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit';
+
+export type ShopItem = PieceKind | Exclude<WeaponKind, 'fists'> | 'ammo' | 'grenade' | 'charge' | 'medkit';
 export type ShopAction = { buy: ShopItem };
 export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> };
 
@@ -38,6 +42,14 @@ export type PlayerInput = {
   placeCharge: boolean;
   shop: ShopAction | null;
   vault: VaultAction | null;
+  /** Hotbar slot to hold (0-8); held state, sent every input by the client. */
+  select: number | null;
+  /** Drop from the selected slot: one unit (a gun with its ammo) or the whole stack. */
+  drop: 'one' | 'stack' | null;
+  /** Swap two hotbar slots. */
+  moveSlot: { from: number; to: number } | null;
+  /** Start using a medkit (the selected slot must hold one). */
+  useMedkit: boolean;
 };
 
 export type PlayerState = {
@@ -60,7 +72,14 @@ export type PlayerState = {
   lastDamagedAt: number;
   inv: Inventory;
   vault: Inventory;
+  /** Nine slots of item kinds held; counts are in `inv`. */
+  hotbar: (HotbarItem | null)[];
+  /** Selected hotbar slot (0-8). */
+  selected: number;
+  /** Derived from the selected slot: its gun, else fists. */
   equipped: WeaponKind;
+  /** A medkit in use heals at this time (null when not healing). */
+  healAt: number | null;
   reloadUntil: number;
   nextFireAt: number;
   busyUntil: number;
@@ -69,7 +88,8 @@ export type PlayerState = {
 };
 
 export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number };
-export type LootBag = { id: number; pos: Vec3; inv: Inventory };
+/** `noPickup`: a dropped bag its dropper can't grab back until `until`. */
+export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number } };
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
@@ -93,4 +113,5 @@ export type Snapshot = {
 export const NO_INPUT: PlayerInput = {
   moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, fire: false, reload: false,
   interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
+  select: null, drop: null, moveSlot: null, useMedkit: false,
 };
