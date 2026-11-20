@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { float, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
+import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
 import { bunkerWallBoxes, type IslandLayout } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
 import { boxUV, mat, StaticBatch } from './geo';
@@ -7,7 +7,7 @@ import { mats } from './materials';
 import { bollard, container, containerStack, crane, drums, generatorProp, lightMast, pallet, palm, shopProp, vaultProp, warehouse } from './props';
 import { ISLAND_DECOR } from './decor';
 import { dressBackdrop, dressIsland } from './dressing';
-import { pbrSample, worldNoise } from './pbr';
+import { pbrAlbedo, pbrSample, worldNoise } from './pbr';
 import { islandSurface, makeRng } from './textures';
 
 const UNLIT_BOOST = 2.6;
@@ -39,33 +39,40 @@ function labelSprite(text: string, bg: string): THREE.Sprite {
  * decor mask, then the painted overlay (markings, joints, stains, drains, litter) on top.
  */
 function islandTopMaterial(R: number) {
+  // Texture budget: a WebGPU fragment stage may bind 16 textures; with the env map + up to 4 shadow cascades this
+  // stays at 10 (concrete/gravel albedo+normal, sand/grass albedo, 2 masks, overlay, noise).
   const surf = islandSurface(R, ISLAND_DECOR);
   const m = new THREE.MeshStandardNodeMaterial();
   m.name = 'islandTop';
   const w = positionWorld.xz;
-  const con = pbrSample('concrete', w.div(3.2));
-  const sand = pbrSample('sand', w.div(2.2), true, true);
-  const grass = pbrSample('grass', w.div(2.6), true, true);
+  const con = pbrSample('concrete', w.div(3.2), true, true);
+  const grv = pbrSample('gravel', w.div(1.6), true, true);
+  const sand = pbrAlbedo('sand', w.div(2.2));
+  const grass = pbrAlbedo('grass', w.div(2.6));
   const mk = texture(surf.mask, uv());
+  const gk = smoothstep(0.15, 0.7, texture(surf.gravel, uv()).r);
   const ov = texture(surf.overlay, uv());
   const macro = mix(float(0.86), float(1.1), worldNoise(0.03));
   let alb = con.albedo.mul(3.6).mul(vec3(0.98, 0.96, 0.92)).mul(macro);
-  alb = mix(alb, sand.albedo.mul(2.1), mk.r);
-  alb = mix(alb, grass.albedo.mul(1.25), mk.g);
+  alb = mix(alb, grv.albedo.mul(vec3(0.9, 0.88, 0.84)), gk);
+  alb = mix(alb, sand.mul(2.1), mk.r);
+  alb = mix(alb, grass.mul(1.25), mk.g);
   const wet = mk.b;
   alb = alb.mul(mix(float(1), float(0.45), wet));
-  alb = mix(alb, ov.rgb, ov.a);
+  alb = mix(alb, ov.rgb, ov.a.mul(float(1).sub(gk.mul(0.6))));
   m.colorNode = alb;
-  let nrm = mix(con.normal, sand.normal, mk.r);
-  nrm = mix(nrm, grass.normal, mk.g);
+  let nrm = mix(con.normal, grv.normal, gk);
+  nrm = mix(nrm, vec3(0.5, 0.5, 1), max(mk.r.mul(0.6), mk.g.mul(0.5)));
   nrm = mix(nrm, vec3(0.5, 0.5, 1), wet.mul(0.9));
-  m.normalNode = normalMap(nrm, vec2(1.1, 1.1));
-  let rough = mix(con.arm.g.mul(1.25).add(0.12), float(0.95), mk.r);
+  m.normalNode = normalMap(nrm, vec2(1.2, 1.2));
+  // concrete roughness: sealed/polished-by-traffic areas vs. dusty open slab
+  let rough: THREE.Node<'float'> = float(0.8).add(worldNoise(0.12, 'g').sub(0.5).mul(0.3));
+  rough = mix(rough, float(0.95), max(gk, mk.r));
   rough = mix(rough, float(0.92), mk.g);
   rough = mix(rough, float(0.04), smoothstep(0.35, 0.8, wet));
   m.roughnessNode = mix(rough, float(0.7), ov.a.mul(0.6)).clamp(0.03, 1);
   m.metalnessNode = float(0);
-  m.aoNode = mix(con.arm.r, float(0.85), mk.g);
+  m.aoNode = mix(float(1), float(0.8), max(gk.mul(0.6), mk.g));
   return m;
 }
 
@@ -270,12 +277,23 @@ function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof 
     blob.computeVertexNormals();
   }
   const leafCols = [0x2a4f1f, 0x34602a, 0x22441b, 0x406d2c];
+  // canopy self-shadowing baked per colour: dark, cool undersides → sunlit tops
+  const blobs = leafCols.map((c) => {
+    const g = blob.clone(), p = g.getAttribute('position'), col = new THREE.Color(c), out: number[] = [];
+    for (let i = 0; i < p.count; i++) {
+      const k = Math.min(1, Math.max(0, (p.getY(i) + 1) / 2));
+      const v = 0.38 + 0.62 * k * k * (3 - 2 * k);
+      out.push(col.r * v * (0.9 + 0.1 * k), col.g * v, col.b * v * (1.1 - 0.1 * k));
+    }
+    g.setAttribute('color', new THREE.Float32BufferAttribute(out, 3));
+    return g;
+  });
   for (let i = 0; i < 260; i++) {
     const x = rng.rr(-W / 2 + 8, W / 2 - 8), zz = rng.rr(-D / 2 + 10, D / 2 - 6);
     const h = hAt(x, zz);
     if (h < 1.2) continue;
     const s = rng.rr(2.4, 5);
-    b.add(M.leaf, blob, at(x, top - 0.25 + h + s * 0.35, hillZ + zz).multiply(mat(0, 0, 0, 0, rng.rr(0, 6), 0, s * rng.rr(1, 1.4), s * rng.rr(0.8, 1.1), s * rng.rr(1, 1.4))), leafCols[i % 4], false, false);
+    b.add(M.leaf, blobs[i % 4], at(x, top - 0.25 + h + s * 0.35, hillZ + zz).multiply(mat(0, 0, 0, 0, rng.rr(0, 6), 0, s * rng.rr(1, 1.4), s * rng.rr(0.8, 1.1), s * rng.rr(1, 1.4))), leafCols[i % 4], false, false);
   }
   for (let i = 0; i < 14; i++) {
     const x = rng.rr(-W / 2 + 10, W / 2 - 10), zz = rng.rr(-D / 2 + 4, -D / 2 + 40);

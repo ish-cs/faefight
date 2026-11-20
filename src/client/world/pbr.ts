@@ -6,7 +6,7 @@ import { abs, float, luminance, max, mix, normalMap, positionWorld, smoothstep, 
  * metal). Helpers sample them with anti-tiling ("texture bombing": a second, rotated + offset sample blended in by
  * low-frequency noise) and world-space macro variation, so large surfaces don't show a repeating grid.
  */
-export type PbrName = 'concrete' | 'concrete_wall' | 'sand' | 'grass' | 'rock' | 'corrugated' | 'painted_metal' | 'planks' | 'linen' | 'asphalt' | 'steel_plate';
+export type PbrName = 'concrete' | 'concrete_wall' | 'sand' | 'grass' | 'rock' | 'corrugated' | 'painted_metal' | 'planks' | 'linen' | 'asphalt' | 'steel_plate' | 'gravel';
 
 type V3 = THREE.Node<'vec3'>;
 type V2 = THREE.Node<'vec2'>;
@@ -104,6 +104,16 @@ export function pbrSample(name: PbrName, uvN: V2, untile: boolean | 'shift' = tr
   const b = { albedo: texture(t.map, uvB).rgb, normal: vec3(nBxy, nB.z).mul(0.5).add(0.5), arm: armOf(uvB) };
   const k = smoothstep(0.4, 0.6, texture(noiseTex(), uvN.mul(0.21)).g);
   return { albedo: mix(a.albedo, b.albedo, k), normal: mix(a.normal, b.normal, k), arm: mix(a.arm, b.arm, k) } as PbrSample;
+}
+
+/** Albedo only (one texture binding), optionally untiled like pbrSample. */
+export function pbrAlbedo(name: PbrName, uvN: V2, untile = true): V3 {
+  const t = pbrTex(name);
+  const a = texture(t.map, uvN).rgb;
+  if (!untile) return a as V3;
+  const uvB = rot(uvN, C, S).mul(0.87).add(vec2(0.37, 0.61));
+  const k = smoothstep(0.4, 0.6, texture(noiseTex(), uvN.mul(0.21)).g);
+  return mix(a, texture(t.map, uvB).rgb, k) as V3;
 }
 
 /** Triplanar sample in world space (`scale` = tiles per metre), for meshes without useful UVs (rocks). */

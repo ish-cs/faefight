@@ -116,6 +116,7 @@ export function signTex(text: string, bg = '#1d4a6e', fg = '#f4f1e8') {
  * [-R, R]. Local -Z faces the enemy (front), +Z is the back where the bunker sits.
  *  - `overlay` (sRGB RGBA): paint, joints, stains, drains, cracks, litter over the PBR concrete (alpha = coverage)
  *  - `mask` (linear RGB): R = sand, G = grass, B = standing water; `maskData` is the same pixels for CPU scatter.
+ *  - `gravel` (linear R): crushed-stone patches; sand and grass sit on top of it.
  */
 export function islandSurface(R: number, d: IslandDecor) {
   return cachedSurface(`islandSurface:${R}`, () => {
@@ -146,6 +147,14 @@ export function islandSurface(R: number, d: IslandDecor) {
       maskData = g.getImageData(0, 0, w, h);
     }, false);
     mask.generateMipmaps = true;
+    let gravelData: ImageData | null = null;
+    const gravel = canvasTex(MS, MS, (g, w, h) => {
+      g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
+      g.globalCompositeOperation = 'lighter';
+      for (const e of d.gravel) ell(g, MP, ms, e, 'rgb(255,0,0)', 2.5, 0.22);
+      g.globalCompositeOperation = 'source-over';
+      gravelData = g.getImageData(0, 0, w, h);
+    }, false);
 
     const overlay = canvasTex(2048, 2048, (g, w, h) => {
       const s = w / (2 * R); // px per metre
@@ -263,8 +272,8 @@ export function islandSurface(R: number, d: IslandDecor) {
       g.strokeStyle = 'rgba(236,234,226,0.3)'; g.lineWidth = 0.12 * s;
       g.beginPath(); g.arc(cx, cx, (R - 0.06) * s, 0, 7); g.stroke();
     });
-    if (!maskData) throw new Error('[world/textures] island mask not drawn');
-    return { overlay, mask, maskData: maskData as ImageData, maskSize: MS };
+    if (!maskData || !gravelData) throw new Error('[world/textures] island mask not drawn');
+    return { overlay, mask, gravel, maskData: maskData as ImageData, maskSize: MS };
   });
 }
 

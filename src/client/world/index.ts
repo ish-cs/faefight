@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import type { IslandLayout } from '../../sim/map';
 import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
-import { Boats, Gulls } from './dressing';
+import { Boats, gullPerches, Gulls } from './dressing';
 import { Grass } from './grass';
 import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
@@ -46,11 +46,16 @@ export class World {
     this.collidables.push(...collidables);
     this.water = buildWater(map);
     this.scene.add(this.water.mesh);
+    // The ambient env map is deliberately hazy/desaturated (for shading); at grazing angles it turned the far sea
+    // milky. Water samples the same map, a bit dimmer.
+    const wm = this.water.mesh.material as THREE.MeshStandardNodeMaterial;
+    wm.envMap = this.scene.environment;
+    wm.envMapIntensity = 0.62;
     this.sky.setInteriors(map);
     this.grass.build(map, (isl) => backdropFrame(isl, map.length), islandMask);
     this.scene.add(this.grass.root);
     this.boats = new Boats(map);
-    this.gulls = new Gulls(map);
+    this.gulls = new Gulls(map, gullPerches(map, (isl) => backdropFrame(isl, map.length)));
     this.scene.add(this.boats.root, this.gulls.mesh);
     console.info(`[world] built ${map.length} islands in ${Math.round(performance.now() - t0)} ms`);
   }

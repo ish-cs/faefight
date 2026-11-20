@@ -12,6 +12,7 @@ const browser = await chromium.launch({
   args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'],
 });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+page.setDefaultTimeout(240_000);
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e)));
@@ -49,6 +50,9 @@ const SPOTS = [
   { name: 'ground', at: [-6, -1], look: [-6, -5], pitch: -0.75 },
   { name: 'bunker', at: [-6, 9], look: [0, 15], pitch: -0.05 },
   { name: 'edge', at: [-15, 12], look: [-25, 30], pitch: -0.12 },
+  { name: 'birds', at: [8, 10], look: [4, 32], pitch: 0.3 },
+  { name: 'perch', at: [16.8, 6.6], look: [19.4, 9.36], pitch: -0.25 },
+  { name: 'gravel', at: [-9.5, 4.5], look: [-13, 9], pitch: -0.5 },
 ];
 // toward the sun (SUN_DIR: elevation 38°, azimuth 58° in three.js spherical coords)
 {

@@ -66,6 +66,8 @@ function make() {
     /** hills / distant islands: vertex-coloured, grass-ground detail in world xz */
     terrain: pbrMaterial('terrain', 'grass', { uvNode: positionWorld.xz.mul(0.22), lum: 0.121, untile: true, roughAdd: 0.1, metalness: 0 }),
     rock: rockMaterial(),
+    /** loose gravel patches (world-space xz) */
+    gravel: pbrMaterial('gravel', 'gravel', { uvNode: positionWorld.xz.div(1.6), tint: 0xe2ddd5, macro: 0.15 }),
     glow: std('glow', { color: 0x0c2a10, emissive: 0x2bff5a, emissiveIntensity: 2.2, roughness: 0.4 }),
   };
 }

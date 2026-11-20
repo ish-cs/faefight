@@ -12,6 +12,8 @@ export type Clutter = { kind: ClutterKind; x: number; z: number; yaw?: number; s
 export type IslandDecor = {
   sandBeds: Ellipse[];
   grassBeds: Ellipse[];
+  /** crushed-stone patches and paths (drawn under sand, so sand beds get a gravel fringe) */
+  gravel: Ellipse[];
   /** shallow standing water (glossy, reflective) */
   puddles: Ellipse[];
   oilStains: Ellipse[];
@@ -32,6 +34,15 @@ export const ISLAND_DECOR: IslandDecor = {
     { x: 12.8, z: 9.6, rx: 3.4, rz: 2.5 },
     { x: -16.2, z: 4.6, rx: 1.4, rz: 1.1 },
     { x: 16.2, z: 4.6, rx: 1.4, rz: 1.1 },
+  ],
+  gravel: [
+    { x: -13, z: 9, rx: 6, rz: 4.6 },
+    { x: 13, z: 9, rx: 6, rz: 4.6 },
+    { x: -7.5, z: 13, rx: 2.8, rz: 1.5 },
+    { x: 7.8, z: 13.2, rx: 2.4, rz: 1.4 },
+    { x: 0, z: 5.2, rx: 4.2, rz: 2.2 },
+    { x: -17.5, z: -5, rx: 1.2, rz: 3.4 },
+    { x: 17.5, z: -2, rx: 1.1, rz: 3 },
   ],
   puddles: [
     { x: -4.2, z: -6.5, rx: 1.3, rz: 0.7 },
@@ -65,6 +76,8 @@ export const ISLAND_DECOR: IslandDecor = {
 export type BackdropDecor = {
   /** grass verges on the backdrop quay (x in units of hw, z metres from the quay edge) */
   grass: Ellipse[];
+  /** gravel patches on the asphalt yard */
+  gravel: Ellipse[];
   clutter: Clutter[];
   /** riprap along the front wall: x ranges (units of hw) */
   riprap: [number, number][];
@@ -77,6 +90,11 @@ export const BACKDROP_DECOR: BackdropDecor = {
     { x: 0.98, z: 3.5, rx: 3.4, rz: 2.4 },
     { x: -0.15, z: 2.2, rx: 2.8, rz: 1.5 },
     { x: 0.62, z: 4.2, rx: 2.4, rz: 1.4 },
+  ],
+  gravel: [
+    { x: -0.78, z: 6.5, rx: 6, rz: 3.2 },
+    { x: 0.5, z: 7.5, rx: 7, rz: 2 },
+    { x: -0.05, z: 4, rx: 4, rz: 1.6 },
   ],
   clutter: [
     { kind: 'ropeCoil', x: -0.52, z: 1.6 },

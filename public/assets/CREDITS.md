@@ -22,7 +22,8 @@ https://polyhaven.com/license.
 | `textures/planks/` | [Raw Plank Wall](https://polyhaven.com/a/raw_plank_wall) | Dimitrios Savva | 1k | wood barricades, scaffold, pallets |
 | `textures/linen/` | [Rough Linen](https://polyhaven.com/a/rough_linen) | colormass, Rico Cilliers | 1k | sandbag burlap (re-tinted) |
 | `textures/asphalt/` | [Asphalt 02](https://polyhaven.com/a/asphalt_02) | Rob Tuytel | 1k | harbor yard paving |
+| `textures/gravel/` | [Gravel Floor 02](https://polyhaven.com/a/gravel_floor_02) | Dimitrios Savva, Jenelle van Heerden | 1k | gravel patches / paths |
 | `textures/steel_plate/` | [Metal Plate 02](https://polyhaven.com/a/metal_plate_02) | Rob Tuytel | 1k | steel plate, vault |
 
-Everything else (signage, palm fronds, bark, crack masks, ground markings/decals, grass blades, gulls, boats) is
+Everything else (signage, palm fronds, bark, crack masks, ground markings/decals, grass blades, pebbles, gulls, boats) is
 generated procedurally at runtime in `src/client/world/`.
