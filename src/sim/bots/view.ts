@@ -5,6 +5,8 @@ import type { PieceKind, PieceState, PlayerState, Vec3 } from '../types';
 /** Public status of every other player (what a human would know from the HUD). */
 export type OtherStatus = {
   id: number; island: number; alive: boolean; eliminated: boolean; respawnAt: number | null;
+  /** Display name (scoreboard). */
+  name?: string;
   /** Kills so far (scoreboard). */
   kills: number;
 };

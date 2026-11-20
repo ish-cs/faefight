@@ -418,7 +418,7 @@ export class Match implements MatchApi {
       self,
       enemies,
       others: [...this.s.players.values()].filter((o) => o.id !== self.id)
-        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills })),
+        .map((o) => ({ id: o.id, name: o.name, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills })),
       map: this.map,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),

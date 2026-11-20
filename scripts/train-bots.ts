@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HAND_PARAMS, PARAM_KEYS, decode, encode, sanitize, type BotParams } from '../src/sim/bots/params';
+import { DEFAULT_PARAMS, HAND_PARAMS, PARAM_KEYS, decode, encode, sanitize, type BotParams } from '../src/sim/bots/params';
 import { DEFAULT_ES, initEs, type EsState } from './train/es';
 import { headToHead, runGeneration, type TrainConfig } from './train/generation';
 import { loadHumanTarget, loadRecorder } from './train/hooks';
@@ -59,7 +59,10 @@ if (flag('resume') && fs.existsSync(statePath)) {
   saved = JSON.parse(fs.readFileSync(statePath, 'utf8')) as Saved;
   console.log(`resuming at generation ${saved.es.gen} (${saved.games} games so far)`);
 } else {
-  saved = { es: initEs(encode(HAND_PARAMS), cfg.es), hall: [], games: 0, evals: [] };
+  // --from-trained: warm start from the current champion (trained-params.json; params it lacks get hand values).
+  const start = flag('from-trained') ? DEFAULT_PARAMS : HAND_PARAMS;
+  saved = { es: initEs(encode(start), cfg.es), hall: [], games: 0, evals: [] };
+  if (flag('from-trained')) console.log('warm start from src/sim/bots/trained-params.json');
   fs.writeFileSync(logPath, '');
 }
 

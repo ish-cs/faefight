@@ -5,8 +5,7 @@ import { AIM, Aim } from '../../src/sim/bots/aim';
 import { Bot } from '../../src/sim/bots/bot';
 import { HAND_PARAMS, PARAM_KEYS, PARAM_SPEC, decode, encode, withTraits } from '../../src/sim/bots/params';
 import { PRESETS } from '../../src/sim/bots/personality';
-import { Strategist, type PlanInput } from '../../src/sim/bots/strategy';
-import type { RivalFacts } from '../../src/sim/bots/mind';
+import { Brain, fightOdds, type BrainInput } from '../../src/sim/bots/brain';
 import type { BotView, OtherStatus } from '../../src/sim/bots/view';
 import { aimDir } from '../../src/sim/combat';
 import { TICK_HZ, WEAPONS } from '../../src/sim/constants';
@@ -87,79 +86,131 @@ describe('dodging', () => {
   });
 });
 
-describe('plan layer', () => {
-  const fact = (id: number, over: Partial<PlanInput['rivals'][number]> = {}): PlanInput['rivals'][number] => ({
+describe('brain: goals for a reason, steps, re-planning', () => {
+  const rival = (id: number, over: Partial<BrainInput['rivals'][number]> = {}): BrainInput['rivals'][number] => ({
     id, reach: true, scaffolds: 0, dist: 60, respawning: false, sinceDeath: Infinity, sealed: false, seenHp: null,
     grudge: 0, busy: false, kills: 0, leaderKills: 0, onMyIsland: false, away: false,
-    island: id, openDoors: 3, generator: 0, guarded: true, ...over,
+    island: id, name: `P${id}`, openDoors: 3, generator: 0, guarded: true, protectedNow: false, ...over,
   });
-  const input = (now: number, rivals: PlanInput['rivals'], over: Partial<PlanInput> = {}): PlanInput => ({
-    now, suddenDeath: false, hp: 1, home: 0, on: 0, rivals, gun: true, upgraded: true, kit: 3, carried: 0, banked: 100,
-    insuranceDue: 0, intruder: false, homeSealed: false, homePlugged: false, incomingBridge: false, killedBy: null,
-    seller: false, wantShields: false, endgame: false, ...over,
+  const input = (now: number, rivals: BrainInput['rivals'], over: Partial<BrainInput> = {}): BrainInput => ({
+    now, suddenDeath: false, hp: 1, shield: 0, home: 0, on: 0, rivals, gun: true, upgraded: true, myWeapon: 'rifle',
+    kit: 3, scaffolds: 0, medkits: 0, carried: 0, banked: 100, insuranceDue: 0, bankable: 0, intruder: false, homeSealed: false,
+    homePlugged: false, incomingBridge: false, killedBy: null, seller: false, wantShields: false, endgame: false,
+    enemy: null, armedNear: 0, underFire: false, ...over,
   });
   const P = { ...HAND_PARAMS, turtleUntil: 60 };
+  const stepLabel = (b: Brain) => b.goal!.steps[b.goal!.step]?.label ?? 'done';
 
-  test('commits to a plan (hysteresis) despite noisy, near-equal options', () => {
-    const s = new Strategist(mulberry32(1));
+  test('commits to a goal (hysteresis) despite noisy, near-equal options', () => {
+    const b = new Brain(mulberry32(1));
     const kinds = new Set<string>();
     for (let i = 0; i < 60; i++) {
-      const p = s.update(input(300 + i * 0.3, [fact(1), fact(2, { dist: 61 }), fact(3, { dist: 62 })]), P, 0.1);
-      kinds.add(`${p.kind}:${p.target}`);
+      const g = b.update(input(300 + i * 0.3, [rival(1), rival(2, { dist: 61 }), rival(3, { dist: 62 })]), P, 0.1);
+      kinds.add(`${g.kind}:${g.target}`);
     }
     expect(kinds.size).toBe(1);
-    expect(s.plan!.motive.length).toBeGreaterThan(5);
   });
 
-  test('decomposes into steps: gear up without a kit, bridge when unreachable, act when there', () => {
-    const s = new Strategist(mulberry32(2));
-    expect(s.update(input(300, [fact(1, { respawning: true })], { kit: 0 }), P, 0).step).toBe('gearUp');
-    const s2 = new Strategist(mulberry32(2));
-    expect(s2.update(input(300, [fact(1, { reach: false, scaffolds: 8 })]), P, 0).step).toBe('bridge');
-    const s3 = new Strategist(mulberry32(2));
-    expect(s3.update(input(300, [fact(1)]), P, 0).step).toBe('approach');
-    const s4 = new Strategist(mulberry32(2));
-    expect(s4.update(input(300, [fact(1)], { on: 1 }), P, 0).step).toBe('act');
+  test('box in a player: a missing precondition leads to the step that fixes it', () => {
+    const at = (over: Partial<BrainInput>, r: Partial<BrainInput['rivals'][number]> = {}) => {
+      const b = new Brain(mulberry32(2));
+      b.update(input(300, [rival(1, { respawning: true, ...r })], over), P, 0);
+      expect(b.goal!.kind).toBe('seal');
+      return b;
+    };
+    const noKit = at({ kit: 0 });
+    expect(noKit.stepAct).toBe('shop');
+    expect(stepLabel(noKit)).toMatch(/seal kit/);
+    expect(stepLabel(at({ kit: 3 }, { reach: false, scaffolds: 8 }))).toMatch(/scaffolds/);
+    const bridge = at({ kit: 3, scaffolds: 8 }, { reach: false, scaffolds: 8 });
+    expect(bridge.stepAct).toBe('bridge');
+    expect(at({ kit: 3 }).stepAct).toBe('attack');
+    const plug = at({ kit: 3, on: 1 });
+    expect(plug.stepAct).toBe('seal');
+    expect(plug.thought).toMatch(/^Goal: seal \(P1 is respawning, I have 3 plugs\) — step \d\/\d plug P1's doors$/);
   });
 
-  test('re-plans on events: target sealed → eliminate; target gone; died → revenge on the killer', () => {
-    const s = new Strategist(mulberry32(3));
-    const p0 = s.update(input(300, [fact(1, { dist: 40 }), fact(2, { dist: 90 })]), P, 0);
-    expect(p0.kind).toBe('seal');
-    expect(p0.target).toBe(1);
-    // Target got sealed (by me or anyone): one kill eliminates them now.
-    const p1 = s.update(input(301, [fact(1, { dist: 40, sealed: true, openDoors: 0 }), fact(2, { dist: 90 })]), P, 0);
-    expect(s.history.map((h) => h.event)).toContain('targetSealed');
-    expect(p1.kind).toBe('eliminate');
-    // Target eliminated: plan moves on at once (no hysteresis).
-    const p2 = s.update(input(302, [fact(2, { dist: 90 })]), P, 0);
-    expect(s.history.map((h) => h.event)).toContain('targetGone');
-    expect(p2.target).toBe(2);
-    // I die to #3: revenge becomes an option and the death forces a re-plan.
-    s.notify('died', 303);
-    const p3 = s.update(input(306, [fact(2, { dist: 90 }), fact(3, { dist: 70, grudge: 60 })], { killedBy: { id: 3, ago: 3 } }), { ...P, planRevenge: 2 }, 0);
-    expect(p3.kind).toBe('revenge');
-    expect(p3.target).toBe(3);
+  test('a sealing opportunity makes it box the player in', () => {
+    const b = new Brain(mulberry32(3));
+    b.update(input(300, [rival(1, { dist: 40 }), rival(2, { dist: 90 })], { carried: 0 }), P, 0);
+    // P2 goes down (respawn window) and I have a kit: box P2 in.
+    b.notify('targetBusy', 301);
+    const g = b.update(input(302, [rival(1, { dist: 40 }), rival(2, { dist: 90, respawning: true })], { endgame: true }), P, 0);
+    expect(g.kind).toBe('seal');
+    expect(g.target).toBe(2);
   });
 
-  test('bridge cut while approaching triggers a re-plan', () => {
-    const s = new Strategist(mulberry32(4));
-    s.update(input(300, [fact(1)]), P, 0);
-    expect(s.plan!.step).toBe('approach');
-    s.update(input(301, [fact(1, { reach: false, scaffolds: 6 })]), P, 0);
-    expect(s.history.map((h) => h.event)).toContain('bridgeCut');
-    expect(s.plan!.step).toBe('bridge');
+  test('low HP in a losing fight: it flees (break sight → home → heal), not fights', () => {
+    const b = new Brain(mulberry32(4));
+    const g = b.update(input(300, [rival(1)], {
+      hp: 0.3, on: 1, myWeapon: 'pistol', upgraded: false, enemy: { id: 1, dist: 15, hp: 100, weapon: 'rifle' }, underFire: true,
+    }), P, 0);
+    expect(g.kind).toBe('retreat');
+    expect(b.stepAct).toBe('disengage');
+    expect(g.reason).toMatch(/HP|lose/);
+    // Out of sight, away from home: fall back home.
+    const g2 = b.update(input(301, [rival(1)], { hp: 0.3, on: 1, upgraded: false, myWeapon: 'pistol' }), P, 0);
+    expect(['retreat', 'heal']).toContain(g2.kind);
+    expect(b.stepAct).toBe('heal');
   });
 
-  test('a live bot exposes its plan for the debug overlay', async () => {
+  test('a fight it can win is not fled; outnumbered changes its mind', () => {
+    const fight = { id: 1, dist: 15, hp: 40, weapon: 'pistol' as const };
+    const even = input(300, [rival(1)], { enemy: fight, armedNear: 1 });
+    expect(fightOdds(even)).toBeGreaterThan(0.6);
+    const b = new Brain(mulberry32(5));
+    expect(b.update(even, P, 0).kind).not.toBe('retreat');
+    const swarmed = input(301, [rival(1)], { hp: 0.5, enemy: { ...fight, hp: 100, weapon: 'smg' }, armedNear: 3, myWeapon: 'pistol' });
+    expect(fightOdds(swarmed)).toBeLessThan(P.fleeOdds);
+    expect(b.update(swarmed, P, 0).kind).toBe('retreat');
+  });
+
+  test('no gun → upgrade (collect then buy); hurt and alone → heal; carrying a lot → bank', () => {
+    const b = new Brain(mulberry32(6));
+    b.update(input(300, [], { gun: false, upgraded: false, carried: 10, banked: 0 }), P, 0);
+    expect(b.goal!.kind).toBe('upgrade');
+    expect(b.stepAct).toBe('collect');
+    const h = new Brain(mulberry32(6));
+    h.update(input(300, [], { hp: 0.2, medkits: 0, carried: 200 }), P, 0);
+    expect(h.goal!.kind).toBe('heal');
+    const k = new Brain(mulberry32(6));
+    k.update(input(300, [rival(1, { reach: false, scaffolds: 20, dist: 200 })], { carried: 900, bankable: 800 }), P, 0);
+    expect(k.goal!.kind).toBe('bank');
+    expect(k.stepAct).toBe('bank');
+  });
+
+  test('re-plans on events: target sealed → finish; target gone; died → hunt the killer; bridge cut → back to bridging', () => {
+    const b = new Brain(mulberry32(3));
+    const g0 = b.update(input(300, [rival(1, { dist: 40 }), rival(2, { dist: 90 })]), P, 0);
+    expect(g0.kind).toBe('seal');
+    expect(g0.target).toBe(1);
+    const g1 = b.update(input(301, [rival(1, { dist: 40, sealed: true, openDoors: 0 }), rival(2, { dist: 90 })]), P, 0);
+    expect(b.history.map((h) => h.event)).toContain('targetSealed');
+    expect(g1.kind).toBe('finish');
+    const g2 = b.update(input(302, [rival(2, { dist: 90 })]), P, 0);
+    expect(b.history.map((h) => h.event)).toContain('targetGone');
+    expect(g2.target).toBe(2);
+    b.notify('died', 303);
+    const g3 = b.update(input(306, [rival(2, { dist: 90 }), rival(3, { dist: 70, grudge: 60 })], { killedBy: { id: 3, ago: 3 } }), { ...P, planRevenge: 2 }, 0);
+    expect(g3.kind).toBe('hunt');
+    expect(g3.target).toBe(3);
+    const c = new Brain(mulberry32(4));
+    c.update(input(300, [rival(1)]), P, 0);
+    expect(c.stepAct).toBe('attack');
+    c.update(input(301, [rival(1, { reach: false, scaffolds: 6 })], { scaffolds: 6 }), P, 0);
+    expect(c.history.map((h) => h.event)).toContain('bridgeCut');
+    expect(c.stepAct).toBe('bridge');
+  });
+
+  test('a live bot exposes goal, reason and step for the debug overlay', async () => {
     const bots: Bot[] = [];
     const m = await Match.create({ players: Array.from({ length: 4 }, () => ({ name: '', isBot: true, difficulty: 'pro' as const })), seed: 5 },
       { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.push(b); return b; } });
     for (let i = 0; i < 30 * 30; i++) m.tick(new Map());
     for (const b of bots) {
-      expect(b.debug.plan).not.toBeNull();
-      expect(b.debug.motive).not.toBe('');
-      expect(['gearUp', 'bank', 'bridge', 'approach', 'act', 'retreat']).toContain(b.debug.step);
+      expect(b.debug.goal).not.toBeNull();
+      expect(b.debug.reason).not.toBe('');
+      expect(b.debug.thought).toMatch(/^Goal: \w+ \(.+\) — (step \d+\/\d+ .+|done)$/);
     }
   }, 60_000);
 });

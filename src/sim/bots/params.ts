@@ -102,6 +102,14 @@ export const PARAM_SPEC = {
   planMinSec: [3, 40, 12, ['patience', 8]],
   /** How strongly the current plan step pushes its goals. */
   stepPush: [0, 0.8, 0.3],
+
+  // ---- brain goals (brain.ts): weights of the self-assessed goals
+  planUpgrade: [0, 2, 0.9],
+  planHeal: [0, 2, 1, ['caution', 0.3]],
+  planBank: [0, 2, 0.5, ['caution', 0.3]],
+  planRetreat: [0, 3, 1.5, ['caution', 0.4]],
+  /** Estimated odds of winning a fight under which a bot runs instead (0.5 = even). */
+  fleeOdds: [0.15, 0.6, 0.38, ['caution', 0.15]],
 } as const satisfies Record<string, Spec>;
 
 export type ParamKey = keyof typeof PARAM_SPEC;

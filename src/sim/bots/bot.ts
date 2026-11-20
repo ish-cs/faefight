@@ -17,7 +17,7 @@ import {
   shoppingPlan,
   type Needs, type ShopStyle,
 } from './plans';
-import { Strategist, type Plan, type PlanInput } from './strategy';
+import { Brain, fightOdds, type BrainGoal, type BrainInput } from './brain';
 import { DODGE_SKILL, Dodger } from './tactics';
 import type { BotView, OtherStatus } from './view';
 
@@ -28,6 +28,11 @@ const GOALS: Goal[] = [
   'fleeTide', 'defend', 'disengage', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
   'shop', 'heal', 'potions', 'collect',
 ];
+/** Actions that may interrupt the brain's current step (reflexes and quick errands). */
+const REFLEXES = new Set<Goal>(['fleeTide', 'defend', 'fight', 'disengage', 'collect', 'loot']);
+/** How much the brain's current step outweighs those. */
+const STEP_BONUS = 0.4;
+const SAFE_STEPS = new Set<Goal>(['heal', 'attack', 'collect', 'bank']);
 /** Trainable per-goal utility bias (params.ts). */
 const GOAL_BIAS: Partial<Record<Goal, ParamKey>> = {
   fight: 'biasFight', disengage: 'biasDisengage', guard: 'biasGuard', bank: 'biasBank', collect: 'biasCollect',
@@ -37,8 +42,13 @@ const GOAL_BIAS: Partial<Record<Goal, ParamKey>> = {
 
 /** What a bot is up to, for an on-screen debug overlay. */
 export type BotDebug = {
-  goal: Goal; target: number | null; plan: Plan['kind'] | null; motive: string; step: Plan['step'] | null;
-  underFire: boolean; enemy: number | null;
+  /** Tick-level action right now (shop, bridge, seal, fight, ...). */
+  action: Goal;
+  /** Brain goal, its reason, and the current step ("2/5 get a seal kit"). */
+  goal: BrainGoal['kind'] | null; reason: string; step: string; stepIndex: number; steps: number;
+  /** One line, like a human's thought: "Goal: seal (Wavy.Dan is away from home, I have 3 plugs) — step 4/7 bridge to Wavy.Dan's island". */
+  thought: string;
+  target: number | null; underFire: boolean; enemy: number | null; fightOdds: number | null;
 };
 
 /** How often a bot reconsiders what to do, and how long it hesitates after changing plans (human thinking time). */
@@ -163,7 +173,8 @@ export class Bot {
   private view!: BotView;
   /** Strategy/tactics weights: the trained defaults with this bot's personality folded in. */
   readonly params: BotParams;
-  private readonly strategist: Strategist;
+  private readonly brain: Brain;
+  private lastOdds: number | null = null;
   readonly dodger: Dodger;
   private wasAlive = true;
   private lastEnemy: number | null = null;
@@ -178,7 +189,7 @@ export class Bot {
     this.t = this.personality.traits;
     const t = this.t;
     this.params = withTraits(params, t);
-    this.strategist = new Strategist(rng);
+    this.brain = new Brain(rng);
     this.dodger = new Dodger(rng, DODGE_SKILL[difficulty]);
     this.style = {
       upgradeFirst: t.patience > 0.65,
@@ -195,16 +206,18 @@ export class Bot {
   get currentGoal(): Goal { return this.goal; }
   /** Rival this bot is currently going after (player id), if any. */
   get currentTarget(): number | null { return this.targetId; }
-  /** Current plan (strategic objective) or null before the first decision. */
-  get currentPlan(): Plan | null { return this.strategist.plan; }
-  /** Plan-layer events seen so far (died, targetGone, ...). */
-  get planEvents() { return this.strategist.history; }
-  /** Everything an on-screen debug overlay wants to show about this bot. */
+  /** Current brain goal (with reason and steps), or null before the first decision. */
+  get currentPlan(): BrainGoal | null { return this.brain.goal; }
+  /** Brain events seen so far (died, targetGone, ...). */
+  get planEvents() { return this.brain.history; }
+  /** Everything an on-screen debug overlay (or the training dashboard) wants to show about this bot. */
   get debug(): BotDebug {
-    const p = this.strategist.plan;
+    const g = this.brain.goal;
+    const st = g && g.step < g.steps.length ? g.steps[g.step] : null;
     return {
-      goal: this.goal, target: this.targetId, plan: p?.kind ?? null, motive: p?.motive ?? '', step: p?.step ?? null,
-      underFire: this.fireFrom !== null, enemy: this.lastEnemy,
+      action: this.goal, goal: g?.kind ?? null, reason: g?.reason ?? '', step: st?.label ?? '',
+      stepIndex: g ? g.step + 1 : 0, steps: g?.steps.length ?? 0, thought: this.brain.thought,
+      target: this.targetId, underFire: this.fireFrom !== null, enemy: this.lastEnemy, fightOdds: this.lastOdds,
     };
   }
 
@@ -218,7 +231,7 @@ export class Bot {
     this.lastNow = now;
     this.mem.update(view);
     if (!me.alive) {
-      if (this.wasAlive) this.strategist.notify('died', now);
+      if (this.wasAlive) this.brain.notify('died', now);
       this.wasAlive = false;
       this.fireFrom = null;
       this.aim.reset();
@@ -239,9 +252,11 @@ export class Bot {
     if (facts) this.chooseTarget(facts);
     let ctx = this.context(view);
     if (facts) {
-      // Plan layer: a strategic objective above the goals; its target overrides the plain rival choice.
-      const plan = this.strategist.update(this.planInput(ctx, facts), this.params, NOISE[this.difficulty] * 3);
-      if (plan.target !== null && plan.target !== this.targetId) { this.targetId = plan.target; ctx = this.context(view); }
+      // The brain: self-assess, choose a goal for a reason, break it into steps; its target overrides the plain rival choice.
+      const inp = this.brainInput(ctx, facts);
+      this.lastOdds = inp.enemy ? fightOdds(inp) : null;
+      const goal = this.brain.update(inp, this.params, NOISE[this.difficulty] * 3);
+      if (goal.target !== null && goal.target !== this.targetId) { this.targetId = goal.target; ctx = this.context(view); }
     }
     if (rescore) {
       const next = this.pick(ctx);
@@ -459,8 +474,8 @@ export class Bot {
     this.targetId = best;
   }
 
-  /** What the plan layer gets to see (all from the view and my memory of it). */
-  private planInput(c: Ctx, facts: RivalFacts[]): PlanInput {
+  /** What the brain gets to see (all from the view and my memory of it). */
+  private brainInput(c: Ctx, facts: RivalFacts[]): BrainInput {
     const { view, me, home } = c;
     const now = view.now;
     const inv = me.inv;
@@ -471,13 +486,23 @@ export class Bot {
         const o = view.others.find((x) => x.id === f.id)!;
         const isl = view.map[o.island];
         const guarded = o.alive && this.mem.recent(o.id, now, 6)?.island === o.island;
+        const seen = view.enemies.find((e) => e.id === o.id);
+        const died = this.mem.diedAt.get(o.id);
+        const atHome = this.mem.recent(o.id, now, 5);
+        const protectedNow = o.alive && (!!seen && seen.invulnUntil > now ||
+          died !== undefined && now - died < 15 && (!atHome || dist2D(atHome.pos, isl.bunker.center) < 8));
         return {
-          ...f, island: o.island, generator: view.generators[o.island], guarded,
+          ...f, island: o.island, name: o.name || `#${o.id}`, generator: view.generators[o.island], guarded, protectedNow,
           openDoors: isl.bunker.doorways.filter((d) => !doorBlocked(view.pieces, d)).length,
         };
       }),
       gun: ownsGun(inv), upgraded: !!(inv.weapons.smg || inv.weapons.rifle || inv.weapons.shotgun),
+      shield: (me.shield ?? 0) / 100, scaffolds: inv.pieces.scaffold ?? 0, medkits: inv.medkits,
+      myWeapon: bestGun(inv, c.enemy ? c.enemyDist : 30),
+      enemy: c.enemy ? { id: c.enemy.id, dist: c.enemyDist, hp: c.enemy.hp + (c.enemy.shield ?? 0), weapon: c.enemy.equipped } : null,
+      armedNear: c.armedNear, underFire: !!c.fire,
       kit: sealKit(inv), carried: inv.cash, banked: me.vault.cash, insuranceDue: this.insuranceDue(me),
+      bankable: Math.max(0, Math.floor(inv.cash - shoppingPlan(me, this.needs(c), this.difficulty, this.style).spent - 25)),
       intruder: !!this.intruder(c), homeSealed: view.sealed[home.index], homePlugged: this.blockers(c).length > 0,
       incomingBridge: !!this.incomingDeck(c),
       killedBy: killed ? { id: killed.id, ago: now - killed.t } : null,
@@ -815,14 +840,25 @@ export class Bot {
     return c.me.breakoutUntil !== null || (c.view.sealed[c.home.index] && !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos));
   }
 
+  /**
+   * Tick-level action: the brain's current step, unless a reflex interrupts it (the tide, being trapped, a fight
+   * in my face, getting out of one I'd lose) or a quick errand is worth it on the way (cash about to cap, a loot bag).
+   */
   private pick(c: Ctx): Goal {
     if (this.trapped(c)) return 'defend';
-    let best: Goal = c.homeReach || !c.reach ? 'collect' : 'attack', bestScore = -Infinity;
+    const step = this.brain.stepAct;
+    const retreating = this.brain.goal?.kind === 'retreat';
+    let best: Goal = step ?? (c.homeReach || !c.reach ? 'collect' : 'attack'), bestScore = -Infinity;
     for (const g of GOALS) {
-      const base = this.score(g, c);
+      if (g !== step && !REFLEXES.has(g)) continue;
+      // Running from a fight I'd lose: only shoot back when cornered.
+      if (g === 'fight' && retreating && c.enemyDist > 5) continue;
+      // A step whose own situational score is nil (e.g. "heal up" while already home) still runs: walking home,
+      // hanging around the generator or the target's door is harmless.
+      const base = Math.max(this.score(g, c), g === step && SAFE_STEPS.has(g) ? 0.05 : 0);
       if (base <= 0 && g !== best) continue;
       const bias = GOAL_BIAS[g];
-      const s = base + (bias ? this.params[bias] : 0) + this.strategist.bonus(g, this.params) +
+      const s = base + (bias ? this.params[bias] : 0) + (g === step ? STEP_BONUS + this.params.stepPush : 0) +
         (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
       if (s > bestScore) { bestScore = s; best = g; }
     }
