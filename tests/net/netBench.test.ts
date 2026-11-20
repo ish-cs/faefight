@@ -91,6 +91,7 @@ describe.runIf(env.BENCH)('net/sim bench', () => {
       const { util } = await import('peerjs');
       const pack = util.pack as Pack;
       const m = await firefight(pieces);
+      if (env.NOCLONE) m.cloneSnapshots = false; // as in the worker
       const legacy = legacyPipe(m.map, pack), wire = wirePipe(m.map, pack, 3);
       const tickMs: number[] = [];
       let shots = 0, hits = 0;

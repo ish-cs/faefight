@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { SnapshotDecoder, SnapshotEncoder } from '../../src/net/snapshotCodec';
+import { WireDecoder, WireEncoder } from '../../src/net/wire';
 import { emptyInventory } from '../../src/sim/economy';
 import { newPlayer } from '../../src/sim/player';
 import type { PieceState, Snapshot } from '../../src/sim/types';
@@ -123,6 +124,23 @@ describe('snapshot codec', () => {
     enc.take(1);
     enc.push({ ...s, tick: 2 });
     expect(JSON.stringify(enc.take(1)).length).toBeLessThan((60 * 1024) / 15);
+  });
+  test('on the binary delta wire, 8 players all moving fit 20 KB/s at 30 Hz (full snapshot under 6 KB)', () => {
+    const enc = new SnapshotEncoder(), wire = new WireEncoder(), dec = new WireDecoder();
+    const s = snap(1, Array.from({ length: 60 }, (_, i) => ({ ...steel(), id: i })));
+    s.projectiles = Array.from({ length: 8 }, (_, i) => ({ id: 500 + i, kind: i % 2 ? 'rocket' : 'grenade', pos: v3(i * 3.33333, 9.87654, 1.11111), vel: v3(30.123, -1.5, 4.444) }));
+    s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
+    enc.push(s);
+    const full = wire.encode(1, enc.take(1, true));
+    expect(full.byteLength).toBeLessThan(6 * 1024);
+    dec.decode(full);
+    wire.ack(dec.ack);
+    for (const p of s.players) { p.pos = v3(p.pos.x + 0.17, p.pos.y, p.pos.z - 0.11); p.vel = v3(5.1, 0, -3.3); p.yaw += 0.05; p.pitch = 0.1; }
+    for (const pr of s.projectiles) pr.pos = v3(pr.pos.x + 1, pr.pos.y - 0.05, pr.pos.z + 0.15);
+    enc.push({ ...s, tick: 2, time: 2 / 30 });
+    const delta = wire.encode(2, enc.take(1, true));
+    expect(delta.byteLength).toBeLessThan((20 * 1024) / 30);
+    expect(dec.decode(delta)).toBeTruthy();
   });
   test("every player's kills and deaths reach every client", () => {
     const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();

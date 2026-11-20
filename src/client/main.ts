@@ -42,6 +42,8 @@ const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
 const GHOST_AHEAD = 3;
 const AIM_RANGE = 120;
+/** Already-sent movement commands repeated in each network input message. */
+const REDUNDANT_CMDS = 2;
 const NAME_KEY = 'faefight.name';
 const NAME_MAX = 16;
 /** Created at load so M-mute works from the menu; the AudioContext itself starts on the first click/key. */
@@ -863,6 +865,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let moveAcc = 0;
   let jumpLatch = false;
   let unsent: MoveCmd[] = [];
+  let sentTail: MoveCmd[] = []; // last commands already sent (input redundancy)
   const predicted = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };
   let lastRendered: { x: number; y: number; z: number } | null = null;
   const eyeY = new VerticalSmoother();
@@ -1003,7 +1006,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       // Network: send at a fixed rate; taps between sends are accumulated, never lost.
       sendAcc.push(sample);
       if (snap && now >= nextSendAt) {
-        backend.input(sendAcc.take(), unsent);
+        // Redundancy: re-send the last few commands too (the host's MoveQueue drops seqs it has), so a
+        // late or lost input message doesn't cost a movement step on links that drop.
+        const cmds = [...sentTail, ...unsent].slice(-MAX_CMDS_PER_MSG);
+        backend.input(sendAcc.take(), cmds);
+        sentTail = cmds.slice(-REDUNDANT_CMDS);
         unsent = [];
         nextSendAt = Math.max(nextSendAt + 1000 / backend.inputHz, now - 1000 / backend.inputHz);
       }

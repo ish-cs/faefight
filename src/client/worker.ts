@@ -58,6 +58,7 @@ function startLoop() {
 async function start(setup: MatchSetup, localId: number) {
   if (match) throw new Error('worker: match already started');
   const m = await Match.create(setup);
+  m.cloneSnapshots = false; // postMessage copies each snapshot already
   match = m;
   const ids = m.humanIds();
   if (!ids.includes(localId)) throw new Error(`worker: local player ${localId} is not a human seat (humans: ${ids.join(',')})`);

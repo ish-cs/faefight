@@ -61,6 +61,11 @@ export class Match implements MatchApi {
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
   private history = new HitboxHistory();
   private rewindT: number | null = null;
+  /**
+   * Snapshots are deep copies by default (callers may keep or mutate them). The worker turns this off:
+   * postMessage copies the snapshot anyway, synchronously, so the extra copy is pure cost.
+   */
+  cloneSnapshots = true;
   /** Lag-compensated shots resolved so far, and the total rewind (tests/debug). */
   lagStats = { shots: 0, rewindSec: 0 };
   /** Potion sellers (temporary default until the centre island lands; see potions.ts). */
@@ -478,7 +483,7 @@ export class Match implements MatchApi {
   }
 
   private snapshot(): Snapshot {
-    return structuredClone({
+    const s: Snapshot = {
       time: this.s.time,
       tick: this.tickNo,
       players: [...this.s.players.values()],
@@ -493,7 +498,8 @@ export class Match implements MatchApi {
       winner: this.s.winner,
       potionShops: this.potionShops,
       events: this.events,
-    });
+    };
+    return this.cloneSnapshots ? structuredClone(s) : s;
   }
 
   private mustPlayer(id: number) {
