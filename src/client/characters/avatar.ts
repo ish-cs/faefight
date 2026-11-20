@@ -275,6 +275,8 @@ export class CharacterSystem {
   private lastNow = performance.now();
   private tmpPos = new THREE.Vector3();
   private tmpVel = new THREE.Vector3();
+  /** Player whose avatar is hidden (the local player in first person); -1 = none. */
+  hiddenId = -1;
   /** Resolves once the models are in (or failed — then the capsule fallback is used). */
   readonly ready: Promise<void>;
 
@@ -334,6 +336,7 @@ export class CharacterSystem {
         pos: this.tmpPos, vel: this.tmpVel, yaw, pitch, alive: p.alive, equipped: p.equipped,
         blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0,
       }, dt, now);
+      if (p.id === this.hiddenId) a.group.visible = false;
     }
     for (const [id, a] of this.avatars) if (!players.some((p) => p.id === id)) { a.dispose(); this.avatars.delete(id); }
   }

@@ -32,6 +32,32 @@ describe('sanitizeInput', () => {
     const ok = sanitizeInput({ ...NO_INPUT, vault: { withdraw: { cash: 20, pieces: { steel: 1 } } } })!;
     expect(ok.vault).toEqual({ withdraw: { cash: 20, pieces: { steel: 1 } } });
   });
+  test('hotbar select must be a slot index 0-8', () => {
+    expect(sanitizeInput({ ...NO_INPUT, select: 4 })!.select).toBe(4);
+    expect(sanitizeInput({ ...NO_INPUT, select: 0 })!.select).toBe(0);
+    for (const bad of [9, -1, 2.5, NaN, Infinity, '3', null, {}, [1]])
+      expect(sanitizeInput({ ...NO_INPUT, select: bad })!.select).toBeNull();
+  });
+  test('drop is one, stack, or nothing', () => {
+    expect(sanitizeInput({ ...NO_INPUT, drop: 'one' })!.drop).toBe('one');
+    expect(sanitizeInput({ ...NO_INPUT, drop: 'stack' })!.drop).toBe('stack');
+    for (const bad of ['all', true, 1, {}, null]) expect(sanitizeInput({ ...NO_INPUT, drop: bad })!.drop).toBeNull();
+  });
+  test('moveSlot needs two in-range slot indices', () => {
+    expect(sanitizeInput({ ...NO_INPUT, moveSlot: { from: 0, to: 8 } })!.moveSlot).toEqual({ from: 0, to: 8 });
+    for (const bad of [{ from: 0, to: 9 }, { from: -1, to: 2 }, { from: 1.5, to: 2 }, { from: '1', to: 2 }, { from: 1 }, [0, 1], 'x', 7])
+      expect(sanitizeInput({ ...NO_INPUT, moveSlot: bad })!.moveSlot).toBeNull();
+    const extra = sanitizeInput({ ...NO_INPUT, moveSlot: { from: 2, to: 3, evil: 'x' } })!.moveSlot;
+    expect(extra).toEqual({ from: 2, to: 3 });
+  });
+  test('useMedkit is a strict boolean; vault medkits must be counts', () => {
+    expect(sanitizeInput({ ...NO_INPUT, useMedkit: true })!.useMedkit).toBe(true);
+    for (const bad of ['yes', 1, {}, null, undefined]) expect(sanitizeInput({ ...NO_INPUT, useMedkit: bad })!.useMedkit).toBe(false);
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { medkits: 2 } } })!.vault).toEqual({ deposit: { medkits: 2 } });
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { medkits: -1 } } })!.vault).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, vault: { withdraw: { medkits: 'lots' } } })!.vault).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'medkit' } })!.shop).toEqual({ buy: 'medkit' });
+  });
   test('booleans are coerced strictly', () => {
     expect(sanitizeInput({ ...NO_INPUT, fire: 'yes' })!.fire).toBe(false);
   });

@@ -1,12 +1,15 @@
 import { emptyInventory } from '../sim/economy';
+import { emptyHotbar } from '../sim/hotbar';
 import type { MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
 
 /**
  * What the host sends a remote client. Same as Snapshot except: pieces are omitted when unchanged
- * since that client's last update, events cover every tick since then, other players' inventories
- * and vaults are blanked, and floats are rounded.
+ * since that client's last update, events cover every tick since then, other players' inventories,
+ * vaults and hotbars are left out (the decoder fills them in empty; `equipped` is still sent so their
+ * gun renders), and floats are rounded.
  */
-export type NetSnapshot = Omit<Snapshot, 'pieces'> & { pieces?: PieceState[] };
+export type NetPlayer = Omit<PlayerState, 'inv' | 'vault' | 'hotbar'> & Partial<Pick<PlayerState, 'inv' | 'vault' | 'hotbar'>>;
+export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players'> & { pieces?: PieceState[]; players: NetPlayer[] };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -57,13 +60,10 @@ export class SnapshotEncoder {
     return out;
   }
 
-  private player(p: PlayerState, own: boolean): PlayerState {
-    return {
-      ...p,
-      pos: rv(p.pos), vel: rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp),
-      inv: own ? p.inv : emptyInventory(),
-      vault: own ? p.vault : emptyInventory(),
-    };
+  private player(p: PlayerState, own: boolean): NetPlayer {
+    const out: NetPlayer = { ...p, pos: rv(p.pos), vel: rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp) };
+    if (!own) { delete out.inv; delete out.vault; delete out.hotbar; }
+    return out;
   }
 }
 
@@ -72,6 +72,9 @@ export class SnapshotDecoder {
 
   decode(n: NetSnapshot): Snapshot {
     if (n.pieces) this.pieces = n.pieces;
-    return { ...n, pieces: this.pieces };
+    const players = n.players.map((p): PlayerState => ({
+      ...p, inv: p.inv ?? emptyInventory(), vault: p.vault ?? emptyInventory(), hotbar: p.hotbar ?? emptyHotbar(),
+    }));
+    return { ...n, players, pieces: this.pieces };
   }
 }

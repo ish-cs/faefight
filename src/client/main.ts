@@ -14,6 +14,7 @@ import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { volumeControl } from './audio/ui';
 import { ThirdPersonCamera } from './camera';
+import { FirstPersonView } from './viewmodel';
 import { DamageFx } from './damageFx';
 import { ChatUi } from './chatUi';
 import { Hud } from './hud';
@@ -82,7 +83,7 @@ type Backend = {
   input(i: PlayerInput): void;
   preview(req: BuildRequest, key: number): void;
   chat(text: string): void;
-  debug?: { teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void };
+  debug?: { teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void };
 };
 
 /** Simulation in a local worker: vs-bot (session = null) or online host. */
@@ -121,6 +122,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     debug: {
       teleport: (x, z) => send({ type: 'debug', cmd: 'teleport', x, z }),
       give: (inv) => send({ type: 'debug', cmd: 'give', inv }),
+      hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
     },
   };
 }
@@ -262,7 +264,7 @@ function showMenu() {
   const stored = Number(localStorage.getItem('faefight.sensitivity')) || 1;
   const keys = document.createElement('div');
   keys.className = 'keys';
-  keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire · R reload · E interact · Enter chat<br>B build (1–7 piece, Q/E or wheel rotate, hold Alt free-place) · 1–5 weapons · G grenade · C charge · M mute';
+  keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire / place / throw · R reload · E interact · Enter chat · V first person · M mute<br>1–9 or wheel pick hotbar slot · Q drop (Ctrl/Shift+Q stack) · Tab drag to reorder · Z/X rotate piece · Alt free-place';
   card.append(play, online, status, sensitivityControl(null, stored), volumeControl(audio), keys);
   menu.append(card);
   app.append(menu);
@@ -338,6 +340,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   const renderer = await Renderer.create(canvas);
   console.info(`[render] backend: ${renderer.backend}`);
   const camera = new ThirdPersonCamera(renderer.camera, () => renderer.collidables);
+  const fpv = new FirstPersonView(renderer, () => input.enabled);
 
   let map: IslandLayout[] = [];
   let humanId = 0;
@@ -355,12 +358,14 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   const openPanel = (kind: 'shop' | 'vault') => {
     if (kind === 'shop') hud.openShop(); else { hud.openVault(); audio.ui('vault'); }
     input.enabled = false;
+    chat.enabled = false; // Enter on a focused shop card buys; it must not open chat
     if (document.pointerLockElement) document.exitPointerLock();
   };
   const closePanel = () => {
     if (!hud.panelOpen) return;
     hud.closePanel();
     input.enabled = !hud.ended && !dead;
+    chat.enabled = !hud.ended && !dead;
     canvas.focus();
   };
 
@@ -371,6 +376,8 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     vault: (a) => input.queue({ vault: a }),
     closePanel,
     backToMenu: () => location.reload(),
+    select: (i) => input.select(i),
+    moveSlot: (from, to) => input.queue({ moveSlot: { from, to } }),
   });
 
   const input = new InputController(canvas, {
@@ -387,8 +394,16 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       input.queue({ build: lastReq });
     },
     lockChange: (locked) => {
-      if (locked) { wasLocked = true; paused?.remove(); paused = null; hint.style.display = 'none'; return; }
-      if (wasLocked && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead) showPause();
+      if (locked) {
+        wasLocked = true; paused?.remove(); paused = null; hint.style.display = 'none';
+        if (input.inventory) input.setInventory(false);
+        return;
+      }
+      if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead) showPause();
+    },
+    inventoryChange: (open) => {
+      hint.textContent = open ? 'Drag hotbar items to reorder · Tab to resume' : 'Click to capture the mouse';
+      hint.classList.toggle('inventory', open);
     },
   });
 
@@ -472,21 +487,27 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
 
   const reqKey = (r: BuildRequest) => `${r.kind}|${r.pos.x.toFixed(2)}|${r.pos.y.toFixed(2)}|${r.pos.z.toFixed(2)}|${r.rotY.toFixed(3)}|${r.free}`;
 
+  // Placement verdict for the ghost as it stands now (null while the sim's answer for it is pending).
+  const ghostState = () => (preview && lastReq && preview.key === reqKey(lastReq) ? preview.result.ok : null);
+
   const applySnapshot = (s: Snapshot, intervalMs?: number) => {
     const first = !snap;
     snap = s;
     hud.pushEvents(renderer.pushSnapshot(s, intervalMs));
+    fpv.onEvents(s.events, humanId);
     audio.snapshot(s);
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
-      if (me) input.yaw = me.yaw;
+      if (me) { input.yaw = me.yaw; input.selected = me.selected; }
       input.enabled = !dead;
       menu.remove();
       canvas.focus();
     }
     damageFx.onSnapshot(s, humanId);
-    hud.update(s, { buildMode: input.buildMode, buildKind: input.buildKind, ghostOk: input.buildMode ? (preview?.result.ok ?? null) : null, free: input.free });
-    chat.enabled = !hud.ended && !dead;
+    const meNow = s.players.find((p) => p.id === humanId);
+    input.held = meNow?.hotbar[input.selected] ?? null;
+    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, free: input.free, inventory: input.inventory });
+    chat.enabled = !hud.ended && !dead && !hud.panelOpen;
     if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
   };
 
@@ -519,6 +540,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       renderer,
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
       input,
+      cameraMode: () => fpv.mode,
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
     };
@@ -541,13 +563,15 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
 
     const me = snap?.players.find((p) => p.id === humanId);
     if (me && renderer.playerPos(humanId, feet)) {
-      camera.update(feet, input.yaw, input.pitch, dt);
+      if (!fpv.updateCamera(feet, input.yaw, input.pitch, me, humanId)) camera.update(feet, input.yaw, input.pitch, dt);
 
-      // Build ghost: ~3 m ahead on the ground, snapped like the sim snaps it, validated by the sim.
-      if (input.buildMode && me.alive) {
+      // Build ghost (holding a piece): ~3 m ahead on the ground, snapped like the sim snaps it, validated by the sim.
+      input.held = me.hotbar[input.selected] ?? null;
+      const buildKind = input.buildKind;
+      if (buildKind && me.alive) {
         const fx = -Math.sin(input.yaw), fz = -Math.cos(input.yaw);
         const req: BuildRequest = {
-          kind: input.buildKind,
+          kind: buildKind,
           pos: { x: feet.x + fx * GHOST_AHEAD, y: me.pos.y, z: feet.z + fz * GHOST_AHEAD },
           rotY: input.yaw + input.buildRot,
           free: input.free,
@@ -575,7 +599,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     }
 
     const sample = input.sample();
-    if (me?.alive) {
+    if (me?.alive && !fpv.isActive) { // first person: the eye ray already is the crosshair ray
       // Aim the sim's eye ray (from the player's head) at whatever is under the crosshair; the camera
       // sits over the shoulder, so the raw look angles would shoot ~0.6 m right of the crosshair.
       // Targets nearer than the head itself would flip the aim backwards, so clamp just past the eye.
@@ -598,6 +622,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     }
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     renderer.render(input.yaw);
+    fpv.render(me, input.yaw, input.pitch, dt);
     audio.frame(renderer.camera);
     requestAnimationFrame(frame);
   };

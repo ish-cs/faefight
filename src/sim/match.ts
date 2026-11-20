@@ -1,16 +1,18 @@
-import { buy, collect, mergeInventory, emptyInventory, tickGenerator, vaultTransfer } from './economy';
+import { buy, collect, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER } from './constants';
+import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMap, type IslandLayout } from './map';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics } from './physics';
 import { unsupportedPieces } from './support';
 import { newPlayer } from './player';
-import type { BotView } from './bots/view';
+import { isPlaceholderBotName, nickname } from './names';
+import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
-import type { BuildRequest, Difficulty, Inventory, MatchEvent, PlayerInput, PlayerState, Snapshot, Vec3 } from './types';
+import type { BuildRequest, Difficulty, Inventory, MatchEvent, PlayerInput, PlayerState, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { add, clone, dist, dist2D, forward, norm, right, scale, sub, v3 } from './vec';
 
@@ -19,6 +21,9 @@ export type MatchOptions = { makeBot?: (id: number, difficulty: Difficulty, rng:
 
 const MAX_PITCH = 1.4;
 const SIGHT_RANGE = 120;
+/** How long hits/tracers stay in a bot's short-term memory, and how long the kill feed is. */
+const RECENT_SEC = 4;
+const FEED_SEC = 30;
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -45,6 +50,11 @@ export class Match implements MatchApi {
   private supportDirty = false;
   private kills: { victim: number; killer: number | null }[] = [];
   private ctx: CombatCtx;
+  /** Public recent history a human would have on screen: hits, tracers, kill feed, scoreboard. */
+  private hits: (HurtEvent & { target: number })[] = [];
+  private shots: ShotSeen[] = [];
+  private feed: FeedLine[] = [];
+  private killCount = new Map<number, number>();
 
   private constructor(readonly map: IslandLayout[], private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
     this.s = newMatchState(map);
@@ -52,13 +62,20 @@ export class Match implements MatchApi {
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
     this.makeBot = opts.makeBot;
+    // Bot seats with a placeholder name ("Bot (hard)") get a human-looking nickname; a separate stream so
+    // names don't shift the bots' own random choices.
+    const nameRng = mulberry32(((setup.seed ?? 1) * 2654435761) ^ 0x5bd1e995);
+    const taken = new Set(setup.players.filter((c) => !(c.isBot && isPlaceholderBotName(c.name))).map((c) => c.name.toLowerCase()));
     setup.players.forEach((cfg, i) => {
       const id = i + 1;
-      const p = newPlayer(id, cfg.name, cfg.isBot, i, map[i].spawn);
+      const name = cfg.isBot && isPlaceholderBotName(cfg.name) ? nickname(nameRng, taken) : cfg.name;
+      const p = newPlayer(id, name, cfg.isBot, i, map[i].spawn);
       p.yaw = map[i].bunker.facingYaw;
       this.s.players.set(id, p);
       physics.addPlayer(id, p.pos);
-      if (cfg.isBot && opts.makeBot) this.bots.set(id, opts.makeBot(id, cfg.difficulty ?? 'medium', rng));
+      if (cfg.isBot && opts.makeBot) {
+        this.bots.set(id, opts.makeBot(id, cfg.difficulty ?? 'medium', rng));
+      }
     });
     this.ctx = {
       physics,
@@ -110,7 +127,10 @@ export class Match implements MatchApi {
     this.collapseUnsupported(now);
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath);
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
+    // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
+    for (const p of this.s.players.values()) { tickHealing(p, now); this.syncHand(p); }
     this.updateSeals(now);
+    this.remember(now);
     return this.snapshot();
   }
 
@@ -165,7 +185,15 @@ export class Match implements MatchApi {
   }
 
   debugGive(playerId: number, inv: Partial<Inventory>): void {
-    mergeInventory(this.mustPlayer(playerId).inv, { ...emptyInventory(), ...inv });
+    const p = this.mustPlayer(playerId);
+    mergeInventory(p.inv, { ...emptyInventory(), ...inv });
+    const overflow = syncFromInventory(p.hotbar, p.inv);
+    if (overflow.length) console.warn(`debugGive: hotbar full, ${overflow.join(', ')} carried without a slot`);
+  }
+
+  debugSetHp(playerId: number, hp: number): void {
+    if (!Number.isFinite(hp) || hp <= 0) throw new Error(`debugSetHp: hp must be > 0, got ${hp}`);
+    this.mustPlayer(playerId).hp = Math.min(PLAYER.hp, hp);
   }
 
   debugKill(playerId: number): void {
@@ -176,12 +204,13 @@ export class Match implements MatchApi {
     p.yaw = input.yaw;
     p.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, input.pitch));
 
-    if (input.slot && input.slot !== p.equipped && (input.slot === 'fists' || p.inv.weapons[input.slot])) {
-      p.equipped = input.slot;
-      p.reloadUntil = 0;
-    }
+    if (input.moveSlot) swapSlots(p.hotbar, input.moveSlot.from, input.moveSlot.to);
+    if (validSlot(input.select)) p.selected = input.select;
+    if (input.slot) this.selectWeapon(p, input.slot);
+    this.syncHand(p);
 
     this.move(p, input);
+    if (input.drop) this.drop(p, input.drop, now);
 
     tickReload(p, now);
     if (now < p.busyUntil) return;
@@ -196,7 +225,47 @@ export class Match implements MatchApi {
     if (input.fire) this.events.push(...tryFire(this.ctx, p, now));
     if (input.throwGrenade) throwGrenade(this.ctx, p, now);
     if (input.placeCharge) placeCharge(this.ctx, p, now);
+    if (input.useMedkit) startMedkit(p, now);
     if (input.build) this.build(p, input.build, now);
+    this.syncHand(p);
+  }
+
+  /** Legacy weapon pick (bots): select the slot holding that gun, or a non-gun slot for fists. */
+  private selectWeapon(p: PlayerState, w: WeaponKind) {
+    if (w === 'fists') {
+      if (!isGunItem(p.hotbar[p.selected])) return;
+      const free = p.hotbar.indexOf(null);
+      const at = free >= 0 ? free : p.hotbar.findIndex((k) => !isGunItem(k));
+      if (at >= 0) p.selected = at;
+      return;
+    }
+    const at = p.hotbar.indexOf(w);
+    if (at >= 0) p.selected = at;
+  }
+
+  /** Hotbar follows the inventory; the hand follows the selected slot. */
+  private syncHand(p: PlayerState) {
+    syncFromInventory(p.hotbar, p.inv);
+    const e = equippedFor(p.hotbar, p.selected);
+    if (e !== p.equipped) {
+      p.equipped = e;
+      p.reloadUntil = 0;
+    }
+  }
+
+  /** Drops from the selected slot as a loot bag just in front of the player (on the ground there, else at their feet). */
+  private drop(p: PlayerState, amount: 'one' | 'stack', now: number) {
+    const kind = p.hotbar[p.selected];
+    if (!kind) return;
+    const inv = takeOut(p.inv, kind, amount);
+    if (!inv) return;
+    this.syncHand(p);
+    const f = forward(p.yaw);
+    const ax = p.pos.x + f.x * LIFECYCLE.dropAhead, az = p.pos.z + f.z * LIFECYCLE.dropAhead;
+    const ground = this.physics.isGroundAt(ax, az);
+    const pos = ground !== null && Math.abs(ground - p.pos.y) <= 1 ? v3(ax, ground, az) : clone(p.pos);
+    const id = this.s.nextId++;
+    this.s.loot.set(id, { id, pos, inv, noPickup: { id: p.id, until: now + LIFECYCLE.dropPickupDelaySec } });
   }
 
   private move(p: PlayerState, input: PlayerInput) {
@@ -244,6 +313,23 @@ export class Match implements MatchApi {
     });
   }
 
+  private remember(now: number) {
+    for (const e of this.events) {
+      const d = e.data;
+      if (e.type === 'hit') this.hits.push({ t: e.t, target: d.target as number, by: (d.by as number | null) ?? null, amount: d.amount as number });
+      else if (e.type === 'shot') this.shots.push({ t: e.t, by: d.by as number, from: d.from as Vec3, to: d.to as Vec3 });
+      else if (e.type === 'kill') {
+        const killer = (d.killer as number | null) ?? null, victim = d.victim as number;
+        this.feed.push({ t: e.t, killer, victim });
+        if (killer !== null && killer !== victim) this.killCount.set(killer, (this.killCount.get(killer) ?? 0) + 1);
+      }
+    }
+    const keep = <T extends { t: number }>(xs: T[], sec: number) => (xs.length && xs[0].t < now - sec ? xs.filter((x) => x.t >= now - sec) : xs);
+    this.hits = keep(this.hits, RECENT_SEC);
+    this.shots = keep(this.shots, RECENT_SEC);
+    this.feed = keep(this.feed, FEED_SEC);
+  }
+
   private botView(self: PlayerState): BotView {
     const eye = eyePos(self);
     const enemies: PlayerState[] = [];
@@ -260,11 +346,15 @@ export class Match implements MatchApi {
       self,
       enemies,
       others: [...this.s.players.values()].filter((o) => o.id !== self.id)
-        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt })),
+        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: this.killCount.get(o.id) ?? 0 })),
       map: this.map,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),
       sealed: [...this.sealed],
+      hurt: this.hits.filter((h) => h.target === self.id).map(({ t, by, amount }) => ({ t, by, amount })),
+      shots: this.shots.filter((s) => s.by !== self.id && dist(s.from, eye) <= SIGHT_RANGE),
+      feed: [...this.feed],
+      loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE).map((b) => clone(b.pos)),
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
       groundAt: (x, z) => this.physics.isGroundAt(x, z),

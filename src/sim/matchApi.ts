@@ -30,4 +30,5 @@ export interface MatchApi {
   /** Debug helpers (dev/e2e only). */
   debugTeleport(playerId: number, pos: Vec3): void;
   debugGive(playerId: number, inv: Partial<Inventory>): void;
+  debugSetHp(playerId: number, hp: number): void;
 }
