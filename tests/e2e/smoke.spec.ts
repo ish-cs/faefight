@@ -80,14 +80,14 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await expect(page.getByTestId('weapon')).toHaveText(/pistol\s*12\/36/i);
   await expect.poll(async () => (await me()).equipped).toBe('pistol');
 
-  // Tab releases the mouse; drag the pistol from slot 1 to slot 5 to reorder.
-  await page.keyboard.press('Tab');
+  // I (reorder key) releases the mouse; drag the pistol from slot 1 to slot 5 to reorder.
+  await page.keyboard.press('KeyI');
   await expect(page.getByTestId('hotbar')).toHaveClass(/editing/);
   await page.getByTestId('hotbar-slot-0').dragTo(page.getByTestId('hotbar-slot-4'));
   await expect.poll(async () => (await me()).hotbar.slice(0, 5)).toEqual([null, 'medkit', null, null, 'pistol']);
   await expect(page.getByTestId('hotbar-slot-4')).toHaveAttribute('data-item', 'pistol');
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', '');
-  await page.keyboard.press('Tab');
+  await page.keyboard.press('KeyI');
   await expect(page.getByTestId('hotbar')).not.toHaveClass(/editing/);
 
   // Build: sandbags go into the first free slot; selecting it is build mode. Place one at the island centre.

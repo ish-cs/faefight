@@ -1,5 +1,4 @@
 import './style.css';
-import * as THREE from 'three/webgpu';
 import type { HostMsg, Slot } from '../net/protocol';
 import { SnapshotDecoder } from '../net/snapshotCodec';
 import type { Link } from '../net/transport';
@@ -12,19 +11,19 @@ import type { MatchSetup } from '../sim/matchApi';
 import type { BuildRequest, Difficulty, Inventory, PlayerInput, Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
-import { volumeControl } from './audio/ui';
-import { ThirdPersonCamera } from './camera';
-import { FirstPersonView } from './viewmodel';
-import { DamageFx } from './damageFx';
 import { ChatUi } from './chatUi';
-import { Hud } from './hud';
+import { loadGameModules, preloadGame } from './gameModules';
 import { InputAccumulator } from './inputAccum';
 import { InputController } from './input';
+import { ACTIONS, activeKeymap, bindingLabel, isAction, type Action } from './keymap';
+import { loadingScreen } from './loading';
 import { LobbyUi } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
-import { Renderer } from './render';
 import { HostSession, JoinError, joinRoom } from './session';
 import { SnapshotBuffer } from './snapBuffer';
+import { applyDocumentSettings } from './settings/apply';
+import { openSettings } from './settings/panel';
+import { settings } from './settings/store';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -43,22 +42,26 @@ function toast(msg: string) {
   setTimeout(() => t.remove(), 8000);
 }
 
-function sensitivityControl(input: { sensitivity: number; setSensitivity(v: number): void } | null, initial: number) {
-  const row = document.createElement('label');
-  row.className = 'sens';
-  const range = document.createElement('input');
-  range.type = 'range'; range.min = '0.2'; range.max = '3'; range.step = '0.05';
-  range.value = String(initial);
-  const val = document.createElement('span');
-  val.textContent = Number(initial).toFixed(2);
-  range.oninput = () => {
-    const v = Number(range.value);
-    val.textContent = v.toFixed(2);
-    if (input) input.setSensitivity(v);
-    else localStorage.setItem('faefight.sensitivity', String(v));
-  };
-  row.append('Mouse sensitivity', range, val);
-  return row;
+const GEAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+
+/** "Settings" button (main menu + pause card). */
+function settingsButton(onClose?: () => void) {
+  const b = document.createElement('button');
+  b.className = 'btn menu-settings';
+  b.innerHTML = `${GEAR}<span>Settings</span>`;
+  b.dataset.testid = 'open-settings';
+  b.onclick = () => openSettings({ onClose });
+  return b;
+}
+
+/** One-line key help from the live keymap (follows rebinding). */
+function keyHelp(): string {
+  const k = (a: Action) => bindingLabel(activeKeymap(), a).split(' / ')[0];
+  const move = (['forward', 'left', 'back', 'right'] as Action[]).map(k).join('');
+  const slots = ACTIONS.filter((a) => a.group === 'Hotbar').map((a) => k(a.id));
+  const slotText = slots.join('') === '123456789' ? '1–9' : slots.join(' ');
+  return `${move} move · ${k('sprint')} sprint · ${k('jump')} jump · Click fire / place / throw · ${k('reload')} reload · ${k('interact')} interact · ${k('chat')} chat · ${k('camera')} first person · ${k('mute')} mute<br>`
+    + `${slotText} or wheel pick hotbar slot · ${k('drop')} drop (Ctrl/Shift+${k('drop')} stack) · ${k('inventory')} drag to reorder · ${k('rotateLeft')}/${k('rotateRight')} rotate piece · ${k('freePlace')} free-place`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -259,11 +262,11 @@ function showMenu() {
   joinBtn.onclick = doJoin;
   codeIn.onkeydown = (e) => { if (e.key === 'Enter') doJoin(); };
 
-  const stored = Number(localStorage.getItem('faefight.sensitivity')) || 1;
   const keys = document.createElement('div');
   keys.className = 'keys';
-  keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire / place / throw · R reload · E interact · Enter chat · V first person · M mute<br>1–9 or wheel pick hotbar slot · Q drop (Ctrl/Shift+Q stack) · Tab drag to reorder · Z/X rotate piece · Alt free-place';
-  card.append(play, online, status, sensitivityControl(null, stored), volumeControl(audio), keys);
+  keys.innerHTML = keyHelp();
+  const unsub = settings.subscribe(() => { if (keys.isConnected) keys.innerHTML = keyHelp(); else unsub(); });
+  card.append(play, online, status, settingsButton(), keys);
   menu.append(card);
   app.append(menu);
 }
@@ -330,13 +333,74 @@ async function joinLobby(code: string, name: string, menu: HTMLElement) {
 // Game
 // ---------------------------------------------------------------------------------------------
 
+/** Loading-screen phases for a match and their share of the bar (real progress, see loading.ts). */
+const MATCH_PHASES = { code: 15, gpu: 10, characters: 25, map: 15, shaders: 30, frames: 5 };
+/** Hidden frames rendered after the warm-up before the loading screen fades. */
+const WARM_FRAMES = 3;
+/** Never leave the player staring at the loading screen if a step hangs. */
+const REVEAL_TIMEOUT_MS = 25_000;
+
 async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi) => void) {
+  const loading = loadingScreen();
+  loading.show('match', MATCH_PHASES);
+  try {
+    await runGame(backend, menu, onChat);
+  } catch (err) {
+    void loading.hide();
+    throw err;
+  }
+}
+
+async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi) => void) {
+  const loading = loadingScreen();
+  const loadStart = performance.now();
+  const mods = await loadGameModules((done, total) => loading.progress('code', done / total, 'Loading game code'));
+  const THREE = mods.three;
+  const { Renderer } = mods.render, { ThirdPersonCamera } = mods.camera, { FirstPersonView } = mods.viewmodel;
+  const { DamageFx } = mods.damageFx, { Hud } = mods.hud;
+  const offCharProgress = mods.characters.onCharacterProgress((f) => loading.progress('characters', f, 'Downloading characters'));
+
   const canvas = document.createElement('canvas');
   canvas.className = 'game';
   canvas.tabIndex = 0;
   app.prepend(canvas);
+  loading.progress('gpu', 0, 'Starting WebGPU');
   const renderer = await Renderer.create(canvas);
+  loading.progress('gpu', 1, 'Starting the simulation');
   console.info(`[render] backend: ${renderer.backend}`);
+  settings.subscribe((st) => {
+    renderer.world.sky.setQuality(st.video.quality);
+    renderer.world.sky.setResolutionScale(st.video.resolutionScale);
+  });
+
+  // ---- reveal: map + avatars + first snapshot → shader warm-up → a few hidden frames → fade in ----
+  let charsReady = false, warmStarted = false, warmed = false, revealed = false, framesAfterWarm = 0;
+  renderer.characters.ready.then(() => {
+    charsReady = true;
+    offCharProgress();
+    loading.progress('characters', 1);
+    maybeWarm();
+  });
+  const revealTimer = setTimeout(() => { console.warn('[loading] warm-up took too long; showing the game anyway'); reveal(); }, REVEAL_TIMEOUT_MS);
+  function maybeWarm() {
+    if (warmStarted || !snap || !map.length || !charsReady) return;
+    warmStarted = true;
+    // One normal frame first so the camera already sits behind the player.
+    requestAnimationFrame(() => {
+      mods.warmup.warmUp(renderer, () => snap?.pieces ?? [], input.yaw, (f, label) => loading.progress('shaders', f, label))
+        .catch((err) => console.warn('[loading] shader warm-up failed; continuing', err))
+        .finally(() => { warmed = true; });
+    });
+  }
+  function reveal() {
+    if (revealed) return;
+    revealed = true;
+    clearTimeout(revealTimer);
+    console.info(`[loading] match ready in ${Math.round(performance.now() - loadStart)} ms`);
+    loading.progress('frames', 1, 'Ready');
+    void loading.hide();
+    canvas.focus();
+  }
   const camera = new ThirdPersonCamera(renderer.camera, () => renderer.collidables);
   const fpv = new FirstPersonView(renderer, () => input.enabled);
 
@@ -400,7 +464,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead) showPause();
     },
     inventoryChange: (open) => {
-      hint.textContent = open ? 'Drag hotbar items to reorder · Tab to resume' : 'Click to capture the mouse';
+      hint.textContent = open ? `Drag hotbar items to reorder · ${bindingLabel(activeKeymap(), 'inventory')} to resume` : 'Click to capture the mouse';
       hint.classList.toggle('inventory', open);
     },
   });
@@ -438,13 +502,14 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     const note = document.createElement('div');
     note.style.cssText = 'font-size:12px;color:var(--muted)';
     note.textContent = 'The match keeps running while paused.';
-    card.append(title, sensitivityControl(input, input.sensitivity), volumeControl(audio), resume, note);
+    card.append(title, resume, settingsButton(), note);
     paused.append(card);
     document.body.append(paused);
   }
 
   function showFatal(titleText: string, detail: string) {
     if (dead) return;
+    reveal();
     input.enabled = false;
     chat.enabled = false;
     chat.close();
@@ -475,7 +540,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   // same E press from immediately re-opening the panel we just closed.
   window.addEventListener('keydown', (e) => {
     if (!hud.panelOpen) return;
-    if (e.code === 'Escape' || (e.code === 'KeyE' && !(e.target instanceof HTMLInputElement))) {
+    if (e.code === 'Escape' || (isAction('interact', e.code) && !(e.target instanceof HTMLInputElement))) {
       e.preventDefault();
       e.stopPropagation();
       closePanel();
@@ -498,8 +563,9 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       const me = s.players.find((p) => p.id === humanId);
       if (me) { input.yaw = me.yaw; input.selected = me.selected; }
       input.enabled = !dead;
-      menu.remove();
+      menu.remove(); // the loading screen still covers the game until warm-up is done
       canvas.focus();
+      maybeWarm();
     }
     damageFx.onSnapshot(s, humanId);
     const meNow = s.players.find((p) => p.id === humanId);
@@ -514,6 +580,8 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       map = m;
       humanId = id;
       renderer.setMap(map, humanId);
+      loading.progress('map', 1, 'Building islands');
+      maybeWarm();
       hud.setMap(map, humanId, island);
       audio.setMap(map, humanId);
     },
@@ -540,6 +608,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       cameraMode: () => fpv.mode,
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
+      settings: () => settings.get(),
     };
   }
 
@@ -549,8 +618,13 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   let nextSendAt = 0;
   let last = performance.now();
   let fpsFrames = 0, fpsSince = last;
+  let lastDrawn = 0;
   const frame = () => {
     const now = performance.now();
+    // Settings → Video frame cap (rAF itself is vsync-locked; this only skips frames below it).
+    const cap = settings.get().video.frameCap;
+    if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
+    lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     fpsFrames++;
@@ -621,9 +695,37 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     renderer.render(input.yaw);
     fpv.render(me, input.yaw, input.pitch, dt);
     audio.frame(renderer.camera);
+    if (warmed && !revealed) {
+      framesAfterWarm++;
+      loading.progress('frames', framesAfterWarm / WARM_FRAMES);
+      if (framesAfterWarm >= WARM_FRAMES) reveal();
+    }
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
 }
 
-showMenu();
+/** First load: branded loading screen (already painted by index.html) → styles + fonts → menu → fade; then preload the game. */
+async function boot() {
+  const loading = loadingScreen();
+  if (DEBUG) (window as unknown as { __faefightLoading: unknown }).__faefightLoading = {
+    visible: () => loading.visible,
+    events: () => loading.events,
+    screen: loading, // screenshots drive it directly (tests/visual/settingsShots.mjs)
+  };
+  loading.show('boot', { styles: 1, fonts: 1, menu: 1 });
+  applyDocumentSettings();
+  loading.progress('styles', 1);
+  // System fonts only, but wait for them (bounded) so the menu never reflows after it appears.
+  await Promise.race([document.fonts?.ready, new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
+  loading.progress('fonts', 1);
+  showMenu();
+  loading.progress('menu', 1);
+  void loading.hide();
+  preloadGame();
+}
+
+boot().catch((err) => {
+  console.error('[main] boot failed', err);
+  showMenu();
+});

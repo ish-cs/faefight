@@ -1,7 +1,7 @@
 import type { Slot } from '../net/protocol';
 import { MAX_PLAYERS } from '../net/protocol';
 import type { Difficulty } from '../sim/types';
-import { ISLAND_COLORS, ISLAND_NAMES } from './render';
+import { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 
 export type LobbyActions = {
   setSeat(i: number, slot: Slot): void;
