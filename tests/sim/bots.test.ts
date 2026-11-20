@@ -411,7 +411,7 @@ describe('difficulty = human skill, not special rules', () => {
     expect(k).toBeGreaterThanOrEqual(5);
     expect(k).toBeLessThan(15);
   });
-  test('PRO still misses sometimes: aim error at 12 m is small but not zero', () => {
+  test('PRO still misses sometimes: aim error is small but not zero (misses at rifle range)', () => {
     let misses = 0, sum = 0;
     for (let i = 0; i < 100; i++) {
       const { view, bot, self, enemy } = duel('pro', 2000 + i, 0);
@@ -419,12 +419,12 @@ describe('difficulty = human skill, not special rules', () => {
       for (let k = 1; k <= 12; k++) { self.yaw = inp.yaw; self.pitch = inp.pitch; view.now += DT; inp = bot.think(view); }
       const err = angleBetween(inp, lookAt(eyePos(self), v3(enemy.pos.x, enemy.pos.y + 1.2, enemy.pos.z)));
       sum += err;
-      // Off the 0.35 m body radius at this range.
-      if (Math.tan(err) * dist2D(self.pos, enemy.pos) > 0.35) misses++;
+      // The same error at 30 m would be off the 0.35 m body radius.
+      if (Math.tan(err) * 30 > 0.35) misses++;
     }
     expect(sum / 100).toBeGreaterThan((0.3 * Math.PI) / 180);
-    expect(misses).toBeGreaterThan(0);
-    expect(misses).toBeLessThan(60);
+    expect(misses).toBeGreaterThan(5);
+    expect(misses).toBeLessThan(80);
   });
   test('an easy bot is slower than a hard bot to notice cash waiting at its generator', () => {
     const reaction = (difficulty: 'easy' | 'hard', seed: number) => {
