@@ -36,7 +36,8 @@ for (const tpl of templates) {
   const hl = Math.hypot(home.center.x, home.center.z);
   // the island nearest +X: the center's rim at 0° is clear of stations, barriers and lamps
   const isl = def.islands.reduce((a, b) => (b.center.x > a.center.x ? b : a));
-  const back = { x: def.center.radius - 2, z: 0.5 };
+  const cc = def.center.center; // off the origin with 2 players
+  const back = { x: cc.x + def.center.radius - 2, z: cc.z + 0.5 };
   await dbg('teleport', back.x, back.z);
   await page.waitForTimeout(900);
   await look(yawTo(back.x, back.z, isl.center.x, isl.center.z), -0.05);
@@ -48,7 +49,7 @@ for (const tpl of templates) {
 
   // center island close-up
   const c = def.center;
-  const pol = (r, deg) => ({ x: Math.cos((deg * Math.PI) / 180) * r, z: Math.sin((deg * Math.PI) / 180) * r });
+  const pol = (r, deg) => ({ x: def.center.center.x + Math.cos((deg * Math.PI) / 180) * r, z: def.center.center.z + Math.sin((deg * Math.PI) / 180) * r });
   const from = pol(4.5, 318), to = pol(2.5, 140);
   await dbg('teleport', from.x, from.z);
   await page.waitForTimeout(900);
@@ -60,10 +61,10 @@ for (const tpl of templates) {
   console.log(JSON.stringify({ tpl, view: 'center', info: info2, fps: fps2 }));
 
   // cosmetic breaking: shoot the nearest barrel on the center island with a rifle
-  const target = def.cosmetics.filter((k) => k.kind === 'barrel' || k.kind === 'crate').sort((a, b) => Math.hypot(a.pos.x, a.pos.z) - Math.hypot(b.pos.x, b.pos.z))[0];
+  const target = def.cosmetics.filter((k) => k.kind === 'barrel' || k.kind === 'crate').sort((a, b) => Math.hypot(a.pos.x - c.center.x, a.pos.z - c.center.z) - Math.hypot(b.pos.x - c.center.x, b.pos.z - c.center.z))[0];
   if (target) {
     await page.evaluate(() => window.__faefight.give?.({ weapons: { pistol: { mag: 12, spare: 200 } } }));
-    const dir = { x: target.pos.x, z: target.pos.z };
+    const dir = { x: target.pos.x - c.center.x, z: target.pos.z - c.center.z };
     const l = Math.hypot(dir.x, dir.z);
     const sx = target.pos.x - (dir.x / l) * 4, sz = target.pos.z - (dir.z / l) * 4;
     await dbg('teleport', sx, sz);

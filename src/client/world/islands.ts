@@ -180,7 +180,7 @@ export function buildIslands(def: MapDef, teamColors: number[]): IslandsOut {
   });
 
   buildCenter(def, root, dress, collidables, wallMat, QUAY_DEPTH, labelSprite);
-  if (yard) gapCranes(dress, map, groundY);
+  if (yard) gapCranes(dress, map, groundY, def.center);
   distantIslands(dress, map);
 
   const bunkers = solid.build(root, 'bunkers');
@@ -354,7 +354,7 @@ function buildYardBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: Rng, isl: Isla
 }
 
 /** Yard only: a ship-to-shore crane standing in the water over each gap between islands, boom toward the middle. */
-function gapCranes(b: StaticBatch, map: IslandLayout[], groundY: number) {
+function gapCranes(b: StaticBatch, map: IslandLayout[], groundY: number, center: MapDef['center']) {
   const M = mats();
   const n = map.length;
   const ring = Math.hypot(map[0].center.x, map[0].center.z);
@@ -362,6 +362,8 @@ function gapCranes(b: StaticBatch, map: IslandLayout[], groundY: number) {
   for (let i = 0; i < n; i++) {
     const a = Math.PI + (2 * Math.PI * (i + 0.5)) / n;
     const d = ring + R * 0.75;
+    // with 2 players the center island sits on a gap bisector: no crane (legs or boom) over it or its approach
+    if (Math.hypot(Math.cos(a) * d - center.center.x, Math.sin(a) * d - center.center.z) < center.radius + 36) continue;
     const yaw = Math.atan2(Math.cos(a), Math.sin(a)); // local -Z points at the middle
     const B = mat(Math.cos(a) * d, groundY - 1.2, Math.sin(a) * d, 0, yaw, 0);
     crane(b, B, 24);

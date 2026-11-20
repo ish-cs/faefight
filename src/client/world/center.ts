@@ -20,7 +20,8 @@ export function buildCenter(def: MapDef, root: THREE.Group, dress: StaticBatch, 
   const c = def.center;
   const R = c.radius, g = c.groundY;
   const yard = def.template === 'yard';
-  const stations = [c.goldGen, c.supplyGen, c.potionShop];
+  // painted pads in island-local XZ (the center island is off the origin with 2 players)
+  const stations = [c.goldGen, c.supplyGen, c.potionShop].map((p) => ({ x: p.x - c.center.x, z: p.z - c.center.z }));
 
   const topMat = new THREE.MeshStandardNodeMaterial({ roughness: 0.93 });
   topMat.name = 'centerTop';
