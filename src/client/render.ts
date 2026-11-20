@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { PLAYER } from '../sim/constants';
-import type { IslandLayout } from '../sim/map';
+import type { IslandLayout, MapDef } from '../sim/map';
 import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
 import { CharacterSystem } from './characters/avatar';
 import { pieceGeometry, World } from './world';
@@ -69,10 +69,10 @@ export class Renderer {
     this.camera.updateProjectionMatrix();
   }
 
-  setMap(map: IslandLayout[], humanId: number) {
-    this.map = map;
+  setMap(def: MapDef, humanId: number) {
+    this.map = def.islands;
     this.humanId = humanId;
-    this.world.setMap(map, ISLAND_COLORS);
+    this.world.setMap(def, ISLAND_COLORS);
   }
 
   /**

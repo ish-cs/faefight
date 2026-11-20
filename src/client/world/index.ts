@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import type { IslandLayout } from '../../sim/map';
+import type { MapDef } from '../../sim/map';
 import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { buildIslands } from './islands';
 import { PieceFx } from './pieceFx';
@@ -33,7 +33,8 @@ export class World {
     };
   }
 
-  setMap(map: IslandLayout[], teamColors: number[]) {
+  setMap(def: MapDef, teamColors: number[]) {
+    const map = def.islands;
     const t0 = performance.now();
     const { root, collidables } = buildIslands(map, teamColors);
     this.scene.add(root);

@@ -4,7 +4,9 @@ import { applyPlayerDamage, placeCharge, throwGrenade, tickExplosives, tickReloa
 import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
-import { buildMap, type IslandLayout } from './map';
+import { buildMapDef, type IslandLayout, type MapDef } from './map';
+import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
+import { Cosmetics } from './cosmetics';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics } from './physics';
 import { unsupportedPieces } from './support';
@@ -55,9 +57,16 @@ export class Match implements MatchApi {
   private shots: ShotSeen[] = [];
   private feed: FeedLine[] = [];
   private killCount = new Map<number, number>();
+  readonly map: IslandLayout[];
+  private center: CenterState = newCenterState();
+  private cosmetics: Cosmetics;
 
-  private constructor(readonly map: IslandLayout[], private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
+  private constructor(readonly def: MapDef, private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
+    const map = def.islands;
+    this.map = map;
+    this.cosmetics = new Cosmetics(def.cosmetics);
     this.s = newMatchState(map);
+    this.s.waterY = def.waterY;
     this.sealed = map.map(() => false);
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
@@ -102,8 +111,8 @@ export class Match implements MatchApi {
   ): Promise<Match> {
     const n = setup.players.length;
     if (n < 2 || n > 8) throw new Error(`Match.create: need 2..8 players, got ${n}`);
-    const map = buildMap(n);
-    return new Match(map, await Physics.create(map), setup, opts);
+    const def = buildMapDef(n, setup.map ?? 'harbor', setup.seed ?? 1);
+    return new Match(def, await Physics.create(def), setup, opts);
   }
 
   humanIds(): number[] {
@@ -126,7 +135,10 @@ export class Match implements MatchApi {
     this.events.push(...tickExplosives(this.ctx, now));
     this.collapseUnsupported(now);
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath);
-    this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
+    tickCenter(this.center, DT, !this.s.suddenDeath);
+    for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
+    this.events.push(...this.cosmetics.onEvents(this.events, now));
+    this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT, this.def.tideRate));
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); this.syncHand(p); }
     this.updateSeals(now);
@@ -217,8 +229,18 @@ export class Match implements MatchApi {
     const isl = this.map[p.island];
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
 
-    if (input.interact)
+    if (input.interact) {
       for (const g of this.s.generators) if (near(this.map[g.island].generator)) collect(p, g);
+      const c = this.def.center;
+      if (near(c.goldGen)) {
+        const cash = collectGold(p, this.center);
+        if (cash > 0) this.events.push({ t: now, type: 'centerCollect', data: { by: p.id, station: 'gold', cash } });
+      }
+      if (near(c.supplyGen)) {
+        const got = collectSupply(p, this.center);
+        if (got.sandbags + got.steel > 0) this.events.push({ t: now, type: 'centerCollect', data: { by: p.id, station: 'supply', ...got } });
+      }
+    }
     if (input.shop && near(isl.shop)) buy(p, input.shop);
     if (input.vault && near(isl.vault) && vaultTransfer(p, input.vault).ok) p.busyUntil = now + ECONOMY.vaultSec;
     if (input.reload) tryReload(p, now);
@@ -348,6 +370,8 @@ export class Match implements MatchApi {
       others: [...this.s.players.values()].filter((o) => o.id !== self.id)
         .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: this.killCount.get(o.id) ?? 0 })),
       map: this.map,
+      center: { island: this.def.center, gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
+      statics: this.def.statics,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),
       sealed: [...this.sealed],
@@ -370,6 +394,8 @@ export class Match implements MatchApi {
       pieces: [...this.s.pieces.values()],
       loot: [...this.s.loot.values()],
       generators: this.s.generators,
+      center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
+      broken: this.cosmetics.broken,
       sealed: this.sealed,
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,

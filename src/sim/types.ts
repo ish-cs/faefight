@@ -89,7 +89,7 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'cosmeticBroken' | 'centerCollect';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 export type Snapshot = {
@@ -99,6 +99,10 @@ export type Snapshot = {
   pieces: PieceState[];
   loot: LootBag[];
   generators: { island: number; stored: number }[];
+  /** Center island bonus stations: cash at the gold generator, free pieces at the supply generator. */
+  center?: { gold: number; bags: number; steel: number };
+  /** Ids of broken cosmetic props (MapDef.cosmetics), in the order they broke. */
+  broken?: number[];
   sealed: boolean[];
   waterY: number;
   suddenDeath: boolean;

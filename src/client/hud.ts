@@ -1,5 +1,5 @@
 import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, LIFECYCLE, MEDKIT, PIECES, WEAPONS } from '../sim/constants';
-import type { IslandLayout } from '../sim/map';
+import type { CenterIsland, IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem } from '../sim/hotbar';
 import type { HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
 import { dist2D } from '../sim/vec';
@@ -14,6 +14,12 @@ const LABEL: Record<string, string> = {
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
   ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit',
 };
+
+function supplyPrompt(c: Snapshot['center']): string {
+  if (!c || c.bags + c.steel === 0) return 'Supplies: restocking…';
+  const parts = [c.bags ? `${c.bags} sandbags` : '', c.steel ? `${c.steel} steel` : ''].filter(Boolean);
+  return `E  Take ${parts.join(' + ')}`;
+}
 
 function priceOf(item: ShopItem): number {
   if ((GUNS as readonly string[]).includes(item)) return WEAPONS[item as WeaponKind].price;
@@ -65,6 +71,7 @@ export type HudActions = {
 export class Hud {
   readonly root = el('div', 'hud');
   private map: IslandLayout[] = [];
+  private centerIsland: CenterIsland | null = null;
   private humanId = 0;
   private me: PlayerState | null = null;
   private snap: Snapshot | null = null;
@@ -120,8 +127,9 @@ export class Hud {
     parent.append(this.root);
   }
 
-  setMap(map: IslandLayout[], humanId: number, humanIsland: number) {
+  setMap(map: IslandLayout[], humanId: number, humanIsland: number, center: CenterIsland | null = null) {
     this.map = map;
+    this.centerIsland = center;
     this.humanId = humanId;
     this.seals.replaceChildren(...map.map((isl) => {
       const chip = el('div', 'seal-chip');
@@ -211,7 +219,7 @@ export class Hud {
   }
 
   /** Prompt/near-station state is computed here from the snapshot so main stays thin. */
-  nearStation(): 'shop' | 'vault' | 'generator' | null {
+  nearStation(): 'shop' | 'vault' | 'generator' | 'gold' | 'supply' | null {
     const me = this.me;
     if (!me || !me.alive) return null;
     const own = this.map[me.island];
@@ -219,6 +227,9 @@ export class Hud {
     if (own && dist2D(own.shop, me.pos) <= r) return 'shop';
     if (own && dist2D(own.vault, me.pos) <= r) return 'vault';
     if (this.map.some((m) => dist2D(m.generator, me.pos) <= r)) return 'generator';
+    const c = this.centerIsland;
+    if (c && dist2D(c.goldGen, me.pos) <= r) return 'gold';
+    if (c && dist2D(c.supplyGen, me.pos) <= r) return 'supply';
     return null;
   }
 
@@ -238,13 +249,17 @@ export class Hud {
     const near = snap.generators
       .map((g) => ({ g, d: dist2D(this.map[g.island].generator, me.pos) }))
       .filter((x) => x.d <= 10).sort((a, b) => a.d - b.d)[0];
-    this.gen.style.display = near ? '' : 'none';
-    if (near) setText(this.gen, `${near.g.island === me.island ? 'Your generator' : `${ISLAND_NAMES[near.g.island % 8]} generator`}  $${Math.floor(near.g.stored)}`);
+    const cg = this.centerIsland && snap.center && dist2D(this.centerIsland.goldGen, me.pos) <= 10 ? snap.center : null;
+    this.gen.style.display = near || cg ? '' : 'none';
+    if (cg && !near) setText(this.gen, `Gold generator  $${Math.floor(cg.gold)}`);
+    else if (near) setText(this.gen, `${near.g.island === me.island ? 'Your generator' : `${ISLAND_NAMES[near.g.island % 8]} generator`}  $${Math.floor(near.g.stored)}`);
 
     const station = this.nearStation();
     const promptText = isPieceItem(me.hotbar[ctx.selected]) ? '' :
       station === 'shop' ? 'E  Shop' : station === 'vault' ? 'E  Vault' :
-      station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` : '';
+      station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` :
+      station === 'gold' ? `E  Collect $${Math.floor(snap.center?.gold ?? 0)}` :
+      station === 'supply' ? supplyPrompt(snap.center) : '';
     setText(this.prompt, promptText);
     this.prompt.style.display = promptText && !this.panelKind ? '' : 'none';
 

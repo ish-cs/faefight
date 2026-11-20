@@ -5,7 +5,7 @@ import { ChatLimiter, cleanChat } from '../net/chat';
 import { Lobby } from '../net/lobby';
 import { SnapshotEncoder } from '../net/snapshotCodec';
 import type { Placement } from '../sim/building';
-import type { IslandLayout } from '../sim/map';
+import { resolveMapChoice, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { Snapshot } from '../sim/types';
 import type { ToWorker } from './protocol';
@@ -14,7 +14,7 @@ const HELLO_TIMEOUT_MS = 10_000;
 const HOST_PEER = 'host';
 
 export type HostEvents = {
-  lobby(slots: Slot[]): void;
+  lobby(slots: Slot[], map: MapChoice): void;
   chat(from: string, text: string): void;
 };
 
@@ -36,6 +36,9 @@ export class HostSession {
   /** Per-peer budgets: build previews (the ghost only re-asks when it moves) and malformed-message warnings. */
   private previewBudget = new Map<string, { windowStart: number; n: number }>();
   private warned = new Map<string, number>();
+  /** Host's map pick ('random' is resolved per match), and the last map played: Random never repeats it. */
+  private mapChoice: MapChoice = 'harbor';
+  private lastMap: MapTemplate | null = null;
 
   private constructor(private room: HostRoom, readonly hostName: string, private ev: HostEvents) {
     this.lobby = new Lobby(hostName, HOST_PEER);
@@ -63,6 +66,20 @@ export class HostSession {
     this.broadcastLobby();
     if (link) { this.send(link, { t: 'ended', reason: 'kicked' }); setTimeout(() => link.close(), 200); }
   }
+  get map(): MapChoice { return this.mapChoice; }
+  get lastPlayedMap(): MapTemplate | null { return this.lastMap; }
+  setMap(choice: MapChoice) {
+    if (this.started) return;
+    this.mapChoice = choice;
+    this.broadcastLobby();
+  }
+  /** The template the next match plays: the choice, or for Random any map but the last one played. */
+  nextMap(rng: () => number = Math.random): MapTemplate {
+    const map = resolveMapChoice(this.mapChoice, this.lastMap, rng);
+    this.lastMap = map;
+    return map;
+  }
+
   canStart() {
     const s = this.lobby.slots();
     return !this.started && s.length >= 2 && s.every((x) => x.kind !== 'open');
@@ -72,9 +89,9 @@ export class HostSession {
     const slots = this.lobby.slots();
     for (const [peerId, link] of this.links) {
       const you = this.lobby.seatOf(peerId);
-      if (you !== null) this.send(link, { t: 'lobby', slots, you });
+      if (you !== null) this.send(link, { t: 'lobby', slots, you, map: this.mapChoice });
     }
-    this.ev.lobby(slots);
+    this.ev.lobby(slots, this.mapChoice);
   }
 
   private send(link: Link, m: HostMsg) {
@@ -176,11 +193,11 @@ export class HostSession {
     if (!this.canStart()) throw new Error('HostSession.start: lobby not ready');
     this.started = true;
     this.worker = worker;
-    return { setup: this.lobby.toMatchSetup(), humanId: 1 };
+    return { setup: { ...this.lobby.toMatchSetup(), map: this.nextMap() }, humanId: 1 };
   }
 
   /** Worker sent the map: tell every remote to start. */
-  onMap(map: IslandLayout[], islands: number[]) {
+  onMap(map: MapDef, islands: number[]) {
     for (const [peerId, link] of this.links) {
       const seat = this.lobby.seatOf(peerId);
       if (seat !== null) this.send(link, { t: 'start', map, playerId: seat + 1, island: islands[seat] ?? seat });

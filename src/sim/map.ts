@@ -1,4 +1,4 @@
-import { MAP } from './constants';
+import { CENTER, MAP } from './constants';
 import type { Vec3 } from './types';
 import { add, forward, right, rotateY, scale, v3, yawOf } from './vec';
 
@@ -17,12 +17,102 @@ export type IslandLayout = {
 };
 export type Box = { center: Vec3; half: Vec3; rotY: number };
 
-export function buildMap(playerCount: number): IslandLayout[] {
+/** Layout templates. `harbor` is the original map; every template has a neutral center island. */
+export type MapTemplate = 'harbor' | 'yard';
+/** What the host picks in the lobby: a template, or a random one per match. */
+export type MapChoice = MapTemplate | 'random';
+export const MAP_TEMPLATES: MapTemplate[] = ['harbor', 'yard'];
+export const MAP_NAMES: Record<MapTemplate, string> = { harbor: 'Harbor', yard: 'Container Yard' };
+export const isMapChoice = (x: unknown): x is MapChoice => x === 'random' || (MAP_TEMPLATES as unknown[]).includes(x);
+export const isMapTemplate = (x: unknown): x is MapTemplate => (MAP_TEMPLATES as unknown[]).includes(x);
+
+/**
+ * Built-in map cover: solid, indestructible boxes (physics `world`, camera blockers, bot obstacles).
+ * `island` = player island index, or -1 for the center island.
+ */
+export type StaticBox = Box & { role: 'cover'; island: number; look: 'container' | 'barrier' };
+
+/** Purely decorative props: breakable (sim-authoritative hp), never collide with players, pieces, seals or support. */
+export type CosmeticKind = 'barrel' | 'crate' | 'fence' | 'palm' | 'lamp' | 'bollard';
+export type CosmeticDef = { id: number; kind: CosmeticKind; pos: Vec3; rotY: number };
+/** Hit shape (vertical cylinder standing on pos) and hit points per cosmetic kind. */
+export const COSMETIC: Record<CosmeticKind, { r: number; h: number; hp: number }> = {
+  barrel: { r: 0.35, h: 0.95, hp: 30 },
+  crate: { r: 0.45, h: 0.8, hp: 40 },
+  fence: { r: 1.0, h: 1.1, hp: 40 },
+  palm: { r: 0.3, h: 7, hp: 80 },
+  lamp: { r: 0.2, h: 5, hp: 60 },
+  bollard: { r: 0.25, h: 0.6, hp: 60 },
+};
+
+/** Neutral island at the middle of the ring: anyone may use its stations. */
+export type CenterIsland = {
+  center: Vec3;
+  radius: number;
+  groundY: number;
+  /** Bonus cash generator (2× rate, high cap, anyone collects). */
+  goldGen: Vec3;
+  /** Accumulates free building pieces; collect by interacting. */
+  supplyGen: Vec3;
+  /** Potion seller NPC (interaction point). */
+  potionShop: Vec3;
+  /** Standing within CENTER.wellRadius of this point refills shield. */
+  shieldWell: Vec3;
+};
+
+export type MapDef = {
+  template: MapTemplate;
+  name: string;
+  seed: number;
+  /** Kill plane (sea) and its sudden-death rise rate (m/s). */
+  waterY: number;
+  tideRate: number;
+  islands: IslandLayout[];
+  center: CenterIsland;
+  statics: StaticBox[];
+  cosmetics: CosmeticDef[];
+};
+
+type TemplateSpec = {
+  radius: number;
+  gap: number;
+  /** Center island radius bounds, and the island→center gap it grows toward. */
+  centerR: [number, number];
+  centerGap: number;
+  /** Smallest island→center gap (the ring grows to keep it; harbor never needs to). */
+  minCenterGap: number;
+};
+const SPEC: Record<MapTemplate, TemplateSpec> = {
+  harbor: { radius: MAP.islandRadius, gap: MAP.gap, centerR: [10, 14], centerGap: 36, minCenterGap: 8 },
+  yard: { radius: 19, gap: 26, centerR: [10, 13], centerGap: 26, minCenterGap: 8 },
+};
+
+/** Pick the template for a match. Random never repeats `last` (the previous map this host played). */
+export function resolveMapChoice(choice: MapChoice, last: MapTemplate | null, rng: () => number = Math.random): MapTemplate {
+  if (choice !== 'random') return choice;
+  const pool = MAP_TEMPLATES.filter((t) => t !== last);
+  return pool[Math.min(pool.length - 1, Math.floor(rng() * pool.length))];
+}
+
+/** Player islands only. `harbor` reproduces the original (pre-MapDef) map exactly. */
+export function buildMap(playerCount: number, template: MapTemplate = 'harbor'): IslandLayout[] {
+  return buildMapDef(playerCount, template).islands;
+}
+
+export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor', seed = 1): MapDef {
   if (playerCount < 2 || playerCount > 8) throw new Error(`buildMap: playerCount must be 2..8, got ${playerCount}`);
-  const r = MAP.islandRadius;
-  const ring = (r + MAP.gap / 2) / Math.sin(Math.PI / playerCount);
+  const spec = SPEC[template];
+  if (!spec) throw new Error(`buildMap: unknown template ${String(template)}`);
+  const r = spec.radius;
   const g = MAP.groundY;
-  const out: IslandLayout[] = [];
+  const base = (r + spec.gap / 2) / Math.sin(Math.PI / playerCount);
+  const ring = Math.max(base, r + spec.centerR[0] + spec.minCenterGap);
+  const centerR = Math.min(spec.centerR[1], Math.max(spec.centerR[0], ring - r - spec.centerGap));
+  const islands: IslandLayout[] = [];
+  const statics: StaticBox[] = [];
+  const cosmetics: CosmeticDef[] = [];
+  const cosmetic = (kind: CosmeticKind, pos: Vec3, rotY: number) => cosmetics.push({ id: cosmetics.length + 1, kind, pos, rotY });
+
   for (let i = 0; i < playerCount; i++) {
     const a = Math.PI + (2 * Math.PI * i) / playerCount;
     const center = v3(Math.cos(a) * ring, 0, Math.sin(a) * ring);
@@ -40,7 +130,7 @@ export function buildMap(playerCount: number): IslandLayout[] {
       const c = add(bunkerCenter, scale(forward(yaw), off));
       return { center: v3(c.x, g, c.z), yaw, width: MAP.bunker.doorWidth };
     });
-    out.push({
+    islands.push({
       index: i,
       center,
       radius: r,
@@ -51,8 +141,67 @@ export function buildMap(playerCount: number): IslandLayout[] {
       vault: at(8, 0),
       shop: at(6, 6),
     });
+
+    // Island-local statics and cosmetics: identical on every island, rotated with it.
+    // Box local X runs along the island's lateral axis, local Z along -forward (toward the bunker).
+    const stat = (fwd: number, side: number, half: Vec3) => {
+      const c = at(fwd, side);
+      statics.push({ center: v3(c.x, g + half.y, c.z), half, rotY: facingYaw, role: 'cover', island: i, look: 'container' });
+    };
+    const cos = (kind: CosmeticKind, fwd: number, side: number, rot = 0) => cosmetic(kind, at(fwd, side), facingYaw + rot);
+    const CH = 2.59 / 2, CL = 6.06 / 2, CW = 2.44 / 2;
+    if (template === 'yard') {
+      // Container cover: a 1-high stack and a 2-high stack (high ground) on the flanks, a 1-high wall at the front.
+      stat(1, -9.5, v3(CW, CH, CL));
+      stat(1, 9.5, v3(CW, 2 * CH, CL));
+      stat(13.5, 0, v3(CL, CH, CW));
+      for (const s of [-1, 1]) {
+        cos('lamp', -4, s * 13);
+        cos('fence', -r + 1.4, s * 6.5);
+        cos('fence', -r + 1.9, s * 8.6, s * 0.25);
+      }
+      cos('barrel', -2, 12.5); cos('barrel', -2.8, 13.1); cos('barrel', -2.2, 13.8);
+      cos('crate', -3, -12.5, 0.2); cos('crate', -3.9, -12.9, -0.1);
+      cos('crate', 9, -4.5, 0.4); cos('barrel', 10, 4.2);
+      for (let k = 0; k < 10; k++) {
+        const t = ((k + 0.5) / 10) * Math.PI * 2;
+        cos('bollard', Math.cos(t) * (r - 0.45), Math.sin(t) * (r - 0.45));
+      }
+    } else {
+      // Harbor: the mooring bollards along the coping, plus a little yard clutter.
+      for (let k = 0; k < 14; k++) {
+        const t = ((k + 0.5) / 14) * Math.PI * 2;
+        cos('bollard', Math.cos(t) * (r - 0.45), Math.sin(t) * (r - 0.45));
+      }
+      for (const s of [-1, 1]) { cos('palm', -14, s * 11, s); cos('lamp', 3, s * 15); }
+      cos('barrel', -4, 10); cos('barrel', -4.7, 10.6); cos('barrel', -3.9, 10.9);
+      cos('crate', -3, -11, 0.3); cos('crate', -3.8, -11.5, -0.2);
+      cos('fence', -r + 1.4, 8); cos('fence', -r + 1.4, -8);
+    }
   }
-  return out;
+
+  // Center island: shield well in the middle, three stations around it, low concrete barriers between them.
+  const polar = (rad: number, deg: number, y = g) => v3(Math.cos((deg * Math.PI) / 180) * rad, y, Math.sin((deg * Math.PI) / 180) * rad);
+  const center: CenterIsland = {
+    center: v3(0, 0, 0), radius: centerR, groundY: g,
+    shieldWell: v3(0, g, 0),
+    goldGen: polar(CENTER.stationRadius, 90),
+    supplyGen: polar(CENTER.stationRadius, 210),
+    potionShop: polar(CENTER.stationRadius, 330),
+  };
+  for (const deg of [30, 150, 270]) {
+    // Long side (local X) tangential, so the barrier faces the middle.
+    statics.push({ center: polar(7.3, deg, g + 0.55), half: v3(1.1, 0.55, 0.32), rotY: -(deg * Math.PI) / 180 + Math.PI / 2, role: 'cover', island: -1, look: 'barrier' });
+  }
+  for (const deg of [60, 180, 300]) cosmetic('lamp', polar(centerR - 1.2, deg), 0);
+  for (const [rad, deg, kind] of [[8.2, 112, 'barrel'], [8.5, 120, 'barrel'], [8.2, 240, 'crate'], [8.6, 0, 'crate']] as const)
+    cosmetic(kind, polar(rad, deg), (deg * Math.PI) / 180);
+
+  return {
+    template, name: MAP_NAMES[template], seed,
+    waterY: MAP.waterY, tideRate: MAP.tideRate,
+    islands, center, statics, cosmetics,
+  };
 }
 
 /** Static, indestructible concrete boxes that make up a bunker (walls with door gaps, lintels, roof). */

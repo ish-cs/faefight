@@ -56,7 +56,7 @@ async function start(setup: MatchSetup, localId: number) {
   const me = snap0.players.find((p) => p.id === humanId);
   if (!me) throw new Error(`worker: human ${humanId} missing from snapshot`);
   const islands = setup.players.map((_, i) => snap0.players.find((p) => p.id === i + 1)?.island ?? i);
-  post({ type: 'map', map: m.map, humanId, humanIsland: me.island, islands });
+  post({ type: 'map', map: m.def, humanId, humanIsland: me.island, islands });
   startLoop();
 }
 

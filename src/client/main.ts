@@ -7,7 +7,7 @@ import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import { snapPlacement, type Placement } from '../sim/building';
 import { PLAYER, TICK_HZ } from '../sim/constants';
-import type { IslandLayout } from '../sim/map';
+import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { BuildRequest, Difficulty, Inventory, PlayerInput, Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
@@ -20,7 +20,7 @@ import { ChatUi } from './chatUi';
 import { Hud } from './hud';
 import { InputAccumulator } from './inputAccum';
 import { InputController } from './input';
-import { LobbyUi } from './lobbyUi';
+import { LobbyUi, mapSelect } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
 import { Renderer } from './render';
 import { HostSession, JoinError, joinRoom } from './session';
@@ -32,6 +32,9 @@ const GHOST_AHEAD = 3;
 const AIM_RANGE = 120;
 const NAME_KEY = 'faefight.name';
 const NAME_MAX = 16;
+const MAP_KEY = 'faefight.map';
+/** Last map played vs bots this page session: Random never repeats it. */
+let lastBotMap: MapTemplate | null = null;
 /** Created at load so M-mute works from the menu; the AudioContext itself starts on the first click/key. */
 const audio = new AudioSystem();
 
@@ -66,7 +69,7 @@ function sensitivityControl(input: { sensitivity: number; setSensitivity(v: numb
 // ---------------------------------------------------------------------------------------------
 
 type GameSink = {
-  map(map: IslandLayout[], humanId: number, island: number): void;
+  map(def: MapDef, humanId: number, island: number): void;
   snapshot(snap: Snapshot): void;
   preview(result: Placement, key: number): void;
   chat(from: string, text: string): void;
@@ -171,8 +174,13 @@ function showMenu() {
   const status = document.createElement('div');
   status.className = 'loading';
   status.dataset.testid = 'menu-status';
-  const lockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach((x) => (x.disabled = true));
-  const unlockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach((x) => (x.disabled = false));
+  const lockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach((x) => (x.disabled = true));
+  const unlockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach((x) => (x.disabled = false));
+  const mapSel = mapSelect(storedMapChoice(), (c) => localStorage.setItem(MAP_KEY, c));
+  mapSel.dataset.testid = 'menu-map';
+  const mapRow = document.createElement('label');
+  mapRow.className = 'map-row';
+  mapRow.append('Map', mapSel);
   for (const d of ['easy', 'medium', 'hard'] as Difficulty[]) {
     const b = document.createElement('button');
     b.className = `btn${d === 'medium' ? ' primary' : ''}`;
@@ -180,9 +188,11 @@ function showMenu() {
     b.dataset.testid = `play-${d}`;
     b.onclick = () => {
       lockMenu();
-      status.textContent = 'Loading…';
+      const map = resolveMapChoice(mapSel.value as MapChoice, lastBotMap);
+      lastBotMap = map;
+      status.textContent = `Loading ${MAP_NAMES[map]}…`;
       const backend = workerBackend(() => ({
-        setup: { players: [{ name: 'You', isBot: false }, { name: `Bot (${d})`, isBot: true, difficulty: d }] },
+        setup: { players: [{ name: 'You', isBot: false }, { name: `Bot (${d})`, isBot: true, difficulty: d }], map },
         humanId: 1,
       }), null);
       startGame(backend, menu).catch((err) => {
@@ -263,9 +273,14 @@ function showMenu() {
   const keys = document.createElement('div');
   keys.className = 'keys';
   keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire / place / throw · R reload · E interact · Enter chat · V first person · M mute<br>1–9 or wheel pick hotbar slot · Q drop (Ctrl/Shift+Q stack) · Tab drag to reorder · Z/X rotate piece · Alt free-place';
-  card.append(play, online, status, sensitivityControl(null, stored), volumeControl(audio), keys);
+  card.append(mapRow, play, online, status, sensitivityControl(null, stored), volumeControl(audio), keys);
   menu.append(card);
   app.append(menu);
+}
+
+function storedMapChoice(): MapChoice {
+  const v = localStorage.getItem(MAP_KEY);
+  return v === 'random' || (MAP_TEMPLATES as string[]).includes(v ?? '') ? (v as MapChoice) : 'harbor';
 }
 
 function showJoinError(menu: HTMLElement, message: string) {
@@ -277,7 +292,7 @@ function showJoinError(menu: HTMLElement, message: string) {
 async function hostLobby(name: string, menu: HTMLElement) {
   let ui: LobbyUi | null = null;
   const session = await HostSession.create(pickTransport(location.search), name, {
-    lobby: (slots) => ui?.render(slots, 0),
+    lobby: (slots, map) => ui?.render(slots, 0, map),
     chat: (from, text) => chat?.add(from, text),
   });
   let chat: ChatUi | null = null;
@@ -287,6 +302,7 @@ async function hostLobby(name: string, menu: HTMLElement) {
     addSeat: () => session.addSeat(),
     removeSeat: (i) => session.removeSeat(i),
     kick: (i) => session.kick(i),
+    setMap: (c) => { session.setMap(c); localStorage.setItem(MAP_KEY, c); },
     start: () => {
       const backend = workerBackend((w) => session.start(w), session);
       const lobbyRoot = ui!.root;
@@ -297,7 +313,7 @@ async function hostLobby(name: string, menu: HTMLElement) {
     },
     back: () => location.reload(),
   }, () => location.reload());
-  ui.render(session.lobby.slots(), 0);
+  session.setMap(storedMapChoice());
   console.info(`[host] room ${session.code} open`);
 }
 
@@ -305,7 +321,7 @@ async function joinLobby(code: string, name: string, menu: HTMLElement) {
   const { link, lobby } = await joinRoom(pickTransport(location.search), code, name);
   menu.remove();
   const ui = new LobbyUi(app, code, null, () => { link.close(); location.reload(); });
-  ui.render(lobby.slots, lobby.you);
+  ui.render(lobby.slots, lobby.you, lobby.map);
   let phase: 'lobby' | 'starting' | 'game' = 'lobby';
   const early: HostMsg[] = [];
   link.onClose(() => { if (phase === 'lobby') ui.error('The host closed the lobby.'); });
@@ -313,9 +329,10 @@ async function joinLobby(code: string, name: string, menu: HTMLElement) {
     const m = raw as HostMsg;
     if (phase === 'game') return; // the game's backend handles messages from here on
     if (phase === 'starting') { early.push(m); return; }
-    if (m.t === 'lobby') ui.render(m.slots, m.you);
+    if (m.t === 'lobby') ui.render(m.slots, m.you, m.map);
+    else if (m.t === 'start') ui.loading(m.map.name);
     else if (m.t === 'ended') { phase = 'game'; ui.error(m.reason === 'host-left' ? 'The host closed the lobby.' : `Removed from lobby (${m.reason}).`); }
-    else if (m.t === 'start') {
+    if (m.t === 'start') {
       phase = 'starting';
       const backend = remoteBackend(link, m, early);
       startGame(backend, ui.root).then(() => { phase = 'game'; }, (err) => {
@@ -341,6 +358,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   const fpv = new FirstPersonView(renderer, () => input.enabled);
 
   let map: IslandLayout[] = [];
+  let mapDef: MapDef | null = null;
   let humanId = 0;
   let snap: Snapshot | null = null;
   let preview: { key: string; result: Placement } | null = null;
@@ -510,11 +528,14 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   };
 
   backend.connect({
-    map: (m, id, island) => {
-      map = m;
+    map: (def, id, island) => {
+      mapDef = def;
+      map = def.islands;
       humanId = id;
-      renderer.setMap(map, humanId);
-      hud.setMap(map, humanId, island);
+      console.info(`[main] map: ${def.name} (${def.template}, ${map.length} islands)`);
+      menu.querySelectorAll('[data-testid="menu-status"], .lobby-status').forEach((e) => { e.textContent = `Loading ${def.name}…`; });
+      renderer.setMap(def, humanId);
+      hud.setMap(map, humanId, island, def.center);
       audio.setMap(map, humanId);
     },
     snapshot: (s) => { if (buffer) buffer.push(s); else applySnapshot(s); },
@@ -533,6 +554,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       ...(backend.debug ?? {}),
       snapshot: () => snap,
       map: () => map,
+      mapDef: () => mapDef,
       humanId: () => humanId,
       renderInfo: () => renderer.info(),
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),

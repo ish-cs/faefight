@@ -1,6 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { PIECES, PLAYER } from './constants';
-import { bunkerWallBoxes, type IslandLayout } from './map';
+import { bunkerWallBoxes, type IslandLayout, type MapDef } from './map';
 import type { PieceState, Vec3 } from './types';
 import { v3 } from './vec';
 
@@ -16,6 +16,11 @@ const quatY = (r: number) => ({ x: 0, y: Math.sin(r / 2), z: 0, w: Math.cos(r / 
 
 /** Station props (generator, vault, shop NPC) as solid boxes: half extents. */
 export const PROP_HALF = { generator: v3(0.6, 0.7, 0.6), vault: v3(0.6, 1.0, 0.5), shop: v3(0.3, 0.9, 0.3) };
+/** Center island stations as solid boxes (the shield well is a flat pad: no collider). */
+export const CENTER_PROP_HALF = { goldGen: v3(0.6, 0.7, 0.6), supplyGen: v3(0.7, 0.6, 0.7), potionShop: v3(0.3, 0.9, 0.3) };
+
+/** Center stations face the island middle. */
+export const centerPropYaw = (p: { x: number; z: number }) => Math.atan2(p.x, p.z);
 
 export class Physics {
   private world: RAPIER.World;
@@ -34,13 +39,30 @@ export class Physics {
     this.cc.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
   }
 
-  static async create(map: IslandLayout[]): Promise<Physics> {
+  /** A full map, or (tests) bare player islands with no center island or cover. */
+  static async create(mapOrIslands: MapDef | IslandLayout[]): Promise<Physics> {
     await ensureInit();
+    const def: Pick<MapDef, 'islands' | 'statics'> & { center: MapDef['center'] | null } = Array.isArray(mapOrIslands)
+      ? { islands: mapOrIslands, statics: [], center: null }
+      : mapOrIslands;
     const ph = new Physics();
-    for (const isl of map) {
-      const desc = RAPIER.ColliderDesc.cylinder(ISLAND_DEPTH / 2, isl.radius)
-        .setTranslation(isl.center.x, isl.groundY - ISLAND_DEPTH / 2, isl.center.z);
+    const disc = (center: Vec3, radius: number, groundY: number) => {
+      const desc = RAPIER.ColliderDesc.cylinder(ISLAND_DEPTH / 2, radius)
+        .setTranslation(center.x, groundY - ISLAND_DEPTH / 2, center.z);
       ph.track(ph.world.createCollider(desc), { type: 'world' });
+    };
+    const c = def.center;
+    if (c) {
+      disc(c.center, c.radius, c.groundY);
+      for (const key of ['goldGen', 'supplyGen', 'potionShop'] as const) {
+        const p = c[key], h = CENTER_PROP_HALF[key];
+        ph.addStaticBox(v3(p.x, p.y + h.y, p.z), h, centerPropYaw(p));
+      }
+    }
+    // Built-in cover: solid and indestructible (a `world` hit, like the islands and bunkers).
+    for (const b of def.statics) ph.addStaticBox(b.center, b.half, b.rotY);
+    for (const isl of def.islands) {
+      disc(isl.center, isl.radius, isl.groundY);
       for (const b of bunkerWallBoxes(isl.bunker)) ph.addStaticBox(b.center, b.half, b.rotY);
       for (const key of ['generator', 'vault', 'shop'] as const) {
         const p = isl[key], h = PROP_HALF[key];

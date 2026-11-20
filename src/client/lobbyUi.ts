@@ -1,6 +1,7 @@
 import type { Slot } from '../net/protocol';
 import { MAX_PLAYERS } from '../net/protocol';
 import type { Difficulty } from '../sim/types';
+import { MAP_NAMES, MAP_TEMPLATES, type MapChoice } from '../sim/map';
 import { ISLAND_COLORS, ISLAND_NAMES } from './render';
 
 export type LobbyActions = {
@@ -8,6 +9,7 @@ export type LobbyActions = {
   addSeat(): void;
   removeSeat(i: number): void;
   kick(i: number): void;
+  setMap(choice: MapChoice): void;
   start(): void;
   back(): void;
 };
@@ -15,6 +17,22 @@ export type LobbyActions = {
 const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
 const DIFFS: Difficulty[] = ['easy', 'medium', 'hard'];
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
+
+const choiceName = (c: MapChoice) => (c === 'random' ? 'Random' : MAP_NAMES[c]);
+
+/** Map dropdown: every template, plus Random (a different map than last time, each match). */
+export function mapSelect(value: MapChoice, onChange: (c: MapChoice) => void): HTMLSelectElement {
+  const sel = document.createElement('select');
+  sel.className = 'seat-select map-select';
+  for (const [v, label] of [...MAP_TEMPLATES.map((t) => [t, MAP_NAMES[t]]), ['random', 'Random']]) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = label;
+    sel.append(o);
+  }
+  sel.value = value;
+  sel.onchange = () => onChange(sel.value as MapChoice);
+  return sel;
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -34,6 +52,9 @@ export class LobbyUi {
   private footer = el('div', 'lobby-footer');
   private status = el('div', 'lobby-status');
   private startBtn: HTMLButtonElement | null = null;
+  private mapRow = el('div', 'lobby-map');
+  private mapSel: HTMLSelectElement | null = null;
+  private mapText = el('span', 'lobby-map-name');
 
   constructor(parent: HTMLElement, code: string, private actions: LobbyActions | null, back: () => void) {
     const title = el('div', 'label', 'Invite code');
@@ -62,13 +83,24 @@ export class LobbyUi {
       this.status.textContent = 'Waiting for host…';
       this.footer.append(backBtn);
     }
-    this.card.append(el('h1', '', 'Lobby'), title, codeRow, hint, this.list, this.status, this.footer);
+    this.mapRow.append(el('span', 'label', 'Map'));
+    if (actions) {
+      this.mapSel = mapSelect('harbor', (c) => actions.setMap(c));
+      this.mapSel.dataset.testid = 'lobby-map';
+      this.mapRow.append(this.mapSel);
+    } else {
+      this.mapText.dataset.testid = 'lobby-map-name';
+      this.mapRow.append(this.mapText);
+    }
+    this.card.append(el('h1', '', 'Lobby'), title, codeRow, hint, this.mapRow, this.list, this.status, this.footer);
     this.root.append(this.card);
     parent.append(this.root);
   }
 
-  render(slots: Slot[], you: number) {
+  render(slots: Slot[], you: number, map: MapChoice = 'harbor') {
     const a = this.actions;
+    if (this.mapSel) this.mapSel.value = map;
+    this.mapText.textContent = choiceName(map);
     this.list.replaceChildren(...slots.map((s, i) => {
       const row = el('div', 'seat');
       row.dataset.testid = `seat-${i}`;
@@ -118,6 +150,14 @@ export class LobbyUi {
       this.startBtn.disabled = slots.length < 2 || open > 0;
       this.status.textContent = open > 0 ? `${open} open seat${open > 1 ? 's' : ''} — wait for friends or fill with bots` : `${slots.length} players ready`;
     }
+  }
+
+  /** The host started: show which map is loading. */
+  loading(mapName: string) {
+    this.status.textContent = `Loading ${mapName}…`;
+    this.status.dataset.testid = 'lobby-loading';
+    if (this.mapSel) this.mapSel.disabled = true;
+    this.mapText.textContent = mapName;
   }
 
   /** Replace the lobby with an error and a Back button. */
