@@ -294,3 +294,167 @@ export function islandTopTex(R: number) {
     speckle(g, w, h, 20);
   }));
 }
+
+/** Island-local footprint of a built-in cover box (container bay markings on the yard top). */
+export type Footprint = { x: number; z: number; hx: number; hz: number };
+
+/**
+ * Container Yard island top (same frame as islandTopTex: canvas x = local X, canvas y = local Z, ±R):
+ * patched asphalt, a concrete coping band, painted lanes, yellow container bays under the cover stacks.
+ */
+export function yardTopTex(R: number, bays: Footprint[]) {
+  const key = `yardTop:${R}:${bays.map((b) => `${b.x.toFixed(1)},${b.z.toFixed(1)}`).join(';')}`;
+  return cached(key, () => canvasTex(2048, 2048, (g, w, h) => {
+    const r = makeRng(9001);
+    const s = w / (2 * R);
+    const P = (m: number) => (m + R) * s;
+    g.fillStyle = '#6c6a64'; g.fillRect(0, 0, w, h);
+    blotches(g, w, h, 300, '40,40,38', 20, 160, 0.18);
+    blotches(g, w, h, 120, '150,146,136', 20, 120, 0.12);
+    // resurfaced asphalt patches (rectangular, slightly darker or lighter, crisp edges)
+    for (let i = 0; i < 9; i++) {
+      const x = r.rr(-R * 0.7, R * 0.7), z = r.rr(-R * 0.7, R * 0.7), pw = r.rr(2, 6), ph = r.rr(2, 5);
+      g.fillStyle = `rgba(${r.rnd() < 0.5 ? '44,44,42' : '120,116,108'},${r.rr(0.25, 0.45)})`;
+      g.fillRect(P(x), P(z), pw * s, ph * s);
+    }
+    // expansion joints every 6 m
+    g.strokeStyle = 'rgba(30,30,28,0.35)'; g.lineWidth = 2;
+    for (let m = -R; m <= R; m += 6) {
+      g.beginPath(); g.moveTo(P(m), 0); g.lineTo(P(m), h); g.stroke();
+      g.beginPath(); g.moveTo(0, P(m)); g.lineTo(w, P(m)); g.stroke();
+    }
+    // lane lines: dashed white along local Z, solid edge lines
+    g.strokeStyle = 'rgba(236,234,226,0.82)'; g.lineWidth = 0.14 * s;
+    g.setLineDash([2.2 * s, 1.6 * s]);
+    for (const x of [-5.2, 5.2]) { g.beginPath(); g.moveTo(P(x), P(-R + 2)); g.lineTo(P(x), P(R - 9)); g.stroke(); }
+    g.setLineDash([]);
+    g.strokeStyle = 'rgba(236,234,226,0.6)'; g.lineWidth = 0.1 * s;
+    for (const x of [-12.5, 12.5]) { g.beginPath(); g.moveTo(P(x), P(-R + 6)); g.lineTo(P(x), P(R - 6)); g.stroke(); }
+    // painted direction arrows in the lanes
+    g.fillStyle = 'rgba(236,234,226,0.8)';
+    for (const [x, z, dir] of [[-8.6, -6, -1], [8.6, -6, 1], [-8.6, 6, -1], [8.6, 6, 1], [0, -4, -1]] as const) {
+      g.save(); g.translate(P(x), P(z)); g.scale(s, s * dir);
+      g.beginPath(); g.moveTo(-0.2, 1.4); g.lineTo(-0.2, -0.2); g.lineTo(-0.55, -0.2); g.lineTo(0, -1.1); g.lineTo(0.55, -0.2); g.lineTo(0.2, -0.2); g.lineTo(0.2, 1.4); g.closePath(); g.fill();
+      g.restore();
+    }
+    // zebra crossing across the front lane
+    g.fillStyle = 'rgba(236,234,226,0.7)';
+    for (let k = -4; k <= 4; k++) g.fillRect(P(k * 1.1 - 0.3), P(-11.5), 0.6 * s, 2.2 * s);
+    // container bays: yellow outlines + corner ticks + stencilled numbers
+    bays.forEach((b, i) => {
+      const pad = 0.35;
+      g.strokeStyle = 'rgba(232,184,28,0.9)'; g.lineWidth = 0.16 * s;
+      g.strokeRect(P(b.x - b.hx - pad), P(b.z - b.hz - pad), (b.hx + pad) * 2 * s, (b.hz + pad) * 2 * s);
+      g.lineWidth = 0.3 * s;
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const cx = P(b.x + sx * (b.hx + pad)), cz = P(b.z + sz * (b.hz + pad));
+        g.beginPath(); g.moveTo(cx - sx * 0.9 * s, cz); g.lineTo(cx, cz); g.lineTo(cx, cz - sz * 0.9 * s); g.stroke();
+      }
+      g.fillStyle = 'rgba(232,184,28,0.85)';
+      g.font = `bold ${Math.round(0.9 * s)}px "Helvetica Neue", Arial, sans-serif`;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      const tz = b.hz > b.hx ? b.z - b.hz - pad - 0.9 : b.z + b.hz + pad + 0.8;
+      g.fillText(`B${String(i + 1).padStart(2, '0')}`, P(b.x), P(tz));
+    });
+    // hatched no-build zone in front of the bunker door (+Z side), as on the harbor top
+    g.save(); g.translate(P(0), P(R - 7 - 2.3 - 1.4)); g.beginPath(); g.rect(-1.1 * s, -1 * s, 2.2 * s, 2 * s); g.clip();
+    g.strokeStyle = 'rgba(232,184,28,0.75)'; g.lineWidth = 0.18 * s;
+    for (let k = -4; k <= 4; k++) { g.beginPath(); g.moveTo(k * 0.6 * s - 2 * s, -2 * s); g.lineTo(k * 0.6 * s + 2 * s, 2 * s); g.stroke(); }
+    g.restore();
+    // oil stains + tyre marks
+    blotches(g, w, h, 50, '24,24,22', 10, 60, 0.28);
+    g.strokeStyle = 'rgba(28,28,26,0.1)'; g.lineWidth = 9;
+    for (let i = 0; i < 10; i++) {
+      g.beginPath(); const x = P(r.rr(-14, 14)), y = P(r.rr(-14, 10));
+      g.moveTo(x, y); g.bezierCurveTo(x + r.rr(-200, 200), y + r.rr(-200, 200), x + r.rr(-300, 300), y + r.rr(-300, 300), x + r.rr(-400, 400), y + r.rr(-400, 400)); g.stroke();
+    }
+    // drain grates
+    for (const [x, z] of [[-5.2, -14], [5.2, -14], [0, 2], [-12, -2], [12, -2]]) {
+      g.fillStyle = '#2e2e2c'; g.fillRect(P(x) - 26, P(z) - 14, 52, 28);
+      g.fillStyle = '#151515'; for (let k = -22; k < 24; k += 6) g.fillRect(P(x) + k, P(z) - 11, 3, 22);
+    }
+    // concrete coping band + yellow safety line around the rim
+    const cx = w / 2;
+    g.strokeStyle = '#b9b2a4'; g.lineWidth = 1.1 * s;
+    g.beginPath(); g.arc(cx, cx, (R - 0.55) * s, 0, 7); g.stroke();
+    g.strokeStyle = 'rgba(40,38,34,0.6)'; g.lineWidth = 2;
+    g.beginPath(); g.arc(cx, cx, (R - 1.1) * s, 0, 7); g.stroke();
+    g.strokeStyle = '#e8b81c'; g.lineWidth = 0.17 * s;
+    g.beginPath(); g.arc(cx, cx, (R - 1.45) * s, 0, 7); g.stroke();
+    speckle(g, w, h, 22);
+  }));
+}
+
+/**
+ * Center island top in world XZ (canvas x = X, canvas y = Z, ±R; the mesh is not rotated).
+ * Harbor: radial concrete paving; yard: asphalt with a painted roundabout. Both mark the shield well
+ * and a hatched pad under each station.
+ */
+export function centerTopTex(R: number, template: 'harbor' | 'yard', stations: { x: number; z: number }[], wellR: number) {
+  return cached(`centerTop:${template}:${R}`, () => canvasTex(1024, 1024, (g, w, h) => {
+    const r = makeRng(777);
+    const s = w / (2 * R);
+    const P = (m: number) => (m + R) * s;
+    const cx = w / 2;
+    const yard = template === 'yard';
+    g.fillStyle = yard ? '#6c6a64' : '#aaa395'; g.fillRect(0, 0, w, h);
+    blotches(g, w, h, 160, yard ? '40,40,38' : '86,80,68', 10, 80, 0.16);
+    blotches(g, w, h, 60, yard ? '150,146,136' : '236,232,220', 10, 60, 0.12);
+    if (yard) {
+      g.strokeStyle = 'rgba(30,30,28,0.35)'; g.lineWidth = 2;
+      for (let m = -R; m <= R; m += 6) {
+        g.beginPath(); g.moveTo(P(m), 0); g.lineTo(P(m), h); g.stroke();
+        g.beginPath(); g.moveTo(0, P(m)); g.lineTo(w, P(m)); g.stroke();
+      }
+      // roundabout lane around the well
+      g.strokeStyle = 'rgba(236,234,226,0.75)'; g.lineWidth = 0.14 * s;
+      g.setLineDash([1.6 * s, 1.2 * s]);
+      g.beginPath(); g.arc(cx, cx, 7.3 * s, 0, 7); g.stroke();
+      g.setLineDash([]);
+    } else {
+      // radial paving: rings + spokes
+      g.strokeStyle = 'rgba(70,64,55,0.35)'; g.lineWidth = 1.5;
+      for (let k = 1; k * 2.2 < R; k++) { g.beginPath(); g.arc(cx, cx, k * 2.2 * s, 0, 7); g.stroke(); }
+      for (let k = 0; k < 24; k++) {
+        const a = (k / 24) * Math.PI * 2;
+        g.beginPath(); g.moveTo(cx + Math.cos(a) * 2.2 * s, cx + Math.sin(a) * 2.2 * s); g.lineTo(cx + Math.cos(a) * R * s, cx + Math.sin(a) * R * s); g.stroke();
+      }
+    }
+    // shield well: dark disc with cyan rings (the glowing ring itself is geometry)
+    g.fillStyle = yard ? '#3a3d40' : '#5d6266'; g.beginPath(); g.arc(cx, cx, (wellR + 0.45) * s, 0, 7); g.fill();
+    g.strokeStyle = 'rgba(110,220,255,0.75)'; g.lineWidth = 0.12 * s;
+    for (const k of [wellR + 0.3, wellR + 0.95]) { g.beginPath(); g.arc(cx, cx, k * s, 0, 7); g.stroke(); }
+    g.setLineDash([0.5 * s, 0.4 * s]);
+    g.beginPath(); g.arc(cx, cx, (wellR + 1.5) * s, 0, 7); g.stroke();
+    g.setLineDash([]);
+    // station pads: hatched yellow squares
+    for (const st of stations) {
+      g.save(); g.translate(P(st.x), P(st.z)); g.rotate(Math.atan2(st.z, st.x));
+      g.beginPath(); g.rect(-1.1 * s, -1.1 * s, 2.2 * s, 2.2 * s); g.save(); g.clip();
+      g.strokeStyle = 'rgba(214,170,40,0.32)'; g.lineWidth = 0.14 * s;
+      for (let k = -6; k <= 6; k++) { g.beginPath(); g.moveTo(k * 0.5 * s - 2 * s, -2 * s); g.lineTo(k * 0.5 * s + 2 * s, 2 * s); g.stroke(); }
+      g.restore();
+      g.strokeStyle = 'rgba(224,178,36,0.75)'; g.lineWidth = 0.1 * s; g.strokeRect(-1.1 * s, -1.1 * s, 2.2 * s, 2.2 * s);
+      g.restore();
+    }
+    blotches(g, w, h, 20, '30,28,26', 8, 30, 0.2);
+    for (let i = 0; i < 4; i++) {
+      g.strokeStyle = 'rgba(28,28,26,0.08)'; g.lineWidth = 6;
+      g.beginPath(); const a = r.rr(0, 6), rr0 = r.rr(3, R - 2);
+      g.arc(cx, cx, rr0 * s, a, a + r.rr(0.5, 2)); g.stroke();
+    }
+    // coping band + yellow safety line
+    g.strokeStyle = yard ? '#b9b2a4' : '#c9c2b4'; g.lineWidth = 0.55 * s;
+    g.beginPath(); g.arc(cx, cx, (R - 0.28) * s, 0, 7); g.stroke();
+    g.strokeStyle = '#e8b81c'; g.lineWidth = 0.17 * s;
+    g.beginPath(); g.arc(cx, cx, (R - 0.95) * s, 0, 7); g.stroke();
+    speckle(g, w, h, 20);
+  }));
+}
+
+/** Chain-link mesh (alpha-tested), one tile ≈ 0.5 m. */
+export const chainTex = () => cached('chain', () => canvasTex(64, 64, (g, w, h) => {
+  g.clearRect(0, 0, w, h);
+  g.strokeStyle = '#d8dcdf'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(0, 0); g.lineTo(w, h); g.moveTo(w, 0); g.lineTo(0, h); g.stroke();
+}));

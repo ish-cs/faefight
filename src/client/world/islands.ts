@@ -1,15 +1,18 @@
 import * as THREE from 'three/webgpu';
 import { float, positionWorld, texture, uv, vec3 } from 'three/tsl';
-import { bunkerWallBoxes, type IslandLayout } from '../../sim/map';
+import { bunkerWallBoxes, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
+import { buildCenter } from './center';
 import { boxUV, mat, StaticBatch } from './geo';
-import { mats } from './materials';
+import { barrierProp, containerCover, containerLite, reefer, rtg } from './mapProps';
+import { CONTAINER_COLORS, mats } from './materials';
 import { bollard, container, containerStack, crane, drums, generatorProp, lightMast, pallet, palm, shopProp, vaultProp, warehouse } from './props';
-import { grainTex, islandTopTex, makeRng } from './textures';
+import { type Footprint, grainTex, islandTopTex, makeRng, yardTopTex } from './textures';
 
 const UNLIT_BOOST = 2.6;
 const QUAY_DEPTH = 14; // how far the quay walls go below y=0 (never visible past the water)
 const CHANNEL = 14; // water between the playable disc and the off-island backdrop quay
+const TYRE = new THREE.TorusGeometry(0.34, 0.13, 8, 14);
 
 function labelSprite(text: string, bg: string): THREE.Sprite {
   const c = document.createElement('canvas');
@@ -46,12 +49,24 @@ function seawallMaterial(topY: number) {
 
 export type IslandsOut = { collidables: THREE.Object3D[]; root: THREE.Group };
 
-export function buildIslands(map: IslandLayout[], teamColors: number[]): IslandsOut {
+/** Island-local XZ footprints of island 0's built-in cover (identical on every island). */
+function coverBays(isl: IslandLayout, statics: StaticBox[]): Footprint[] {
+  const yaw = isl.bunker.facingYaw, c = Math.cos(yaw), s = Math.sin(yaw);
+  return statics.filter((b) => b.island === isl.index).map((b) => {
+    const dx = b.center.x - isl.center.x, dz = b.center.z - isl.center.z;
+    // inverse of rotation.y = yaw
+    return { x: dx * c - dz * s, z: dx * s + dz * c, hx: b.half.x, hz: b.half.z };
+  });
+}
+
+export function buildIslands(def: MapDef, teamColors: number[]): IslandsOut {
+  const map = def.islands;
+  const yard = def.template === 'yard';
   const root = new THREE.Group();
   root.name = 'islands';
   const collidables: THREE.Object3D[] = [];
   const dress = new StaticBatch(); // non-colliding decoration
-  const solid = new StaticBatch(); // bunker walls: match sim colliders exactly
+  const solid = new StaticBatch(); // bunker walls + barriers: match sim colliders exactly
   const M = mats();
   const n = map.length;
   const R = map[0].radius;
@@ -61,7 +76,8 @@ export function buildIslands(map: IslandLayout[], teamColors: number[]): Islands
   const topMat = new THREE.MeshStandardNodeMaterial({ roughness: 0.93 });
   topMat.name = 'islandTop';
   const grain = texture(grainTex(), positionWorld.xz.mul(0.35)).r;
-  topMat.colorNode = texture(islandTopTex(R), uv()).rgb.mul(grain.mul(0.5).add(0.75));
+  const topTex = yard ? yardTopTex(R, coverBays(map[0], def.statics)) : islandTopTex(R);
+  topMat.colorNode = texture(topTex, uv()).rgb.mul(grain.mul(0.5).add(0.75));
   topMat.roughnessNode = float(0.95).sub(grain.mul(0.1));
   const wallMat = seawallMaterial(groundY);
   const wallGeo = new THREE.CylinderGeometry(R, R, groundY + QUAY_DEPTH, 128, 1, true);
@@ -88,15 +104,14 @@ export function buildIslands(map: IslandLayout[], teamColors: number[]): Islands
     root.add(top, wall);
     collidables.push(top, wall);
 
-    // fenders hang on the outside of the wall (outside the disc); low mooring bollards on the coping
+    // fenders hang on the outside of the wall (outside the disc): rubber blocks (harbor) or tyres (yard).
+    // The mooring bollards on the coping are breakable cosmetics now (cosmetics.ts).
     const fenders = Math.round((2 * Math.PI * R) / 6);
     for (let k = 0; k < fenders; k++) {
       const a = (k / fenders) * Math.PI * 2;
-      dress.add(M.rubber, new THREE.BoxGeometry(0.4, 1.3, 0.26), L.clone().multiply(mat(Math.sin(a) * (R + 0.12), groundY - 0.85, Math.cos(a) * (R + 0.12), 0, a, 0)), 0xffffff, true);
-    }
-    for (let k = 0; k < 14; k++) {
-      const a = ((k + 0.5) / 14) * Math.PI * 2;
-      bollard(dress, L.clone().multiply(mat(Math.sin(a) * (R - 0.45), groundY, Math.cos(a) * (R - 0.45))));
+      const m = L.clone().multiply(mat(Math.sin(a) * (R + 0.12), groundY - 0.85, Math.cos(a) * (R + 0.12), 0, a, 0));
+      if (yard) dress.add(M.rubber, TYRE, m.multiply(mat(0, 0, 0.06)), 0xffffff, true);
+      else dress.add(M.rubber, new THREE.BoxGeometry(0.4, 1.3, 0.26), m, 0xffffff, true);
     }
 
     // --- bunker: concrete boxes identical to bunkerWallBoxes
@@ -142,9 +157,30 @@ export function buildIslands(map: IslandLayout[], teamColors: number[]): Islands
       root.add(s);
     }
 
-    buildBackdrop(dress, L, rng, isl, n, R, groundY);
+    if (yard) buildYardBackdrop(dress, L, rng, isl, n, R, groundY);
+    else buildBackdrop(dress, L, rng, isl, n, R, groundY);
   }
 
+  // built-in cover: container stacks on the player islands, concrete barriers on the center island.
+  // Visual hulls fill the sim's boxes exactly; containers get an invisible exact proxy for the camera.
+  def.statics.forEach((st, i) => {
+    const c = new THREE.Vector3(st.center.x, st.center.y, st.center.z), h = new THREE.Vector3(st.half.x, st.half.y, st.half.z);
+    if (st.look === 'barrier') {
+      barrierProp(solid, dress, new THREE.Matrix4().compose(c, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), st.rotY), new THREE.Vector3(1, 1, 1)), h);
+      return;
+    }
+    containerCover(dress, c, h, st.rotY, 3001 + (st.island >= 0 ? (i % 3) * 7 + st.island * 131 : i));
+    const proxy = new THREE.Mesh(new THREE.BoxGeometry(h.x * 2, h.y * 2, h.z * 2), M.matte);
+    proxy.position.copy(c);
+    proxy.rotation.y = st.rotY;
+    proxy.visible = false;
+    proxy.name = `proxy:cover${i}`;
+    root.add(proxy);
+    collidables.push(proxy);
+  });
+
+  buildCenter(def, root, dress, collidables, wallMat, QUAY_DEPTH, labelSprite);
+  if (yard) gapCranes(dress, map, groundY);
   distantIslands(dress, map);
 
   const bunkers = solid.build(root, 'bunkers');
@@ -153,24 +189,30 @@ export function buildIslands(map: IslandLayout[], teamColors: number[]): Islands
   return { collidables, root };
 }
 
-/**
- * Harbor scenery behind each island (local +Z), separated from the playable disc by open water so nothing
- * here can be mistaken for walkable ground or cover.
- */
-function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof makeRng>, isl: IslandLayout, n: number, R: number, groundY: number) {
-  const M = mats();
-  const ring = Math.hypot(isl.center.x, isl.center.z);
-  const z0 = R + CHANNEL, depth = 80, z1 = z0 + depth;
-  const hw = Math.max(25, Math.min(60, (ring + z0) * Math.sin(Math.PI / n) - 8));
-  const top = groundY + 0.2;
-  const at = (x: number, y: number, z: number, ry = 0) => L.clone().multiply(mat(x, y, z, 0, ry, 0));
+type Rng = ReturnType<typeof makeRng>;
+type At = (x: number, y: number, z: number, ry?: number) => THREE.Matrix4;
+type Frame = { at: At; z0: number; z1: number; depth: number; hw: number; top: number };
 
-  // quay slab: concrete top + seawall faces (front + sides)
+/** Backdrop frame behind an island (local +Z): quay from z0 to z1, half-width hw, deck at `top`. */
+function backdropFrame(L: THREE.Matrix4, isl: IslandLayout, n: number, R: number, groundY: number): Frame {
+  const ring = Math.hypot(isl.center.x, isl.center.z);
+  const z0 = R + CHANNEL, depth = 80;
+  return {
+    at: (x, y, z, ry = 0) => L.clone().multiply(mat(x, y, z, 0, ry, 0)),
+    z0, z1: z0 + depth, depth,
+    hw: Math.max(25, Math.min(60, (ring + z0) * Math.sin(Math.PI / n) - 8)),
+    top: groundY + 0.2,
+  };
+}
+
+/** Quay slab (deck tinted by `deck`) + seawall faces (front + sides) + coping, bollards and fenders. */
+function backdropQuay(b: StaticBatch, { at, z0, depth, hw, top }: Frame, deck: number, tyres: boolean) {
+  const M = mats();
   {
     const slab = new THREE.PlaneGeometry(2 * hw, depth).rotateX(-Math.PI / 2);
     const u = slab.getAttribute('uv');
     for (let i = 0; i < u.count; i++) u.setXY(i, (u.getX(i) * 2 * hw) / 3, (u.getY(i) * depth) / 3);
-    b.add(M.concrete, slab, at(0, top, z0 + depth / 2), 0xffffff, false);
+    b.add(M.concrete, slab, at(0, top, z0 + depth / 2), deck, false);
   }
   const face = (w: number) => {
     const g = new THREE.PlaneGeometry(w, top + QUAY_DEPTH);
@@ -186,7 +228,20 @@ function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof 
   b.add(M.paint, new THREE.PlaneGeometry(2 * hw - 1, 0.18).rotateX(-Math.PI / 2), at(0, top + 0.01, z0 + 0.9), 0xe8b81c, false);
   b.add(M.concrete, boxUV(2 * hw, 0.08, 0.5, 3), at(0, top + 0.02, z0 + 0.25), 0xd6d0c2, false);
   for (let x = -hw + 3; x < hw - 1; x += 7) bollard(b, at(x, top, z0 + 0.6));
-  for (let x = -hw + 2; x < hw; x += 4.5) b.add(M.rubber, new THREE.BoxGeometry(0.5, 1.2, 0.25), at(x, top - 0.9, z0 - 0.12));
+  for (let x = -hw + 2; x < hw; x += 4.5) {
+    if (tyres) b.add(M.rubber, TYRE, at(x, top - 0.9, z0 - 0.2));
+    else b.add(M.rubber, new THREE.BoxGeometry(0.5, 1.2, 0.25), at(x, top - 0.9, z0 - 0.12));
+  }
+}
+
+/**
+ * Harbor scenery behind each island (local +Z), separated from the playable disc by open water so nothing
+ * here can be mistaken for walkable ground or cover.
+ */
+function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: Rng, isl: IslandLayout, n: number, R: number, groundY: number) {
+  const F = backdropFrame(L, isl, n, R, groundY);
+  const { at, z0, hw, top } = F;
+  backdropQuay(b, F, 0xffffff, false);
 
   // crane over the channel, warehouse, containers, masts, palms, clutter
   crane(b, at(hw * 0.55, top, z0 + 9, 0), 22);
@@ -202,8 +257,12 @@ function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof 
   drums(b, at(hw * 0.38, top, z0 + 3), 4, rng);
   drums(b, at(-hw * 0.3, top, z0 + 5), 3, rng);
   for (const [x, z] of [[-hw * 0.45, 4], [-hw * 0.42, 5.4], [hw * 0.02, 13]]) pallet(b, at(x, top, z0 + z));
+  jungleHill(b, F, rng, isl, 260, 14);
+}
 
-  // jungle hill behind the yard
+/** Jungle hill behind the quay: displaced terrain, `blobs` canopy blobs, `palms` palms. */
+function jungleHill(b: StaticBatch, { at, z1, hw, top }: Frame, rng: Rng, isl: IslandLayout, blobs: number, palms: number) {
+  const M = mats();
   const W = 2 * hw + 90, D = 110, SX = 60, SZ = 32;
   const g = new THREE.PlaneGeometry(W, D, SX, SZ).rotateX(-Math.PI / 2);
   const pos = g.getAttribute('position');
@@ -237,16 +296,79 @@ function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof 
     blob.computeVertexNormals();
   }
   const leafCols = [0x2a4f1f, 0x34602a, 0x22441b, 0x406d2c];
-  for (let i = 0; i < 260; i++) {
+  for (let i = 0; i < blobs; i++) {
     const x = rng.rr(-W / 2 + 8, W / 2 - 8), zz = rng.rr(-D / 2 + 10, D / 2 - 6);
     const h = hAt(x, zz);
     if (h < 1.2) continue;
     const s = rng.rr(2.4, 5);
     b.add(M.leaf, blob, at(x, top - 0.25 + h + s * 0.35, hillZ + zz).multiply(mat(0, 0, 0, 0, rng.rr(0, 6), 0, s * rng.rr(1, 1.4), s * rng.rr(0.8, 1.1), s * rng.rr(1, 1.4))), leafCols[i % 4], false, false);
   }
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < palms; i++) {
     const x = rng.rr(-W / 2 + 10, W / 2 - 10), zz = rng.rr(-D / 2 + 4, -D / 2 + 40);
     palm(b, at(x, top - 0.25 + Math.max(0, hAt(x, zz)) - 0.3, hillZ + zz, rng.rr(0, 6)), rng, rng.rr(9, 14), rng.rr(1, 3));
+  }
+}
+
+/**
+ * Container Yard scenery behind each island: a terminal apron with RTG-served container blocks, a reefer
+ * row, light masts, a ship-to-shore crane over the channel and the warehouse; the hill is thinner.
+ */
+function buildYardBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: Rng, isl: IslandLayout, n: number, R: number, groundY: number) {
+  const F = backdropFrame(L, isl, n, R, groundY);
+  const { at, z0, hw, top } = F;
+  const M = mats();
+  backdropQuay(b, F, 0x9a968e, true);
+  const pick = () => CONTAINER_COLORS[Math.floor(rng.rnd() * CONTAINER_COLORS.length)];
+  // painted apron: lane lines along the quay
+  for (const z of [5.5, 11.5, 30]) b.add(M.paint, new THREE.PlaneGeometry(2 * hw - 4, 0.15).rotateX(-Math.PI / 2), at(0, top + 0.01, z0 + z), z === 5.5 ? 0xe8b81c : 0xe6e3da, false);
+  /** A block of `bays` × `rows` stacks (long axis X), first row at z, heights 1..maxH. */
+  const block = (cx: number, z: number, bays: number, rows: number, maxH: number) => {
+    for (let bay = 0; bay < bays; bay++) for (let row = 0; row < rows; row++) {
+      const hgt = 1 + Math.floor(rng.rnd() * maxH);
+      for (let k = 0; k < hgt; k++) {
+        const x = cx + (bay - (bays - 1) / 2) * 6.4;
+        containerLite(b, at(x + rng.rr(-0.05, 0.05), top + k * 2.59, z + row * 2.6, rng.rr(-0.01, 0.01)), pick());
+      }
+    }
+  };
+  const bx = hw * 0.45;
+  for (const sx of [-1, 1]) {
+    block(sx * bx, z0 + 15, 2, 4, 3);
+    rtg(b, at(sx * bx, top, z0 + 15 + 3.9), 19, 14, 17);
+    block(sx * bx, z0 + 34, 3, 5, 4);
+  }
+  block(0, z0 + 50, 4, 4, 2);
+  // reefer row on the apron (plugged into a power rack) + a few loose boxes
+  for (let k = 0; k < 3; k++) reefer(b, at(-hw * 0.1, top, z0 + 7 + k * 2.6, Math.PI));
+  b.add(M.galv, new THREE.BoxGeometry(0.3, 3, 8), at(-hw * 0.1 - 4.2, top + 1.5, z0 + 9.6));
+  container(b, at(hw * 0.12, top, z0 + 4, 0.06), pick());
+  container(b, at(hw * 0.12, top, z0 + 7.5, -0.03), pick());
+  container(b, at(hw * 0.12, top + 2.59, z0 + 5.8, 0.02), pick());
+  // ship-to-shore crane over the channel, warehouse at the back, light masts
+  crane(b, at(-hw * 0.62, top, z0 + 9, 0), 22);
+  warehouse(b, at(hw * 0.05, top, z0 + 66), `PALMERA CONTAINER TERMINAL  ·  BERTH ${isl.index + 1}`);
+  for (const [x, z] of [[-hw * 0.82, 4], [hw * 0.82, 4], [-hw * 0.2, 26], [hw * 0.7, 26]]) lightMast(b, at(x, top, z0 + z));
+  drums(b, at(hw * 0.3, top, z0 + 3), 4, rng);
+  for (const [x, z] of [[hw * 0.36, 5.2], [hw * 0.4, 6.6]]) pallet(b, at(x, top, z0 + z));
+  jungleHill(b, F, rng, isl, 120, 8);
+}
+
+/** Yard only: a ship-to-shore crane standing in the water over each gap between islands, boom toward the middle. */
+function gapCranes(b: StaticBatch, map: IslandLayout[], groundY: number) {
+  const M = mats();
+  const n = map.length;
+  const ring = Math.hypot(map[0].center.x, map[0].center.z);
+  const R = map[0].radius;
+  for (let i = 0; i < n; i++) {
+    const a = Math.PI + (2 * Math.PI * (i + 0.5)) / n;
+    const d = ring + R * 0.75;
+    const yaw = Math.atan2(Math.cos(a), Math.sin(a)); // local -Z points at the middle
+    const B = mat(Math.cos(a) * d, groundY - 1.2, Math.sin(a) * d, 0, yaw, 0);
+    crane(b, B, 24);
+    // pile caps under the four legs (below deck level, never reachable)
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      b.add(M.concrete, boxUV(3, QUAY_DEPTH, 3, 3), B.clone().multiply(mat(sx * 8, -QUAY_DEPTH / 2 + 0.3, sz * 8)), 0xc9c2b4, false);
+    }
   }
 }
 

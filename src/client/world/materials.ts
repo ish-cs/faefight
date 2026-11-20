@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
-import { awningTex, barkTex, burlapTex, concreteTex, corrNormal, corrTex, frondTex, leafBlobTex, seawallTex, steelTex, woodTex } from './textures';
+import { color, float, sin, time, uv, vertexColor } from 'three/tsl';
+import { awningTex, chainTex, barkTex, burlapTex, concreteTex, corrNormal, corrTex, frondTex, leafBlobTex, seawallTex, steelTex, woodTex } from './textures';
 
 type Opts = ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0];
 const std = (name: string, o: Opts) => {
@@ -28,6 +29,27 @@ function make() {
     leaf: std('leaf', { map: leafBlobTex(), roughness: 0.95 }),
     terrain: std('terrain', { roughness: 1 }),
     glow: std('glow', { color: 0x0c2a10, emissive: 0x2bff5a, emissiveIntensity: 2.2, roughness: 0.4 }),
+    chain: std('chain', { map: chainTex(), alphaTest: 0.4, side: THREE.DoubleSide, metalness: 0.6, roughness: 0.5 }),
+    /** Self-lit parts whose light colour is the vertex colour (gold bars, potions, lamp heads, LEDs). */
+    lit: (() => {
+      const m = std('lit', { roughness: 0.35 });
+      m.emissiveNode = vertexColor().mul(1.6);
+      return m;
+    })(),
+    /** Shield well ring: cyan, slowly pulsing. */
+    shield: (() => {
+      const m = std('shield', { color: 0x0a2a33, roughness: 0.3 });
+      m.emissiveNode = color(0x46d8ff).mul(sin(time.mul(2.2)).mul(0.35).add(1.6)).mul(vertexColor());
+      return m;
+    })(),
+    /** Faint additive light column over the shield well (v=0 bottom → fades out at the top). */
+    beam: (() => {
+      const m = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+      m.name = 'beam';
+      const fade = float(1).sub(uv().y);
+      m.colorNode = color(0x46c8ff).mul(float(0.22).add(sin(time.mul(2.2)).mul(0.05))).mul(fade.mul(fade));
+      return m;
+    })(),
   };
 }
 /** Shared static-world materials. All use vertex colours as a per-part tint (white = untinted). */

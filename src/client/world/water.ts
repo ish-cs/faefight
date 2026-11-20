@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { color, float, max, min, mix, normalize, positionWorld, smoothstep, texture, time, transformNormalToView, uniform, vec2, vec3 } from 'three/tsl';
-import type { IslandLayout } from '../../sim/map';
+import type { MapDef } from '../../sim/map';
 
 const NORMALS_URL = `${import.meta.env.BASE_URL}assets/textures/waternormals.jpg`;
 
@@ -9,7 +9,7 @@ const NORMALS_URL = `${import.meta.env.BASE_URL}assets/textures/waternormals.jpg
  * the island walls fading to deep blue, a thin foam line where water meets the quay. Opaque on purpose: a
  * transparent pass would blend against the sky and wash out. The caller moves `mesh.position.y` with the tide.
  */
-export function buildWater(map: IslandLayout[]): THREE.Mesh {
+export function buildWater(def: MapDef): THREE.Mesh {
   const tex = new THREE.TextureLoader().load(NORMALS_URL, undefined, undefined, (err) => console.error(`[world/water] failed to load ${NORMALS_URL}`, err));
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
 
@@ -25,8 +25,9 @@ export function buildWater(map: IslandLayout[]): THREE.Mesh {
   const strength = 0.55;
   mat.normalNode = transformNormalToView(normalize(vec3(n.x.mul(strength), n.z, n.y.mul(strength))));
 
-  // distance to the nearest island quay wall
-  const rim = map.map((isl) => p.sub(uniform(new THREE.Vector2(isl.center.x, isl.center.z))).length().sub(isl.radius));
+  // distance to the nearest quay wall (player islands + the center island)
+  const discs = [...def.islands, def.center];
+  const rim = discs.map((isl) => p.sub(uniform(new THREE.Vector2(isl.center.x, isl.center.z))).length().sub(isl.radius));
   const near = max(rim.slice(1).reduce((a, b) => min(a, b), rim[0]), float(0));
   const shallow = color(0x16c9b6), mid = color(0x0b9bb0), deep = color(0x07527f);
   const base = mix(mix(shallow, mid, smoothstep(0, 9, near)), deep, smoothstep(6, 40, near));
