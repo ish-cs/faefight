@@ -345,7 +345,9 @@ export class FirstPersonView {
       const h = HOLD[me.equipped];
       rig.grip.position.set(...h.grip).lerp(_b.set(...h.ads), ads);
       // Reload tilt: roll the gun about the hand so the magazine well turns toward you.
-      rig.grip.rotation.set(this.dip * 0.18, 0.012 + this.dip * 0.22, this.dip * 0.5);
+      // The launcher instead swings across the body so its rear (where the rocket goes in) comes into view.
+      if (me.equipped === 'rocket') rig.grip.rotation.set(this.dip * 0.1, 0.012 + this.dip * 1.1, this.dip * 0.15);
+      else rig.grip.rotation.set(this.dip * 0.18, 0.012 + this.dip * 0.22, this.dip * 0.5);
     }
     this.cam.fov = VM_FOV - ads * 8;
     this.cam.updateProjectionMatrix();
