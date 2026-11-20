@@ -506,6 +506,8 @@ export class Hud {
     if (!me) return;
     if (rebuild || !this.panel.querySelector('.shop-grid')) {
       const grid = el('div', 'shop-grid');
+      const info = el('div', 'shop-info', 'Hover an item for details');
+      info.dataset.testid = 'shop-info';
       const section = (title: string, items: ShopItem[]) => {
         const row = el('div', 'shop-row');
         row.setAttribute('role', 'group');
@@ -527,6 +529,10 @@ export class Hud {
           lock.innerHTML = LOCK_ICON;
           b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
           b.onclick = () => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item); };
+          // The name/details show in the panel's info bar (never clipped by the panel edge).
+          const show = () => { setText(info, b.dataset.name ?? ''); info.classList.add('on'); };
+          const hide = () => info.classList.remove('on');
+          b.onmouseenter = show; b.onfocus = show; b.onmouseleave = hide; b.onblur = hide;
           row.append(b);
         }
         grid.append(el('div', 'shop-section', title), row);
@@ -540,7 +546,7 @@ export class Hud {
         // Lock cards only show up once you own (or have locked) that gun.
         section('Upgrades', ['genUpgrade', ...GUNS.map(lockItem)]);
       }
-      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid);
+      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid, info);
       // Focus the panel (not a card, so no tooltip pops up): Tab or an arrow key then walks the cards.
       this.panel.tabIndex = -1;
       this.panel.onkeydown = (e) => this.shopArrows(e);
