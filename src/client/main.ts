@@ -138,11 +138,11 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
         if (m.t === 'snap') sink.snapshot(decoder.decode(m.s));
         else if (m.t === 'preview') sink.preview(m.result, m.key);
         else if (m.t === 'chat') sink.chat(m.from, m.text);
-        else if (m.t === 'ended') { closed = true; sink.fatal('Host left', 'The host ended the match.'); }
+        else if (m.t === 'ended') { closed = true; sink.fatal('Host left', 'Match over: the host left the game.'); }
       };
       early.forEach(handle);
       link.onMessage((raw) => handle(raw as HostMsg));
-      link.onClose(() => { if (!closed) { closed = true; sink.fatal('Host left', 'The connection to the host closed.'); } });
+      link.onClose(() => { if (!closed) { closed = true; sink.fatal('Host left', 'Match over: lost the connection to the host.'); } });
     },
     input: (input) => link.send({ t: 'input', input }),
     preview: (req, key) => link.send({ t: 'preview', req, key }),
