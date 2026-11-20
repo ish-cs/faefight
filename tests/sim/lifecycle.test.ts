@@ -103,15 +103,45 @@ describe('lifecycle', () => {
     expect(b.invulnUntil).toBeGreaterThan(5.5);
   });
 
-  test('sealed at respawn → eliminated, and the other player wins a 1v1', async () => {
+  test('sealed at respawn → respawns trapped; still inside after 10 s → eliminated', async () => {
     const { s, physics, b, run } = await setup();
     sealIsland(s, 1);
     killPlayer(s, physics, 2, 0, false);
-    const evs = run(0, 3.2);
+    let evs = run(0, 3.2);
+    expect(b.alive).toBe(true);
+    expect(b.eliminated).toBe(false);
+    expect(b.breakoutUntil).toBeCloseTo(13, 0);
+    expect(evs.some((e) => e.type === 'trapped')).toBe(true);
+    evs = run(3.2, 12.9);
+    expect(b.eliminated).toBe(false);
+    evs = run(12.9, 13.2);
     expect(b.eliminated).toBe(true);
+    expect(b.alive).toBe(false);
     expect(s.winner).toBe(1);
     expect(evs.some((e) => e.type === 'eliminated')).toBe(true);
     expect(evs.some((e) => e.type === 'win')).toBe(true);
+  });
+
+  test('breaking out of the bunker within 10 s keeps you in the game', async () => {
+    const { s, physics, b, run } = await setup();
+    sealIsland(s, 1);
+    killPlayer(s, physics, 2, 0, false);
+    run(0, 3.2);
+    b.pos = spot(1, 8); // walked out through a doorway they cleared
+    run(3.2, 14);
+    expect(b.eliminated).toBe(false);
+    expect(b.alive).toBe(true);
+    expect(b.breakoutUntil).toBeNull();
+  });
+
+  test('dying while trapped is final', async () => {
+    const { s, physics, b, run } = await setup();
+    sealIsland(s, 1);
+    killPlayer(s, physics, 2, 0, false);
+    run(0, 5);
+    killPlayer(s, physics, 2, 5, false);
+    run(5, 9);
+    expect(b.eliminated).toBe(true);
   });
 
   test('unsealing before respawn restores respawn', async () => {
@@ -134,6 +164,8 @@ describe('lifecycle', () => {
     expect(b.eliminated).toBe(false);
     killPlayer(s, physics, 2, 5, false);
     run(5, 8.2);
+    expect(b.eliminated).toBe(false); // respawned trapped, 10 s to break out
+    run(8.2, 18.4);
     expect(b.eliminated).toBe(true);
   });
 

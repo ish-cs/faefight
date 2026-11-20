@@ -186,10 +186,14 @@ export class Hud {
       if (owner) setText(chip.querySelector('.name') as HTMLElement, owner.name);
     });
     const ownSealed = !!snap.sealed[me.island];
-    this.sealedBanner.style.display = ownSealed && !me.eliminated && snap.winner === null ? 'block' : 'none';
+    const trapped = me.alive && me.breakoutUntil != null;
+    setText(this.sealedBanner, trapped
+      ? `BREAK OUT! ${Math.max(0, me.breakoutUntil! - snap.time).toFixed(1)}s`
+      : 'YOUR BUNKER IS SEALED');
+    this.sealedBanner.style.display = (ownSealed || trapped) && !me.eliminated && snap.winner === null ? 'block' : 'none';
 
     if (!me.alive && !me.eliminated && me.respawnAt !== null) {
-      setText(this.center, ownSealed ? `Bunker sealed — respawn in ${(me.respawnAt - snap.time).toFixed(1)}s unless you're cleared` : `Respawning in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s`);
+      setText(this.center, ownSealed ? `Bunker sealed — you'll respawn trapped in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s with 10s to break out` : `Respawning in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s`);
       this.center.style.display = 'block';
     } else if (ctx.buildMode) {
       const have = inv.pieces[ctx.buildKind] ?? 0;

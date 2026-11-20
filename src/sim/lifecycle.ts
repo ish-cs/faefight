@@ -1,10 +1,10 @@
-import { LIFECYCLE, MAP, PLAYER } from './constants';
+import { LIFECYCLE, MAP, PLAYER, SEAL } from './constants';
 import { emptyInventory, mergeInventory } from './economy';
 import type { IslandLayout } from './map';
 import type { Physics } from './physics';
 import { isSealed } from './seal';
 import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState, Vec3 } from './types';
-import { clone, dist, rotateY, v3 } from './vec';
+import { clone, dist, dist2D, rotateY, v3 } from './vec';
 
 export type MatchStateCore = {
   time: number;
@@ -58,6 +58,14 @@ export function killPlayer(
   p.hp = 0;
   p.alive = false;
   p.vel = v3();
+  if (p.breakoutUntil !== null) {
+    // Died while trapped in a sealed bunker: no more respawns.
+    p.breakoutUntil = null;
+    p.respawnAt = null;
+    p.eliminated = true;
+    physics.setPlayerPos(victimId, PARKED);
+    return [ev(now, 'kill', { victim: victimId, killer, inWater }), ev(now, 'eliminated', { player: victimId })];
+  }
   p.respawnAt = now + LIFECYCLE.respawnSec;
   physics.setPlayerPos(victimId, PARKED);
   return [ev(now, 'kill', { victim: victimId, killer, inWater })];
@@ -113,10 +121,16 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
   for (const p of s.players.values()) {
     if (p.alive || p.eliminated || p.respawnAt === null || now < p.respawnAt) continue;
     p.respawnAt = null;
-    if (islandSealed(s, map, p.island)) {
+    // Sudden death seals every bunker for good (nothing to break): no respawn at all.
+    if (s.forcedSeal) {
       p.eliminated = true;
       out.push(ev(now, 'eliminated', { player: p.id }));
       continue;
+    }
+    // Physically sealed: respawn inside anyway, with a short window to break out.
+    if (islandSealed(s, map, p.island)) {
+      p.breakoutUntil = now + LIFECYCLE.breakoutSec;
+      out.push(ev(now, 'trapped', { player: p.id, until: p.breakoutUntil }));
     }
     const spawn = freeSpawnSpot(physics, map[p.island]);
     p.pos = clone(spawn);
@@ -124,6 +138,17 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
     p.alive = true;
     p.invulnUntil = now + LIFECYCLE.invulnSec;
     physics.setPlayerPos(p.id, spawn);
+  }
+
+  for (const p of s.players.values()) {
+    if (!p.alive || p.breakoutUntil === null) continue;
+    const bunker = map[p.island].bunker.center;
+    if (dist2D(p.pos, bunker) > SEAL.exitRadius) {
+      p.breakoutUntil = null;
+      out.push(ev(now, 'escaped', { player: p.id }));
+    } else if (now >= p.breakoutUntil) {
+      out.push(...killPlayer(s, physics, p.id, now, false));
+    }
   }
 
   if (s.winner === null && s.players.size >= 2) {

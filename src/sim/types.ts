@@ -51,6 +51,8 @@ export type PlayerState = {
   alive: boolean;
   eliminated: boolean;
   respawnAt: number | null;
+  /** Set while trapped in a sealed bunker after respawning: eliminated at this time unless out. */
+  breakoutUntil: number | null;
   invulnUntil: number;
   inv: Inventory;
   vault: Inventory;
@@ -64,7 +66,7 @@ export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3
 export type LootBag = { id: number; pos: Vec3; inv: Inventory };
 
 export type MatchEventType =
-  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath'
+  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
   | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 

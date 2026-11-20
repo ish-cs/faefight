@@ -103,7 +103,8 @@ describe('Match', () => {
     expect(sealedSnap.sealed[1]).toBe(true);
     m.debugKill(2);
     let snap = sealedSnap;
-    for (let i = 0; i < 100; i++) snap = m.tick(new Map());
+    // 3 s respawn + 10 s to break out of the sealed bunker.
+    for (let i = 0; i < 30 * 14; i++) snap = m.tick(new Map());
     expect(snap.winner).toBe(1);
   });
 });
