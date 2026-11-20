@@ -15,6 +15,8 @@ import type { ToWorker } from './protocol';
 const HELLO_TIMEOUT_MS = 10_000;
 // Lobby key for the host. Contains a NUL so no remote peer id (PeerJS, BroadcastChannel, loopback) can equal it.
 const HOST_PEER = '\u0000host';
+/** Difficulty of the bot that takes a leaver's seat in a rematch (same as a mid-match takeover). */
+const TAKEOVER_DIFFICULTY = 'medium' as const;
 
 export type HostEvents = {
   lobby(slots: Slot[]): void;
@@ -201,6 +203,48 @@ export class HostSession {
     this.started = true;
     this.worker = worker;
     return { setup: this.lobby.toMatchSetup(), humanId: 1 };
+  }
+
+  /**
+   * Rematch: a fresh match on a new worker with the same seats and the same lobby code. Friends who left
+   * mid-match get a medium bot (fresh nickname); everyone else keeps their seat, bots their nickname and
+   * difficulty. onMap then sends every friend a new 'start', which their client treats as a restart.
+   */
+  restart(worker: { postMessage(m: ToWorker): void }): { setup: MatchSetup; humanId: number } {
+    if (!this.started) throw new Error('HostSession.restart: match not started');
+    for (const seat of this.leaverSeats()) {
+      const slot = this.lobby.slots()[seat];
+      if (slot.kind === 'human') this.lobby.removePeer(slot.peerId);
+      this.lobby.setSeat(seat, { kind: 'bot', difficulty: TAKEOVER_DIFFICULTY });
+    }
+    this.resetStream(worker);
+    console.info('[host] rematch');
+    return { setup: this.lobby.toMatchSetup(), humanId: 1 };
+  }
+
+  /** End the match and send everyone back to the lobby screen (seats editable, new friends may join). */
+  backToLobby() {
+    if (!this.started) return;
+    for (const seat of this.leaverSeats()) {
+      const slot = this.lobby.slots()[seat];
+      if (slot.kind === 'human') this.lobby.removePeer(slot.peerId);
+    }
+    this.started = false;
+    this.resetStream(null);
+    console.info('[host] back to lobby');
+    this.broadcastLobby();
+  }
+
+  /** Human seats (not the host) whose friend is no longer connected. */
+  private leaverSeats(): number[] {
+    return this.lobby.slots().flatMap((s, i) => (s.kind === 'human' && !s.isHost && !this.links.has(s.peerId) ? [i] : []));
+  }
+
+  private resetStream(worker: { postMessage(m: ToWorker): void } | null) {
+    this.worker = worker;
+    this.encoder = new SnapshotEncoder();
+    this.tickNo = 0;
+    this.previewBudget.clear();
   }
 
   /** Worker sent the map: tell every remote to start. */
