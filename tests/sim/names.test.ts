@@ -27,6 +27,8 @@ describe('bot nicknames', () => {
 
   test('placeholder bot names get a nickname; real names are kept', async () => {
     expect(isPlaceholderBotName('Bot (hard)')).toBe(true);
+    expect(isPlaceholderBotName('Bot (easy) 2')).toBe(true); // extra debug/test bots get numbered
+    expect(isPlaceholderBotName('Bot 7')).toBe(true);
     expect(isPlaceholderBotName('')).toBe(true);
     expect(isPlaceholderBotName('Bobby')).toBe(false);
     const m = await Match.create({ players: [
