@@ -77,7 +77,7 @@ describe('Lobby', () => {
     expect(l.seatOf('p1')).toBeNull();
     // open <-> bot
     expect(l.setSeat(2, { kind: 'bot', difficulty: 'hard' })).toBe(true);
-    expect(l.slots()[2]).toEqual({ kind: 'bot', difficulty: 'hard' });
+    expect(l.slots()[2]).toMatchObject({ kind: 'bot', difficulty: 'hard' });
     expect(l.setSeat(2, { kind: 'bot', difficulty: 'easy' })).toBe(true);
     expect(l.setSeat(2, { kind: 'open' })).toBe(true);
     // humans only arrive via addHuman
@@ -92,7 +92,7 @@ describe('Lobby', () => {
     const bot = { kind: 'bot' as const, difficulty: 'easy' as const };
     l.setSeat(1, bot);
     (bot as { difficulty: string }).difficulty = 'hard';
-    expect(l.slots()[1]).toEqual({ kind: 'bot', difficulty: 'easy' });
+    expect(l.slots()[1]).toMatchObject({ kind: 'bot', difficulty: 'easy' });
   });
 
   test('addSeat / removeSeat', () => {
@@ -121,7 +121,7 @@ describe('Lobby', () => {
     expect(l.seatOf('p2')).toBe(1);
   });
 
-  test('toMatchSetup maps seat i to players[i] with bot names', () => {
+  test('toMatchSetup maps seat i to players[i] with the bots\' nicknames', () => {
     const l = new Lobby('Ann', 'p0');
     l.addHuman('Bob', 'p1');
     l.addSeat();
@@ -132,8 +132,8 @@ describe('Lobby', () => {
       players: [
         { name: 'Ann', isBot: false },
         { name: 'Bob', isBot: false },
-        { name: 'Bot (hard)', isBot: true, difficulty: 'hard' },
-        { name: 'Bot (easy)', isBot: true, difficulty: 'easy' },
+        { name: (l.slots()[2] as { name: string }).name, isBot: true, difficulty: 'hard' },
+        { name: (l.slots()[3] as { name: string }).name, isBot: true, difficulty: 'easy' },
       ],
     });
   });
@@ -145,5 +145,32 @@ describe('Lobby', () => {
     expect(() => l.toMatchSetup()).not.toThrow();
     l.addSeat();
     expect(() => l.toMatchSetup()).toThrow(/open/i);
+  });
+});
+
+describe('bot nicknames in the lobby', () => {
+  test('a bot seat gets a human-style nickname that carries into the match', () => {
+    const l = new Lobby('Alice', 'host');
+    l.setSeat(1, { kind: 'bot', difficulty: 'easy' });
+    const slot = l.slots()[1];
+    expect(slot.kind).toBe('bot');
+    const name = (slot as { name?: string }).name!;
+    expect(name).toBeTruthy();
+    expect(name).not.toMatch(/bot/i);
+    expect(l.toMatchSetup().players[1].name).toBe(name);
+  });
+  test('changing only the difficulty keeps the nickname', () => {
+    const l = new Lobby('Alice', 'host');
+    l.setSeat(1, { kind: 'bot', difficulty: 'easy' });
+    const first = (l.slots()[1] as { name?: string }).name;
+    l.setSeat(1, { kind: 'bot', difficulty: 'hard' });
+    expect((l.slots()[1] as { name?: string }).name).toBe(first);
+  });
+  test('nicknames are unique in a lobby', () => {
+    const l = new Lobby('Alice', 'host');
+    for (let i = 0; i < 6; i++) l.addSeat();
+    for (let i = 1; i < 8; i++) l.setSeat(i, { kind: 'bot', difficulty: 'medium' });
+    const names = l.slots().map((s) => (s.kind === 'bot' ? s.name : s.kind === 'human' ? s.name : ''));
+    expect(new Set(names).size).toBe(8);
   });
 });
