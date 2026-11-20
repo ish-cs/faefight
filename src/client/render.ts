@@ -18,6 +18,8 @@ export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 const UNLIT_BOOST = 2.6;
 const boosted = (hex: number) => new THREE.Color(hex).multiplyScalar(UNLIT_BOOST);
 
+const GPU_TIMING = typeof location !== 'undefined' && new URLSearchParams(location.search).get('gputime') === '1';
+
 type Fx = { mesh: THREE.Mesh; mat: THREE.MeshBasicNodeMaterial; born: number; life: number; grow?: number };
 
 export class Renderer {
@@ -72,12 +74,28 @@ export class Renderer {
   localGunPoint: ((which: 'muzzle' | 'eject', out: THREE.Vector3) => THREE.Vector3 | null) | null = null;
 
   private constructor(canvas: HTMLCanvasElement) {
-    this.gpu = new THREE.WebGPURenderer({ canvas, antialias: true });
+    this.gpu = new THREE.WebGPURenderer({ canvas, antialias: true, trackTimestamp: GPU_TIMING });
+  }
+
+  /** ?gputime=1: per-frame GPU render time (ms) from timestamp queries, newest last (debug/perf only). */
+  readonly gpuMs: number[] = [];
+  gpuStats() {
+    const xs = [...this.gpuMs].sort((a, b) => a - b);
+    const q = (k: number) => xs[Math.min(xs.length - 1, Math.floor(xs.length * k))] ?? 0;
+    return { n: xs.length, avg: xs.reduce((a, b) => a + b, 0) / (xs.length || 1), p95: q(0.95) };
+  }
+  private resolveGpuTime() {
+    this.gpu.resolveTimestampsAsync('render').then((ms) => {
+      if (typeof ms !== 'number' || !Number.isFinite(ms)) return;
+      this.gpuMs.push(ms);
+      if (this.gpuMs.length > 600) this.gpuMs.shift();
+    }, (err) => console.warn('[render] GPU timestamp resolve failed', err));
   }
 
   static async create(canvas: HTMLCanvasElement): Promise<Renderer> {
     const r = new Renderer(canvas);
     await r.gpu.init();
+    r.characters.camera = r.camera;
     r.world = new World(r.gpu, r.scene, r.camera, r.collidables); // tone mapping, pixel ratio, shadows, sky
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
@@ -124,6 +142,7 @@ export class Renderer {
   /** Every snapshot as soon as it arrives (before any event delay): drives player interpolation. */
   ingest(snap: Snapshot) {
     this.clock.push(snap.time, performance.now() / 1000);
+    if (snap.time > this.newestSim) this.newestSim = snap.time;
     for (const p of snap.players) {
       let tr = this.tracks.get(p.id);
       if (!tr) { tr = new PlayerTrack(); this.tracks.set(p.id, tr); }
@@ -140,6 +159,13 @@ export class Renderer {
   beginFrame() {
     this.playT = this.clock.advance(performance.now() / 1000);
   }
+
+  /**
+   * Sim time of the other players shown this frame (sent with shots: lag compensation). Never past the
+   * newest snapshot: beyond it tracks only extrapolate/hold, so the host has nothing truer to rewind to.
+   */
+  get renderTime(): number | null { return this.playT === null ? null : Math.min(this.playT, this.newestSim); }
+  private newestSim = -Infinity;
 
   /** Debug: current interpolation delay (s) behind the newest snapshot. */
   get interpDelay() { return this.clock.delay; }
@@ -159,6 +185,11 @@ export class Renderer {
     this.potionSellers.sync(snap.potionShops);
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
+  }
+
+  /** An event made up on this client (predicted shot): same effects as one from a snapshot. */
+  localEvent(e: MatchEvent) {
+    this.onEvent(e);
   }
 
   private onEvent(e: MatchEvent) {
@@ -285,12 +316,16 @@ export class Renderer {
     this.ghostPulse = 1;
   }
 
-  /** Meshes the aim ray may hit: world + pieces + other players. */
+  /** Meshes the aim ray may hit: world + pieces + other players. Reused array: valid until the next call. */
   aimTargets(): THREE.Object3D[] {
-    const out = [...this.collidables];
+    const out = this.aimList;
+    out.length = 0;
+    for (const o of this.collidables) out.push(o);
     this.characters.aimTargets(this.humanId, out);
     return out;
   }
+  private aimList: THREE.Object3D[] = [];
+  private motionOf = (id: number, out: Motion) => this.playerMotion(id, out);
 
   render(localYaw: number) {
     this.potionSellers.frame(performance.now());
@@ -299,13 +334,14 @@ export class Renderer {
     this.lastFrame = now;
     const snap = this.curr;
     if (snap) {
-      this.characters.sync(snap.hidden?.length ? snap.players.filter((p) => !snap.hidden!.includes(p.id)) : snap.players, this.humanId, localYaw, snap.time, (id, out) => this.playerMotion(id, out));
+      this.characters.sync(snap.players, this.humanId, localYaw, snap.time, this.motionOf, snap.hidden);
       for (const m of this.loot.values()) m.rotation.y += 1.2 * dt;
     }
 
-    for (const f of [...this.fx]) {
+    for (let i = this.fx.length - 1; i >= 0; i--) {
+      const f = this.fx[i];
       const k = (now - f.born) / f.life;
-      if (k >= 1) { this.scene.remove(f.mesh); f.mat.dispose(); this.fx.splice(this.fx.indexOf(f), 1); continue; }
+      if (k >= 1) { this.scene.remove(f.mesh); f.mat.dispose(); this.fx.splice(i, 1); continue; }
       f.mat.opacity = 0.9 * (1 - k);
       if (f.grow) f.mesh.scale.setScalar(0.2 + (f.grow - 0.2) * Math.sqrt(k));
     }
@@ -317,6 +353,7 @@ export class Renderer {
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
+    if (GPU_TIMING) this.resolveGpuTime();
   }
 
   info() {
