@@ -1,44 +1,33 @@
 /// <reference lib="webworker" />
 import { Match } from '../sim/match';
 import { TICK_HZ } from '../sim/constants';
-import type { MatchApi } from '../sim/matchApi';
-import { NO_INPUT, type PlayerInput } from '../sim/types';
+import type { MatchSetup } from '../sim/matchApi';
+import type { Difficulty, PlayerInput } from '../sim/types';
+import { InputAccumulator } from './inputAccum';
 import type { FromWorker, ToWorker } from './protocol';
 
 const post = (m: FromWorker) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m);
 
-let match: MatchApi | null = null;
+/** Difficulty a leaver's seat is handed to. */
+const TAKEOVER_DIFFICULTY: Difficulty = 'medium';
+
+let match: Match | null = null;
 let humanId = 0;
 let groundYFor: (x: number, z: number) => number = () => 0;
 
-// Held controls come from the latest input message; one-shot actions are accumulated between ticks
-// so a quick tap that lands between two ticks is never lost, and each acts on exactly one tick.
-let held: PlayerInput = { ...NO_INPUT };
-let pending: Partial<PlayerInput> = {};
+// One accumulator per human-controlled player (local + remote). Botified players are dropped.
+const inputs = new Map<number, InputAccumulator>();
 
-function accumulate(input: PlayerInput) {
-  held = input;
-  if (input.jump) pending.jump = true;
-  if (input.fire) pending.fire = true;
-  if (input.reload) pending.reload = true;
-  if (input.interact) pending.interact = true;
-  if (input.throwGrenade) pending.throwGrenade = true;
-  if (input.placeCharge) pending.placeCharge = true;
-  if (input.slot) pending.slot = input.slot;
-  if (input.build) pending.build = input.build;
-  if (input.shop) pending.shop = input.shop;
-  if (input.vault) pending.vault = input.vault;
+function pushInput(playerId: number, input: PlayerInput) {
+  const acc = inputs.get(playerId);
+  if (acc) acc.push(input); // unknown or botified ids are ignored
 }
 
 function step() {
   if (!match) return;
-  const input: PlayerInput = {
-    ...held, reload: false, interact: false, throwGrenade: false, placeCharge: false,
-    slot: null, build: null, shop: null, vault: null, ...pending,
-  };
-  pending = {};
-  const snap = match.tick(new Map([[humanId, input]]));
-  post({ type: 'snapshot', snap });
+  const tickInputs = new Map<number, PlayerInput>();
+  for (const [id, acc] of inputs) tickInputs.set(id, acc.take());
+  post({ type: 'snapshot', snap: match.tick(tickInputs) });
 }
 
 function startLoop() {
@@ -54,19 +43,20 @@ function startLoop() {
   loop();
 }
 
-async function start(difficulty: 'easy' | 'medium' | 'hard') {
+async function start(setup: MatchSetup, localId: number) {
   if (match) throw new Error('worker: match already started');
-  const m = await Match.create({
-    players: [{ name: 'You', isBot: false }, { name: `Bot (${difficulty})`, isBot: true, difficulty }],
-  });
+  const m = await Match.create(setup);
   match = m;
   const ids = m.humanIds();
-  if (ids.length !== 1) throw new Error(`worker: expected 1 human, got ${ids.length}`);
-  humanId = ids[0];
+  if (!ids.includes(localId)) throw new Error(`worker: local player ${localId} is not a human seat (humans: ${ids.join(',')})`);
+  humanId = localId;
+  for (const id of ids) inputs.set(id, new InputAccumulator());
   groundYFor = (x, z) => m.map.find((i) => Math.hypot(i.center.x - x, i.center.z - z) <= i.radius)?.groundY ?? m.map[0].groundY;
-  const me = m.tick(new Map()).players.find((p) => p.id === humanId);
+  const snap0 = m.tick(new Map());
+  const me = snap0.players.find((p) => p.id === humanId);
   if (!me) throw new Error(`worker: human ${humanId} missing from snapshot`);
-  post({ type: 'map', map: m.map, humanId, humanIsland: me.island });
+  const islands = setup.players.map((_, i) => snap0.players.find((p) => p.id === i + 1)?.island ?? i);
+  post({ type: 'map', map: m.map, humanId, humanIsland: me.island, islands });
   startLoop();
 }
 
@@ -75,13 +65,21 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
   try {
     switch (msg.type) {
       case 'start':
-        start(msg.difficulty).catch((err) => post({ type: 'error', message: `start failed: ${String(err?.stack ?? err)}` }));
+        start(msg.setup, msg.humanId).catch((err) => post({ type: 'error', message: `start failed: ${String(err?.stack ?? err)}` }));
         break;
       case 'input':
-        accumulate(msg.input);
+        pushInput(humanId, msg.input);
+        break;
+      case 'remoteInput':
+        if (msg.playerId !== humanId) pushInput(msg.playerId, msg.input);
+        break;
+      case 'botify':
+        if (!match) throw new Error('botify before start');
+        if (!inputs.delete(msg.playerId)) break; // already a bot
+        match.setBot(msg.playerId, TAKEOVER_DIFFICULTY);
         break;
       case 'preview':
-        if (match) post({ type: 'preview', result: match.previewBuild(humanId, msg.req) });
+        if (match) post({ type: 'preview', playerId: msg.playerId, result: match.previewBuild(msg.playerId, msg.req), key: msg.key });
         break;
       case 'debug':
         if (!match) throw new Error('debug before start');

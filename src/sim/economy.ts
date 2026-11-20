@@ -60,6 +60,8 @@ export function buy(player: PlayerState, action: ShopAction): Result {
 
 /** Checks `from` holds everything `req` asks for. Weapon entries in `req` are matched by key only. */
 function holds(from: Inventory, req: Partial<Inventory>): string | null {
+  const amounts = [req.cash, req.grenades, req.charges, ...Object.values(req.pieces ?? {})];
+  if (amounts.some((n) => n !== undefined && (!Number.isFinite(n) || n < 0))) return 'amounts must be zero or more';
   if ((req.cash ?? 0) > from.cash) return `only $${from.cash} available`;
   if ((req.grenades ?? 0) > from.grenades) return 'not enough grenades';
   if ((req.charges ?? 0) > from.charges) return 'not enough charges';

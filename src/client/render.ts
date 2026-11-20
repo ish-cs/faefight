@@ -89,6 +89,7 @@ export class Renderer {
   private prev: Snapshot | null = null;
   private curr: Snapshot | null = null;
   private currAt = 0;
+  private interpMs = TICK_MS;
   private players = new Map<number, PlayerView>();
   private pieces = new Map<number, THREE.Mesh>();
   private loot = new Map<number, THREE.Mesh>();
@@ -289,11 +290,15 @@ export class Renderer {
     }
   }
 
-  /** Feed a new snapshot. Returns its events for the HUD. */
-  pushSnapshot(snap: Snapshot): MatchEvent[] {
+  /**
+   * Feed a new snapshot. Returns its events for the HUD. intervalMs = how long to interpolate from the
+   * previous snapshot to this one (one tick locally; the snapshot spacing for remote clients).
+   */
+  pushSnapshot(snap: Snapshot, intervalMs = TICK_MS): MatchEvent[] {
     this.prev = this.curr ?? snap;
     this.curr = snap;
     this.currAt = performance.now();
+    this.interpMs = Math.max(1, intervalMs);
     this.waterY = snap.waterY;
     this.syncPieces(snap.pieces);
     this.syncLoot(snap);
@@ -429,7 +434,7 @@ export class Renderer {
   }
 
   private alpha() {
-    return Math.min(1, Math.max(0, (performance.now() - this.currAt) / TICK_MS));
+    return Math.min(1, Math.max(0, (performance.now() - this.currAt) / this.interpMs));
   }
 
   setGhost(kind: PieceKind | null, pos?: Vec3, rotY = 0, ok = false) {

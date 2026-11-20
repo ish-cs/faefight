@@ -37,6 +37,8 @@ export class Match implements MatchApi {
   private explosives: Explosive[] = [];
   private grounded = new Map<number, boolean>();
   private bots = new Map<number, BotBrain>();
+  private rng: () => number;
+  private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
   private sealDirty = true;
   private ctx: CombatCtx;
@@ -45,6 +47,8 @@ export class Match implements MatchApi {
     this.s = newMatchState(map);
     this.sealed = map.map(() => false);
     const rng = mulberry32(setup.seed ?? 1);
+    this.rng = rng;
+    this.makeBot = opts.makeBot;
     setup.players.forEach((cfg, i) => {
       const id = i + 1;
       const p = newPlayer(id, cfg.name, cfg.isBot, i, map[i].spawn);
@@ -108,6 +112,14 @@ export class Match implements MatchApi {
     const p = this.mustPlayer(playerId);
     const snapped = snapPlacement(req.pos, req.rotY, req.free);
     return validatePlacement(this.physics, req.kind, snapped.pos, snapped.rotY, p.pos);
+  }
+
+  /** Hand a seat to a bot (e.g. a friend disconnected). */
+  setBot(playerId: number, difficulty: Difficulty): void {
+    const p = this.mustPlayer(playerId);
+    if (!this.makeBot) throw new Error('Match.setBot: no bot factory configured');
+    p.isBot = true;
+    this.bots.set(playerId, this.makeBot(playerId, difficulty, this.rng));
   }
 
   debugTeleport(playerId: number, pos: Vec3): void {
