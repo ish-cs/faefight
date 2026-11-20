@@ -1,6 +1,6 @@
 import { buy, collect, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
-import { placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
+import { applyPlayerDamage, placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
@@ -9,7 +9,8 @@ import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics } from './physics';
 import { unsupportedPieces } from './support';
 import { newPlayer } from './player';
-import type { BotView } from './bots/view';
+import { isPlaceholderBotName, nickname } from './names';
+import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
 import type { BuildRequest, Difficulty, Inventory, MatchEvent, PlayerInput, PlayerState, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
@@ -20,6 +21,9 @@ export type MatchOptions = { makeBot?: (id: number, difficulty: Difficulty, rng:
 
 const MAX_PITCH = 1.4;
 const SIGHT_RANGE = 120;
+/** How long hits/tracers stay in a bot's short-term memory, and how long the kill feed is. */
+const RECENT_SEC = 4;
+const FEED_SEC = 30;
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -44,7 +48,13 @@ export class Match implements MatchApi {
   private sealed: boolean[];
   private sealDirty = true;
   private supportDirty = false;
+  private kills: { victim: number; killer: number | null }[] = [];
   private ctx: CombatCtx;
+  /** Public recent history a human would have on screen: hits, tracers, kill feed, scoreboard. */
+  private hits: (HurtEvent & { target: number })[] = [];
+  private shots: ShotSeen[] = [];
+  private feed: FeedLine[] = [];
+  private killCount = new Map<number, number>();
 
   private constructor(readonly map: IslandLayout[], private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
     this.s = newMatchState(map);
@@ -52,13 +62,20 @@ export class Match implements MatchApi {
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
     this.makeBot = opts.makeBot;
+    // Bot seats with a placeholder name ("Bot (hard)") get a human-looking nickname; a separate stream so
+    // names don't shift the bots' own random choices.
+    const nameRng = mulberry32(((setup.seed ?? 1) * 2654435761) ^ 0x5bd1e995);
+    const taken = new Set(setup.players.filter((c) => !(c.isBot && isPlaceholderBotName(c.name))).map((c) => c.name.toLowerCase()));
     setup.players.forEach((cfg, i) => {
       const id = i + 1;
-      const p = newPlayer(id, cfg.name, cfg.isBot, i, map[i].spawn);
+      const name = cfg.isBot && isPlaceholderBotName(cfg.name) ? nickname(nameRng, taken) : cfg.name;
+      const p = newPlayer(id, name, cfg.isBot, i, map[i].spawn);
       p.yaw = map[i].bunker.facingYaw;
       this.s.players.set(id, p);
       physics.addPlayer(id, p.pos);
-      if (cfg.isBot && opts.makeBot) this.bots.set(id, opts.makeBot(id, cfg.difficulty ?? 'medium', rng));
+      if (cfg.isBot && opts.makeBot) {
+        this.bots.set(id, opts.makeBot(id, cfg.difficulty ?? 'medium', rng));
+      }
     });
     this.ctx = {
       physics,
@@ -73,6 +90,7 @@ export class Match implements MatchApi {
         this.supportDirty = true;
       },
       onKill: (victim, killer) => {
+        this.kills.push({ victim, killer });
         this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer));
       },
     };
@@ -112,6 +130,7 @@ export class Match implements MatchApi {
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); this.syncHand(p); }
     this.updateSeals(now);
+    this.remember(now);
     return this.snapshot();
   }
 
@@ -141,6 +160,15 @@ export class Match implements MatchApi {
       const pos = v3(p.pos.x, p.pos.y + PIECES[p.kind].h / 2, p.pos.z);
       this.events.push({ t: now, type: 'destroyed', data: { piece: id, kind: p.kind, pos, rotY: p.rotY, collapse: true } });
     }
+  }
+
+  debugDamagePlayer(playerId: number, amount: number): void {
+    this.events.push(...applyPlayerDamage(this.ctx, this.mustPlayer(playerId), amount, null, this.s.time));
+  }
+
+  /** Every kill so far (tests/debug). */
+  debugKills(): { victim: number; killer: number | null }[] {
+    return this.kills;
   }
 
   debugDamagePiece(pieceId: number, amount: number): void {
@@ -252,6 +280,9 @@ export class Match implements MatchApi {
     const r = this.physics.movePlayer(p.id, scale(p.vel, DT));
     p.pos = r.pos;
     this.grounded.set(p.id, r.grounded);
+    const impact = -p.vel.y;
+    if (!grounded && r.grounded && impact > LIFECYCLE.safeFallSpeed)
+      this.events.push(...applyPlayerDamage(this.ctx, p, (impact - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time));
     if (r.grounded && p.vel.y < 0) p.vel.y = 0;
   }
 
@@ -282,6 +313,23 @@ export class Match implements MatchApi {
     });
   }
 
+  private remember(now: number) {
+    for (const e of this.events) {
+      const d = e.data;
+      if (e.type === 'hit') this.hits.push({ t: e.t, target: d.target as number, by: (d.by as number | null) ?? null, amount: d.amount as number });
+      else if (e.type === 'shot') this.shots.push({ t: e.t, by: d.by as number, from: d.from as Vec3, to: d.to as Vec3 });
+      else if (e.type === 'kill') {
+        const killer = (d.killer as number | null) ?? null, victim = d.victim as number;
+        this.feed.push({ t: e.t, killer, victim });
+        if (killer !== null && killer !== victim) this.killCount.set(killer, (this.killCount.get(killer) ?? 0) + 1);
+      }
+    }
+    const keep = <T extends { t: number }>(xs: T[], sec: number) => (xs.length && xs[0].t < now - sec ? xs.filter((x) => x.t >= now - sec) : xs);
+    this.hits = keep(this.hits, RECENT_SEC);
+    this.shots = keep(this.shots, RECENT_SEC);
+    this.feed = keep(this.feed, FEED_SEC);
+  }
+
   private botView(self: PlayerState): BotView {
     const eye = eyePos(self);
     const enemies: PlayerState[] = [];
@@ -298,11 +346,15 @@ export class Match implements MatchApi {
       self,
       enemies,
       others: [...this.s.players.values()].filter((o) => o.id !== self.id)
-        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt })),
+        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: this.killCount.get(o.id) ?? 0 })),
       map: this.map,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),
       sealed: [...this.sealed],
+      hurt: this.hits.filter((h) => h.target === self.id).map(({ t, by, amount }) => ({ t, by, amount })),
+      shots: this.shots.filter((s) => s.by !== self.id && dist(s.from, eye) <= SIGHT_RANGE),
+      feed: [...this.feed],
+      loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE).map((b) => clone(b.pos)),
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
       groundAt: (x, z) => this.physics.isGroundAt(x, z),

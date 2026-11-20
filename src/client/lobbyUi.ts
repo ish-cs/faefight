@@ -80,7 +80,10 @@ export class LobbyUi {
         name.textContent = s.name;
         if (s.isHost) name.append(el('span', 'tagpill', 'host'));
         if (i === you) name.append(el('span', 'tagpill you', 'you'));
-      } else if (s.kind === 'bot') name.textContent = `Bot (${s.difficulty})`;
+      } else if (s.kind === 'bot') {
+        name.textContent = s.name ?? 'Bot';
+        name.append(el('span', 'tagpill', `bot · ${s.difficulty}`));
+      }
       else { name.textContent = 'Open'; name.classList.add('open'); }
       row.append(dot, name);
       if (a && i > 0 && s.kind !== 'human') {

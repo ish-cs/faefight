@@ -128,6 +128,10 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
   for (const p of s.players.values())
     if (p.alive && p.pos.y < s.waterY) out.push(...killPlayer(s, physics, p.id, now, true));
 
+  for (const p of s.players.values())
+    if (p.alive && p.hp < PLAYER.hp && now - p.lastDamagedAt >= LIFECYCLE.regenDelaySec)
+      p.hp = Math.min(PLAYER.hp, p.hp + LIFECYCLE.regenPerSec * dt);
+
   for (const bag of [...s.loot.values()]) {
     if (bag.pos.y < s.waterY) { s.loot.delete(bag.id); continue; }
     for (const p of s.players.values()) {

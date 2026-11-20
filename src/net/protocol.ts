@@ -7,7 +7,7 @@ import type { NetSnapshot } from './snapshotCodec';
 export type Slot =
   | { kind: 'open' }
   | { kind: 'human'; name: string; peerId: string; isHost: boolean }
-  | { kind: 'bot'; difficulty: Difficulty };
+  | { kind: 'bot'; difficulty: Difficulty; name?: string };
 
 export const MAX_PLAYERS = 8;
 export const CHAT_MAX_LEN = 200;

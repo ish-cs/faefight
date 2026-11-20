@@ -3,7 +3,18 @@ import type { Placement } from '../building';
 import type { PieceKind, PieceState, PlayerState, Vec3 } from '../types';
 
 /** Public status of every other player (what a human would know from the HUD). */
-export type OtherStatus = { id: number; island: number; alive: boolean; eliminated: boolean; respawnAt: number | null };
+export type OtherStatus = {
+  id: number; island: number; alive: boolean; eliminated: boolean; respawnAt: number | null;
+  /** Kills so far (scoreboard). */
+  kills: number;
+};
+
+/** A hit I took: the damage indicator says how much, the kill cam / direction says who. */
+export type HurtEvent = { t: number; by: number | null; amount: number };
+/** A shot whose tracer I could see (fired within sight range of me). */
+export type ShotSeen = { t: number; by: number; from: Vec3; to: Vec3 };
+/** Kill feed line. */
+export type FeedLine = { t: number; killer: number | null; victim: number };
 
 /**
  * Everything a bot may know when deciding its next input. Built by Match each tick.
@@ -20,6 +31,14 @@ export type BotView = {
   generators: number[];
   /** Whether each island's bunker is currently sealed, indexed by island. */
   sealed: boolean[];
+  /** Hits against me in the last few seconds. */
+  hurt: HurtEvent[];
+  /** Tracers seen in the last few seconds (my own shots excluded). */
+  shots: ShotSeen[];
+  /** Kill feed, last ~30 s. */
+  feed: FeedLine[];
+  /** Positions of loot bags within sight range. */
+  loot: Vec3[];
   waterY: number;
   suddenDeath: boolean;
   /** Top surface y under (x, z) (land, piece or scaffold), or null over open water. */

@@ -121,6 +121,14 @@ export class Nav {
     return null;
   }
 
+  /** Island to head for next from a toward b over finished bridges (b itself, or one stop on the way), or null. */
+  hop(a: number, b: number): number | null {
+    if (a === b || this.bridge(a, b)) return b;
+    for (let c = 0; c < this.view.map.length; c++)
+      if (c !== a && c !== b && this.bridge(a, c) && this.bridge(c, b)) return c;
+    return null;
+  }
+
   private enterable(l: Lane, i: number): boolean {
     const map = this.view.map;
     const p = laneAt(l, i === l.from ? landHalf(map[i]) + 0.5 : l.length - landHalf(map[i]) - 0.5);
@@ -160,9 +168,10 @@ export class Nav {
     let l: Lane | null;
     let sTarget: number;
     if (a >= 0 && b >= 0) {
-      l = this.bridge(a, b);
-      if (!l) return null;
-      sTarget = this.landS(l, b);
+      const h = this.hop(a, b);
+      l = h === null ? null : this.bridge(a, h);
+      if (!l || h === null) return null;
+      sTarget = this.landS(l, h);
     } else if (a < 0) {
       l = this.nearestLane(me);
       if (!l) return null;

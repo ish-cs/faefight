@@ -1,4 +1,5 @@
 import type { MatchSetup } from '../sim/matchApi';
+import { nickname } from '../sim/names';
 import { MAX_PLAYERS, type Slot } from './protocol';
 
 const MIN_SEATS = 2;
@@ -53,8 +54,16 @@ export class Lobby {
     if (!Number.isInteger(i) || i <= 0 || i >= this.seats.length) return false;
     if (slot.kind === 'human') return false;
     if (this.seats[i].kind === 'human' && slot.kind !== 'open') return false;
-    this.seats[i] = slot.kind === 'open' ? { kind: 'open' } : { kind: 'bot', difficulty: slot.difficulty };
+    if (slot.kind === 'open') { this.seats[i] = { kind: 'open' }; return true; }
+    const prev = this.seats[i];
+    // Keep a bot's nickname when only its difficulty changes; otherwise give it a fresh, unique one.
+    const name = prev.kind === 'bot' && prev.name ? prev.name : nickname(Math.random, this.takenNames());
+    this.seats[i] = { kind: 'bot', difficulty: slot.difficulty, name };
     return true;
+  }
+
+  private takenNames(): Set<string> {
+    return new Set(this.seats.flatMap((s) => (s.kind === 'human' || (s.kind === 'bot' && s.name) ? [s.name as string] : [])));
   }
 
   /** Append an open seat (up to MAX_PLAYERS). */
@@ -81,7 +90,7 @@ export class Lobby {
     return {
       players: this.seats.map((s) => {
         if (s.kind === 'human') return { name: s.name, isBot: false };
-        if (s.kind === 'bot') return { name: `Bot (${s.difficulty})`, isBot: true, difficulty: s.difficulty };
+        if (s.kind === 'bot') return { name: s.name ?? '', isBot: true, difficulty: s.difficulty };
         throw new Error('unreachable: open seat');
       }),
     };
