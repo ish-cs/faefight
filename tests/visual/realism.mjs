@@ -38,7 +38,7 @@ async function goto(spot) {
   await dbg('hp', 100000);
   const w = toWorld(...spot.at);
   await dbg('teleport', w.x, w.z);
-  await page.evaluate(([y, p]) => { window.__faefight.input.yaw = y; window.__faefight.input.pitch = p; }, [yawToward(spot.at, spot.look), spot.pitch ?? -0.05]);
+  await page.evaluate(([y, p]) => { window.__faefight.input.yaw = y; window.__faefight.input.pitch = p; }, [spot.yawWorld ?? yawToward(spot.at, spot.look), spot.pitch ?? -0.05]);
   await page.waitForTimeout(spot.wait ?? 1400);
 }
 
@@ -50,6 +50,11 @@ const SPOTS = [
   { name: 'bunker', at: [-6, 9], look: [0, 15], pitch: -0.05 },
   { name: 'edge', at: [-15, 12], look: [-25, 30], pitch: -0.12 },
 ];
+// toward the sun (SUN_DIR: elevation 38°, azimuth 58° in three.js spherical coords)
+{
+  const ph = (52 * Math.PI) / 180, th = (58 * Math.PI) / 180;
+  SPOTS.push({ name: 'sun', at: [0, -6], yawWorld: Math.atan2(-Math.sin(ph) * Math.sin(th), -Math.sin(ph) * Math.cos(th)), pitch: 0.42 });
+}
 
 if (mode === 'shots' || mode === 'all') {
   await setQuality(shotQuality);
@@ -73,7 +78,8 @@ if (mode === 'perf' || mode === 'all') {
       acc.push(await dbg('frames'));
     }
     const avg = acc.reduce((a, f) => a + f.avg, 0) / acc.length;
-    out[q] = { avgMs: +avg.toFixed(2), fps: +(1000 / avg).toFixed(0), p95: +Math.max(...acc.map((f) => f.p95)).toFixed(2), p99: +Math.max(...acc.map((f) => f.p99)).toFixed(2), perSpot: acc.map((f) => +f.avg.toFixed(2)) };
+    const p50 = acc.reduce((a, f) => a + f.p50, 0) / acc.length;
+    out[q] = { p50: +p50.toFixed(2), avgMs: +avg.toFixed(2), fps: +(1000 / avg).toFixed(0), p95: +Math.max(...acc.map((f) => f.p95)).toFixed(2), p99: +Math.max(...acc.map((f) => f.p99)).toFixed(2), perSpot: acc.map((f) => +f.avg.toFixed(2)) };
   }
   console.log(JSON.stringify(out));
   console.log('renderInfo', JSON.stringify(await dbg('renderInfo')));

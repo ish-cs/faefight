@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import type { IslandLayout } from '../../sim/map';
 import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
+import { Boats, Gulls } from './dressing';
 import { Grass } from './grass';
 import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
@@ -23,6 +24,8 @@ export class World {
   private water: Ocean | null = null;
   /** instanced grass beds (high/ultra) */
   readonly grass = new Grass();
+  private boats: Boats | null = null;
+  private gulls: Gulls | null = null;
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
   constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
@@ -46,6 +49,9 @@ export class World {
     this.sky.setInteriors(map);
     this.grass.build(map, (isl) => backdropFrame(isl, map.length), islandMask);
     this.scene.add(this.grass.root);
+    this.boats = new Boats(map);
+    this.gulls = new Gulls(map);
+    this.scene.add(this.boats.root, this.gulls.mesh);
     console.info(`[world] built ${map.length} islands in ${Math.round(performance.now() - t0)} ms`);
   }
 
@@ -57,6 +63,9 @@ export class World {
   /** `feet`: live player feet positions (grass bends away from them). */
   render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
     if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
+    const t = performance.now() / 1000;
+    this.boats?.update(t, waterY);
+    this.gulls?.update(t);
     this.grass.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
     this.pieceFx.update(performance.now());

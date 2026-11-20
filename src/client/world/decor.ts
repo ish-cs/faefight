@@ -58,8 +58,6 @@ export const ISLAND_DECOR: IslandDecor = {
     { kind: 'litter', x: 11, z: 1 },
     { kind: 'flowers', x: -13.6, z: 10.2 },
     { kind: 'flowers', x: 12.1, z: 8.9 },
-    { kind: 'shrub', x: -15.3, z: 11.4, s: 0.9 },
-    { kind: 'shrub', x: 15.6, z: 11.0, s: 0.8 },
   ],
   riprap: [-2.6, -1.9, -1.1, 1.0, 1.8, 2.7],
 };

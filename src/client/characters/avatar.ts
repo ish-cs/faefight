@@ -90,6 +90,25 @@ function shieldBar(): { sprite: THREE.Sprite; draw(shield: number): void } {
 }
 
 /** One player's visual: skinned soldier (or the capsule fallback), gun, flash, name tag, hitbox. */
+let _contact: { geo: THREE.BufferGeometry; mat: THREE.MeshBasicNodeMaterial } | null = null;
+function contact() {
+  if (_contact) return _contact;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('[characters] 2D canvas context unavailable');
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(0,0,0,0.55)'); gr.addColorStop(0.45, 'rgba(0,0,0,0.3)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.MeshBasicNodeMaterial({ map: tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+  mat.name = 'contactShadow';
+  _contact = { geo: new THREE.PlaneGeometry(1.1, 1.1).rotateX(-Math.PI / 2), mat };
+  return _contact;
+}
+const contactGeo = () => contact().geo;
+const contactMat = () => contact().mat;
+
 export class Avatar {
   readonly group = new THREE.Group();
   /** Invisible capsule the crosshair ray hits (raycasting skinned meshes is slow and pose-dependent). */
@@ -122,6 +141,9 @@ export class Avatar {
   private smoothVel = new THREE.Vector3();
   private materials: THREE.Material[] = [];
 
+  /** soft ambient-occlusion contact blob under the feet (hidden while airborne) */
+  private blob: THREE.Mesh | null = null;
+
   constructor(assets: CharacterAssets | null, p: PlayerState, color: number, isLocal: boolean) {
     const r = PLAYER.radius;
     this.hitbox = new THREE.Mesh(new THREE.CapsuleGeometry(r, PLAYER.height - 2 * r, 6, 12),
@@ -130,8 +152,13 @@ export class Avatar {
     this.group.add(this.hitbox);
     this.flash = buildMuzzleFlash();
 
-    if (assets) this.buildModel(assets, p, color);
-    else {
+    if (assets) {
+      this.buildModel(assets, p, color);
+      this.blob = new THREE.Mesh(contactGeo(), contactMat());
+      this.blob.position.y = 0.012;
+      this.blob.renderOrder = 1;
+      this.group.add(this.blob);
+    } else {
       // Fallback look (model failed to load): the original capsule with a visor.
       this.hitbox.castShadow = true;
       const visor = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.12), new THREE.MeshStandardNodeMaterial({ color: 0x15181c, roughness: 0.2, metalness: 0.4 }));
@@ -241,6 +268,7 @@ export class Avatar {
     const once = next.loop === THREE.LoopOnce;
     if (once || !next.isRunning()) next.reset();
     if (name === 'Air') { next.time = 0.18; next.timeScale = 0; }
+    if (this.blob) this.blob.visible = name !== 'Air' && name !== 'Death';
     next.setEffectiveWeight(1).play();
     if (this.current) this.current.crossFadeTo(next, name === 'Death' ? 0.1 : FADE, false);
     this.current = next;

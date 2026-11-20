@@ -6,6 +6,7 @@ import { boxUV, mat, StaticBatch } from './geo';
 import { mats } from './materials';
 import { bollard, container, containerStack, crane, drums, generatorProp, lightMast, pallet, palm, shopProp, vaultProp, warehouse } from './props';
 import { ISLAND_DECOR } from './decor';
+import { dressBackdrop, dressIsland } from './dressing';
 import { pbrSample, worldNoise } from './pbr';
 import { islandSurface, makeRng } from './textures';
 
@@ -168,6 +169,7 @@ export function buildIslands(map: IslandLayout[], teamColors: number[]): Islands
     }
 
     buildBackdrop(dress, L, rng, isl, n, R, groundY);
+    dressIsland(dress, L, isl);
   }
 
   distantIslands(dress, map);
@@ -232,6 +234,7 @@ function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof 
   drums(b, at(hw * 0.38, top, z0 + 3), 4, rng);
   drums(b, at(-hw * 0.3, top, z0 + 5), 3, rng);
   for (const [x, z] of [[-hw * 0.45, 4], [-hw * 0.42, 5.4], [hw * 0.02, 13]]) pallet(b, at(x, top, z0 + z));
+  dressBackdrop(b, at, hw, z0, top, rng);
 
   // jungle hill behind the yard
   const W = 2 * hw + 90, D = 110, SX = 60, SZ = 32;

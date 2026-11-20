@@ -53,19 +53,6 @@ function cached<T extends THREE.Texture>(key: string, make: () => T): T {
   return t;
 }
 
-/** Tileable weathered concrete (≈3 m per tile). */
-export const concreteTex = () => cached('concrete', () => canvasTex(512, 512, (g, w, h) => {
-  g.fillStyle = '#b0a99b'; g.fillRect(0, 0, w, h);
-  blotches(g, w, h, 140, '84,78,66', 8, 50, 0.1);
-  blotches(g, w, h, 40, '232,228,216', 8, 40, 0.08);
-  for (let i = 0; i < 6; i++) { // formwork tie holes in a grid
-    for (let j = 0; j < 6; j++) { g.fillStyle = 'rgba(60,56,50,0.5)'; g.beginPath(); g.arc(40 + i * 86, 40 + j * 86, 3, 0, 7); g.fill(); }
-  }
-  g.fillStyle = 'rgba(70,64,56,0.25)'; g.fillRect(0, 255, w, 2); // pour line
-  for (let i = 0; i < 10; i++) { g.fillStyle = `rgba(80,74,64,${rr(0.04, 0.12)})`; g.fillRect(rnd() * w, 0, rr(2, 6), rr(40, 220)); }
-  speckle(g, w, h, 24);
-}));
-
 /** Quay wall: v=0 bottom (deep, dark) → v=1 top (sunlit coping). Algae/tide band set by the caller's UV. */
 export const seawallTex = () => cached('seawall', () => canvasTex(256, 1024, (g, w, h) => {
   const gr = g.createLinearGradient(0, 0, 0, h);
@@ -78,70 +65,6 @@ export const seawallTex = () => cached('seawall', () => canvasTex(256, 1024, (g,
   for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(60,55,45,${rr(0.05, 0.2)})`; g.fillRect(rnd() * w, 0.03 * h, rr(1, 4), rr(20, 110)); }
   g.fillStyle = 'rgba(30,30,28,0.35)'; g.fillRect(0, 0, 2, h); // panel joint
   speckle(g, w, h, 18);
-}));
-
-/** Corrugated steel albedo (grayscale, tint with material/vertex colour). Ribs run along v. */
-export const RIBS = 28;
-export const corrTex = () => cached('corr', () => canvasTex(512, 256, (g, w, h) => {
-  for (let x = 0; x < w; x++) {
-    const s = 0.86 + 0.14 * Math.sin((x / w) * RIBS * Math.PI * 2);
-    const v = Math.round(228 * s);
-    g.fillStyle = `rgb(${v},${v},${v})`; g.fillRect(x, 0, 1, h);
-  }
-  for (let i = 0; i < 26; i++) {
-    const x = rnd() * w, len = rr(40, 200);
-    const gr = g.createLinearGradient(0, 0, 0, len);
-    gr.addColorStop(0, 'rgba(110,60,30,0.5)'); gr.addColorStop(1, 'rgba(110,60,30,0)');
-    g.fillStyle = gr; g.fillRect(x, 0, rr(1, 3), len);
-  }
-  blotches(g, w, h, 30, '70,60,50', 8, 40, 0.22);
-  speckle(g, w, h, 16);
-}));
-
-export const corrNormal = () => cached('corrN', () => canvasTex(512, 4, (g, w, h) => {
-  const d = g.createImageData(w, h);
-  for (let x = 0; x < w; x++) {
-    const s = Math.cos((x / w) * RIBS * Math.PI * 2) * 0.8, len = Math.hypot(s, 1);
-    for (let y = 0; y < h; y++) {
-      const i = (y * w + x) * 4;
-      d.data[i] = 128 + 127 * (s / len); d.data[i + 1] = 128; d.data[i + 2] = 255 / len; d.data[i + 3] = 255;
-    }
-  }
-  g.putImageData(d, 0, 0);
-}, false));
-
-/** Weathered planks running along u (horizontal), 8 boards per tile. */
-export const woodTex = () => cached('wood', () => canvasTex(512, 256, (g, w, h) => {
-  const n = 8, bh = h / n;
-  for (let i = 0; i < n; i++) {
-    const b = rr(0.78, 1.1);
-    g.fillStyle = `rgb(${(152 * b) | 0},${(114 * b) | 0},${(74 * b) | 0})`; g.fillRect(0, i * bh, w, bh);
-    for (let k = 0; k < 40; k++) { g.fillStyle = `rgba(70,45,25,${rr(0.05, 0.22)})`; g.fillRect(0, i * bh + rnd() * bh, w, 1); }
-    for (let k = 0; k < 3; k++) { g.fillStyle = 'rgba(60,38,20,0.35)'; g.beginPath(); g.ellipse(rnd() * w, i * bh + rr(4, bh - 4), rr(3, 8), rr(1.5, 3), 0, 0, 7); g.fill(); }
-    g.fillStyle = 'rgba(28,18,10,0.85)'; g.fillRect(0, i * bh, w, 2);
-    g.fillStyle = 'rgba(40,40,40,0.9)';
-    for (const x of [12, w / 2, w - 14]) { g.fillRect(x, i * bh + 6, 3, 3); g.fillRect(x, i * bh + bh - 9, 3, 3); }
-  }
-  speckle(g, w, h, 20);
-}));
-
-export const burlapTex = () => cached('burlap', () => canvasTex(128, 128, (g, w, h) => {
-  g.fillStyle = '#c0aa7c'; g.fillRect(0, 0, w, h);
-  for (let y = 0; y < h; y += 2) { g.fillStyle = 'rgba(90,72,45,0.28)'; g.fillRect(0, y, w, 1); }
-  for (let x = 0; x < w; x += 2) { g.fillStyle = 'rgba(90,72,45,0.2)'; g.fillRect(x, 0, 1, h); }
-  blotches(g, w, h, 10, '90,70,40', 6, 24, 0.3);
-  speckle(g, w, h, 30);
-}));
-
-export const steelTex = () => cached('steel', () => canvasTex(256, 256, (g, w, h) => {
-  g.fillStyle = '#727a80'; g.fillRect(0, 0, w, h);
-  blotches(g, w, h, 14, '125,70,38', 10, 50, 0.28);
-  blotches(g, w, h, 30, '90,96,100', 10, 60, 0.25);
-  for (let i = 0; i < 70; i++) {
-    g.strokeStyle = `rgba(205,210,215,${rr(0.05, 0.22)})`;
-    g.beginPath(); const x = rnd() * w, y = rnd() * h; g.moveTo(x, y); g.lineTo(x + rr(-30, 30), y + rr(-8, 8)); g.stroke();
-  }
-  speckle(g, w, h, 14);
 }));
 
 export const frondTex = () => cached('frond', () => canvasTex(128, 512, (g, w, h) => {
@@ -187,32 +110,6 @@ export function signTex(text: string, bg = '#1d4a6e', fg = '#f4f1e8') {
     speckle(g, w, h, 14);
   }));
 }
-
-/** Crack mask: R = crack "rank" (0 = none). A crack pixel shows once damage ≥ 1 - rank. */
-export const crackTex = () => cached('crack', () => canvasTex(256, 256, (g, w, h) => {
-  g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
-  g.lineCap = 'round';
-  for (let c = 0; c < 22; c++) {
-    const rank = rr(0.15, 1);
-    let x = rnd() * w, y = rnd() * h, a = rnd() * Math.PI * 2;
-    const v = Math.round(rank * 255);
-    g.strokeStyle = `rgb(${v},${v},${v})`;
-    for (let s = 0; s < 14; s++) {
-      g.lineWidth = rr(1, 2.6) * (1 - s / 18);
-      const nx = x + Math.cos(a) * rr(6, 14), ny = y + Math.sin(a) * rr(6, 14);
-      g.beginPath(); g.moveTo(x, y); g.lineTo(nx, ny); g.stroke();
-      x = nx; y = ny; a += rr(-0.7, 0.7);
-    }
-  }
-}, false));
-
-/** Fine concrete grain for close-up detail (multiplied on top of large painted maps). ~0.5 avg. */
-export const grainTex = () => cached('grain', () => canvasTex(256, 256, (g, w, h) => {
-  g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
-  blotches(g, w, h, 40, '60,60,60', 6, 30, 0.25);
-  blotches(g, w, h, 40, '200,200,200', 6, 30, 0.2);
-  speckle(g, w, h, 40);
-}, false));
 
 /**
  * Top-down island surface layers in island-local space: canvas x = local X, canvas y = local Z, both spanning
