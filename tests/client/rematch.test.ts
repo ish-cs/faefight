@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import type { HostSession as HostSessionT } from '../../src/client/session';
 import { LoopbackTransport } from '../../src/net/loopback';
 import { NET_VERSION } from '../../src/net/protocol';
+import { WireDecoder, wireHeader } from '../../src/net/wire';
 import { newPlayer } from '../../src/sim/player';
 import type { MatchEvent, PieceState, Snapshot } from '../../src/sim/types';
 import { v3 } from '../../src/sim/vec';
@@ -91,6 +92,8 @@ describe('HostSession rematch', () => {
     await flush();
     const msgs = bob.got.filter((m) => m.t === 'snap');
     expect(msgs).toHaveLength(1);
+    expect(wireHeader(msgs[0].b).baseSeq).toBe(0); // a full snapshot, not a delta against the old match
+    msgs[0].s = new WireDecoder().decode(msgs[0].b);
     expect(msgs[0].s.tick).toBe(1);
     expect(msgs[0].s.pieces).toEqual([]);
     expect(msgs[0].s.events).toEqual([]);

@@ -436,13 +436,16 @@ export class Hud {
       } else if (e.type === 'suddenDeath') {
         this.addFeed('Sudden death: generators stopped, tide rising', true);
       } else if (e.type === 'hit') {
-        if (e.data.by === this.humanId && e.data.target !== this.humanId) {
-          this.crosshair.classList.toggle('head', e.data.part === 'head');
-          this.flash(this.crosshair, 'hit');
-        }
+        if (e.data.by === this.humanId && e.data.target !== this.humanId && !e.data.echo) this.hitmarker(e.data.part === 'head');
         if (e.data.target === this.humanId) this.flash(this.damage, 'on');
       }
     }
+  }
+
+  /** Crosshair hitmarker (also shown straight away for a predicted hit). */
+  hitmarker(head: boolean) {
+    this.crosshair.classList.toggle('head', head);
+    this.flash(this.crosshair, 'hit');
   }
 
   private flash(node: HTMLElement, cls: string) {
@@ -504,6 +507,8 @@ export class Hud {
     if (!me) return;
     if (rebuild || !this.panel.querySelector('.shop-grid')) {
       const grid = el('div', 'shop-grid');
+      const info = el('div', 'shop-info', 'Hover an item for details');
+      info.dataset.testid = 'shop-info';
       const section = (title: string, items: ShopItem[]) => {
         const row = el('div', 'shop-row');
         row.setAttribute('role', 'group');
@@ -525,6 +530,10 @@ export class Hud {
           lock.innerHTML = LOCK_ICON;
           b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
           b.onclick = (e) => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item, e.shiftKey); };
+          // The name/details show in the panel's info bar (never clipped by the panel edge).
+          const show = () => { setText(info, b.dataset.name ?? ''); info.classList.add('on'); };
+          const hide = () => info.classList.remove('on');
+          b.onmouseenter = show; b.onfocus = show; b.onmouseleave = hide; b.onblur = hide;
           row.append(b);
         }
         grid.append(el('div', 'shop-section', title), row);
@@ -538,7 +547,7 @@ export class Hud {
         // Lock cards only show up once you own (or have locked) that gun.
         section('Upgrades', ['genUpgrade', ...GUNS.map(lockItem)]);
       }
-      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid);
+      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid, info);
       // Focus the panel (not a card, so no tooltip pops up): Tab or an arrow key then walks the cards.
       this.panel.tabIndex = -1;
       this.panel.onkeydown = (e) => this.shopArrows(e);

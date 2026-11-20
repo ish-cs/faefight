@@ -103,6 +103,7 @@ export class GunFx {
 
   /** Feed every snapshot's events (`myId` gets the closer, brighter variants). */
   onEvent(e: MatchEvent, myId: number) {
+    if (e.data.echo) return; // already shown when predicted (shotPredict.ts)
     if (e.type === 'shot') this.onShot(e.data, myId);
     else if (e.type === 'hit') this.onHit(e.data);
     else if (e.type === 'explosion') this.onExplosion(e.data);

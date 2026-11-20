@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  abs, attribute, bumpMap, float, max, mix, mx_noise_float, normalGeometry, normalLocal, normalMap, positionGeometry, positionLocal,
+  abs, attribute, bumpMap, float, luminance, max, mix, mx_noise_float, normalGeometry, normalLocal, normalMap, positionGeometry, positionLocal,
   pow, select, sin, smoothstep, step, texture, uv, vec2, vec3, vec4,
 } from 'three/tsl';
 import { PIECES } from '../../sim/constants';
@@ -8,7 +8,8 @@ import type { PieceKind, PieceState } from '../../sim/types';
 import { DAMAGE_TILE_M, damageTex } from './damageTex';
 import { boxUV, mat, merge, part, strut } from './geo';
 import { CONTAINER_COLORS } from './materials';
-import { burlapTex, corrNormal, corrTex, makeRng, steelTex, woodTex } from './textures';
+import { pbrTex, type PbrName } from './pbr';
+import { makeRng } from './textures';
 
 const KINDS: PieceKind[] = ['sandbags', 'wood', 'metal', 'steel', 'scaffold', 'ramp', 'container'];
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -254,11 +255,19 @@ function dmgOpts(kind: PieceKind, slot: Slot): DmgOpts {
   }
 }
 
-const SLOT_BASE: Record<Slot, { map?: () => THREE.Texture; normal?: () => THREE.Texture; rough: number; metal: number; side?: THREE.Side }> = {
-  burlap: { map: burlapTex, rough: 0.97, metal: 0 },
-  wood: { map: woodTex, rough: 0.82, metal: 0 },
-  corr: { map: corrTex, normal: corrNormal, rough: 0.5, metal: 0.55, side: THREE.DoubleSide },
-  steel: { map: steelTex, rough: 0.42, metal: 0.75 },
+/**
+ * Base look per slot: a CC0 PBR set (see public/assets/CREDITS.md) — albedo (optionally re-tinted from its luminance),
+ * normal, ARM roughness — or a flat PBR colour. Damage nodes below layer on top of this.
+ */
+type SlotBase = {
+  pbr?: PbrName; uvScale?: [number, number]; gain?: number; lum?: number; tint?: [number, number, number]; normalScale?: number;
+  rough: number; metal: number; side?: THREE.Side;
+};
+const SLOT_BASE: Record<Slot, SlotBase> = {
+  burlap: { pbr: 'linen', uvScale: [2.5, 2.5], lum: 0.4, tint: [0.62, 0.5, 0.33], normalScale: 1.6, rough: 0.97, metal: 0 },
+  wood: { pbr: 'planks', uvScale: [1, 1], gain: 1.05, normalScale: 1, rough: 0.82, metal: 0 },
+  corr: { pbr: 'corrugated', uvScale: [2, 1], lum: 0.44, normalScale: 1.2, rough: 0.5, metal: 0.45, side: THREE.DoubleSide },
+  steel: { pbr: 'steel_plate', uvScale: [1, 1], gain: 4, tint: [0.88, 0.9, 0.93], normalScale: 1, rough: 0.42, metal: 0.7 },
   galv: { rough: 0.38, metal: 0.85 },
   paint: { rough: 0.6, metal: 0.25 },
 };
@@ -299,7 +308,16 @@ function slotMaterial(kind: PieceKind, slot: Slot): THREE.MeshStandardNodeMateri
   const hasHole = step(0.001, holeT);
   const rim = below(s.g, holeT.add(0.022), 0.006).mul(hasHole);
 
-  let col = (b.map ? texture(b.map(), uv()).rgb : vec3(1, 1, 1)) as unknown as V3;
+  const P = b.pbr ? pbrTex(b.pbr) : null;
+  const uvP = uv().mul(vec2(...(b.uvScale ?? [1, 1])));
+  const arm = P ? texture(P.arm, uvP) : null;
+  let col = vec3(1, 1, 1) as unknown as V3;
+  if (P) {
+    const a = texture(P.map, uvP).rgb;
+    col = (b.lum ? vec3(luminance(a).div(b.lum)) : a.mul(b.gain ?? 1)) as unknown as V3;
+    if (b.tint) col = col.mul(vec3(...b.tint));
+  }
+  const baseRough = (arm ? arm.g.mul(b.rough / 0.7).clamp(0.05, 1) : float(b.rough)) as N;
   let wear: N = float(0); // 0..1: how much the surface turned to rough, non-metal grime/rust/char
   const SAND = vec3(0.84, 0.7, 0.46);
   switch (o.style) {
@@ -347,10 +365,9 @@ function slotMaterial(kind: PieceKind, slot: Slot): THREE.MeshStandardNodeMateri
     }
   }
   m.colorNode = vec4(col, 1);
-  if (o.style === 'sheet' || o.style === 'steel' || o.style === 'trim') {
-    m.roughnessNode = mix(float(b.rough), float(0.95), wear);
-    m.metalnessNode = mix(float(b.metal), float(0.1), wear);
-  }
+  m.roughnessNode = mix(baseRough, float(0.95), wear);
+  if (o.style === 'sheet' || o.style === 'steel' || o.style === 'trim') m.metalnessNode = mix(float(b.metal), float(0.1), wear);
+  if (arm) m.aoNode = arm.r;
   if (o.hole) {
     m.opacityNode = step(holeT, s.g);
     m.alphaTest = 0.5;
@@ -360,11 +377,10 @@ function slotMaterial(kind: PieceKind, slot: Slot): THREE.MeshStandardNodeMateri
   if (o.dent) {
     const tb = texture(dt, puv);
     const h = tb.a.mul(below(tb.g, d.mul(1.4), 0.2)).mul(smoothstep(0.1, 0.6, d));
-    const baseN = b.normal ? normalMap(texture(b.normal(), uv()), vec2(1.1, 1.1)) : undefined;
+    const baseN = P ? normalMap(texture(P.normal, uvP), vec2(b.normalScale ?? 1, b.normalScale ?? 1)) : undefined;
     m.normalNode = bumpMap(h, float(o.style === 'steel' || o.style === 'trim' ? 2.5 : 4), baseN);
-  } else if (b.normal) {
-    m.normalMap = b.normal();
-    m.normalScale = new THREE.Vector2(1.1, 1.1);
+  } else if (P) {
+    m.normalNode = normalMap(texture(P.normal, uvP), vec2(b.normalScale ?? 1, b.normalScale ?? 1));
   }
 
   // vertex deformation

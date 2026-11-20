@@ -23,6 +23,19 @@ const LOW_READY_RATE = 8; // 1/s easing in/out of low ready
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _right = new THREE.Vector3();
+const _q3 = new THREE.Quaternion();
+const _sphere = new THREE.Sphere();
+const _proj = new THREE.Matrix4();
+
+/**
+ * Level of detail (draw calls are the client's main cost: each skinned part is a draw in the main pass and in
+ * every shadow cascade it overlaps).
+ * - Culling: a sphere around the avatar that also covers its death pose (and its shadow, which at this sun
+ *   elevation falls within ~2.5 m) — so the main pass and each shadow cascade cull avatars properly.
+ * - Shadows: every part casts up close; the few big parts (torso, legs, head) further out; none far away.
+ * - Animation: off-screen avatars skip the mixer (time is kept, so they resume in step); far ones update at half rate.
+ */
+export const CHAR_LOD = { cullRadius: 2.2, shadowRadius: 2.6, shadowAllM: 30, shadowMajorM: 90, majorParts: 3, animHalfRateM: 45 };
 
 /** Display-rate motion of one player (render.ts fills it: predicted locally, interpolated for others). */
 export type Motion = { pos: THREE.Vector3; vel: THREE.Vector3; yaw: number; pitch: number };
@@ -96,6 +109,25 @@ function shieldBar(): { sprite: THREE.Sprite; draw(shield: number): void } {
 }
 
 /** One player's visual: skinned soldier (or the capsule fallback), gun, flash, name tag, hitbox. */
+let _contact: { geo: THREE.BufferGeometry; mat: THREE.MeshBasicNodeMaterial } | null = null;
+function contact() {
+  if (_contact) return _contact;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('[characters] 2D canvas context unavailable');
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(0,0,0,0.55)'); gr.addColorStop(0.45, 'rgba(0,0,0,0.3)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.MeshBasicNodeMaterial({ map: tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+  mat.name = 'contactShadow';
+  _contact = { geo: new THREE.PlaneGeometry(1.1, 1.1).rotateX(-Math.PI / 2), mat };
+  return _contact;
+}
+const contactGeo = () => contact().geo;
+const contactMat = () => contact().mat;
+
 export class Avatar {
   readonly group = new THREE.Group();
   /** Invisible capsule the crosshair ray hits (raycasting skinned meshes is slow and pose-dependent). */
@@ -129,6 +161,17 @@ export class Avatar {
   private lastPos = new THREE.Vector3();
   private smoothVel = new THREE.Vector3();
   private materials: THREE.Material[] = [];
+  /** Skinned parts with whether they keep casting a shadow at mid range (the biggest few). */
+  private parts: { mesh: THREE.SkinnedMesh; major: boolean }[] = [];
+  private shadowTier = -1;
+  /** LOD inputs for the next update(): set by CharacterSystem from the camera each frame. */
+  lodOnScreen = true;
+  lodDist = 0;
+  private animSkipped = 0;
+  private animFrame = 0;
+
+  /** soft ambient-occlusion contact blob under the feet (hidden while airborne) */
+  private blob: THREE.Mesh | null = null;
 
   constructor(assets: CharacterAssets | null, p: PlayerState, color: number, isLocal: boolean) {
     const r = PLAYER.radius;
@@ -138,8 +181,13 @@ export class Avatar {
     this.group.add(this.hitbox);
     this.flash = buildMuzzleFlash();
 
-    if (assets) this.buildModel(assets, p, color);
-    else {
+    if (assets) {
+      this.buildModel(assets, p, color);
+      this.blob = new THREE.Mesh(contactGeo(), contactMat());
+      this.blob.position.y = 0.012;
+      this.blob.renderOrder = 1;
+      this.group.add(this.blob);
+    } else {
       // Fallback look (model failed to load): the original capsule with a visor.
       this.hitbox.castShadow = true;
       const visor = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.12), new THREE.MeshStandardNodeMaterial({ color: 0x15181c, roughness: 0.2, metalness: 0.4 }));
@@ -172,7 +220,8 @@ export class Avatar {
     model.traverse((o) => {
       const m = o as THREE.SkinnedMesh;
       if (!m.isSkinnedMesh) return;
-      m.frustumCulled = false; // bind-pose bounds don't follow the animation (death, lean)
+      // Bind-pose bounds don't follow the animation (death, lean): cull against a fixed sphere round the avatar.
+      this.parts.push({ mesh: m, major: false });
       const swap = (mat: THREE.Material) => {
         if (mat.name !== variant.uniformMaterial) return mat;
         if (!uniform) {
@@ -187,6 +236,18 @@ export class Avatar {
     if (!uniform) console.warn(`[characters] uniform material "${variant.uniformMaterial}" not found; team colour only on name tag`);
     this.group.add(model);
     this.model = model;
+    this.group.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4(), size = new THREE.Vector3();
+    for (const part of this.parts) {
+      const m = part.mesh;
+      // The avatar-space sphere (centre 0.9 m up, CHAR_LOD.cullRadius) in this mesh's local frame.
+      inv.copy(m.matrixWorld).invert();
+      const scale = m.matrixWorld.getMaxScaleOnAxis() || 1;
+      m.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0).applyMatrix4(inv), (CHAR_LOD.cullRadius + CHAR_LOD.shadowRadius) / scale);
+      m.frustumCulled = true;
+    }
+    const vol = (m: THREE.SkinnedMesh) => { m.geometry.computeBoundingBox(); m.geometry.boundingBox!.getSize(size); return size.x * size.y * size.z; };
+    [...this.parts].sort((a, b) => vol(b.mesh) - vol(a.mesh)).slice(0, CHAR_LOD.majorParts).forEach((p) => { p.major = true; });
 
     this.mixer = new THREE.AnimationMixer(model);
     for (const [name, clip] of assets.clips) this.actions.set(name, this.mixer.clipAction(clip));
@@ -248,6 +309,7 @@ export class Avatar {
       this.group.add(holder);
     }
     holder.add(gun);
+    this.weaponDirty = true;
     this.flash.position.copy(gun.userData.muzzle as THREE.Vector3);
     gun.add(this.flash);
     this.weapon = holder;
@@ -260,6 +322,7 @@ export class Avatar {
     const once = next.loop === THREE.LoopOnce;
     if (once || !next.isRunning()) next.reset();
     if (name === 'Air') { next.time = 0.18; next.timeScale = 0; }
+    if (this.blob) this.blob.visible = name !== 'Air' && name !== 'Death';
     next.setEffectiveWeight(1).play();
     if (this.current) this.current.crossFadeTo(next, name === 'Death' ? 0.1 : FADE, false);
     this.current = next;
@@ -302,7 +365,13 @@ export class Avatar {
       if (sh !== this.shownShield) { this.shownShield = sh; this.shieldTag.draw(sh); }
     }
 
+    this.applyShadowLod();
     if (!this.mixer) return;
+    // Animation LOD: nothing to see off screen; far away, half rate. Skipped time is caught up on the next update.
+    this.animFrame++;
+    if (!this.lodOnScreen || (this.lodDist > CHAR_LOD.animHalfRateM && this.animFrame % 2 === 1)) { this.animSkipped += dt; return; }
+    dt += this.animSkipped;
+    this.animSkipped = 0;
     this.smoothVel.lerp(f.vel, 1 - Math.exp(-VEL_SMOOTH_RATE * dt));
     const { name, ts } = chooseClip({
       alive: f.alive, vel: this.smoothVel, yaw: f.yaw, equipped: f.equipped,
@@ -328,13 +397,29 @@ export class Avatar {
     }
   }
 
+  /** Shadow casting by distance tier (only touches the meshes when the tier changes). */
+  private applyShadowLod() {
+    const d = this.lodDist;
+    const tier = d < CHAR_LOD.shadowAllM ? 0 : d < CHAR_LOD.shadowMajorM ? 1 : 2;
+    if (tier === this.shadowTier && !this.weaponDirty) return;
+    this.shadowTier = tier;
+    this.weaponDirty = false;
+    for (const p of this.parts) p.mesh.castShadow = tier === 0 || (tier === 1 && p.major);
+    this.weapon?.traverse((o) => {
+      if (!(o as THREE.Mesh).isMesh) return;
+      o.userData.castsShadow ??= o.castShadow; // as built (weapons.ts)
+      o.castShadow = tier === 0 && o.userData.castsShadow;
+    });
+  }
+  private weaponDirty = false;
+
   /** Rotate a bone by `angle` about the body's right axis (_right, world space), whatever its local axes. */
   private bend(bone: THREE.Bone | undefined, angle: number) {
     if (!bone?.parent) return;
     // local' = parentWorld⁻¹ · R(world) · parentWorld · local
     bone.parent.getWorldQuaternion(_q);
     _q2.setFromAxisAngle(_right, angle);
-    const inv = _q.clone().invert();
+    const inv = _q3.copy(_q).invert();
     bone.quaternion.premultiply(_q).premultiply(_q2).premultiply(inv);
     bone.updateMatrixWorld(true);
   }
@@ -360,6 +445,9 @@ export class CharacterSystem {
   private snapAt = 0;
   /** Player whose avatar is hidden (the local player in first person); -1 = none. */
   hiddenId = -1;
+  /** The view camera, for LOD (distance shadows, culling-aware animation). */
+  camera: THREE.Camera | null = null;
+  private frustum = new THREE.Frustum();
   /** Resolves once the models are in (or failed — then the capsule fallback is used). */
   readonly ready: Promise<void>;
 
@@ -393,7 +481,8 @@ export class CharacterSystem {
 
   onEvent(e: MatchEvent) {
     const now = performance.now();
-    if (e.type === 'shot') this.avatars.get(e.data.by as number)?.onShot((e.data.weapon as WeaponKind) ?? 'pistol', now);
+    // echo = the host confirming a shot we already showed (client shot prediction): animated once.
+    if (e.type === 'shot') { if (!e.data.echo) this.avatars.get(e.data.by as number)?.onShot((e.data.weapon as WeaponKind) ?? 'pistol', now); }
     else if (e.type === 'hit') this.avatars.get(e.data.target as number)?.onHit(now);
   }
 
@@ -403,14 +492,29 @@ export class CharacterSystem {
    * local player (smoother than the 30 Hz sim yaw). Pitch is the sim's aim pitch for everyone.
    */
   sync(players: PlayerState[], humanId: number, localYaw: number, simTime: number,
-    motionOf: (id: number, out: Motion) => Motion | null) {
+    motionOf: (id: number, out: Motion) => Motion | null, hidden?: readonly number[]) {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastNow) / 1000);
     this.lastNow = now;
     if (simTime !== this.snapTime) { this.snapTime = simTime; this.snapAt = now; }
     const m = this.tmpMotion;
+    const cam = this.camera;
+    if (cam) {
+      cam.updateMatrixWorld();
+      this.frustum.setFromProjectionMatrix(_proj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    }
     for (const p of players) {
+      // Not perceivable (interest management): keep the avatar, just don't show it — rebuilding a skinned
+      // model each time someone steps round a corner is a frame hitch.
+      if (hidden?.includes(p.id)) { const h = this.avatars.get(p.id); if (h) { h.group.visible = false; h.alive = false; } continue; }
       const a = this.avatar(p, humanId);
+      if (cam) {
+        const pos = a.group.position;
+        a.lodDist = cam.position.distanceTo(pos);
+        _sphere.center.set(pos.x, pos.y + 0.9, pos.z);
+        _sphere.radius = CHAR_LOD.cullRadius + CHAR_LOD.shadowRadius;
+        a.lodOnScreen = this.frustum.intersectsSphere(_sphere);
+      }
       m.yaw = p.yaw;
       m.pitch = p.pitch;
       if (!motionOf(p.id, m)) { m.pos.set(p.pos.x, p.pos.y, p.pos.z); m.vel.set(p.vel.x, p.vel.y, p.vel.z); }
@@ -425,10 +529,17 @@ export class CharacterSystem {
       }, dt, now);
       if (p.id === this.hiddenId) a.group.visible = false;
     }
-    for (const [id, a] of this.avatars) if (!players.some((p) => p.id === id)) { a.dispose(); this.avatars.delete(id); }
+    if (this.avatars.size > players.length)
+      for (const [id, a] of this.avatars) if (!players.some((p) => p.id === id)) { a.dispose(); this.avatars.delete(id); }
   }
 
   /** Hitboxes the aim ray may hit: other players that are alive. */
+  /** Which player an aim-ray hit (one of aimTargets) belongs to. */
+  playerOf(obj: THREE.Object3D): number | null {
+    for (const [id, a] of this.avatars) if (a.hitbox === obj) return id;
+    return null;
+  }
+
   aimTargets(humanId: number, out: THREE.Object3D[]) {
     for (const [id, a] of this.avatars) if (id !== humanId && a.alive && a.group.visible) out.push(a.hitbox);
   }

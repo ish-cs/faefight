@@ -5,6 +5,8 @@ import { ChatLimiter, cleanChat } from '../net/chat';
 import { Lobby } from '../net/lobby';
 import { SnapshotEncoder } from '../net/snapshotCodec';
 import { InterestManager } from '../net/interest';
+import { WireEncoder, wireHeader } from '../net/wire';
+import { SnapRate } from '../net/snapRate';
 import { PeerGuard, type Verdict } from '../net/rateLimit';
 import type { Placement } from '../sim/building';
 import type { IslandLayout } from '../sim/map';
@@ -57,6 +59,8 @@ export class HostSession {
   private reserved = new Map<number, ReturnType<typeof setTimeout>>();
   /** Last map (and island per seat) sent with 'start', for a friend who reconnects mid-match. */
   private startInfo: { map: IslandLayout[]; islands: number[] } | null = null;
+  /** Per remote player: binary delta encoder (baseline = their last ack) and adaptive send rate. */
+  private streams = new Map<number, { wire: WireEncoder; rate: SnapRate }>();
 
   private constructor(private room: HostRoom, readonly hostName: string, private ev: HostEvents) {
     this.lobby = new Lobby(hostName, HOST_PEER);
@@ -159,6 +163,7 @@ export class HostSession {
       switch (msg.t) {
         case 'input':
           if (blocked(guard.admitInput(now))) return;
+          if (msg.ack !== undefined) this.streams.get(playerId)?.wire.ack(msg.ack);
           if (this.started) this.worker?.postMessage({ type: 'remoteInput', playerId, input: msg.input, cmds: msg.cmds });
           break;
         case 'preview':
@@ -192,6 +197,7 @@ export class HostSession {
     this.links.delete(peerId);
     if (seat === null) return;
     this.interest?.forget(seat + 1);
+    this.streams.delete(seat + 1);
     if (!this.started) { this.lobby.removePeer(peerId); this.broadcastLobby(); return; }
     const name = this.nameOf(seat);
     this.pings.forget(peerId);
@@ -226,6 +232,7 @@ export class HostSession {
     const playerId = seat + 1;
     this.interest?.forget(playerId);
     this.encoder.resync(playerId);
+    this.streams.delete(playerId); // fresh binary stream: the new client has no delta baseline
     this.worker?.postMessage({ type: 'humanize', playerId });
     this.send(link, { t: 'lobby', slots: this.lobby.slots(), you: seat });
     this.send(link, { t: 'start', map: this.startInfo.map, playerId, island: this.startInfo.islands[seat] ?? seat });
@@ -330,6 +337,7 @@ export class HostSession {
   private resetStream(worker: { postMessage(m: ToWorker): void } | null) {
     this.worker = worker;
     this.encoder = new SnapshotEncoder();
+    this.streams.clear();
     this.tickNo = 0;
     this.previewBudget.clear();
   }
@@ -345,18 +353,34 @@ export class HostSession {
     this.issueTokens();
   }
 
-  /** Every worker snapshot; broadcast every 2nd tick (15 Hz). */
+  /**
+   * Every worker snapshot. Each friend gets it at 30 Hz while their stream fits the bandwidth budget,
+   * else every 2nd tick (snapRate.ts), interest-filtered, binary and delta-compressed against the
+   * newest snapshot they acknowledged (wire.ts).
+   */
   onSnapshot(snap: Snapshot) {
     this.ticks.onTick(performance.now());
     this.encoder.push(snap);
-    if (this.tickNo++ % 2 !== 0) return;
-    this.interest?.update(snap);
+    const tick = this.tickNo++;
+    let updated = false;
     for (const [peerId, link] of this.links) {
       const seat = this.lobby.seatOf(peerId);
       if (seat === null) continue;
-      const s = this.encoder.take(seat + 1);
-      this.send(link, { t: 'snap', s: this.interest ? this.interest.apply(seat + 1, s) : s });
+      const id = seat + 1;
+      let st = this.streams.get(id);
+      if (!st) { st = { wire: new WireEncoder(), rate: new SnapRate() }; this.streams.set(id, st); }
+      if (!st.rate.due(tick)) continue;
+      if (!updated) { this.interest?.update(snap); updated = true; }
+      const s = this.encoder.take(id, true);
+      const b = st.wire.encode(snap.tick, this.interest ? this.interest.apply(id, s) : s);
+      st.rate.sent(b.byteLength, wireHeader(b).baseSeq === 0);
+      this.send(link, { t: 'snap', b });
     }
+  }
+
+  /** Debug/bench: per-friend stream stats. */
+  streamStats() {
+    return [...this.streams].map(([id, st]) => ({ id, fast: st.rate.fast, avgBytes: Math.round(st.rate.avgBytes), acked: st.wire.ackedSeq, ...st.wire.stats }));
   }
 
   /** Worker preview reply for a remote player. */

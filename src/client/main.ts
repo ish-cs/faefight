@@ -1,13 +1,14 @@
 import './style.css';
 import type { Object3D } from 'three/webgpu';
 import type { HostMsg, Slot } from '../net/protocol';
-import { SnapshotDecoder } from '../net/snapshotCodec';
+import { SnapshotDecoder, type NetSnapshot } from '../net/snapshotCodec';
+import { WireDecoder } from '../net/wire';
 import type { Link } from '../net/transport';
 import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import type { Placement } from '../sim/building';
 import { BuildAim, type AimOutcome } from './buildAim';
-import { DT, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
+import { DT, HEAD, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import type { IslandLayout } from '../sim/map';
@@ -26,6 +27,7 @@ import { LobbyUi } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom } from './session';
 import { SnapshotBuffer } from './snapBuffer';
+import { DynamicResolution } from './dynRes';
 import { endButtons, GameScope, type EndRole } from './rematch';
 import { Scoreboard } from './scoreboard';
 import { applyDocumentSettings } from './settings/apply';
@@ -42,10 +44,13 @@ import { botCountControl, prepareJoin, rememberDifficulty } from './qol/menu';
 import { loadPrefs, savePrefs, seatPrefsOf } from './qol/prefs';
 import { clearRejoin, loadRejoin, markAutoRejoin, saveRejoin, touchRejoin } from './qol/rejoin';
 import { isPieceItem } from '../sim/hotbar';
+import { aimDirection, ShotPredictor } from './shotPredict';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
 const AIM_RANGE = 120;
+/** Already-sent movement commands repeated in each network input message. */
+const REDUNDANT_CMDS = 2;
 const NAME_KEY = 'faefight.name';
 const NAME_MAX = 16;
 /** Created at load so M-mute works from the menu; the AudioContext itself starts on the first click/key. */
@@ -111,9 +116,10 @@ type Backend = {
   /** Vs bot only: stop / restart the simulation (pause card). */
   pause?(paused: boolean): void;
   debug?: {
-    teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void;
+    teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
+    pieces(x: number, z: number, n: number): void;
   };
 };
 
@@ -153,10 +159,11 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     pause: session ? undefined : (paused) => send({ type: 'pause', paused }),
     debug: {
       teleport: (x, z) => send({ type: 'debug', cmd: 'teleport', x, z }),
-      give: (inv) => send({ type: 'debug', cmd: 'give', inv }),
+      give: (inv, id) => send({ type: 'debug', cmd: 'give', inv, id }),
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
       potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
+      pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
     },
@@ -171,6 +178,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
 /** Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived before the game was ready. */
 function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, early: HostMsg[]): Backend {
   const decoder = new SnapshotDecoder();
+  const wire = new WireDecoder();
   let closed = false;
   let disposed = false;
   return {
@@ -180,7 +188,10 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
       sink.map(start.map, start.playerId, start.island);
       const handle = (m: HostMsg) => {
         if (disposed) return;
-        if (m.t === 'snap') sink.snapshot(decoder.decode(m.s));
+        if (m.t === 'snap') {
+          const n = wire.decode<NetSnapshot>(m.b);
+          if (n) sink.snapshot(decoder.decode(n));
+        }
         else if (m.t === 'preview') sink.preview(m.result, m.key);
         else if (m.t === 'chat') sink.chat(m.from, m.text);
         else if (m.t === 'ended') { closed = true; if (m.reason === 'host-left') sink.fatal('Host left', 'Match over: the host left the game.'); else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`); }
@@ -195,7 +206,7 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
         else sink.fatal('Host left', 'Match over: lost the connection to the host.');
       });
     },
-    input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds }); },
+    input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds, ack: wire.ack || undefined }); },
     preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
     chat: (text) => link.send({ t: 'chat', text }),
     close: () => { disposed = true; },
@@ -507,9 +518,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let running = true;
   /** Free-fly chosen from the end screen (otherwise spectating = being dead). */
   let spectateChosen = false;
+  /** Dynamic resolution: drops the render scale while frames run over budget, restores it when stable. */
+  const dynRes = new DynamicResolution();
+  dynRes.enabled = settings.get().video.dynamicResolution;
   const offSettings = settings.subscribe((st) => {
     renderer.world.sky.setQuality(st.video.quality);
     renderer.world.sky.setResolutionScale(st.video.resolutionScale);
+    dynRes.enabled = st.video.dynamicResolution;
+    renderer.world.sky.setDynamicScale(dynRes.scale);
   });
 
   // ---- reveal: map + avatars + first snapshot → shader warm-up → a few hidden frames → fade in ----
@@ -784,13 +800,19 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && fpv.adsK > 0.9 };
   };
 
+  // Client shot prediction (shotPredict.ts); predictShot is defined with the frame loop.
+  const shots = new ShotPredictor();
+  /** Debug: when own shots were shown (predicted) and when the host's shot events reached the effects (old path). */
+  const shotTimes = { predicted: [] as number[], applied: [] as number[] };
   const applySnapshot = (s: Snapshot) => {
     const first = !snap;
+    if (DEBUG) for (const e of s.events) if (e.type === 'shot' && e.data.by === humanId) shotTimes.applied.push(performance.now());
     snap = s;
     snapTime = s.time; snapAt = performance.now();
     hud.pushEvents(renderer.pushSnapshot(s));
     const meSnap = s.players.find((p) => p.id === humanId);
     fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
+    // (Own 'shot'/'hit' events flagged echo were already shown when predicted; their effects skip them.)
     // My recoil: the sim reports each kick with the shot; it moves my real aim (I have to pull against it).
     for (const e of s.events) {
       const kick = e.data.kick as { pitch: number; yaw: number } | undefined;
@@ -842,6 +864,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       predictor?.onSnapshot(s);
       latest = s;
       if (buffer) qol.onNetSnapshot();
+      shots.reconcile(s.events, humanId, performance.now());
       if (buildPending && s.events.some((e) => e.type === 'placed' && (e.data as { by?: number }).by === humanId)) buildPending = null;
       renderer.ingest(s);
       if (buffer) buffer.push(s); else applySnapshot(s);
@@ -884,14 +907,50 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
       predicted: () => ({ active: !!predictor?.active, pos: lastRendered, seq: moveSeq, stats: predictor?.stats ?? null, pending: predictor?.pending ?? 0 }),
       frames: () => frameStats(),
-      resetFrames: () => { frameMs.length = 0; },
+      resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; },
+      gpuMs: () => renderer.gpuStats(),
+      renderScale: () => ({ dyn: dynRes.scale, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: dynRes.smoothedMs }),
       interpDelay: () => renderer.interpDelay,
+      shotPredict: () => ({ ...shots.stats, inFlight: shots.inFlight, times: shotTimes }),
       /** Current build ghost: snap tag, ghost/rest position, rotation, validity (+ reason) and the exact request a click sends. */
       buildAim: () => aim,
       /** The sim's own verdict for a build request (round trip), to cross-check the local ghost. */
       serverPreview: (req: BuildRequest) => new Promise<Placement>((res) => { const k = ++debugPreviewSeq; debugPreviews.set(k, res); backend.preview(req, k); }),
     };
   }
+
+  // ---- client shot prediction (shotPredict.ts) ----
+  const shotRay = new THREE.Raycaster();
+  const shotFrom = new THREE.Vector3(), shotDir = new THREE.Vector3(), victimFeet = new THREE.Vector3();
+  /** Fire pressed this frame: show the shot now if the gun can fire; predict a hitmarker when it can't miss. */
+  const predictShot = (yaw: number, pitch: number) => {
+    const meNew = latest?.players.find((p) => p.id === humanId);
+    const w = shots.tryFire(meNew, performance.now());
+    if (!w || !meNew) return;
+    if (DEBUG) shotTimes.predicted.push(performance.now());
+    const range = WEAPONS[w].range;
+    shotFrom.set(feet.x, feet.y + PLAYER.eyeHeight, feet.z);
+    const d = aimDirection(yaw, pitch);
+    shotDir.set(d.x, d.y, d.z);
+    shotRay.set(shotFrom, shotDir);
+    shotRay.far = range;
+    const hit = shotRay.intersectObjects(renderer.aimTargets(), false)[0];
+    const to = hit ? hit.point : shotFrom.clone().addScaledVector(shotDir, range);
+    const ev = { t: simNow(), type: 'shot' as const, data: { by: humanId, weapon: w, from: { x: shotFrom.x, y: shotFrom.y, z: shotFrom.z }, to: { x: to.x, y: to.y, z: to.z }, predicted: true } };
+    renderer.localEvent(ev);
+    fpv.onEvents([ev], humanId, meNew.pos);
+    audio.predicted('shot', w);
+    const victim = hit && w !== 'rocket' ? renderer.characters.playerOf(hit.object) : null;
+    if (victim === null || !renderer.playerPos(victim, victimFeet)) return;
+    // Only when the whole spread cone fits on the body: the host's random spread can't make it a miss.
+    const cone = spreadDeg(w, { ads: fpv.adsK > 0.5, bloom: meNew.bloom, lastShotAt: meNew.lastShotAt }, simNow(),
+      { speed: Math.hypot(meNew.vel.x, meNew.vel.z), grounded: Math.abs(meNew.vel.y) < 0.5 });
+    if (WEAPONS[w].pellets === 1 && Math.atan2(PLAYER.radius * 0.8, hit!.distance) < (cone * Math.PI) / 180) return;
+    shots.markHit();
+    hud.hitmarker(to.y >= victimFeet.y + HEAD.y - HEAD.r);
+    audio.predicted('hitmarker');
+    renderer.gunFx.onEvent({ t: ev.t, type: 'hit', data: { target: victim, by: humanId, pos: { x: to.x, y: to.y, z: to.z }, part: to.y >= victimFeet.y + HEAD.y - HEAD.r ? 'head' : 'body', weapon: w } }, humanId);
+  };
 
   // ---- frame loop ----
   const feet = new THREE.Vector3();
@@ -904,6 +963,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let moveAcc = 0;
   let jumpLatch = false;
   let unsent: MoveCmd[] = [];
+  let sentTail: MoveCmd[] = []; // last commands already sent (input redundancy)
   const predicted = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };
   let lastRendered: { x: number; y: number; z: number } | null = null;
   const eyeY = new VerticalSmoother();
@@ -912,8 +972,16 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const frameStats = () => {
     const xs = [...frameMs].sort((a, b) => a - b);
     const q = (k: number) => xs[Math.min(xs.length - 1, Math.floor(xs.length * k))] ?? 0;
-    return { n: xs.length, avg: xs.reduce((a, b) => a + b, 0) / (xs.length || 1), p50: q(0.5), p95: q(0.95), p99: q(0.99), max: xs[xs.length - 1] ?? 0 };
+    const ws = [...workMs].sort((a, b) => a - b);
+    const wq = (k: number) => ws[Math.min(ws.length - 1, Math.floor(ws.length * k))] ?? 0;
+    return {
+      n: xs.length, avg: xs.reduce((a, b) => a + b, 0) / (xs.length || 1), p50: q(0.5), p95: q(0.95), p99: q(0.99), max: xs[xs.length - 1] ?? 0,
+      /** Main-thread time spent inside the frame callback (CPU cost, independent of vsync). */
+      cpuAvg: ws.reduce((a, b) => a + b, 0) / (ws.length || 1), cpuP95: wq(0.95), cpuP99: wq(0.99),
+      hitches: xs.filter((x) => x > 25).length,
+    };
   };
+  const workMs: number[] = [];
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
   const frame = () => {
@@ -923,6 +991,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
+    if (revealed) {
+      dynRes.frame(now - last, 1000 / (cap || 60));
+      renderer.world.sky.setDynamicScale(dynRes.scale);
+    }
     frameMs.push(now - last);
     if (frameMs.length > 600) frameMs.shift();
     last = now;
@@ -1017,12 +1089,20 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       sample.pitch = Math.atan2(dy, Math.hypot(dx, dz));
       Object.assign(sample, moveForAim(sample.moveX, sample.moveZ, camYaw, sample.yaw));
     }
+    if (sample.fire && me?.alive && !spectating) predictShot(sample.yaw, sample.pitch);
+    // Lag compensation: tell the host which moment of everyone else we were looking at when we fired.
+    const viewT = renderer.renderTime;
+    if (sample.fire && viewT !== null) sample.viewT = viewT;
     if (backend.inputHz === null) { backend.input(sample, unsent); unsent = []; }
     else {
       // Network: send at a fixed rate; taps between sends are accumulated, never lost.
       sendAcc.push(sample);
       if (snap && now >= nextSendAt) {
-        backend.input(sendAcc.take(), unsent);
+        // Redundancy: re-send the last few commands too (the host's MoveQueue drops seqs it has), so a
+        // late or lost input message doesn't cost a movement step on links that drop.
+        const cmds = [...sentTail, ...unsent].slice(-MAX_CMDS_PER_MSG);
+        backend.input(sendAcc.take(), cmds);
+        sentTail = cmds.slice(-REDUNDANT_CMDS);
         unsent = [];
         nextSendAt = Math.max(nextSendAt + 1000 / backend.inputHz, now - 1000 / backend.inputHz);
       }
@@ -1040,6 +1120,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       loading.progress('frames', framesAfterWarm / WARM_FRAMES);
       if (framesAfterWarm >= WARM_FRAMES) reveal();
     }
+    workMs.push(performance.now() - now);
+    if (workMs.length > 600) workMs.shift();
     if (running) requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
