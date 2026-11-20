@@ -91,6 +91,12 @@ export class Renderer {
     this.camera.updateProjectionMatrix();
   }
 
+  /** The local player changed (0 = none: the host handed its player to a bot and spectates). */
+  setLocalPlayer(id: number) {
+    this.humanId = id;
+    this.local = null;
+  }
+
   setMap(map: IslandLayout[], humanId: number) {
     this.map = map;
     this.humanId = humanId;

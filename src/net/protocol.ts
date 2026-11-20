@@ -4,10 +4,13 @@ import type { IslandLayout } from '../sim/map';
 import type { BuildRequest, Difficulty, PlayerInput } from '../sim/types';
 import type { NetSnapshot } from './snapshotCodec';
 
-/** A lobby seat. Seat index = island index = player id - 1 once the match starts. */
+/**
+ * A lobby seat. Seat index = island index = player id - 1 once the match starts, except that a spectating
+ * host (spectator: true, seat 0 only) gets no player and every later seat moves down one.
+ */
 export type Slot =
   | { kind: 'open' }
-  | { kind: 'human'; name: string; peerId: string; isHost: boolean }
+  | { kind: 'human'; name: string; peerId: string; isHost: boolean; spectator?: boolean }
   | { kind: 'bot'; difficulty: Difficulty; name?: string };
 
 export const MAX_PLAYERS = 8;

@@ -27,8 +27,14 @@ export const FRAME_CAPS = [0, 30, 60, 120] as const;
 export type FrameCap = (typeof FRAME_CAPS)[number];
 export type CameraMode = 'third' | 'first';
 
+/**
+ * Stored-format version. v2: the FPS counter became a visible-by-default feature, so loading anything
+ * older turns it on (only a choice made after this change can hide it).
+ */
+export const SETTINGS_VERSION = 2;
+
 export type Settings = {
-  v: 1;
+  v: typeof SETTINGS_VERSION;
   controls: { sensitivity: number; invertY: boolean; keys: Keymap };
   video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; resolutionScale: number; frameCap: FrameCap };
   audio: { master: number; effects: number; ambience: number; muted: boolean };
@@ -44,7 +50,7 @@ export const LIMITS = {
 
 export function defaultSettings(): Settings {
   return {
-    v: 1,
+    v: SETTINGS_VERSION,
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, resolutionScale: 1, frameCap: 0 },
     audio: { master: 0.8, effects: 1, ambience: 1, muted: false },
@@ -71,7 +77,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   const d = defaultSettings();
   const r = obj(raw), c = obj(r.controls), v = obj(r.video), a = obj(r.audio), g = obj(r.gameplay);
   return {
-    v: 1,
+    v: SETTINGS_VERSION,
     controls: {
       sensitivity: num(c.sensitivity, LIMITS.sensitivity[0], LIMITS.sensitivity[1], d.controls.sensitivity),
       invertY: bool(c.invertY, d.controls.invertY),
@@ -124,7 +130,14 @@ export function loadSettings(store: KV | null = defaultStore()): Settings {
     return migrated;
   }
   try {
-    return sanitizeSettings(JSON.parse(raw));
+    const parsed: unknown = JSON.parse(raw);
+    const s = sanitizeSettings(parsed);
+    if (obj(parsed).v !== SETTINGS_VERSION) {
+      s.video.showFps = true; // v1 → v2
+      console.info(`[settings] migrated stored settings v${String(obj(parsed).v)} → v${SETTINGS_VERSION} (FPS counter on)`);
+      saveSettings(s, store);
+    }
+    return s;
   } catch (err) {
     console.warn('[settings] stored settings are corrupt; using defaults', err);
     return defaultSettings();

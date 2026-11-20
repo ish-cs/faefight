@@ -94,6 +94,27 @@ describe('SettingsStore', () => {
     expect(store.get().video.fovThird).toBe(90);
   });
 
+  it('FPS counter is on by default and on F3', () => {
+    expect(defaultSettings().video.showFps).toBe(true);
+    expect(defaultKeymap().fps).toEqual(['F3']);
+  });
+
+  it('v1 settings migrate to v2 with the FPS counter on; a v2 choice to hide it sticks', () => {
+    const v1 = { ...defaultSettings(), v: 1, video: { ...defaultSettings().video, showFps: false, quality: 'low' } };
+    const s = mem({ [SETTINGS_KEY]: JSON.stringify(v1) });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const got = loadSettings(s);
+    info.mockRestore();
+    expect(got.v).toBe(2);
+    expect(got.video.showFps).toBe(true);
+    expect(got.video.quality).toBe('low'); // everything else kept
+    expect(JSON.parse(s.m.get(SETTINGS_KEY)!).v).toBe(2); // migrated once, persisted
+
+    const store = new SettingsStore(s);
+    store.update((d) => { d.video.showFps = false; });
+    expect(loadSettings(s).video.showFps).toBe(false);
+  });
+
   it('a throwing listener does not block others', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const store = new SettingsStore(mem());

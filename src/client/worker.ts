@@ -60,15 +60,16 @@ async function start(setup: MatchSetup, localId: number) {
   const m = await Match.create(setup);
   match = m;
   const ids = m.humanIds();
-  if (!ids.includes(localId)) throw new Error(`worker: local player ${localId} is not a human seat (humans: ${ids.join(',')})`);
+  // localId 0: the host spectates (no local player); it still runs the sim for everyone else.
+  if (localId !== 0 && !ids.includes(localId)) throw new Error(`worker: local player ${localId} is not a human seat (humans: ${ids.join(',')})`);
   humanId = localId;
   for (const id of ids) { inputs.set(id, new InputAccumulator()); moveQueues.set(id, new MoveQueue()); }
   groundYFor = (x, z) => m.map.find((i) => Math.hypot(i.center.x - x, i.center.z - z) <= i.radius)?.groundY ?? m.map[0].groundY;
   const snap0 = m.tick(new Map());
   const me = snap0.players.find((p) => p.id === humanId);
-  if (!me) throw new Error(`worker: human ${humanId} missing from snapshot`);
+  if (humanId !== 0 && !me) throw new Error(`worker: human ${humanId} missing from snapshot`);
   const islands = setup.players.map((_, i) => snap0.players.find((p) => p.id === i + 1)?.island ?? i);
-  post({ type: 'map', map: m.map, humanId, humanIsland: me.island, islands });
+  post({ type: 'map', map: m.map, humanId, humanIsland: me?.island ?? -1, islands });
   startLoop();
 }
 

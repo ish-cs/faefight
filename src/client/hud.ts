@@ -162,6 +162,7 @@ export class Hud {
     for (const c of ['t', 'b', 'l', 'r', 'hm']) this.crosshair.append(el('i', c));
     this.crosshair.dataset.testid = 'crosshair';
     this.reloadRing.dataset.testid = 'reload-ring';
+    this.fps.dataset.testid = 'fps';
     this.scope.dataset.testid = 'scope';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
       this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
@@ -292,7 +293,17 @@ export class Hud {
     this.snap = snap;
     const me = snap.players.find((p) => p.id === this.humanId) ?? null;
     this.me = me;
-    if (!me) return;
+    // No player of our own (spectating host): player widgets hidden, match info and the end screen still live.
+    this.root.classList.toggle('no-player', !me);
+    if (!me) {
+      this.center.style.display = 'none';
+      this.sealedBanner.style.display = 'none';
+      this.updateMatchInfo(snap, -1);
+      const end = endState(snap.winner, 0, false, snap.players);
+      if (end) this.showEnd(snap, end);
+      this.tickFeed();
+      return;
+    }
     const inv = me.inv;
 
     this.hpFill.style.width = `${Math.max(0, me.hp)}%`;
@@ -348,22 +359,7 @@ export class Hud {
     this.reloadRing.style.display = rl === null ? 'none' : '';
     if (rl !== null) this.reloadRing.style.setProperty('--p', `${Math.round(rl * 360)}deg`);
 
-    const left = LIFECYCLE.suddenDeathAt - snap.time;
-    setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
-    this.timer.classList.toggle('sd', snap.suddenDeath);
-    setText(this.banner, snap.suddenDeath ? `Tide rising · water ${snap.waterY.toFixed(1)} m` : left < 60 ? 'Sudden death soon' : '');
-    this.banner.style.display = this.banner.textContent ? '' : 'none';
-
-    Array.from(this.seals.children).forEach((chip, i) => {
-      const sealed = !!snap.sealed[i];
-      const out = !!snap.players.find((p) => p.island === i)?.eliminated;
-      chip.classList.toggle('sealed', sealed && !out);
-      chip.classList.toggle('out', out);
-      setText(chip.querySelector('.state') as HTMLElement, chipState(sealed, out));
-      // Other islands are labelled with their owner's name (a leaver's seat stays theirs, now bot-run).
-      const owner = i === me.island ? null : snap.players.find((p) => p.island === i);
-      if (owner) setText(chip.querySelector('.name') as HTMLElement, owner.name);
-    });
+    this.updateMatchInfo(snap, me.island);
     const ownSealed = !!snap.sealed[me.island];
     const trapped = me.alive && me.breakoutUntil != null;
     setText(this.sealedBanner, trapped
@@ -385,25 +381,47 @@ export class Hud {
     if (!buildKind) this.center.classList.remove('small');
 
     const end = endState(snap.winner, this.humanId, me.eliminated, snap.players);
-    if (end) {
-      // Re-shown when the match result changes (e.g. eliminated mid-match, then someone wins).
-      const key = `${end.state}|${snap.winner}`;
-      if (this.endScreen.dataset.key !== key) {
-        this.endScreen.dataset.key = key;
-        this.endScreen.dataset.state = end.state;
-        this.endScreen.dataset.testid = 'end-screen';
-        const btn = el('button', 'btn', 'Back to menu');
-        btn.onclick = () => this.act.backToMenu();
-        const buttons = el('div', 'end-buttons');
-        buttons.append(...(this.act.endButtons?.(snap.winner !== null) ?? [btn]));
-        this.endScreen.replaceChildren(el('div', 'end-title', end.title), el('div', 'end-sub', end.sub), buttons);
-        this.endScreen.style.display = 'flex';
-      }
-    }
+    if (end) this.showEnd(snap, end);
 
     if (this.panelKind === 'shop' || this.panelKind === 'potions') this.renderShop();
     else if (this.panelKind === 'vault') this.refreshVault();
     this.tickFeed();
+  }
+
+  /** Timer, tide banner and the island chips (myIsland -1 = none of them is yours). */
+  private updateMatchInfo(snap: Snapshot, myIsland: number) {
+    const left = LIFECYCLE.suddenDeathAt - snap.time;
+    setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
+    this.timer.classList.toggle('sd', snap.suddenDeath);
+    setText(this.banner, snap.suddenDeath ? `Tide rising · water ${snap.waterY.toFixed(1)} m` : left < 60 ? 'Sudden death soon' : '');
+    this.banner.style.display = this.banner.textContent ? '' : 'none';
+
+    Array.from(this.seals.children).forEach((chip, i) => {
+      const sealed = !!snap.sealed[i];
+      const out = !!snap.players.find((p) => p.island === i)?.eliminated;
+      chip.classList.toggle('sealed', sealed && !out);
+      chip.classList.toggle('out', out);
+      setText(chip.querySelector('.state') as HTMLElement, chipState(sealed, out));
+      // Other islands are labelled with their owner's name (a leaver's seat stays theirs, now bot-run).
+      const owner = i === myIsland ? null : snap.players.find((p) => p.island === i);
+      if (owner) setText(chip.querySelector('.name') as HTMLElement, owner.name);
+    });
+  }
+
+  private showEnd(snap: Snapshot, end: NonNullable<ReturnType<typeof endState>>) {
+    // Re-shown when the match result changes (e.g. eliminated mid-match, then someone wins).
+    const key = `${end.state}|${snap.winner}`;
+    if (this.endScreen.dataset.key !== key) {
+      this.endScreen.dataset.key = key;
+      this.endScreen.dataset.state = end.state;
+      this.endScreen.dataset.testid = 'end-screen';
+      const btn = el('button', 'btn', 'Back to menu');
+      btn.onclick = () => this.act.backToMenu();
+      const buttons = el('div', 'end-buttons');
+      buttons.append(...(this.act.endButtons?.(snap.winner !== null) ?? [btn]));
+      this.endScreen.replaceChildren(el('div', 'end-title', end.title), el('div', 'end-sub', end.sub), buttons);
+      this.endScreen.style.display = 'flex';
+    }
   }
 
   get ended() {
