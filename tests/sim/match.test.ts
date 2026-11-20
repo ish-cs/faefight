@@ -35,7 +35,7 @@ describe('Match', () => {
     expect(snap.players[0].inv.cash).toBeLessThanOrEqual(50 + 51);
   });
 
-  test('buying at your own shop works, at an enemy shop it does not', async () => {
+  test('any shop NPC sells to anyone: your own and an enemy island\'s', async () => {
     const m = await Match.create(humans1v1);
     const yaw0 = m.map[0].bunker.facingYaw;
     m.debugTeleport(1, add(m.map[0].shop, scale(forward(yaw0), 1.5)));
@@ -44,7 +44,7 @@ describe('Match', () => {
     m.debugGive(1, { cash: 100 });
     m.debugTeleport(1, add(m.map[1].shop, scale(forward(m.map[1].bunker.facingYaw), 1.5)));
     snap = m.tick(inputs(1, { shop: { buy: 'sandbags' } }));
-    expect(snap.players[0].inv.pieces.sandbags ?? 0).toBe(0);
+    expect(snap.players[0].inv.pieces.sandbags ?? 0).toBe(1);
   });
 
   test('build places a piece, consumes it, and makes you busy', async () => {
