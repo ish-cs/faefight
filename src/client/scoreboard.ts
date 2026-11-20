@@ -1,5 +1,5 @@
 import type { PlayerState, Snapshot } from '../sim/types';
-import { ISLAND_COLORS } from './render';
+import { ISLAND_COLORS } from './colors';
 
 export type ScoreStatus = 'alive' | 'trapped' | 'dead' | 'eliminated' | 'spectating';
 export const STATUS_LABEL: Record<ScoreStatus, string> = {

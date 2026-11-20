@@ -13,27 +13,26 @@ import {
   audibility, DEFAULT_LIMITS, dist, distanceCutoff, echoSend, heartbeatInterval, MAX_DISTANCE, muffleCutoff,
   REF_DISTANCE, ROLLOFF, VoiceLimiter, waveLevel,
 } from './voices';
+import { isAction } from '../keymap';
+import { settings, type Settings } from '../settings/store';
 
-const VOL_KEY = 'faefight.volume';
-const MUTE_KEY = 'faefight.muted';
 /** 2D cues that should not be muffled by low health or reverb (UI-ish). */
+/** uiBus level at full Effects volume. */
+const UI_LEVEL = 0.8;
 const UI_SOUNDS = new Set(['hitmarker', 'kill', 'death', 'eliminated', 'win', 'lose', 'draw', 'alarm', 'tick', 'escaped', 'horn', 'coin', 'loot', 'purchase', 'vault']);
 
 type Chain = { input: GainNode; air: BiquadFilterNode; panner: PannerNode; echo: GainNode };
 type CameraLike = { matrixWorld: { elements: ArrayLike<number> } };
 
-function readStore(key: string): string | null {
-  try { return localStorage.getItem(key); } catch { return null; }
-}
-function writeStore(key: string, v: string) {
-  try { localStorage.setItem(key, v); } catch { /* private mode: settings just don't persist */ }
-}
 
 export type AudioStats = { state: string; played: number; dropped: number; active: number; bySound: Record<string, number> };
 
 export class AudioSystem {
-  volume: number;
-  muted: boolean;
+  /** Master volume / mute / bus levels mirror Settings → Audio (the store persists them). */
+  volume = 0.8;
+  muted = false;
+  effects = 1;
+  ambience = 1;
   private ctx: AudioContext | null = null;
   private kit: Kit | null = null;
   private master!: GainNode;
@@ -56,14 +55,13 @@ export class AudioSystem {
   private listeners = new Set<() => void>();
 
   constructor() {
-    const v = Number(readStore(VOL_KEY));
-    this.volume = readStore(VOL_KEY) !== null && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.8;
-    this.muted = readStore(MUTE_KEY) === '1';
+    this.applySettings(settings.get().audio);
+    settings.subscribe((s) => this.applySettings(s.audio));
     const unlock = () => this.unlock();
     window.addEventListener('pointerdown', unlock, { capture: true });
     window.addEventListener('keydown', (e) => {
       unlock();
-      if (e.code !== 'KeyM' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!isAction('mute', e.code) || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target;
       if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return;
       this.setMuted(!this.muted);
@@ -74,19 +72,26 @@ export class AudioSystem {
   onChange(fn: () => void): () => void { this.listeners.add(fn); return () => this.listeners.delete(fn); }
 
   setVolume(v: number) {
-    this.volume = Math.min(1, Math.max(0, v));
-    writeStore(VOL_KEY, String(this.volume));
-    this.applyMaster();
+    settings.update((s) => { s.audio.master = Math.min(1, Math.max(0, v)); });
   }
 
   setMuted(m: boolean) {
-    this.muted = m;
-    writeStore(MUTE_KEY, m ? '1' : '0');
-    this.applyMaster();
+    settings.update((s) => { s.audio.muted = m; });
   }
 
-  private applyMaster() {
-    if (this.ctx) this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, this.ctx.currentTime, 0.02);
+  private applySettings(a: Settings['audio']) {
+    this.volume = a.master;
+    this.muted = a.muted;
+    this.effects = a.effects;
+    this.ambience = a.ambience;
+    if (this.ctx) {
+      const t = this.ctx.currentTime;
+      this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, t, 0.02);
+      this.sfxBus.gain.setTargetAtTime(this.effects, t, 0.02);
+      this.echoIn.gain.setTargetAtTime(this.effects, t, 0.02);
+      this.uiBus.gain.setTargetAtTime(UI_LEVEL * this.effects, t, 0.02);
+      if (this.ambient) this.ambient.bus.gain.setTargetAtTime(this.ambience, t, 0.05);
+    }
     this.listeners.forEach((fn) => fn());
   }
 
@@ -124,10 +129,11 @@ export class AudioSystem {
     this.world = ctx.createGain();
     this.world.connect(this.muffle).connect(comp);
     this.uiBus = ctx.createGain();
-    this.uiBus.gain.value = 0.8;
+    this.uiBus.gain.value = UI_LEVEL * this.effects;
     this.uiBus.connect(comp);
 
     this.sfxBus = ctx.createGain();
+    this.sfxBus.gain.value = this.effects;
     this.sfxBus.connect(this.world);
 
     // Short synthetic room: enclosed bunker reverb (send level follows the listener's location).
@@ -139,6 +145,7 @@ export class AudioSystem {
 
     // Distant slap-back echo for far shots and explosions.
     this.echoIn = ctx.createGain();
+    this.echoIn.gain.value = this.effects;
     const delay = ctx.createDelay(1);
     delay.delayTime.value = 0.22;
     const elp = ctx.createBiquadFilter();
@@ -172,7 +179,7 @@ export class AudioSystem {
     };
     const bus = ctx.createGain();
     bus.gain.value = 0;
-    bus.gain.setTargetAtTime(1, ctx.currentTime, 1.5); // fade in
+    bus.gain.setTargetAtTime(this.ambience, ctx.currentTime, 1.5); // fade in
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass'; lp.frequency.value = 20000;
     bus.connect(lp).connect(this.world);
