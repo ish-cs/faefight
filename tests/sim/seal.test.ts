@@ -56,3 +56,16 @@ describe('isSealed (spawn covered)', () => {
     expect(isSealed(b, [wall])).toBe(false);
   });
 });
+
+describe('isSealed performance', () => {
+  test('300 pieces elsewhere on the map do not slow the check down', () => {
+    const b = bunker();
+    const far: PieceState[] = Array.from({ length: 300 }, (_, i) => ({
+      id: 5000 + i, kind: 'steel', owner: 1, rotY: 0, hp: 1200,
+      pos: v3(b.center.x + 30 + (i % 20), b.center.y, b.center.z + Math.floor(i / 20)),
+    }));
+    const t0 = performance.now();
+    for (let i = 0; i < 20; i++) isSealed(b, far);
+    expect((performance.now() - t0) / 20).toBeLessThan(6); // was ~18 ms before culling; loose bound so a busy machine does not flake
+  });
+});
