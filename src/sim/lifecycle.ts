@@ -164,8 +164,15 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
   }
 
   for (const p of s.players.values()) {
-    if (!p.alive || p.breakoutUntil === null) continue;
+    if (!p.alive) continue;
     const bunker = map[p.island].bunker.center;
+    // Inside your own bunker while it's sealed (however you got there): the escape clock starts.
+    if (p.breakoutUntil === null && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
+      p.breakoutUntil = now + LIFECYCLE.breakoutSec;
+      out.push(ev(now, 'trapped', { player: p.id, until: p.breakoutUntil }));
+      continue;
+    }
+    if (p.breakoutUntil === null) continue;
     if (dist2D(p.pos, bunker) > SEAL.exitRadius) {
       p.breakoutUntil = null;
       out.push(ev(now, 'escaped', { player: p.id }));
