@@ -22,6 +22,7 @@ Pick a bot difficulty on the menu, then click the game to capture the mouse.
 | Tab | Release the mouse and drag hotbar slots to reorder (Tab again or click the game to resume) |
 | Z / X | Rotate the held piece · hold Alt for free placement |
 | E | Collect cash at a generator · open your shop or vault |
+| V | Toggle first / third person |
 | M | Mute / unmute sound |
 
 Bought items go into the first free hotbar slot (9 slots, like Minecraft). With a full hotbar you can only buy more of what you already hold.
