@@ -42,12 +42,12 @@ Files: `src/net/lobby.ts`, `src/net/chat.ts`, `src/net/loopback.ts`, `src/net/br
 
 ### Task 3 (agent "client"): Lobby UI, host relay, remote client, chat UI
 Files: `src/client/main.ts`, `src/client/worker.ts`, `src/client/protocol.ts`, `src/client/lobbyUi.ts`, `src/client/chatUi.ts`, `src/client/session.ts`, `tests/e2e/online.spec.ts`.
-- [ ] Menu: Play vs Bot (as today) · Host game · Join game (code + name).
-- [ ] Lobby screen: code shown big with copy button, seat list, host can set seats to Open / Bot (easy/med/hard), Start (≥ 2 seats filled).
-- [ ] Worker accepts a roster and `{type:'remoteInput', playerId, input}`; per-player one-shot accumulation; `{type:'botify', playerId}`.
-- [ ] Host main: broadcasts snapshot every 2nd tick (15 Hz), relays chat, answers preview, botifies leavers.
-- [ ] Remote client: no worker; renders snapshots; sends inputs at 30 Hz; preview via host.
-- [ ] Chat: Enter opens input (releases pointer lock), feed bottom-left, fades.
-- [ ] e2e with `?net=local`: page A hosts, page B joins by code, A starts with 1 bot, both see 3 players, B moves and A sees it, chat round-trips, B closes → A's HUD shows B's seat now a bot.
+- [x] Menu: Play vs Bot (as today) · Host game · Join game (code + name).
+- [x] Lobby screen: code shown big with copy button, seat list, host can set seats to Open / Bot (easy/med/hard), Start (≥ 2 seats filled).
+- [x] Worker accepts a roster and `{type:'remoteInput', playerId, input}`; per-player one-shot accumulation; `{type:'botify', playerId}`.
+- [x] Host main: broadcasts snapshot every 2nd tick (15 Hz), relays chat, answers preview, botifies leavers.
+- [x] Remote client: no worker; renders snapshots; sends inputs at 30 Hz; preview via host.
+- [x] Chat: Enter opens input (releases pointer lock), feed bottom-left, fades.
+- [x] e2e with `?net=local`: page A hosts, page B joins by code, A starts with 1 bot, both see 3 players, B moves and A sees it, chat round-trips, B closes → A's HUD shows B's seat now a bot.
 
 ### Task 4 (lead): Integrate, bandwidth check, real PeerJS check across two browsers, review.

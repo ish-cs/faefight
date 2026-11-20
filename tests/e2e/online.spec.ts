@@ -8,7 +8,11 @@ const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
     return (api ? api[f as string](...(a as unknown[])) : null) as T;
   }, [fn, args] as const);
 
-const SHOTS = process.env.E2E_SHOTS; // directory for review screenshots (optional)
+// Directory for review screenshots (optional): E2E_SHOTS=/some/dir pnpm e2e
+const SHOTS = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.E2E_SHOTS;
+
+// Each test runs two WebGPU pages; running them one at a time keeps GPU contention (and flakiness) down.
+test.describe.configure({ mode: 'serial' });
 
 test('host + join by code, bot seat, movement, chat, leaver becomes a bot', async ({ context }) => {
   const errors: string[] = [];

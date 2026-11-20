@@ -11,12 +11,14 @@ export class SnapshotBuffer<S extends Timed> {
   private playTime: number | null = null;
   private lastReleased: number | null = null;
 
-  constructor(private delay = 0.1, private maxDrift = 0.25) {}
+  constructor(private delay = 0.1, private maxDrift = 0.25, private maxQueue = 30) {}
 
   push(s: S) {
     const newest = this.q.length ? this.q[this.q.length - 1].time : this.lastReleased;
     if (newest !== null && s.time <= newest) return; // stale / duplicate
     this.q.push(s);
+    // Hidden tab (no frames to drain us): keep only the last couple of seconds.
+    if (this.q.length > this.maxQueue) this.q.splice(0, this.q.length - this.maxQueue);
   }
 
   get size() {

@@ -1,7 +1,8 @@
 import { NET_VERSION, type HostMsg, type Slot } from '../net/protocol';
 import { sanitizeClientMsg } from '../net/sanitize';
 import type { HostRoom, Link, Transport } from '../net/transport';
-import { ChatLimiter, cleanChat, Lobby } from '../net/_stubs';
+import { ChatLimiter, cleanChat } from '../net/chat';
+import { Lobby } from '../net/lobby';
 import { SnapshotEncoder } from '../net/snapshotCodec';
 import type { Placement } from '../sim/building';
 import type { IslandLayout } from '../sim/map';
@@ -211,7 +212,8 @@ export async function joinRoom(transport: Transport, code: string, name: string)
   } catch (err) {
     if (err instanceof JoinError) throw err;
     console.warn('[join] transport.join failed', err);
-    throw new JoinError('not-found', String((err as Error)?.message ?? err));
+    const detail = String((err as Error)?.message ?? err);
+    throw new JoinError(/not found|no game/i.test(detail) ? 'not-found' : 'transport', detail);
   }
   const first = await withTimeout(new Promise<HostMsg>((resolve, reject) => {
     link.onClose(() => reject(new JoinError('closed')));
