@@ -298,7 +298,9 @@ function loadingScreen(text: string): HTMLElement {
 /** Vs bot. Play again = same difficulty on a fresh worker. */
 async function playSolo(d: Difficulty, menu: HTMLElement) {
   const backend = workerBackend(() => ({
-    setup: { players: [{ name: 'You', isBot: false }, { name: `Bot (${d})`, isBot: true, difficulty: d }] },
+    // ?debug=1&bots=N (1-7) fills more seats for perf testing
+    setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: DEBUG ? Math.min(7, Math.max(1, Number(new URLSearchParams(location.search).get('bots')) || 1)) : 1 },
+      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))] },
     humanId: 1,
   }), null);
   let game: Game | null = null;
@@ -648,6 +650,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       map: () => map,
       humanId: () => humanId,
       renderInfo: () => renderer.info(),
+      renderer,
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
       input,
       cameraMode: () => fpv.mode,
