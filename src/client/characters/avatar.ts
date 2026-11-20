@@ -22,6 +22,12 @@ const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _right = new THREE.Vector3();
 
+/** Display-rate motion of one player (render.ts fills it: predicted locally, interpolated for others). */
+export type Motion = { pos: THREE.Vector3; vel: THREE.Vector3; yaw: number; pitch: number };
+
+/** 1/s: how quickly the animation's velocity follows the real one (blends locomotion clips smoothly). */
+const VEL_SMOOTH_RATE = 12;
+
 export type AvatarFrame = {
   pos: THREE.Vector3; // interpolated feet
   vel: THREE.Vector3; // interpolated velocity
@@ -83,6 +89,7 @@ export class Avatar {
   alive = true;
   private diedAt = -1;
   private lastPos = new THREE.Vector3();
+  private smoothVel = new THREE.Vector3();
   private materials: THREE.Material[] = [];
 
   constructor(assets: CharacterAssets | null, p: PlayerState, color: number, isLocal: boolean) {
@@ -205,7 +212,7 @@ export class Avatar {
   }
 
   update(f: AvatarFrame, dt: number, now: number) {
-    if (f.alive && !this.wasAlive) this.diedAt = -1; // respawned
+    if (f.alive && !this.wasAlive) { this.diedAt = -1; this.smoothVel.set(0, 0, 0); } // respawned
     if (!f.alive && this.wasAlive) this.diedAt = now;
     this.wasAlive = f.alive;
     this.alive = f.alive;
@@ -225,8 +232,9 @@ export class Avatar {
     if (this.tag) this.tag.visible = f.alive;
 
     if (!this.mixer) return;
+    this.smoothVel.lerp(f.vel, 1 - Math.exp(-VEL_SMOOTH_RATE * dt));
     const { name, ts } = chooseClip({
-      alive: f.alive, vel: f.vel, yaw: f.yaw, equipped: f.equipped,
+      alive: f.alive, vel: this.smoothVel, yaw: f.yaw, equipped: f.equipped,
       flinching: now < this.flinchUntil, punching: now < this.punchUntil, aiming: now < this.aimUntil,
     });
     this.fadeTo(name, ts);
@@ -273,8 +281,7 @@ export class CharacterSystem {
   private avatars = new Map<number, Avatar>();
   private assets: CharacterAssets | null = null;
   private lastNow = performance.now();
-  private tmpPos = new THREE.Vector3();
-  private tmpVel = new THREE.Vector3();
+  private tmpMotion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
   /** Player whose avatar is hidden (the local player in first person); -1 = none. */
   hiddenId = -1;
   /** Resolves once the models are in (or failed — then the capsule fallback is used). */
@@ -315,25 +322,19 @@ export class CharacterSystem {
    * alpha, posOf = render.ts's interpolated feet (handles teleports), localYaw = camera yaw for the
    * local player (smoother than the 30 Hz sim yaw). Pitch is the sim's aim pitch for everyone.
    */
-  sync(players: PlayerState[], prevOf: (id: number) => PlayerState | undefined, t: number, humanId: number,
-    localYaw: number, simTime: number, posOf: (id: number, out: THREE.Vector3) => THREE.Vector3 | null) {
+  sync(players: PlayerState[], humanId: number, localYaw: number, simTime: number,
+    motionOf: (id: number, out: Motion) => Motion | null) {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastNow) / 1000);
     this.lastNow = now;
+    const m = this.tmpMotion;
     for (const p of players) {
       const a = this.avatar(p, humanId);
-      const q = prevOf(p.id) ?? p;
-      if (!posOf(p.id, this.tmpPos)) this.tmpPos.set(p.pos.x, p.pos.y, p.pos.z);
-      this.tmpVel.set(q.vel.x + (p.vel.x - q.vel.x) * t, q.vel.y + (p.vel.y - q.vel.y) * t, q.vel.z + (p.vel.z - q.vel.z) * t);
-      let yaw = localYaw;
-      if (p.id !== humanId) {
-        let d = p.yaw - q.yaw;
-        d = Math.atan2(Math.sin(d), Math.cos(d));
-        yaw = q.yaw + d * t;
-      }
-      const pitch = q.pitch + (p.pitch - q.pitch) * t;
+      m.yaw = p.yaw;
+      m.pitch = p.pitch;
+      if (!motionOf(p.id, m)) { m.pos.set(p.pos.x, p.pos.y, p.pos.z); m.vel.set(p.vel.x, p.vel.y, p.vel.z); }
       a.update({
-        pos: this.tmpPos, vel: this.tmpVel, yaw, pitch, alive: p.alive, equipped: p.equipped,
+        pos: m.pos, vel: m.vel, yaw: p.id === humanId ? localYaw : m.yaw, pitch: m.pitch, alive: p.alive, equipped: p.equipped,
         blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0,
       }, dt, now);
       if (p.id === this.hiddenId) a.group.visible = false;

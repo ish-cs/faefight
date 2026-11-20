@@ -144,7 +144,7 @@ export class HostSession {
       switch (msg.t) {
         case 'input':
           if (blocked(guard.admitInput(now))) return;
-          if (this.started) this.worker?.postMessage({ type: 'remoteInput', playerId, input: msg.input });
+          if (this.started) this.worker?.postMessage({ type: 'remoteInput', playerId, input: msg.input, cmds: msg.cmds });
           break;
         case 'preview':
           if (this.started && this.previewAllowed(link.peerId))

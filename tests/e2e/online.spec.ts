@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { pressAndMeasure, release } from './predictHelpers';
 
 type Snap = { players: { id: number; name: string; isBot: boolean; pos: { x: number; y: number; z: number } }[] };
 
@@ -64,6 +65,12 @@ test('host + join by code, bot seat, movement, chat, leaver becomes a bot', asyn
   const posOn = async (p: Page) => (await dbg<Snap>(p, 'snapshot')).players.find((x) => x.id === bId)!.pos;
   const p0 = await posOn(a);
   await b.bringToFront();
+  // B's own movement is predicted: it responds before the host has echoed anything back.
+  await expect.poll(async () => (await dbg<{ active: boolean }>(b, 'predicted')).active, { timeout: 15_000 }).toBe(true);
+  const r = await pressAndMeasure(b);
+  await release(b);
+  expect(r.frames).toBeLessThanOrEqual(2);
+  expect(r.serverMovedFirst).toBe(false);
   await b.locator('canvas.game').focus();
   await b.keyboard.down('KeyW');
   await b.waitForTimeout(1000);
