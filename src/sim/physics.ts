@@ -22,6 +22,7 @@ export class Physics {
   private cc: RAPIER.KinematicCharacterController;
   private entities = new Map<number, HitTarget>();
   private pieces = new Map<number, RAPIER.Collider>();
+  private pieceKinds = new Map<number, PieceState['kind']>();
   private players = new Map<number, RAPIER.Collider>();
   private dirty = true;
 
@@ -82,6 +83,7 @@ export class Physics {
     }
     desc.setRotation(quatY(p.rotY));
     this.pieces.set(p.id, this.track(this.world.createCollider(desc), { type: 'piece', id: p.id }));
+    this.pieceKinds.set(p.id, p.kind);
   }
 
   removePiece(id: number): void {
@@ -90,7 +92,12 @@ export class Physics {
     this.entities.delete(c.handle);
     this.world.removeCollider(c, false);
     this.pieces.delete(id);
+    this.pieceKinds.delete(id);
     this.dirty = true;
+  }
+
+  pieceKind(id: number): PieceState['kind'] | undefined {
+    return this.pieceKinds.get(id);
   }
 
   addPlayer(id: number, pos: Vec3): void {
@@ -149,11 +156,17 @@ export class Physics {
 
   /** First non-player surface hit going straight down from (x, yFrom, z) within maxDrop, or null. */
   surfaceBelow(x: number, yFrom: number, z: number, maxDrop: number): number | null {
+    return this.probeDown(x, yFrom, z, maxDrop)?.y ?? null;
+  }
+
+  /** Like surfaceBelow, but also reports what was hit. */
+  probeDown(x: number, yFrom: number, z: number, maxDrop: number): { y: number; hit: HitTarget } | null {
     this.sync();
     const ray = new RAPIER.Ray({ x, y: yFrom, z }, { x: 0, y: -1, z: 0 });
     const h = this.world.castRay(ray, maxDrop, false, undefined, undefined, undefined, undefined,
       (c) => this.entities.get(c.handle)?.type !== 'player');
-    return h ? yFrom - h.timeOfImpact : null;
+    if (!h) return null;
+    return { y: yFrom - h.timeOfImpact, hit: this.entities.get(h.collider.handle) ?? { type: 'world' } };
   }
 
   /** Everything overlapping an oriented box. */

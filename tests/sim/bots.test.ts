@@ -41,14 +41,23 @@ function groundAt(pieces: PieceState[], x: number, z: number): number | null {
   return top;
 }
 
-/** Simplified validatePlacement: reach, scaffold near-end support, otherwise ground under the center. */
+/** Simplified validatePlacement: reach, scaffold attaches level past its near end without overlapping decks, otherwise ground under the center. */
 function canPlace(view: BotView, kind: PieceKind, pos: Vec3, rotY: number): Placement {
   if (dist2D(pos, view.self.pos) > BUILD.reach) return { ok: false, reason: 'too far' };
   if (kind === 'scaffold') {
-    const ends = [-1, 1].map((k) => add(pos, rotateY(v3(0, 0, k * (PIECES.scaffold.d / 2 - 0.3)), rotY)));
+    const s = PIECES.scaffold;
+    const ends = [-1, 1].map((k) => add(pos, rotateY(v3(0, 0, k * (s.d / 2 + 0.2)), rotY)));
     const near = dist2D(ends[0], view.self.pos) <= dist2D(ends[1], view.self.pos) ? ends[0] : ends[1];
     const y = view.groundAt(near.x, near.z);
-    return y === null ? { ok: false, reason: 'scaffold needs a support at the near end' } : { ok: true, pos: v3(pos.x, y, pos.z) };
+    if (y === null) return { ok: false, reason: 'scaffold needs a support at the near end' };
+    for (const p of view.pieces) {
+      if (p.kind !== 'scaffold') continue;
+      const l = rotateY(v3(pos.x - p.pos.x, 0, pos.z - p.pos.z), -p.rotY);
+      if (Math.abs(l.x) < s.w - 0.04 && Math.abs(l.z) < s.d - 0.04) return { ok: false, reason: 'blocked' };
+    }
+    const onDeck = view.pieces.some((p) => p.kind === 'scaffold' && Math.abs(p.pos.y + s.h - y) < 1e-6 &&
+      Math.abs(rotateY(v3(near.x - p.pos.x, 0, near.z - p.pos.z), -p.rotY).z) <= s.d / 2);
+    return { ok: true, pos: v3(pos.x, onDeck ? y - s.h : y, pos.z) };
   }
   const y = view.groundAt(pos.x, pos.z);
   return y === null ? { ok: false, reason: 'nothing to build on' } : { ok: true, pos: v3(pos.x, Math.max(y, pos.y), pos.z) };

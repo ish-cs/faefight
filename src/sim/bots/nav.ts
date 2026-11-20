@@ -112,8 +112,8 @@ export class Nav {
   }
 
   /**
-   * A finished bridge walkable from island a to b, or null. Each scaffold rests on the previous deck, so a bridge
-   * climbs 0.2 m per segment and can only be entered from its builder's (low) end.
+   * A finished bridge walkable from island a to b, or null. Decks chain level, but a bridge can still end high
+   * (e.g. built off a stack), so check the end on island a is enterable.
    */
   bridge(a: number, b: number): Lane | null {
     for (const l of [lane(this.view.map, a, b), lane(this.view.map, b, a)])

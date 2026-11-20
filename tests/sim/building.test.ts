@@ -62,6 +62,20 @@ describe('validatePlacement', () => {
     const standEdge = v3(isl().center.x + f.x * 21.5, isl().groundY, isl().center.z + f.z * 21.5);
     expect(validatePlacement(ph, 'scaffold', floating, yaw(), standEdge).ok).toBe(false);
   });
+  test('chained scaffold stays level with the deck it attaches to', async () => {
+    const ph = await Physics.create(map);
+    const f = forward(yaw());
+    const at = (d: number) => v3(isl().center.x + f.x * d, isl().groundY, isl().center.z + f.z * d);
+    const first = validatePlacement(ph, 'scaffold', at(23), yaw(), at(20));
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    ph.addPiece({ id: 1, kind: 'scaffold', owner: 0, pos: first.pos, rotY: yaw(), hp: 200 });
+    // Standing on the first deck, attach the next 4 m segment to its far end.
+    const second = validatePlacement(ph, 'scaffold', add(at(27), v3(0, 0.2, 0)), yaw(), add(at(24), v3(0, 0.2, 0)));
+    expect(second.ok).toBe(true);
+    if (second.ok) expect(second.pos.y).toBeCloseTo(first.pos.y, 2);
+  });
+
   test('non-scaffold pieces cannot be placed over water', async () => {
     const ph = await Physics.create(map);
     const f = forward(yaw());

@@ -16,6 +16,8 @@ export type Placement = { ok: true; pos: Vec3 } | { ok: false; reason: string };
 /** How far above the requested point we look for a support surface, and how far down. */
 const PROBE_UP = 1.5;
 const PROBE_DOWN = 4;
+/** How far past a scaffold's near end we look for what it attaches to. */
+const ATTACH_PROBE = 0.2;
 
 export function validatePlacement(
   physics: Physics, kind: PieceKind, pos: Vec3, rotY: number, playerPos: Vec3,
@@ -30,13 +32,15 @@ export function validatePlacement(
 
   let restY: number;
   if (kind === 'scaffold') {
-    // The end nearer the player must sit on land or on another scaffold/piece; the far end may hang over water.
-    const ends = [v3(0, 0, -s.d / 2 + 0.3), v3(0, 0, s.d / 2 - 0.3)];
+    // Attach at the end nearer the player: probe just past that end. Land → rest on it; another
+    // scaffold deck → sit level with that deck so bridges stay flat. The far end may hang over water.
+    const ends = [v3(0, 0, -s.d / 2 - ATTACH_PROBE), v3(0, 0, s.d / 2 + ATTACH_PROBE)];
     const dists = ends.map((e) => dist2D(add(pos, rotateY(e, rotY)), playerPos));
-    const near = ends[dists[0] <= dists[1] ? 0 : 1];
-    const y = below(near);
-    if (y === null || Math.abs(y - pos.y) > PROBE_UP) return { ok: false, reason: 'scaffold needs a support at the near end' };
-    restY = y;
+    const w = add(pos, rotateY(ends[dists[0] <= dists[1] ? 0 : 1], rotY));
+    const sup = physics.probeDown(w.x, pos.y + PROBE_UP, w.z, PROBE_UP + PROBE_DOWN);
+    if (!sup || Math.abs(sup.y - pos.y) > PROBE_UP) return { ok: false, reason: 'scaffold needs a support at the near end' };
+    const onDeck = sup.hit.type === 'piece' && physics.pieceKind(sup.hit.id) === 'scaffold';
+    restY = onDeck ? sup.y - s.h : sup.y;
   } else {
     const hx = s.w / 2 - 0.1, hz = s.d / 2 - 0.1;
     const samples = [v3(0, 0, 0), v3(-hx, 0, -hz), v3(hx, 0, -hz), v3(-hx, 0, hz), v3(hx, 0, hz)];

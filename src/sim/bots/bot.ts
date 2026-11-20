@@ -26,7 +26,7 @@ const STUCK_SEC = 2, STUCK_DIST = 0.5, UNSTICK_SEC = 0.6;
 const TURN_RATE = 8;
 const CHEST = 1.2;
 /** Net forward progress of one scaffold laid end-to-end. */
-const SCAFFOLD_STEP = 3.4;
+const SCAFFOLD_STEP = 3.8;
 const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, smg: 12, pistol: 16, rifle: 25 };
 
 /** What a goal wants this tick; aiming at enemies, weapons and safety are layered on top by think(). */
@@ -295,7 +295,8 @@ export class Bot {
     const ahead = laneAt(l, f.s + 4);
     if (c.me.busyUntil > c.view.now) return { dir: null, face: ahead };
     const rotY = yawOf(l.dir);
-    for (const k of [1.6, 1.4, 1.2, 1.0, 0.8]) {
+    // Butt the new deck against the end of the last one (it sits level with whatever its near end attaches to).
+    for (const k of [2.0, 2.1, 2.2, 2.3, 2.4, 2.6]) {
       const p = laneAt(l, f.s + k);
       const pos = v3(p.x, c.me.pos.y, p.z);
       if (!c.view.canPlace('scaffold', pos, rotY).ok) continue;
