@@ -1,7 +1,7 @@
 import { buy, collect, mergeInventory, emptyInventory, tickGenerator, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
-import { placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, PIECES, PLAYER } from './constants';
+import { applyPlayerDamage, placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
+import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER } from './constants';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMap, type IslandLayout } from './map';
 import type { MatchApi, MatchSetup } from './matchApi';
@@ -43,6 +43,7 @@ export class Match implements MatchApi {
   private sealed: boolean[];
   private sealDirty = true;
   private supportDirty = false;
+  private kills: { victim: number; killer: number | null }[] = [];
   private ctx: CombatCtx;
 
   private constructor(readonly map: IslandLayout[], private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
@@ -72,6 +73,7 @@ export class Match implements MatchApi {
         this.supportDirty = true;
       },
       onKill: (victim, killer) => {
+        this.kills.push({ victim, killer });
         this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer));
       },
     };
@@ -140,6 +142,15 @@ export class Match implements MatchApi {
     }
   }
 
+  debugDamagePlayer(playerId: number, amount: number): void {
+    this.events.push(...applyPlayerDamage(this.ctx, this.mustPlayer(playerId), amount, null, this.s.time));
+  }
+
+  /** Every kill so far (tests/debug). */
+  debugKills(): { victim: number; killer: number | null }[] {
+    return this.kills;
+  }
+
   debugDamagePiece(pieceId: number, amount: number): void {
     const p = this.s.pieces.get(pieceId);
     if (!p) throw new Error(`Match.debugDamagePiece: no piece ${pieceId}`);
@@ -200,6 +211,9 @@ export class Match implements MatchApi {
     const r = this.physics.movePlayer(p.id, scale(p.vel, DT));
     p.pos = r.pos;
     this.grounded.set(p.id, r.grounded);
+    const impact = -p.vel.y;
+    if (!grounded && r.grounded && impact > LIFECYCLE.safeFallSpeed)
+      this.events.push(...applyPlayerDamage(this.ctx, p, (impact - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time));
     if (r.grounded && p.vel.y < 0) p.vel.y = 0;
   }
 

@@ -74,6 +74,11 @@ export const LIFECYCLE = {
   suddenDeathAt: 900,
   tideRate: 0.05,
   lootPickupRadius: 1.5,
+  regenDelaySec: 8,
+  regenPerSec: 1,
+  /** Landing faster than this (m/s, ≈3 m drop) hurts; damage per m/s above it. */
+  safeFallSpeed: 8,
+  fallDmgPerSpeed: 8,
 };
 
 export const SEAL = { cell: 0.25, half: 8, blockHeight: 1.3, exitRadius: 4 };

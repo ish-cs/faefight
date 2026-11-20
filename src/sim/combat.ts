@@ -36,6 +36,7 @@ function pelletDir(yaw: number, pitch: number, i: number, n: number): Vec3 {
 export function applyPlayerDamage(ctx: CombatCtx, target: PlayerState, amount: number, attackerId: number | null, now: number): MatchEvent[] {
   if (!target.alive || now < target.invulnUntil) return [];
   target.hp -= amount;
+  target.lastDamagedAt = now;
   const out = [ev(now, 'hit', { target: target.id, by: attackerId, amount })];
   if (target.hp <= 0) {
     target.hp = 0;
