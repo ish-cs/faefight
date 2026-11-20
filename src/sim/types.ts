@@ -54,6 +54,8 @@ export type PlayerState = {
   /** Set while trapped in a sealed bunker after respawning: eliminated at this time unless out. */
   breakoutUntil: number | null;
   invulnUntil: number;
+  /** Sim time of the last damage taken (regen waits after this). */
+  lastDamagedAt: number;
   inv: Inventory;
   vault: Inventory;
   equipped: WeaponKind;
@@ -67,7 +69,7 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory };
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 export type Snapshot = {

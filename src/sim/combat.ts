@@ -36,6 +36,7 @@ function pelletDir(yaw: number, pitch: number, i: number, n: number): Vec3 {
 export function applyPlayerDamage(ctx: CombatCtx, target: PlayerState, amount: number, attackerId: number | null, now: number): MatchEvent[] {
   if (!target.alive || now < target.invulnUntil) return [];
   target.hp -= amount;
+  target.lastDamagedAt = now;
   const out = [ev(now, 'hit', { target: target.id, by: attackerId, amount })];
   if (target.hp <= 0) {
     target.hp = 0;
@@ -44,12 +45,20 @@ export function applyPlayerDamage(ctx: CombatCtx, target: PlayerState, amount: n
   return out;
 }
 
-function hitPiece(ctx: CombatCtx, id: number, amount: number, source: 'bullet' | 'fist' | 'explosive', now: number): MatchEvent[] {
+function hitPiece(
+  ctx: CombatCtx, id: number, amount: number, source: 'bullet' | 'fist' | 'explosive', now: number, by: number | null, at: Vec3,
+): MatchEvent[] {
   const piece = ctx.pieces.get(id);
   if (!piece) return [];
-  if (!damagePiece(piece, amount, source)) return [];
+  const before = piece.hp;
+  const destroyed = damagePiece(piece, amount, source);
+  const out = [ev(now, 'pieceHit', {
+    piece: id, kind: piece.kind, by, source, amount: before - Math.max(0, piece.hp), hp: Math.max(0, piece.hp), maxHp: PIECES[piece.kind].hp, pos: at,
+  })];
+  if (!destroyed) return out;
   ctx.onPieceDestroyed(id);
-  return [ev(now, 'destroyed', { piece: id, kind: piece.kind })];
+  out.push(ev(now, 'destroyed', { piece: id, kind: piece.kind, pos: pieceCenter(piece), rotY: piece.rotY }));
+  return out;
 }
 
 export function tryFire(ctx: CombatCtx, p: PlayerState, now: number): MatchEvent[] {
@@ -74,7 +83,7 @@ export function tryFire(ctx: CombatCtx, p: PlayerState, now: number): MatchEvent
       const target = ctx.players.get(hit.hit.id);
       if (target) out.push(...applyPlayerDamage(ctx, target, spec.dmg, p.id, now));
     } else if (hit.hit.type === 'piece') {
-      out.push(...hitPiece(ctx, hit.hit.id, spec.dmg, kind === 'fists' ? 'fist' : 'bullet', now));
+      out.push(...hitPiece(ctx, hit.hit.id, spec.dmg, kind === 'fists' ? 'fist' : 'bullet', now, p.id, hit.point));
     }
   }
   if (ammo && ammo.mag === 0) tryReload(p, now);
@@ -132,13 +141,13 @@ function explode(ctx: CombatCtx, e: Explosive, now: number): MatchEvent[] {
     }
     for (const pc of [...ctx.pieces.values()]) {
       const d = dist(pieceCenter(pc), e.pos);
-      if (d < GRENADE.radius) out.push(...hitPiece(ctx, pc.id, GRENADE.dmg * (1 - d / GRENADE.radius), 'explosive', now));
+      if (d < GRENADE.radius) out.push(...hitPiece(ctx, pc.id, GRENADE.dmg * (1 - d / GRENADE.radius), 'explosive', now, e.owner, pieceCenter(pc)));
     }
   } else {
     for (const pl of ctx.players.values())
       if (dist(bodyCenter(pl), e.pos) < CHARGE.playerRadius) out.push(...applyPlayerDamage(ctx, pl, CHARGE.playerDmg, e.owner, now));
     for (const pc of [...ctx.pieces.values()])
-      if (dist(pieceCenter(pc), e.pos) < CHARGE.radius) out.push(...hitPiece(ctx, pc.id, CHARGE.pieceDmg, 'explosive', now));
+      if (dist(pieceCenter(pc), e.pos) < CHARGE.radius) out.push(...hitPiece(ctx, pc.id, CHARGE.pieceDmg, 'explosive', now, e.owner, pieceCenter(pc)));
   }
   return out;
 }

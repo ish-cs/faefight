@@ -89,6 +89,33 @@ describe('combat', () => {
     tryFire(ctx, a, 0);
     expect(steel.hp).toBeCloseTo(1198);
   });
+  test('hitting a piece reports where, by whom, effective damage and remaining hp', async () => {
+    const { ctx, a } = await setup();
+    givePistol(a);
+    const steel: PieceState = { id: 9, kind: 'steel', owner: 2, pos: spot(8), rotY: yaw(), hp: 1200 };
+    ctx.pieces.set(9, steel);
+    ctx.physics.addPiece(steel);
+    const evs = tryFire(ctx, a, 0);
+    const e = evs.find((x) => x.type === 'pieceHit')!;
+    expect(e).toBeDefined();
+    expect(e.data).toMatchObject({ piece: 9, kind: 'steel', by: 1, maxHp: 1200 });
+    expect(e.data.amount as number).toBeCloseTo(2);
+    expect(e.data.hp as number).toBeCloseTo(1198);
+    expect((e.data.pos as Vec3).y).toBeGreaterThan(spot(8).y);
+  });
+  test('destroying a piece reports its kind and position for debris', async () => {
+    const { ctx, a } = await setup();
+    a.inv.charges = 1;
+    const wood: PieceState = { id: 9, kind: 'wood', owner: 2, pos: spot(5.5), rotY: yaw(), hp: 250 };
+    ctx.pieces.set(9, wood);
+    ctx.physics.addPiece(wood);
+    placeCharge(ctx, a, 0);
+    const evs = [];
+    for (let t = 0; t <= 3.1; t += 1 / 30) evs.push(...tickExplosives(ctx, t));
+    const d = evs.find((x) => x.type === 'destroyed')!;
+    expect(d.data).toMatchObject({ piece: 9, kind: 'wood' });
+    expect(d.data.pos).toBeDefined();
+  });
   test('firing a gun you do not own does nothing', async () => {
     const { ctx, a, b } = await setup();
     a.equipped = 'rifle';
