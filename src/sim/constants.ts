@@ -17,14 +17,15 @@ export const PLAYER = {
 export type PieceSpec = { w: number; h: number; d: number; hp: number; price: number; placeSec: number };
 
 // w = width along local X, h = height, d = depth along local Z. Ramp rises along local +Z.
+// Piece HP was cut 20% (2026-11-20) so walls break a little faster.
 export const PIECES: Record<PieceKind, PieceSpec> = {
-  sandbags: { w: 2, h: 1.0, d: 0.8, hp: 150, price: 10, placeSec: 0.5 },
-  wood: { w: 2, h: 2.0, d: 0.2, hp: 250, price: 25, placeSec: 0.8 },
-  metal: { w: 2, h: 2.5, d: 0.1, hp: 500, price: 60, placeSec: 1.2 },
-  steel: { w: 2, h: 2.5, d: 0.15, hp: 1200, price: 150, placeSec: 2.0 },
-  scaffold: { w: 2, h: 0.2, d: 4, hp: 200, price: 20, placeSec: 0.6 },
-  ramp: { w: 2, h: 1.5, d: 3, hp: 200, price: 30, placeSec: 0.8 },
-  container: { w: 6, h: 2.6, d: 2.4, hp: 2500, price: 300, placeSec: 3.0 },
+  sandbags: { w: 2, h: 1.0, d: 0.8, hp: 120, price: 10, placeSec: 0.5 },
+  wood: { w: 2, h: 2.0, d: 0.2, hp: 200, price: 25, placeSec: 0.8 },
+  metal: { w: 2, h: 2.5, d: 0.1, hp: 400, price: 60, placeSec: 1.2 },
+  steel: { w: 2, h: 2.5, d: 0.15, hp: 960, price: 150, placeSec: 2.0 },
+  scaffold: { w: 2, h: 0.2, d: 4, hp: 160, price: 20, placeSec: 0.6 },
+  ramp: { w: 2, h: 1.5, d: 3, hp: 160, price: 30, placeSec: 0.8 },
+  container: { w: 6, h: 2.6, d: 2.4, hp: 2000, price: 300, placeSec: 3.0 },
 };
 
 /** Spread cone half-angles in degrees. Bloom grows per shot and recovers at `recover` deg/s. */
