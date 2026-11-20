@@ -26,6 +26,8 @@ import { LobbyUi } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom, type SpectateResult } from './session';
 import { HELP_TEXT, HOST_ONLY, parseCommand, unknownCommand } from './commands';
+import { currentDevice, currentIsChromium, isMobileDevice, showComputerOnly } from './device';
+import { openHowTo } from './howTo';
 import { SnapshotBuffer } from './snapBuffer';
 import { endButtons, GameScope, type EndRole } from './rematch';
 import { Scoreboard } from './scoreboard';
@@ -294,9 +296,42 @@ function showMenu() {
   keys.className = 'keys';
   keys.innerHTML = keyHelp();
   const unsub = settings.subscribe(() => { if (keys.isConnected) keys.innerHTML = keyHelp(); else unsub(); });
-  card.append(play, online, status, settingsButton(), keys);
+  const howBtn = document.createElement('button');
+  howBtn.className = 'btn menu-settings';
+  howBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg><span>How to play</span>';
+  howBtn.dataset.testid = 'open-how-to';
+  howBtn.onclick = () => openHowTo();
+  const menuBtns = document.createElement('div');
+  menuBtns.className = 'menu-btns';
+  menuBtns.append(howBtn, settingsButton());
+  card.append(play, online, status, menuBtns, keys);
   menu.append(card);
   app.append(menu);
+  if (!currentIsChromium()) menu.append(chromeBanner());
+}
+
+/** First-ever launch: How to play opens by itself (once the loading screen is gone), then never again. */
+function firstLaunchHowTo() {
+  if (settings.get().onboarding.howToSeen) return;
+  console.info('[menu] first launch: showing How to play');
+  openHowTo(() => settings.update((d) => { d.onboarding.howToSeen = true; }));
+}
+
+/** Dismissible "Best in Google Chrome" note for non-Chromium browsers (never blocks them). */
+function chromeBanner(): HTMLElement {
+  const b = document.createElement('div');
+  b.className = 'chrome-banner glass';
+  b.dataset.testid = 'chrome-banner';
+  const t = document.createElement('span');
+  t.textContent = 'Best in Google Chrome';
+  const x = document.createElement('button');
+  x.className = 'chrome-banner-x';
+  x.textContent = '✕';
+  x.title = 'Dismiss';
+  x.dataset.testid = 'chrome-banner-close';
+  x.onclick = () => b.remove();
+  b.append(t, x);
+  return b;
 }
 
 /** Full-screen "starting…" card shown while a rematch tears down the old game and builds the new one. */
@@ -1057,6 +1092,13 @@ async function boot() {
     events: () => loading.events,
     screen: loading, // screenshots drive it directly (tests/visual/settingsShots.mjs)
   };
+  if (isMobileDevice(currentDevice())) {
+    // Phones and tablets: a card instead of the game, and nothing of the game is loaded.
+    console.info('[main] mobile device: showing the computer-only card');
+    void loading.hide();
+    showComputerOnly(app);
+    return;
+  }
   loading.show('boot', { styles: 1, fonts: 1, menu: 1 });
   applyDocumentSettings();
   loading.progress('styles', 1);
@@ -1065,11 +1107,11 @@ async function boot() {
   loading.progress('fonts', 1);
   showMenu();
   loading.progress('menu', 1);
-  void loading.hide();
+  void loading.hide().then(firstLaunchHowTo);
   preloadGame();
 }
 
 boot().catch((err) => {
   console.error('[main] boot failed', err);
-  showMenu();
+  if (isMobileDevice(currentDevice())) showComputerOnly(app); else showMenu();
 });

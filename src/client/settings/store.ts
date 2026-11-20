@@ -39,6 +39,8 @@ export type Settings = {
   video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; resolutionScale: number; frameCap: FrameCap };
   audio: { master: number; effects: number; ambience: number; muted: boolean };
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode };
+  /** One-time things: the How to play card shows by itself until it has been seen once. */
+  onboarding: { howToSeen: boolean };
 };
 
 export const LIMITS = {
@@ -55,6 +57,7 @@ export function defaultSettings(): Settings {
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, resolutionScale: 1, frameCap: 0 },
     audio: { master: 0.8, effects: 1, ambience: 1, muted: false },
     gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third' },
+    onboarding: { howToSeen: false },
   };
 }
 
@@ -75,7 +78,7 @@ const HEX = /^#[0-9a-f]{6}$/i;
 /** Anything (parsed JSON, partial, wrong types) → a complete valid Settings. */
 export function sanitizeSettings(raw: unknown): Settings {
   const d = defaultSettings();
-  const r = obj(raw), c = obj(r.controls), v = obj(r.video), a = obj(r.audio), g = obj(r.gameplay);
+  const r = obj(raw), c = obj(r.controls), v = obj(r.video), a = obj(r.audio), g = obj(r.gameplay), o = obj(r.onboarding);
   return {
     v: SETTINGS_VERSION,
     controls: {
@@ -103,6 +106,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       damageNumbers: bool(g.damageNumbers, d.gameplay.damageNumbers),
       cameraMode: oneOf(g.cameraMode, ['third', 'first'] as const, d.gameplay.cameraMode),
     },
+    onboarding: { howToSeen: bool(o.howToSeen, d.onboarding.howToSeen) },
   };
 }
 
