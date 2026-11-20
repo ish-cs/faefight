@@ -116,6 +116,7 @@ export class Strategist {
       this.plan = { ...best, since: inp.now };
     }
     this.plan.step = this.stepOf(this.plan, inp, p);
+    this.last = this.snapshot(inp, this.plan.target);
     return this.plan;
   }
 
@@ -127,10 +128,16 @@ export class Strategist {
     return (w ?? 0) * p.stepPush;
   }
 
-  private detectEvents(inp: PlanInput) {
-    const t = this.plan?.target ?? null;
+  private snapshot(inp: PlanInput, t: number | null) {
     const r = t === null ? null : inp.rivals.find((x) => x.id === t) ?? null;
-    const now = { target: t, sealed: !!r?.sealed, reach: !!r?.reach, busy: !!r?.busy, intruder: inp.intruder || inp.homeSealed };
+    return { target: t, sealed: !!r?.sealed, reach: !!r?.reach, busy: !!r?.busy, intruder: inp.intruder || inp.homeSealed };
+  }
+
+  /** Compare against the facts at the last update (for the target chosen then). */
+  private detectEvents(inp: PlanInput) {
+    const t = this.last?.target ?? null;
+    const r = t === null ? null : inp.rivals.find((x) => x.id === t) ?? null;
+    const now = this.snapshot(inp, t);
     const was = this.last;
     if (was && t !== null && was.target === t) {
       if (!r) this.notify('targetGone', inp.now);
@@ -141,7 +148,6 @@ export class Strategist {
       }
     }
     if (was && now.intruder && !was.intruder) this.notify('homeThreat', inp.now);
-    this.last = now;
   }
 
   private candidates(inp: PlanInput, p: BotParams): Plan[] {
