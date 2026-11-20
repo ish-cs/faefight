@@ -117,6 +117,7 @@ export class SoundDirector {
       const d = e.data;
       switch (e.type) {
         case 'shot': {
+          if (d.echo) break; // played when predicted (shotPredict.ts)
           const own = d.by === this.humanId;
           out.push({ sound: 'shot', kind: d.weapon as WeaponKind, pos: own ? null : (d.from as Vec3), gain: own ? 1 : 0.9, own });
           break;
@@ -135,7 +136,7 @@ export class SoundDirector {
             if (at && shield > 0) out.push({ sound: 'shieldHit', pos: at, gain: 0.7 });
             if (at && d.broke) out.push({ sound: 'shieldBreak', pos: at, gain: 1 });
             if (at && flesh > 0) out.push({ sound: 'impact', pos: at, gain: 0.7 });
-            if (d.by === this.humanId) out.push({ sound: 'hitmarker', pos: null, gain: 0.6 });
+            if (d.by === this.humanId && !d.echo) out.push({ sound: 'hitmarker', pos: null, gain: 0.6 });
           }
           break;
         }

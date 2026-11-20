@@ -16,7 +16,7 @@ export type ToWorker =
   | { type: 'botify'; playerId: number }
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
-  | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory> }
+  | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
   | { type: 'debug'; cmd: 'hp'; hp: number }
   | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }

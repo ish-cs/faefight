@@ -237,6 +237,11 @@ export class AudioSystem {
     this.play({ sound, pos: null, gain: 0.8 });
   }
 
+  /** Predicted shot / hitmarker (shotPredict.ts): the host's echo of it plays nothing. */
+  predicted(sound: 'shot' | 'hitmarker', kind?: string) {
+    this.play(sound === 'shot' ? { sound, kind, pos: null, gain: 1, own: true } : { sound, pos: null, gain: 0.6 });
+  }
+
   /** Your own handling sounds that the sim doesn't report (raising the sights). */
   local(sound: 'ads') {
     this.play({ sound, pos: null, gain: 0.7, own: true });

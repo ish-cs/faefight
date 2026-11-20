@@ -453,7 +453,8 @@ export class CharacterSystem {
 
   onEvent(e: MatchEvent) {
     const now = performance.now();
-    if (e.type === 'shot') this.avatars.get(e.data.by as number)?.onShot((e.data.weapon as WeaponKind) ?? 'pistol', now);
+    // echo = the host confirming a shot we already showed (client shot prediction): animated once.
+    if (e.type === 'shot') { if (!e.data.echo) this.avatars.get(e.data.by as number)?.onShot((e.data.weapon as WeaponKind) ?? 'pistol', now); }
     else if (e.type === 'hit') this.avatars.get(e.data.target as number)?.onHit(now);
   }
 
@@ -505,6 +506,12 @@ export class CharacterSystem {
   }
 
   /** Hitboxes the aim ray may hit: other players that are alive. */
+  /** Which player an aim-ray hit (one of aimTargets) belongs to. */
+  playerOf(obj: THREE.Object3D): number | null {
+    for (const [id, a] of this.avatars) if (a.hitbox === obj) return id;
+    return null;
+  }
+
   aimTargets(humanId: number, out: THREE.Object3D[]) {
     for (const [id, a] of this.avatars) if (id !== humanId && a.alive && a.group.visible) out.push(a.hitbox);
   }

@@ -180,6 +180,11 @@ export class Renderer {
     return snap.events;
   }
 
+  /** An event made up on this client (predicted shot): same effects as one from a snapshot. */
+  localEvent(e: MatchEvent) {
+    this.onEvent(e);
+  }
+
   private onEvent(e: MatchEvent) {
     if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);

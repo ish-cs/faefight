@@ -7,7 +7,7 @@ import type { Link } from '../net/transport';
 import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import { snapPlacement, type Placement } from '../sim/building';
-import { DT, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
+import { DT, HEAD, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import type { IslandLayout } from '../sim/map';
@@ -36,6 +36,7 @@ import { VerticalSmoother } from './interp';
 import type { Predictor } from './predict';
 import { MAX_CMDS_PER_MSG } from '../net/sanitize';
 import { SealAnnouncer } from './announce';
+import { aimDirection, ShotPredictor } from './shotPredict';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -102,7 +103,7 @@ type Backend = {
   /** Stop delivering to the sink (game torn down for a rematch / back to lobby). Remote: the link stays open. */
   close(): void;
   debug?: {
-    teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void;
+    teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
@@ -144,7 +145,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     chat: (text) => session?.localChat(text),
     debug: {
       teleport: (x, z) => send({ type: 'debug', cmd: 'teleport', x, z }),
-      give: (inv) => send({ type: 'debug', cmd: 'give', inv }),
+      give: (inv, id) => send({ type: 'debug', cmd: 'give', inv, id }),
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
       potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
@@ -713,13 +714,20 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && fpv.adsK > 0.9 };
   };
 
+  // Client shot prediction (shotPredict.ts); predictShot is defined with the frame loop.
+  const shots = new ShotPredictor();
+  /** Debug: when own shots were shown (predicted) and when the host's shot events reached the effects (old path). */
+  const shotTimes = { predicted: [] as number[], applied: [] as number[] };
+  let latest: Snapshot | null = null; // newest snapshot (ammo/reload for prediction), ahead of the event buffer
   const applySnapshot = (s: Snapshot) => {
     const first = !snap;
+    if (DEBUG) for (const e of s.events) if (e.type === 'shot' && e.data.by === humanId) shotTimes.applied.push(performance.now());
     snap = s;
     snapTime = s.time; snapAt = performance.now();
     hud.pushEvents(renderer.pushSnapshot(s));
     const meSnap = s.players.find((p) => p.id === humanId);
     fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
+    // (Own 'shot'/'hit' events flagged echo were already shown when predicted; their effects skip them.)
     // My recoil: the sim reports each kick with the shot; it moves my real aim (I have to pull against it).
     for (const e of s.events) {
       const kick = e.data.kick as { pitch: number; yaw: number } | undefined;
@@ -762,6 +770,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     snapshot: (s) => {
       // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
       predictor?.onSnapshot(s);
+      latest = s;
+      shots.reconcile(s.events, humanId, performance.now());
       renderer.ingest(s);
       if (buffer) buffer.push(s); else applySnapshot(s);
     },
@@ -806,8 +816,42 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       gpuMs: () => renderer.gpuStats(),
       renderScale: () => ({ dyn: dynRes.scale, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: dynRes.smoothedMs }),
       interpDelay: () => renderer.interpDelay,
+      shotPredict: () => ({ ...shots.stats, inFlight: shots.inFlight, times: shotTimes }),
     };
   }
+
+  // ---- client shot prediction (shotPredict.ts) ----
+  const shotRay = new THREE.Raycaster();
+  const shotFrom = new THREE.Vector3(), shotDir = new THREE.Vector3(), victimFeet = new THREE.Vector3();
+  /** Fire pressed this frame: show the shot now if the gun can fire; predict a hitmarker when it can't miss. */
+  const predictShot = (yaw: number, pitch: number) => {
+    const meNew = latest?.players.find((p) => p.id === humanId);
+    const w = shots.tryFire(meNew, performance.now());
+    if (!w || !meNew) return;
+    if (DEBUG) shotTimes.predicted.push(performance.now());
+    const range = WEAPONS[w].range;
+    shotFrom.set(feet.x, feet.y + PLAYER.eyeHeight, feet.z);
+    const d = aimDirection(yaw, pitch);
+    shotDir.set(d.x, d.y, d.z);
+    shotRay.set(shotFrom, shotDir);
+    shotRay.far = range;
+    const hit = shotRay.intersectObjects(renderer.aimTargets(), false)[0];
+    const to = hit ? hit.point : shotFrom.clone().addScaledVector(shotDir, range);
+    const ev = { t: simNow(), type: 'shot' as const, data: { by: humanId, weapon: w, from: { x: shotFrom.x, y: shotFrom.y, z: shotFrom.z }, to: { x: to.x, y: to.y, z: to.z }, predicted: true } };
+    renderer.localEvent(ev);
+    fpv.onEvents([ev], humanId, meNew.pos);
+    audio.predicted('shot', w);
+    const victim = hit && w !== 'rocket' ? renderer.characters.playerOf(hit.object) : null;
+    if (victim === null || !renderer.playerPos(victim, victimFeet)) return;
+    // Only when the whole spread cone fits on the body: the host's random spread can't make it a miss.
+    const cone = spreadDeg(w, { ads: fpv.adsK > 0.5, bloom: meNew.bloom, lastShotAt: meNew.lastShotAt }, simNow(),
+      { speed: Math.hypot(meNew.vel.x, meNew.vel.z), grounded: Math.abs(meNew.vel.y) < 0.5 });
+    if (WEAPONS[w].pellets === 1 && Math.atan2(PLAYER.radius * 0.8, hit!.distance) < (cone * Math.PI) / 180) return;
+    shots.markHit();
+    hud.hitmarker(to.y >= victimFeet.y + HEAD.y - HEAD.r);
+    audio.predicted('hitmarker');
+    renderer.gunFx.onEvent({ t: ev.t, type: 'hit', data: { target: victim, by: humanId, pos: { x: to.x, y: to.y, z: to.z }, part: to.y >= victimFeet.y + HEAD.y - HEAD.r ? 'head' : 'body', weapon: w } }, humanId);
+  };
 
   // ---- frame loop ----
   const feet = new THREE.Vector3();
@@ -950,6 +994,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       sample.pitch = Math.atan2(dy, Math.hypot(dx, dz));
       Object.assign(sample, moveForAim(sample.moveX, sample.moveZ, camYaw, sample.yaw));
     }
+    if (sample.fire && me?.alive && !spectating) predictShot(sample.yaw, sample.pitch);
     // Lag compensation: tell the host which moment of everyone else we were looking at when we fired.
     const viewT = renderer.renderTime;
     if (sample.fire && viewT !== null) sample.viewT = viewT;
