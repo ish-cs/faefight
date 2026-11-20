@@ -44,6 +44,12 @@ export class World {
     console.info(`[world] built ${map.length} islands in ${Math.round(performance.now() - t0)} ms`);
   }
 
+  /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
+  syncCosmetics(_broken: number[]) { /* TODO(map art): instanced cosmetics */ }
+
+  /** A cosmetic prop just broke: debris burst at its position. */
+  cosmeticEvent(_e: MatchEvent) { /* TODO(map art) */ }
+
   syncPieces(pieces: PieceState[]) { this.pieces.sync(pieces); this.pieceFx.sync(pieces); }
 
   /** `pieceHit` / `destroyed` events → decals, particles, shake, debris. */

@@ -86,6 +86,7 @@ export class Renderer {
     this.interpMs = Math.max(1, intervalMs);
     this.waterY = snap.waterY;
     this.world.syncPieces(snap.pieces);
+    this.world.syncCosmetics(snap.broken ?? []);
     this.syncLoot(snap);
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
@@ -98,6 +99,8 @@ export class Renderer {
       if (from && to) this.addTracer(from, to, e.data.by === this.humanId);
     } else if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
+    } else if (e.type === 'cosmeticBroken') {
+      this.world.cosmeticEvent(e);
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : 4);
