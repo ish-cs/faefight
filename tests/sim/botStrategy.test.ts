@@ -1,12 +1,17 @@
 import { describe, expect, test } from 'vitest';
-import { Bot } from '../../src/sim/bots/bot';
-import { lane, laneAt } from '../../src/sim/bots/nav';
+import { Bot, throwAngles } from '../../src/sim/bots/bot';
+import { angleBetween, lookAt } from '../../src/sim/bots/aim';
+import { insideBunker, lane, laneAt } from '../../src/sim/bots/nav';
+import { plugSpot } from '../../src/sim/bots/plans';
+import { aimDir, eyePos } from '../../src/sim/combat';
+import { buy, vaultTransfer } from '../../src/sim/economy';
+import { syncFromInventory } from '../../src/sim/hotbar';
 import { ARCHETYPES, preset, rollPersonality, type Archetype } from '../../src/sim/bots/personality';
 import type { BotView, OtherStatus } from '../../src/sim/bots/view';
-import { PIECES, TICK_HZ, WEAPONS } from '../../src/sim/constants';
+import { ECONOMY, GRENADE, PIECES, SEAL, TICK_HZ, WEAPONS } from '../../src/sim/constants';
 import { buildMap } from '../../src/sim/map';
 import { newPlayer } from '../../src/sim/player';
-import type { PieceState, PlayerInput, PlayerState, Vec3 } from '../../src/sim/types';
+import type { PieceKind, PieceState, PlayerInput, PlayerState, Vec3 } from '../../src/sim/types';
 import { add, dist2D, forward, right, rotateY, scale, v3, yawOf } from '../../src/sim/vec';
 
 const map = buildMap(4);
@@ -209,5 +214,130 @@ describe('human tactics', () => {
     for (let i = 0; i < 15 * TICK_HZ; i++) { if (bot.think(view).shop) tries++; view.now += DT; } // the buy never lands
     expect(tries).toBeGreaterThanOrEqual(1);
     expect(tries).toBeLessThanOrEqual(2);
+  });
+});
+
+/** step() plus what a Match would do with shop, vault, charge and grenade inputs. */
+function richStep(view: BotView, inp: PlayerInput, log: { charges: Vec3[]; nades: PlayerInput[] }) {
+  const me = view.self;
+  const isl = map[me.island];
+  const near = (p: Vec3) => dist2D(me.pos, p) <= ECONOMY.interactRadius;
+  if (me.busyUntil <= view.now) {
+    if (inp.vault && near(isl.vault) && vaultTransfer(me, inp.vault).ok) me.busyUntil = view.now + ECONOMY.vaultSec;
+    if (inp.shop && near(isl.shop)) buy(me, inp.shop);
+    if (inp.placeCharge && me.inv.charges > 0) { me.inv.charges--; log.charges.push({ ...me.pos }); }
+    if (inp.throwGrenade && me.inv.grenades > 0) { me.inv.grenades--; log.nades.push(inp); }
+  }
+  step(view, inp);
+}
+
+/** Pieces plugging doorways of island i's bunker (all of them unless `only` is given). */
+function plugs(i: number, kind: PieceKind, only?: number): PieceState[] {
+  return map[i].bunker.doorways.filter((_, k) => only === undefined || k === only)
+    .map((d, k) => ({ id: 900 + i * 10 + k, kind, owner: 3, pos: plugSpot(d, kind, 0), rotY: d.yaw, hp: PIECES[kind].hp }));
+}
+
+describe('game sense', () => {
+  test('own bunker steel-sealed while out, cash banked: withdraws, buys a charge and blasts a plug from outside', () => {
+    const self = armed(0, 0, add(map[0].shop, v3(2, 0, 0)));
+    self.vault.cash = 600;
+    const pieces = plugs(0, 'steel');
+    const view = makeView(self, { pieces, sealed: [true, false, false, false] });
+    const bot = new Bot(0, 'hard', mulberry32(4), preset('Turtle'));
+    const log = { charges: [] as Vec3[], nades: [] as PlayerInput[] };
+    let bought = false;
+    for (let i = 0; i < 40 * TICK_HZ && !log.charges.length; i++) {
+      const inp = bot.think(view);
+      if (inp.shop?.buy === 'charge') bought = true;
+      richStep(view, inp, log);
+    }
+    expect(bought).toBe(true);
+    expect(log.charges.length).toBe(1);
+    const at = log.charges[0];
+    // Right in front of a steel plug, from outside the bunker.
+    expect(Math.min(...pieces.map((p) => dist2D(p.pos, at)))).toBeLessThan(2.2);
+    expect(insideBunker(map[0].bunker, at)).toBe(false);
+  });
+
+  test('one of my doorways gets plugged: clears it before heading out to bridge', () => {
+    const self = armed(0, 0, onIsland(0, 0));
+    self.inv.pieces = { scaffold: 12, wood: 3 };
+    const plug = plugs(0, 'wood', 1);
+    const view = makeView(self, { pieces: plug });
+    const bot = new Bot(0, 'hard', mulberry32(6), preset('Rusher'));
+    const center = v3(plug[0].pos.x, plug[0].pos.y + 1, plug[0].pos.z);
+    let firedAtPlug = false;
+    const goals = new Set<string>();
+    for (let i = 0; i < 8 * TICK_HZ && !firedAtPlug; i++) {
+      const inp = bot.think(view);
+      goals.add(bot.currentGoal);
+      if (inp.fire && angleBetween(inp, lookAt(eyePos(self), center)) < 0.08) firedAtPlug = true;
+      step(view, inp);
+    }
+    expect(goals.has('bridge')).toBe(false);
+    expect(firedAtPlug).toBe(true);
+  });
+
+  test('does not idle inside its own bunker: with nothing to do there, walks out', () => {
+    for (const difficulty of ['medium', 'hard', 'pro'] as const) {
+      const self = armed(0, 0, v3(map[0].bunker.center.x, map[0].groundY, map[0].bunker.center.z));
+      const view = makeView(self);
+      const bot = new Bot(0, difficulty, mulberry32(8), preset('Turtle'));
+      for (let i = 0; i < 4 * TICK_HZ; i++) step(view, bot.think(view));
+      expect(dist2D(self.pos, map[0].bunker.center), difficulty).toBeGreaterThan(SEAL.exitRadius);
+    }
+  });
+
+  test('escape countdown running inside my bunker with one doorway open: gets out in time', () => {
+    const self = armed(0, 0, v3(map[0].bunker.center.x, map[0].groundY, map[0].bunker.center.z));
+    self.breakoutUntil = 110;
+    const view = makeView(self, { pieces: [...plugs(0, 'steel', 0), ...plugs(0, 'metal', 1)], sealed: [true, false, false, false] });
+    const bot = new Bot(0, 'hard', mulberry32(9));
+    let t = 0;
+    for (; t < 10 * TICK_HZ && dist2D(self.pos, map[0].bunker.center) <= SEAL.exitRadius; t++) step(view, bot.think(view));
+    expect(t / TICK_HZ).toBeLessThan(5);
+  });
+
+  test('a rival who ducks behind cover gets a grenade thrown after them', () => {
+    const self = armed(0, 0, onIsland(0, 0));
+    self.inv.grenades = 2;
+    const enemy = armed(3, 3, onIsland(0, 12, 3));
+    const wall: PieceState = { id: 77, kind: 'wood', owner: 3, pos: onIsland(0, 10.5, 2.6), rotY: yawOf(v3(enemy.pos.x - self.pos.x, 0, enemy.pos.z - self.pos.z)), hp: 250 };
+    const view = makeView(self, { enemies: [enemy], pieces: [wall] });
+    const bot = new Bot(0, 'pro', mulberry32(10));
+    const log = { charges: [] as Vec3[], nades: [] as PlayerInput[] };
+    richStep(view, bot.think(view), log);
+    view.enemies = []; // behind the wall now
+    for (let i = 0; i < 2 * TICK_HZ && !log.nades.length; i++) richStep(view, bot.think(view), log);
+    expect(log.nades.length).toBe(1);
+    const toEnemy = lookAt(eyePos(self), enemy.pos);
+    expect(Math.abs(Math.atan2(Math.sin(log.nades[0].yaw - toEnemy.yaw), Math.cos(log.nades[0].yaw - toEnemy.yaw)))).toBeLessThan(0.15);
+    const a = throwAngles(eyePos(self), enemy.pos, false)!;
+    expect(Math.abs(log.nades[0].pitch - a.pitch)).toBeLessThan(0.1);
+  });
+
+  test('throwAngles lands the grenade where it was aimed (same physics as the sim)', () => {
+    const eye = v3(0, 3.6, 0);
+    for (const [to, low] of [[v3(0, 2.3, -12), false], [v3(8, 2.3, 0), true], [v3(-15, 2.3, 10), false]] as [Vec3, boolean][]) {
+      const a = throwAngles(eye, to, low)!;
+      expect(a).not.toBeNull();
+      const dir = aimDir(a.yaw, a.pitch);
+      let pos = eye, vel = add(scale(dir, GRENADE.throwSpeed), v3(0, 3, 0));
+      while (pos.y > to.y) { vel = v3(vel.x, vel.y - 9.81 * DT, vel.z); pos = add(pos, scale(vel, DT)); }
+      expect(dist2D(pos, to)).toBeLessThan(1.2);
+    }
+  });
+
+  test('hurt with a medkit on the hotbar and nobody in sight: uses it', () => {
+    const self = armed(0, 0, onIsland(0, 0));
+    self.hp = 40;
+    self.inv.medkits = 1;
+    syncFromInventory(self.hotbar, self.inv);
+    const view = makeView(self);
+    const bot = new Bot(0, 'pro', mulberry32(11));
+    let used: PlayerInput | null = null;
+    for (let i = 0; i < TICK_HZ && !used; i++) { const inp = bot.think(view); if (inp.useMedkit) used = inp; step(view, inp); }
+    expect(used).not.toBeNull();
+    expect(self.hotbar[used!.select!]).toBe('medkit');
   });
 });

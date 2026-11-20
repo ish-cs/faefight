@@ -101,8 +101,27 @@ export function killPlayer(
   return [ev(now, 'kill', { victim: victimId, killer, inWater })];
 }
 
+/**
+ * Seal checks are a flood fill, and the escape countdown asks every tick for anyone standing near their bunker:
+ * cache per island until the set of pieces changes. Ids only ever grow, so (count, id sum) identifies the set.
+ */
+const sealCache = new WeakMap<MatchStateCore, { count: number; sum: number; byIsland: Map<number, boolean> }>();
+
 export function islandSealed(s: MatchStateCore, map: IslandLayout[], island: number): boolean {
-  return s.forcedSeal || isSealed(map[island].bunker, [...s.pieces.values()]);
+  if (s.forcedSeal) return true;
+  let sum = 0;
+  for (const id of s.pieces.keys()) sum += id;
+  let c = sealCache.get(s);
+  if (!c || c.count !== s.pieces.size || c.sum !== sum) {
+    c = { count: s.pieces.size, sum, byIsland: new Map() };
+    sealCache.set(s, c);
+  }
+  let sealed = c.byIsland.get(island);
+  if (sealed === undefined) {
+    sealed = isSealed(map[island].bunker, [...s.pieces.values()]);
+    c.byIsland.set(island, sealed);
+  }
+  return sealed;
 }
 
 /** The spawn point, or the nearest free spot inside the bunker if a piece sits on it. */

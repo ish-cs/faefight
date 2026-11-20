@@ -94,3 +94,57 @@ Existing: own state, visible enemies (line of sight), others' public status, map
 water/sudden death. Added (all on a human's screen): `hurt` (hits against me: who and how much — damage indicator +
 kill cam), `shots` (tracers within sight range: who fired from where to where), `loot` (bags within sight range),
 `kills` per player in `others` (scoreboard), `feed` (recent kill feed).
+
+## 9. Skill ladder and the PRO pass
+
+Difficulty is only human skill: reaction, aim, decision speed and decision mistakes. Every level runs the same game
+sense below; better players just execute it faster and cleaner.
+
+| | react | aim cone | tracking / flick cap | rethink every | hesitate | score noise | buy gap |
+|---|---|---|---|---|---|---|---|
+| Easy | 0.80 s | 14° | 4 / 6 rad/s | 1.6 s | 1.2 s | 0.30 | 3 s |
+| Medium | 0.50 s | 8° | 6 / 8 | 1.0 s | 0.6 s | 0.15 | 1.5 s |
+| Hard | 0.24 s | 3° | 11 / 11 | 0.5 s | 0.15 s | 0.08 | 0.6 s |
+| PRO | 0.18 s | 1.5° (tightens to ~1°) | 16 / 12 (~690°/s) | 0.3 s | 0.05 s | 0.03 | 0.35 s |
+
+PRO still misses at range (≈1° is ±0.5 m at 30 m) and can't flick faster than a hand. Hard and PRO also keep
+**death insurance** ($75 in the vault: pistol + ammo) before leaving home, buy grenades/medkits when rich and a
+steel seal kit when they can afford it. Easy never buys grenades; medium only when very rich.
+
+Game sense (all levels):
+- **Never linger in your own bunker.** Since the rule change, standing within 4 m of your own sealed bunker starts the
+  10 s escape countdown. Bots walk out after respawning, disengage to *behind* the bunker (≥ 4.8 m out), guard and
+  take cover from there, and never throw cover walls in front of their own doorways.
+- **Escaping** (`bots/escape.ts`): an occupancy grid (seal.ts cells, walls and pieces grown by the player radius)
+  gives a path around any wall inside or across a doorway. No path → break the piece that is cheapest to get through
+  (hp ÷ material multiplier ÷ weapon dps; a charge counts as ~5 s for anything ≤ 1500 hp; doorway plugs preferred),
+  facing it squarely from inside, charge planted then hide at the far side. Grenades are never used from inside
+  (no spot in a 4×4 m room is outside the 4 m blast). The countdown makes this top priority.
+- **Plugs in my own doorways** get cleared before going out (one plugged door is most of a seal); a hard plug with
+  nothing to break it means: withdraw banked cash, buy a charge, blast it from outside the countdown radius.
+- **Grenades**: thrown at a rival who ducked out of sight 0.3–2.5 s ago (6.5–22 m; high lob when one lands within the
+  fuse, else the flat arc, which still bursts on the cover next to them), or flat through an open doorway at a rival
+  inside their bunker. Throw error = the thrower's aim cone. `throwAngles` integrates the same per-tick physics.
+- **Bridges**: routes chain over any number of other players' bridges (BFS). A rival out on a bridge toward my
+  island → shoot the deck nearest my shore first (drop them in the water or strand them); an intruder I can't see →
+  cut the bridge behind them.
+- **Economy**: grab generator cash ≥ $40 before leaving and never let it reach the cap; bank excess; spend banked cash.
+- **Healing**: medkit at ≤ 55 HP (hard/PRO; 45 medium, 35 easy) when nobody is close; low HP away from home without
+  a medkit → go home and let regen work.
+- **Snipers** take a sandbag tower 75 s before sudden death and shoot from it.
+- **Respawn windows**: kill + seal as before; without a kit, wait at their door for the unarmed respawn.
+- **No hurtful drops**: walking never steps off more than 3 m unless there's no other way.
+- Unarmed bots back off only from guns close enough to matter (not a pistol across the water).
+
+Measured (seeds alternate seats; 1v1s swing on one early kill, so 20 seeds):
+
+| Series | Result |
+|---|---|
+| PRO vs Hard 1v1, seeds 1–20 | PRO 15/20 (before shields/potions landed: 16/20, seeds 1–30 23/30) |
+| Hard vs Medium 1v1, seeds 1–20 | Hard 19/20 |
+| 8 PRO FFA, seeds 1–3 | winners at 15.1 / 13.7 / 15.2 min · 49–72 kills · 6–9 seals · 5–7 pre-SD eliminations · 0.51–0.72 ms/tick |
+| Mixed FFA (2 each), seeds 1–3 | draw / Hard / Medium at 15.7–15.8 min · 33–43 kills · 6–8 seals · 5–6 pre-SD eliminations · 0.50–0.59 ms/tick |
+
+Open: with shields in, 8-PRO FFAs mostly end just after sudden death starts (last two or three standing), not before.
+
+`MEASURE=1v1|ffa [A=pro B=hard SEEDS=1,2,3 TRACE=10] npx vitest run tests/sim/proMeasure.test.ts` reproduces these.
