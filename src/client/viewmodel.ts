@@ -254,7 +254,7 @@ export class FirstPersonView {
         if (d < 30) this.shake(0.03 * Math.max(0, 1 - d / 30) ** 2 * (e.data.kind === 'grenade' ? 0.7 : 1));
       }
       if (e.type === 'hit' && e.data.target === humanId) this.shake(0.004 + Math.min(0.01, Number(e.data.amount) / 4000));
-      if (e.type !== 'shot' || e.data.by !== humanId) continue;
+      if (e.type !== 'shot' || e.data.by !== humanId || e.data.echo) continue; // echo: kicked when predicted
       const weapon = (e.data.weapon as WeaponKind) ?? 'pistol';
       this.kickKind = weapon;
       const s = PUNCH_SCALE[weapon] ?? 1;

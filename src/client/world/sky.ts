@@ -188,10 +188,21 @@ export class SkyLighting {
     this.applyPixelRatio();
   }
 
+  /** Dynamic resolution (dynRes.ts): a further multiplier, changed by the frame loop to hold the frame rate. */
+  setDynamicScale(s: number) {
+    if (s === this.dynScale) return;
+    this.dynScale = s;
+    this.applyPixelRatio();
+  }
+  private dynScale = 1;
+
   private applyPixelRatio() {
     const base = Math.min(window.devicePixelRatio, PRESETS[this.quality].pixelRatio);
-    this.gpu.setPixelRatio(Math.min(2, Math.max(0.5, base * this.resScale)));
+    this.gpu.setPixelRatio(Math.min(2, Math.max(0.5, base * this.resScale * this.dynScale)));
   }
+
+  /** Effective pixel ratio the scene renders at (debug/perf). */
+  get pixelRatio() { return this.gpu.getPixelRatio(); }
 
   toggleQuality(): Quality {
     this.setQuality(QUALITIES[(QUALITIES.indexOf(this.quality) + 1) % QUALITIES.length]);
