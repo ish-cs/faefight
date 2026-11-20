@@ -151,3 +151,17 @@ describe('setBot', () => {
     expect(() => m.setBot(9, 'easy')).toThrow();
   });
 });
+
+describe('spawn protection ends when you attack', () => {
+  test('firing drops your spawn protection', async () => {
+    const m = await Match.create({ players: [{ name: 'a', isBot: false }, { name: 'b', isBot: false }] });
+    m.debugKill(1);
+    let snap = m.tick(new Map());
+    for (let i = 0; i < 100; i++) snap = m.tick(new Map());
+    expect(snap.players[0].alive).toBe(true);
+    expect(snap.players[0].invulnUntil).toBeGreaterThan(snap.time + 5);
+    snap = m.tick(new Map([[1, { ...NO_INPUT, fire: true, slot: 'pistol' }]]));
+    snap = m.tick(new Map([[1, { ...NO_INPUT, fire: true }]]));
+    expect(snap.players[0].invulnUntil).toBeLessThanOrEqual(snap.time);
+  });
+});
