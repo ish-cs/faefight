@@ -140,8 +140,11 @@ describe('Bot economy', () => {
   test('buys a pistol at its own shop with $50+ and no gun', () => {
     const self = newPlayer(0, 'bot', true, 0, add(map[0].shop, v3(1.5, 0, 0)));
     self.inv.cash = 60;
-    const inp = new Bot(0, 'hard', mulberry32(2)).think(makeView(self));
-    expect(inp.shop).toEqual({ buy: 'pistol' });
+    const view = makeView(self);
+    const bot = new Bot(0, 'hard', mulberry32(2));
+    let bought = false;
+    for (let i = 0; i < TICK_HZ && !bought; i++) { bought = bot.think(view).shop?.buy === 'pistol'; view.now += 1 / TICK_HZ; }
+    expect(bought).toBe(true); // within a second (a moment of human hesitation is fine)
   });
 });
 
@@ -373,5 +376,45 @@ describe('shopping with an empty gun', () => {
     const needs = { scaffolds: 0, kit: 0, charge: false };
     expect(nextPurchase(p, needs, 'hard')).toBe('ammo');
     expect(() => shoppingPlan(p, needs, 'hard')).not.toThrow();
+  });
+});
+
+describe('difficulty = human skill, not special rules', () => {
+  test('easy aim is very loose and slow to react; every level is gentler than before', () => {
+    expect(AIM.easy.coneRad).toBeGreaterThan((12 * Math.PI) / 180);
+    expect(AIM.easy.reactSec).toBeGreaterThanOrEqual(0.7);
+    expect(AIM.medium.reactSec).toBeGreaterThanOrEqual(0.45);
+    expect(AIM.hard.reactSec).toBeGreaterThanOrEqual(0.28);
+    expect(AIM.hard.coneRad).toBeGreaterThan((4 * Math.PI) / 180);
+  });
+  test('an easy bot is slower than a hard bot to notice cash waiting at its generator', () => {
+    const reaction = (difficulty: 'easy' | 'hard', seed: number) => {
+      // Busy shopping first (has $60 at the shop, no gun)...
+      const self = newPlayer(0, 'bot', true, 0, add(map[0].shop, v3(1.5, 0, 0)));
+      self.inv.cash = 60;
+      const view = makeView(self, { now: 10 });
+      view.generators = [0, 0];
+      const bot = new Bot(0, difficulty, mulberry32(seed));
+      bot.think(view);
+      expect(bot.currentGoal).toBe('shop');
+      // ...then the purchase lands and cash piles up at its generator.
+      self.inv.cash = 0;
+      self.inv.weapons.pistol = { mag: 12, spare: 36 };
+      view.generators = [300, 0];
+      const t0 = view.now;
+      while (bot.currentGoal !== 'collect' && view.now - t0 < 10) { bot.think(view); view.now += 1 / TICK_HZ; }
+      return view.now - t0;
+    };
+    const avg = (d: 'easy' | 'hard') => [1, 2, 3, 4, 5, 6].reduce((a, s) => a + reaction(d, s), 0) / 6;
+    expect(avg('easy')).toBeGreaterThan(avg('hard'));
+  });
+  test('after changing plans an easy bot hesitates before moving', () => {
+    const self = newPlayer(0, 'bot', true, 0, add(map[0].shop, v3(4, 0, 0)));
+    self.inv.cash = 60; // wants a pistol → switches plan from the initial 'collect' to 'shop'
+    const view = makeView(self, { now: 10 });
+    const bot = new Bot(0, 'easy', mulberry32(1));
+    const first = bot.think(view);
+    expect(bot.currentGoal).toBe('shop');
+    expect(Math.hypot(first.moveX, first.moveZ)).toBe(0);
   });
 });
