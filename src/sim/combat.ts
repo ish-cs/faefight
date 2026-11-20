@@ -3,7 +3,7 @@ import {
 } from './constants';
 import { damagePiece } from './building';
 import { bloomAfterShot, coneOffset, DEG, falloff, hash01, magCap, nextBurst, recoilKick, reloadTime, shellsLoadedBy, spreadDeg } from './gunplay';
-import type { Physics } from './physics';
+import type { Physics, RayHit } from './physics';
 import type { MatchEvent, PieceState, PlayerState, Projectile, Vec3 } from './types';
 import { add, dist, forward, norm, right, rotateY, scale, sub, v3 } from './vec';
 
@@ -21,6 +21,8 @@ export type CombatCtx = {
   grounded?(id: number): boolean;
   /** A blast pushed this player (velocity change, m/s). */
   onKnockback?(id: number, dv: Vec3): void;
+  /** Hitscan ray for a shot (lag-compensated by the match); defaults to physics.raycast. */
+  castShot?(origin: Vec3, dir: Vec3, maxDist: number, shooter: number): RayHit | null;
 };
 
 const ev = (t: number, type: MatchEvent['type'], data: Record<string, unknown>): MatchEvent => ({ t, type, data });
@@ -142,7 +144,8 @@ export function tryFire(ctx: CombatCtx, p: PlayerState, now: number): MatchEvent
     const hits: MatchEvent[] = [];
     for (let i = 0; i < spec.pellets; i++) {
       const dir = pelletDir(p.yaw, p.pitch, cone, seed, i, spec.pellets, ring);
-      const hit = ctx.physics.raycast(eye, dir, spec.range, p.id, true); // bullets pass bunker firing slits
+      // Bullets pass bunker firing slits.
+      const hit = ctx.castShot ? ctx.castShot(eye, dir, spec.range, p.id) : ctx.physics.raycast(eye, dir, spec.range, p.id, true);
       const to = hit ? hit.point : add(eye, scale(dir, spec.range));
       if (i === 0) shot.to = to; else tos.push(rv(to));
       if (!hit) continue;

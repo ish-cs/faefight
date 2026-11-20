@@ -6,7 +6,7 @@ import type { BuildRequest, Inventory, PlayerInput, Snapshot } from '../sim/type
 
 /** main thread → worker */
 export type ToWorker =
-  /** humanId = the local (this browser's) player; seat i becomes player id i + 1 on island i. */
+  /** humanId = the local (this browser's) player, 0 = none (spectating host); setup.players[i] becomes player id i + 1. */
   | { type: 'start'; setup: MatchSetup; humanId: number }
   /** Local player's input. */
   | { type: 'input'; input: PlayerInput; cmds?: MoveCmd[] }
@@ -16,15 +16,17 @@ export type ToWorker =
   | { type: 'botify'; playerId: number }
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
-  | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory> }
+  | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
   | { type: 'debug'; cmd: 'hp'; hp: number }
   | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
-  | { type: 'debug'; cmd: 'potionShop'; x: number; z: number };
+  | { type: 'debug'; cmd: 'potionShop'; x: number; z: number }
+  /** Perf testing: n pieces on rings around (x, z), placement rules skipped. */
+  | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number };
 
 /** worker → main thread */
 export type FromWorker =
-  /** islands[id - 1] = island index of player id. */
+  /** islands[id - 1] = island index of player id; humanId 0 / humanIsland -1 = no local player. */
   | { type: 'map'; map: MapDef; humanId: number; humanIsland: number; islands: number[] }
   | { type: 'snapshot'; snap: Snapshot }
   | { type: 'preview'; playerId: number; result: Placement; key: number }

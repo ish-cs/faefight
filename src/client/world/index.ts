@@ -2,12 +2,14 @@ import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
 import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { CosmeticLayer } from './cosmetics';
-import { buildIslands } from './islands';
+import { Boats, gullPerches, Gulls } from './dressing';
+import { Grass } from './grass';
+import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
 import { setBuiltInPotionStalls } from './potionSeller';
 import { installQualityToggle, SkyLighting } from './sky';
-import { buildWater } from './water';
+import { buildWater, type Ocean } from './water';
 
 export { pieceGeometry } from './pieces';
 export type { Quality } from './sky';
@@ -21,10 +23,14 @@ export class World {
   readonly pieces = new PieceLayer();
   /** Bullet holes, impact particles, shake and destruction debris for pieces. */
   readonly pieceFx = new PieceFx(this.pieces);
-  private water: THREE.Mesh | null = null;
+  private water: Ocean | null = null;
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
   private cosmetics: CosmeticLayer | null = null;
+  /** instanced grass beds (high/ultra) */
+  readonly grass = new Grass();
+  private boats: Boats | null = null;
+  private gulls: Gulls | null = null;
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
   constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
@@ -46,13 +52,25 @@ export class World {
     this.islands = root;
     this.islandHulls = collidables;
     this.collidables.push(...collidables);
+    const map = def.islands;
     this.water = buildWater(def);
-    this.scene.add(this.water);
-    this.sky.setInteriors(def.islands);
+    this.scene.add(this.water.mesh);
+    // The ambient env map is deliberately hazy/desaturated (for shading); at grazing angles it turned the far sea
+    // milky. Water samples the same map, a bit dimmer.
+    const wm = this.water.mesh.material as THREE.MeshStandardNodeMaterial;
+    wm.envMap = this.scene.environment;
+    wm.envMapIntensity = 0.62;
+    this.sky.setInteriors(map);
+    // grass follows the harbor surface mask (sand/grass beds); the Container Yard is bare asphalt
+    if (def.template === 'harbor') this.grass.build(map, (isl) => backdropFrame(isl, map.length), islandMask);
+    this.scene.add(this.grass.root);
+    this.boats = new Boats(map);
+    this.gulls = new Gulls(map, gullPerches(map, (isl) => backdropFrame(isl, map.length)));
+    this.scene.add(this.boats.root, this.gulls.mesh);
     setBuiltInPotionStalls([def.center.potionShop]); // center.ts draws this seller; PotionSellers must not double it
     this.cosmetics = new CosmeticLayer(def.cosmetics);
     this.scene.add(this.cosmetics.root);
-    console.info(`[world] built ${def.name}: ${def.islands.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
+    console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
 
   /** Drop a previous map (setMap twice in one session). Shared materials/textures stay cached. */
@@ -65,7 +83,13 @@ export class World {
       this.islands = null;
       this.islandHulls = [];
     }
-    if (this.water) { this.water.geometry.dispose(); this.water.removeFromParent(); this.water = null; }
+    if (this.water) { this.water.mesh.geometry.dispose(); this.water.mesh.removeFromParent(); this.water = null; }
+    // grass beds are additive per build: drop the previous map's
+    for (const c of [...this.grass.root.children]) { if (c instanceof THREE.Mesh) c.geometry.dispose(); c.removeFromParent(); }
+    this.boats?.root.removeFromParent();
+    this.boats = null;
+    this.gulls?.mesh.removeFromParent();
+    this.gulls = null;
     this.cosmetics?.dispose();
     this.cosmetics = null;
   }
@@ -84,8 +108,14 @@ export class World {
   /** `pieceHit` / `destroyed` events → decals, particles, shake, debris. */
   pieceEvent(e: MatchEvent, players: PlayerState[]) { this.pieceFx.onEvent(e, players); }
 
-  render(waterY: number, _focus?: THREE.Vector3) {
-    if (this.water) this.water.position.y = waterY;
+  /** `feet`: live player feet positions (grass bends away from them). */
+  render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
+    if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
+    const t = performance.now() / 1000;
+    this.boats?.update(t, waterY);
+    this.gulls?.update(t);
+    this.grass.setQuality(this.sky.quality);
+    if (focus) this.grass.update(focus, feet);
     this.pieceFx.update(performance.now());
     this.sky.render(); // cascaded shadows follow the camera themselves
   }

@@ -50,6 +50,9 @@ export class Predictor {
 
   get pending() { return this.history.length; }
 
+  /** The local collision world (map + snapshot pieces + players); build aiming validates against it. */
+  get world(): Physics { return this.physics; }
+
   /** Feed every authoritative snapshot as soon as it arrives (not delayed by interpolation). */
   onSnapshot(snap: Snapshot) {
     this.syncWorld(snap);

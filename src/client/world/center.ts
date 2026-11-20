@@ -1,14 +1,30 @@
 import * as THREE from 'three/webgpu';
-import { float, positionWorld, texture, uv } from 'three/tsl';
+import { float, mix, normalMap, positionWorld, texture, uv, vec2 } from 'three/tsl';
 import { CENTER } from '../../sim/constants';
 import type { MapDef } from '../../sim/map';
 import { CENTER_PROP_HALF, centerPropYaw } from '../../sim/physics';
 import { mat, StaticBatch } from './geo';
 import { goldGenProp, potionProp, supplyProp } from './mapProps';
 import { mats } from './materials';
-import { centerTopTex, grainTex } from './textures';
+import { type PbrName, pbrSample, worldNoise } from './pbr';
+import { centerTopTex } from './textures';
 
 type Label = (text: string, bg: string) => THREE.Sprite;
+
+/**
+ * A disc top whose colour is a painted layout canvas (uv space) over a world-space PBR set: the canvas gives the
+ * markings, the PBR set the normal/roughness grain, a world noise the macro variation.
+ */
+export function paintedTopMaterial(name: string, painted: THREE.Texture, set: PbrName) {
+  const m = new THREE.MeshStandardNodeMaterial();
+  m.name = name;
+  const s = pbrSample(set, positionWorld.xz.div(set === 'asphalt' ? 2.4 : 3.2), true, true);
+  m.colorNode = texture(painted, uv()).rgb.mul(mix(float(0.84), float(1.08), worldNoise(0.04)));
+  m.normalNode = normalMap(s.normal, vec2(1, 1));
+  m.roughnessNode = float(0.88).add(worldNoise(0.12, 'g').sub(0.5).mul(0.16));
+  m.metalnessNode = float(0);
+  return m;
+}
 
 /**
  * The neutral center island: disc + quay wall in the template's style, the three stations (exact collider
@@ -23,11 +39,7 @@ export function buildCenter(def: MapDef, root: THREE.Group, dress: StaticBatch, 
   // painted pads in island-local XZ (the center island is off the origin with 2 players)
   const stations = [c.goldGen, c.supplyGen, c.potionShop].map((p) => ({ x: p.x - c.center.x, z: p.z - c.center.z }));
 
-  const topMat = new THREE.MeshStandardNodeMaterial({ roughness: 0.93 });
-  topMat.name = 'centerTop';
-  const grain = texture(grainTex(), positionWorld.xz.mul(0.35)).r;
-  topMat.colorNode = texture(centerTopTex(R, def.template, stations, CENTER.wellRadius), uv()).rgb.mul(grain.mul(0.5).add(0.75));
-  topMat.roughnessNode = float(0.95).sub(grain.mul(0.1));
+  const topMat = paintedTopMaterial('centerTop', centerTopTex(R, def.template, stations, CENTER.wellRadius), yard ? 'asphalt' : 'concrete');
   const top = new THREE.Mesh(new THREE.CircleGeometry(R, 96).rotateX(-Math.PI / 2), topMat);
   top.position.set(c.center.x, g, c.center.z);
   top.receiveShadow = true;

@@ -233,8 +233,13 @@ export class AudioSystem {
   }
 
   /** UI-originated sounds (e.g. opening the vault). */
-  ui(sound: 'vault') {
-    this.play({ sound, pos: null, gain: 0.8 });
+  ui(sound: 'vault' | 'tick', gain = 0.8) {
+    this.play({ sound, pos: null, gain });
+  }
+
+  /** Predicted shot / hitmarker (shotPredict.ts): the host's echo of it plays nothing. */
+  predicted(sound: 'shot' | 'hitmarker', kind?: string) {
+    this.play(sound === 'shot' ? { sound, kind, pos: null, gain: 1, own: true } : { sound, pos: null, gain: 0.6 });
   }
 
   /** Your own handling sounds that the sim doesn't report (raising the sights). */

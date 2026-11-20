@@ -58,17 +58,19 @@ function startLoop() {
 async function start(setup: MatchSetup, localId: number) {
   if (match) throw new Error('worker: match already started');
   const m = await Match.create(setup);
+  m.cloneSnapshots = false; // postMessage copies each snapshot already
   match = m;
   const ids = m.humanIds();
-  if (!ids.includes(localId)) throw new Error(`worker: local player ${localId} is not a human seat (humans: ${ids.join(',')})`);
+  // localId 0: the host spectates (no local player); it still runs the sim for everyone else.
+  if (localId !== 0 && !ids.includes(localId)) throw new Error(`worker: local player ${localId} is not a human seat (humans: ${ids.join(',')})`);
   humanId = localId;
   for (const id of ids) { inputs.set(id, new InputAccumulator()); moveQueues.set(id, new MoveQueue()); }
   groundYFor = (x, z) => m.map.find((i) => Math.hypot(i.center.x - x, i.center.z - z) <= i.radius)?.groundY ?? m.map[0].groundY;
   const snap0 = m.tick(new Map());
   const me = snap0.players.find((p) => p.id === humanId);
-  if (!me) throw new Error(`worker: human ${humanId} missing from snapshot`);
+  if (humanId !== 0 && !me) throw new Error(`worker: human ${humanId} missing from snapshot`);
   const islands = setup.players.map((_, i) => snap0.players.find((p) => p.id === i + 1)?.island ?? i);
-  post({ type: 'map', map: m.def, humanId, humanIsland: me.island, islands });
+  post({ type: 'map', map: m.def, humanId, humanIsland: me?.island ?? -1, islands });
   startLoop();
 }
 
@@ -100,9 +102,17 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         else if (msg.cmd === 'hp') match.debugSetHp(humanId, msg.hp);
         else if (msg.cmd === 'shield') match.debugSetShield(msg.id ?? humanId, msg.shield);
         else if (msg.cmd === 'potionShop') match.debugSetPotionShops([{ x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z }]);
+        else if (msg.cmd === 'pieces') {
+          const kinds = ['wood', 'metal', 'steel', 'sandbags', 'container', 'scaffold'] as const;
+          for (let i = 0; i < Math.min(400, msg.n); i++) {
+            const ring = 6 + Math.floor(i / 24) * 4, a = (i % 24) / 24 * Math.PI * 2 + ring;
+            const x = msg.x + Math.cos(a) * ring, z = msg.z + Math.sin(a) * ring;
+            match.debugPlacePiece(kinds[i % kinds.length], { x, y: groundYFor(x, z), z }, a);
+          }
+        }
         else if (msg.cmd === 'eliminate') match.debugEliminate(msg.playerId);
         else if (msg.cmd === 'kill') match.debugKill(msg.playerId);
-        else if (msg.cmd === 'give') match.debugGive(humanId, msg.inv);
+        else if (msg.cmd === 'give') match.debugGive(msg.id ?? humanId, msg.inv);
         break;
     }
   } catch (err) {

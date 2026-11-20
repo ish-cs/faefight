@@ -59,6 +59,12 @@ export type PlayerInput = {
   useMedkit: boolean;
   /** Start drinking the potion in the selected slot. */
   drink: boolean;
+  /**
+   * Lag compensation: the sim time of the world this player was looking at when they fired (their
+   * interpolated view of everyone else). The host resolves their shots against hitboxes rewound to
+   * then (clamped; see lagComp.ts). Absent = no rewind (bots, old clients).
+   */
+  viewT?: number;
 };
 
 export type PlayerState = {

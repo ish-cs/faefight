@@ -14,7 +14,7 @@ export class InputAccumulator {
     this.held = input;
     const p = this.pending;
     if (input.jump) p.jump = true;
-    if (input.fire) p.fire = true;
+    if (input.fire) { p.fire = true; if (input.viewT !== undefined) p.viewT = input.viewT; }
     if (input.reload) p.reload = true;
     if (input.interact) p.interact = true;
     if (input.throwGrenade) p.throwGrenade = true;

@@ -74,6 +74,8 @@ export type HudContext = {
   /** Locally selected hotbar slot (sent to the sim every input). */
   selected: number;
   ghostOk: boolean | null;
+  /** Why the ghost is red ("too far", "needs support", "blocked") or what it snapped to; shown after the build hint. */
+  buildNote?: string | null;
   free: boolean;
   /** I (inventory) mode: pointer released so slots can be dragged. */
   inventory: boolean;
@@ -169,6 +171,7 @@ export class Hud {
     for (const c of ['t', 'b', 'l', 'r', 'hm']) this.crosshair.append(el('i', c));
     this.crosshair.dataset.testid = 'crosshair';
     this.reloadRing.dataset.testid = 'reload-ring';
+    this.fps.dataset.testid = 'fps';
     this.scope.dataset.testid = 'scope';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
       this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
@@ -303,7 +306,17 @@ export class Hud {
     this.snap = snap;
     const me = snap.players.find((p) => p.id === this.humanId) ?? null;
     this.me = me;
-    if (!me) return;
+    // No player of our own (spectating host): player widgets hidden, match info and the end screen still live.
+    this.root.classList.toggle('no-player', !me);
+    if (!me) {
+      this.center.style.display = 'none';
+      this.sealedBanner.style.display = 'none';
+      this.updateMatchInfo(snap, -1);
+      const end = endState(snap.winner, 0, false, snap.players);
+      if (end) this.showEnd(snap, end);
+      this.tickFeed();
+      return;
+    }
     const inv = me.inv;
 
     this.hpFill.style.width = `${Math.max(0, me.hp)}%`;
@@ -363,6 +376,37 @@ export class Hud {
     this.reloadRing.style.display = rl === null ? 'none' : '';
     if (rl !== null) this.reloadRing.style.setProperty('--p', `${Math.round(rl * 360)}deg`);
 
+    this.updateMatchInfo(snap, me.island);
+    const ownSealed = !!snap.sealed[me.island];
+    const trapped = me.alive && me.breakoutUntil != null;
+    setText(this.sealedBanner, trapped
+      ? `BREAK OUT! ${Math.max(0, me.breakoutUntil! - snap.time).toFixed(1)}s`
+      : 'YOUR BUNKER IS SEALED');
+    this.sealedBanner.style.display = (ownSealed || trapped) && !me.eliminated && snap.winner === null ? 'block' : 'none';
+
+    if (!me.alive && !me.eliminated && me.respawnAt !== null) {
+      setText(this.center, ownSealed ? `Bunker sealed — you'll respawn trapped in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s with 10s to break out` : `Respawning in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s`);
+      this.center.style.display = 'block';
+    } else if (buildKind) {
+      const have = inv.pieces[buildKind] ?? 0;
+      setText(this.center, `Build: ${LABEL[buildKind]} (${have})  ·  Z/X rotate  ·  ${ctx.free ? 'free place' : 'Alt free place'}${ctx.buildNote ? `  ·  ${ctx.buildNote}` : ''}`);
+      this.center.style.display = 'block';
+      this.center.classList.add('small');
+    } else {
+      this.center.style.display = 'none';
+    }
+    if (!buildKind) this.center.classList.remove('small');
+
+    const end = endState(snap.winner, this.humanId, me.eliminated, snap.players);
+    if (end) this.showEnd(snap, end);
+
+    if (this.panelKind === 'shop' || this.panelKind === 'potions') this.renderShop();
+    else if (this.panelKind === 'vault') this.refreshVault();
+    this.tickFeed();
+  }
+
+  /** Timer, tide banner and the island chips (myIsland -1 = none of them is yours). */
+  private updateMatchInfo(snap: Snapshot, myIsland: number) {
     const left = LIFECYCLE.suddenDeathAt - snap.time;
     setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
     this.timer.classList.toggle('sd', snap.suddenDeath);
@@ -376,49 +420,25 @@ export class Hud {
       chip.classList.toggle('out', out);
       setText(chip.querySelector('.state') as HTMLElement, chipState(sealed, out));
       // Other islands are labelled with their owner's name (a leaver's seat stays theirs, now bot-run).
-      const owner = i === me.island ? null : snap.players.find((p) => p.island === i);
+      const owner = i === myIsland ? null : snap.players.find((p) => p.island === i);
       if (owner) setText(chip.querySelector('.name') as HTMLElement, owner.name);
     });
-    const ownSealed = !!snap.sealed[me.island];
-    const trapped = me.alive && me.breakoutUntil != null;
-    setText(this.sealedBanner, trapped
-      ? `BREAK OUT! ${Math.max(0, me.breakoutUntil! - snap.time).toFixed(1)}s`
-      : 'YOUR BUNKER IS SEALED');
-    this.sealedBanner.style.display = (ownSealed || trapped) && !me.eliminated && snap.winner === null ? 'block' : 'none';
+  }
 
-    if (!me.alive && !me.eliminated && me.respawnAt !== null) {
-      setText(this.center, ownSealed ? `Bunker sealed — you'll respawn trapped in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s with 10s to break out` : `Respawning in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s`);
-      this.center.style.display = 'block';
-    } else if (buildKind) {
-      const have = inv.pieces[buildKind] ?? 0;
-      setText(this.center, `Build: ${LABEL[buildKind]} (${have})  ·  Z/X rotate  ·  ${ctx.free ? 'free place' : 'Alt free place'}`);
-      this.center.style.display = 'block';
-      this.center.classList.add('small');
-    } else {
-      this.center.style.display = 'none';
+  private showEnd(snap: Snapshot, end: NonNullable<ReturnType<typeof endState>>) {
+    // Re-shown when the match result changes (e.g. eliminated mid-match, then someone wins).
+    const key = `${end.state}|${snap.winner}`;
+    if (this.endScreen.dataset.key !== key) {
+      this.endScreen.dataset.key = key;
+      this.endScreen.dataset.state = end.state;
+      this.endScreen.dataset.testid = 'end-screen';
+      const btn = el('button', 'btn', 'Back to menu');
+      btn.onclick = () => this.act.backToMenu();
+      const buttons = el('div', 'end-buttons');
+      buttons.append(...(this.act.endButtons?.(snap.winner !== null) ?? [btn]));
+      this.endScreen.replaceChildren(el('div', 'end-title', end.title), el('div', 'end-sub', end.sub), buttons);
+      this.endScreen.style.display = 'flex';
     }
-    if (!buildKind) this.center.classList.remove('small');
-
-    const end = endState(snap.winner, this.humanId, me.eliminated, snap.players);
-    if (end) {
-      // Re-shown when the match result changes (e.g. eliminated mid-match, then someone wins).
-      const key = `${end.state}|${snap.winner}`;
-      if (this.endScreen.dataset.key !== key) {
-        this.endScreen.dataset.key = key;
-        this.endScreen.dataset.state = end.state;
-        this.endScreen.dataset.testid = 'end-screen';
-        const btn = el('button', 'btn', 'Back to menu');
-        btn.onclick = () => this.act.backToMenu();
-        const buttons = el('div', 'end-buttons');
-        buttons.append(...(this.act.endButtons?.(snap.winner !== null) ?? [btn]));
-        this.endScreen.replaceChildren(el('div', 'end-title', end.title), el('div', 'end-sub', end.sub), buttons);
-        this.endScreen.style.display = 'flex';
-      }
-    }
-
-    if (this.panelKind === 'shop' || this.panelKind === 'potions') this.renderShop();
-    else if (this.panelKind === 'vault') this.refreshVault();
-    this.tickFeed();
   }
 
   get ended() {
@@ -448,13 +468,16 @@ export class Hud {
       } else if (e.type === 'suddenDeath') {
         this.addFeed('Sudden death: generators stopped, tide rising', true);
       } else if (e.type === 'hit') {
-        if (e.data.by === this.humanId && e.data.target !== this.humanId) {
-          this.crosshair.classList.toggle('head', e.data.part === 'head');
-          this.flash(this.crosshair, 'hit');
-        }
+        if (e.data.by === this.humanId && e.data.target !== this.humanId && !e.data.echo) this.hitmarker(e.data.part === 'head');
         if (e.data.target === this.humanId) this.flash(this.damage, 'on');
       }
     }
+  }
+
+  /** Crosshair hitmarker (also shown straight away for a predicted hit). */
+  hitmarker(head: boolean) {
+    this.crosshair.classList.toggle('head', head);
+    this.flash(this.crosshair, 'hit');
   }
 
   private flash(node: HTMLElement, cls: string) {
@@ -516,6 +539,8 @@ export class Hud {
     if (!me) return;
     if (rebuild || !this.panel.querySelector('.shop-grid')) {
       const grid = el('div', 'shop-grid');
+      const info = el('div', 'shop-info', 'Hover an item for details');
+      info.dataset.testid = 'shop-info';
       const section = (title: string, items: ShopItem[]) => {
         const row = el('div', 'shop-row');
         row.setAttribute('role', 'group');
@@ -537,6 +562,10 @@ export class Hud {
           lock.innerHTML = LOCK_ICON;
           b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
           b.onclick = () => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item); };
+          // The name/details show in the panel's info bar (never clipped by the panel edge).
+          const show = () => { setText(info, b.dataset.name ?? ''); info.classList.add('on'); };
+          const hide = () => info.classList.remove('on');
+          b.onmouseenter = show; b.onfocus = show; b.onmouseleave = hide; b.onblur = hide;
           row.append(b);
         }
         grid.append(el('div', 'shop-section', title), row);
@@ -550,7 +579,7 @@ export class Hud {
         // Lock cards only show up once you own (or have locked) that gun.
         section('Upgrades', ['genUpgrade', ...GUNS.map(lockItem)]);
       }
-      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid);
+      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid, info);
       // Focus the panel (not a card, so no tooltip pops up): Tab or an arrow key then walks the cards.
       this.panel.tabIndex = -1;
       this.panel.onkeydown = (e) => this.shopArrows(e);

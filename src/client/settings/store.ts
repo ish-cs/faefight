@@ -27,12 +27,20 @@ export const FRAME_CAPS = [0, 30, 60, 120] as const;
 export type FrameCap = (typeof FRAME_CAPS)[number];
 export type CameraMode = 'third' | 'first';
 
+/**
+ * Stored-format version. v2: the FPS counter became a visible-by-default feature, so loading anything
+ * older turns it on (only a choice made after this change can hide it).
+ */
+export const SETTINGS_VERSION = 2;
+
 export type Settings = {
-  v: 1;
+  v: typeof SETTINGS_VERSION;
   controls: { sensitivity: number; invertY: boolean; keys: Keymap };
-  video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; resolutionScale: number; frameCap: FrameCap };
+  video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean };
   audio: { master: number; effects: number; ambience: number; muted: boolean };
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode };
+  /** One-time things: the How to play card shows by itself until it has been seen once. */
+  onboarding: { howToSeen: boolean };
 };
 
 export const LIMITS = {
@@ -44,11 +52,12 @@ export const LIMITS = {
 
 export function defaultSettings(): Settings {
   return {
-    v: 1,
+    v: SETTINGS_VERSION,
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
-    video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, resolutionScale: 1, frameCap: 0 },
+    video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, resolutionScale: 1, frameCap: 0, dynamicResolution: true },
     audio: { master: 0.8, effects: 1, ambience: 1, muted: false },
     gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third' },
+    onboarding: { howToSeen: false },
   };
 }
 
@@ -69,9 +78,9 @@ const HEX = /^#[0-9a-f]{6}$/i;
 /** Anything (parsed JSON, partial, wrong types) → a complete valid Settings. */
 export function sanitizeSettings(raw: unknown): Settings {
   const d = defaultSettings();
-  const r = obj(raw), c = obj(r.controls), v = obj(r.video), a = obj(r.audio), g = obj(r.gameplay);
+  const r = obj(raw), c = obj(r.controls), v = obj(r.video), a = obj(r.audio), g = obj(r.gameplay), o = obj(r.onboarding);
   return {
-    v: 1,
+    v: SETTINGS_VERSION,
     controls: {
       sensitivity: num(c.sensitivity, LIMITS.sensitivity[0], LIMITS.sensitivity[1], d.controls.sensitivity),
       invertY: bool(c.invertY, d.controls.invertY),
@@ -84,6 +93,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       showFps: bool(v.showFps, d.video.showFps),
       resolutionScale: num(v.resolutionScale, LIMITS.resolutionScale[0], LIMITS.resolutionScale[1], d.video.resolutionScale),
       frameCap: oneOf(v.frameCap, FRAME_CAPS, d.video.frameCap),
+      dynamicResolution: bool(v.dynamicResolution, d.video.dynamicResolution),
     },
     audio: {
       master: num(a.master, 0, 1, d.audio.master),
@@ -97,6 +107,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       damageNumbers: bool(g.damageNumbers, d.gameplay.damageNumbers),
       cameraMode: oneOf(g.cameraMode, ['third', 'first'] as const, d.gameplay.cameraMode),
     },
+    onboarding: { howToSeen: bool(o.howToSeen, d.onboarding.howToSeen) },
   };
 }
 
@@ -124,7 +135,14 @@ export function loadSettings(store: KV | null = defaultStore()): Settings {
     return migrated;
   }
   try {
-    return sanitizeSettings(JSON.parse(raw));
+    const parsed: unknown = JSON.parse(raw);
+    const s = sanitizeSettings(parsed);
+    if (obj(parsed).v !== SETTINGS_VERSION) {
+      s.video.showFps = true; // v1 → v2
+      console.info(`[settings] migrated stored settings v${String(obj(parsed).v)} → v${SETTINGS_VERSION} (FPS counter on)`);
+      saveSettings(s, store);
+    }
+    return s;
   } catch (err) {
     console.warn('[settings] stored settings are corrupt; using defaults', err);
     return defaultSettings();

@@ -1,13 +1,16 @@
 import * as THREE from 'three/webgpu';
-import { float, positionWorld, texture, uv, vec3 } from 'three/tsl';
+import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
 import { bunkerSlitBoxes, bunkerWallBoxes, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
-import { buildCenter } from './center';
+import { buildCenter, paintedTopMaterial } from './center';
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrierProp, containerCover, containerLite, reefer, rtg } from './mapProps';
 import { CONTAINER_COLORS, mats } from './materials';
 import { bollard, container, containerStack, crane, drums, generatorProp, lightMast, pallet, palm, shopProp, vaultProp, warehouse } from './props';
-import { type Footprint, grainTex, islandTopTex, makeRng, yardTopTex } from './textures';
+import { ISLAND_DECOR } from './decor';
+import { dressBackdrop, dressIsland } from './dressing';
+import { pbrAlbedo, pbrSample, worldNoise } from './pbr';
+import { type Footprint, islandSurface, makeRng, yardTopTex } from './textures';
 
 const UNLIT_BOOST = 2.6;
 const QUAY_DEPTH = 14; // how far the quay walls go below y=0 (never visible past the water)
@@ -34,16 +37,45 @@ function labelSprite(text: string, bg: string): THREE.Sprite {
   return s;
 }
 
-/** Quay-wall material: seawall map with v tied to world height so the algae band sits at the waterline. */
-function seawallMaterial(topY: number) {
-  const M = mats();
-  const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.9 });
-  m.name = 'quayWall';
-  const tex = M.seawall.map!;
-  // canvas covers 16 m of wall: v=1 at topY, v=0 at topY-16
-  const v = positionWorld.y.sub(topY - 16).div(16);
-  const u = uv().x;
-  m.colorNode = texture(tex, vec3(u, v, 0).xy).rgb;
+/**
+ * Island slab: worn-concrete PBR in world space, blended with sand / grass-ground sets and glossy puddles by the
+ * decor mask, then the painted overlay (markings, joints, stains, drains, litter) on top.
+ */
+function islandTopMaterial(R: number) {
+  // Texture budget: a WebGPU fragment stage may bind 16 textures; with the env map + up to 4 shadow cascades this
+  // stays at 10 (concrete/gravel albedo+normal, sand/grass albedo, 2 masks, overlay, noise).
+  const surf = islandSurface(R, ISLAND_DECOR);
+  const m = new THREE.MeshStandardNodeMaterial();
+  m.name = 'islandTop';
+  const w = positionWorld.xz;
+  const con = pbrSample('concrete', w.div(3.2), true, true);
+  const grv = pbrSample('gravel', w.div(1.6), true, true);
+  const sand = pbrAlbedo('sand', w.div(2.2));
+  const grass = pbrAlbedo('grass', w.div(2.6));
+  const mk = texture(surf.mask, uv());
+  const gk = smoothstep(0.15, 0.7, texture(surf.gravel, uv()).r);
+  const ov = texture(surf.overlay, uv());
+  const macro = mix(float(0.86), float(1.1), worldNoise(0.03));
+  let alb = con.albedo.mul(3.6).mul(vec3(0.98, 0.96, 0.92)).mul(macro);
+  alb = mix(alb, grv.albedo.mul(vec3(0.9, 0.88, 0.84)), gk);
+  alb = mix(alb, sand.mul(2.1), mk.r);
+  alb = mix(alb, grass.mul(1.25), mk.g);
+  const wet = mk.b;
+  alb = alb.mul(mix(float(1), float(0.45), wet));
+  alb = mix(alb, ov.rgb, ov.a.mul(float(1).sub(gk.mul(0.6))));
+  m.colorNode = alb;
+  let nrm = mix(con.normal, grv.normal, gk);
+  nrm = mix(nrm, vec3(0.5, 0.5, 1), max(mk.r.mul(0.6), mk.g.mul(0.5)));
+  nrm = mix(nrm, vec3(0.5, 0.5, 1), wet.mul(0.9));
+  m.normalNode = normalMap(nrm, vec2(1.2, 1.2));
+  // concrete roughness: sealed/polished-by-traffic areas vs. dusty open slab
+  let rough: THREE.Node<'float'> = float(0.8).add(worldNoise(0.12, 'g').sub(0.5).mul(0.3));
+  rough = mix(rough, float(0.95), max(gk, mk.r));
+  rough = mix(rough, float(0.92), mk.g);
+  rough = mix(rough, float(0.04), smoothstep(0.35, 0.8, wet));
+  m.roughnessNode = mix(rough, float(0.7), ov.a.mul(0.6)).clamp(0.03, 1);
+  m.metalnessNode = float(0);
+  m.aoNode = mix(float(1), float(0.8), max(gk.mul(0.6), mk.g));
   return m;
 }
 
@@ -59,6 +91,12 @@ function coverBays(isl: IslandLayout, statics: StaticBox[]): Footprint[] {
   });
 }
 
+/** The island surface mask (R sand, G grass, B puddles) on the CPU, for scattering grass where the ground shows it. */
+export function islandMask(isl: IslandLayout) {
+  const s = islandSurface(isl.radius, ISLAND_DECOR);
+  return { data: s.maskData, size: s.maskSize, R: isl.radius };
+}
+
 export function buildIslands(def: MapDef, teamColors: number[]): IslandsOut {
   const map = def.islands;
   const yard = def.template === 'yard';
@@ -72,14 +110,9 @@ export function buildIslands(def: MapDef, teamColors: number[]): IslandsOut {
   const R = map[0].radius;
   const groundY = map[0].groundY;
 
-  // shared island top material: painted layout map × fine grain
-  const topMat = new THREE.MeshStandardNodeMaterial({ roughness: 0.93 });
-  topMat.name = 'islandTop';
-  const grain = texture(grainTex(), positionWorld.xz.mul(0.35)).r;
-  const topTex = yard ? yardTopTex(R, coverBays(map[0], def.statics)) : islandTopTex(R);
-  topMat.colorNode = texture(topTex, uv()).rgb.mul(grain.mul(0.5).add(0.75));
-  topMat.roughnessNode = float(0.95).sub(grain.mul(0.1));
-  const wallMat = seawallMaterial(groundY);
+  // harbor: main's PBR slab with sand/grass/puddle decor; yard: painted asphalt (lanes + container bays) on asphalt PBR
+  const topMat = yard ? paintedTopMaterial('islandTop', yardTopTex(R, coverBays(map[0], def.statics)), 'asphalt') : islandTopMaterial(R);
+  const wallMat = M.seawall;
   const wallGeo = new THREE.CylinderGeometry(R, R, groundY + QUAY_DEPTH, 128, 1, true);
   {
     const uvA = wallGeo.getAttribute('uv');
@@ -137,7 +170,7 @@ export function buildIslands(def: MapDef, teamColors: number[]): IslandsOut {
       }
     }
     const BL = new THREE.Matrix4().compose(new THREE.Vector3(b.center.x, groundY, b.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
-    dress.add(M.concrete, boxUV(9, 0.04, 9, 3), BL.clone().multiply(mat(0, 0.02, 0)), 0xe6e0d2, false);
+    dress.add(M.slab, boxUV(9, 0.04, 9, 3), BL.clone().multiply(mat(0, 0.02, 0)), 0xe6e0d2, false);
     dress.add(M.matte, new THREE.PlaneGeometry(4, 4).rotateX(-Math.PI / 2), BL.clone().multiply(mat(0, 0.045, 0)), 0x8f8a7f, false);
     // team stripe painted on the walls
     const team = teamColors[isl.index % teamColors.length];
@@ -173,8 +206,12 @@ export function buildIslands(def: MapDef, teamColors: number[]): IslandsOut {
       root.add(s);
     }
 
-    if (yard) buildYardBackdrop(dress, L, rng, isl, n, R, groundY);
-    else buildBackdrop(dress, L, rng, isl, n, R, groundY);
+    if (yard) {
+      buildYardBackdrop(dress, L, rng, isl, n);
+    } else {
+      buildBackdrop(dress, L, rng, isl, n);
+      dressIsland(dress, L, isl); // sand/grass-bed pebbles + harbor clutter: harbor only (the yard is bare asphalt)
+    }
   }
 
   // built-in cover: container stacks on the player islands, concrete barriers on the center island.
@@ -209,16 +246,19 @@ type Rng = ReturnType<typeof makeRng>;
 type At = (x: number, y: number, z: number, ry?: number) => THREE.Matrix4;
 type Frame = { at: At; z0: number; z1: number; depth: number; hw: number; top: number };
 
-/** Backdrop frame behind an island (local +Z): quay from z0 to z1, half-width hw, deck at `top`. */
-function backdropFrame(L: THREE.Matrix4, isl: IslandLayout, n: number, R: number, groundY: number): Frame {
+/** Backdrop quay behind an island (local +Z): front edge z0, half-width hw, deck at `top` (also used for grass/gulls). */
+export function backdropFrame(isl: IslandLayout, n: number) {
   const ring = Math.hypot(isl.center.x, isl.center.z);
-  const z0 = R + CHANNEL, depth = 80;
-  return {
-    at: (x, y, z, ry = 0) => L.clone().multiply(mat(x, y, z, 0, ry, 0)),
-    z0, z1: z0 + depth, depth,
-    hw: Math.max(25, Math.min(60, (ring + z0) * Math.sin(Math.PI / n) - 8)),
-    top: groundY + 0.2,
-  };
+  const z0 = isl.radius + CHANNEL;
+  const hw = Math.max(25, Math.min(60, (ring + z0) * Math.sin(Math.PI / n) - 8));
+  return { z0, hw, top: isl.groundY + 0.2 };
+}
+
+/** backdropFrame plus the island-frame transform and depth, for the builders below. */
+function frameOf(L: THREE.Matrix4, isl: IslandLayout, n: number): Frame {
+  const { z0, hw, top } = backdropFrame(isl, n);
+  const depth = 80;
+  return { at: (x, y, z, ry = 0) => L.clone().multiply(mat(x, y, z, 0, ry, 0)), z0, z1: z0 + depth, depth, hw, top };
 }
 
 /** Quay slab (deck tinted by `deck`) + seawall faces (front + sides) + coping, bollards and fenders. */
@@ -228,7 +268,7 @@ function backdropQuay(b: StaticBatch, { at, z0, depth, hw, top }: Frame, deck: n
     const slab = new THREE.PlaneGeometry(2 * hw, depth).rotateX(-Math.PI / 2);
     const u = slab.getAttribute('uv');
     for (let i = 0; i < u.count; i++) u.setXY(i, (u.getX(i) * 2 * hw) / 3, (u.getY(i) * depth) / 3);
-    b.add(M.concrete, slab, at(0, top, z0 + depth / 2), deck, false);
+    b.add(M.asphalt, slab, at(0, top, z0 + depth / 2), deck, false);
   }
   const face = (w: number) => {
     const g = new THREE.PlaneGeometry(w, top + QUAY_DEPTH);
@@ -241,8 +281,8 @@ function backdropQuay(b: StaticBatch, { at, z0, depth, hw, top }: Frame, deck: n
   b.add(M.seawall, face(depth).rotateY(Math.PI / 2), at(hw, wallY, z0 + depth / 2), 0xffffff, false);
   b.add(M.seawall, face(depth).rotateY(-Math.PI / 2), at(-hw, wallY, z0 + depth / 2), 0xffffff, false);
   // edge: yellow line, bollards, fenders
-  b.add(M.paint, new THREE.PlaneGeometry(2 * hw - 1, 0.18).rotateX(-Math.PI / 2), at(0, top + 0.01, z0 + 0.9), 0xe8b81c, false);
-  b.add(M.concrete, boxUV(2 * hw, 0.08, 0.5, 3), at(0, top + 0.02, z0 + 0.25), 0xd6d0c2, false);
+  b.add(M.paint, new THREE.PlaneGeometry(2 * hw - 1, 0.18).rotateX(-Math.PI / 2), at(0, top + 0.065, z0 + 0.9), 0xe8b81c, false);
+  b.add(M.slab, boxUV(2 * hw, 0.08, 1.4, 3), at(0, top + 0.02, z0 + 0.7), 0xffffff, false);
   for (let x = -hw + 3; x < hw - 1; x += 7) bollard(b, at(x, top, z0 + 0.6));
   for (let x = -hw + 2; x < hw; x += 4.5) {
     if (tyres) b.add(M.rubber, TYRE, at(x, top - 0.9, z0 - 0.2));
@@ -254,8 +294,8 @@ function backdropQuay(b: StaticBatch, { at, z0, depth, hw, top }: Frame, deck: n
  * Harbor scenery behind each island (local +Z), separated from the playable disc by open water so nothing
  * here can be mistaken for walkable ground or cover.
  */
-function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: Rng, isl: IslandLayout, n: number, R: number, groundY: number) {
-  const F = backdropFrame(L, isl, n, R, groundY);
+function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: Rng, isl: IslandLayout, n: number) {
+  const F = frameOf(L, isl, n);
   const { at, z0, hw, top } = F;
   backdropQuay(b, F, 0xffffff, false);
 
@@ -273,11 +313,12 @@ function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: Rng, isl: IslandLa
   drums(b, at(hw * 0.38, top, z0 + 3), 4, rng);
   drums(b, at(-hw * 0.3, top, z0 + 5), 3, rng);
   for (const [x, z] of [[-hw * 0.45, 4], [-hw * 0.42, 5.4], [hw * 0.02, 13]]) pallet(b, at(x, top, z0 + z));
+  dressBackdrop(b, at, hw, z0, top, rng);
   jungleHill(b, F, rng, isl, 260, 14);
 }
 
 /** Jungle hill behind the quay: displaced terrain, `blobs` canopy blobs, `palms` palms. */
-function jungleHill(b: StaticBatch, { at, z1, hw, top }: Frame, rng: Rng, isl: IslandLayout, blobs: number, palms: number) {
+function jungleHill(b: StaticBatch, { at, z1, hw, top }: Frame, rng: Rng, isl: IslandLayout, count: number, palms: number) {
   const M = mats();
   const W = 2 * hw + 90, D = 110, SX = 60, SZ = 32;
   const g = new THREE.PlaneGeometry(W, D, SX, SZ).rotateX(-Math.PI / 2);
@@ -312,12 +353,23 @@ function jungleHill(b: StaticBatch, { at, z1, hw, top }: Frame, rng: Rng, isl: I
     blob.computeVertexNormals();
   }
   const leafCols = [0x2a4f1f, 0x34602a, 0x22441b, 0x406d2c];
-  for (let i = 0; i < blobs; i++) {
+  // canopy self-shadowing baked per colour: dark, cool undersides → sunlit tops
+  const blobs = leafCols.map((c) => {
+    const g = blob.clone(), p = g.getAttribute('position'), col = new THREE.Color(c), out: number[] = [];
+    for (let i = 0; i < p.count; i++) {
+      const k = Math.min(1, Math.max(0, (p.getY(i) + 1) / 2));
+      const v = 0.38 + 0.62 * k * k * (3 - 2 * k);
+      out.push(col.r * v * (0.9 + 0.1 * k), col.g * v, col.b * v * (1.1 - 0.1 * k));
+    }
+    g.setAttribute('color', new THREE.Float32BufferAttribute(out, 3));
+    return g;
+  });
+  for (let i = 0; i < count; i++) {
     const x = rng.rr(-W / 2 + 8, W / 2 - 8), zz = rng.rr(-D / 2 + 10, D / 2 - 6);
     const h = hAt(x, zz);
     if (h < 1.2) continue;
     const s = rng.rr(2.4, 5);
-    b.add(M.leaf, blob, at(x, top - 0.25 + h + s * 0.35, hillZ + zz).multiply(mat(0, 0, 0, 0, rng.rr(0, 6), 0, s * rng.rr(1, 1.4), s * rng.rr(0.8, 1.1), s * rng.rr(1, 1.4))), leafCols[i % 4], false, false);
+    b.add(M.leaf, blobs[i % 4], at(x, top - 0.25 + h + s * 0.35, hillZ + zz).multiply(mat(0, 0, 0, 0, rng.rr(0, 6), 0, s * rng.rr(1, 1.4), s * rng.rr(0.8, 1.1), s * rng.rr(1, 1.4))), leafCols[i % 4], false, false);
   }
   for (let i = 0; i < palms; i++) {
     const x = rng.rr(-W / 2 + 10, W / 2 - 10), zz = rng.rr(-D / 2 + 4, -D / 2 + 40);
@@ -329,11 +381,11 @@ function jungleHill(b: StaticBatch, { at, z1, hw, top }: Frame, rng: Rng, isl: I
  * Container Yard scenery behind each island: a terminal apron with RTG-served container blocks, a reefer
  * row, light masts, a ship-to-shore crane over the channel and the warehouse; the hill is thinner.
  */
-function buildYardBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: Rng, isl: IslandLayout, n: number, R: number, groundY: number) {
-  const F = backdropFrame(L, isl, n, R, groundY);
+function buildYardBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: Rng, isl: IslandLayout, n: number) {
+  const F = frameOf(L, isl, n);
   const { at, z0, hw, top } = F;
   const M = mats();
-  backdropQuay(b, F, 0x9a968e, true);
+  backdropQuay(b, F, 0xd6d2ca, true);
   const pick = () => CONTAINER_COLORS[Math.floor(rng.rnd() * CONTAINER_COLORS.length)];
   // painted apron: lane lines along the quay
   for (const z of [5.5, 11.5, 30]) b.add(M.paint, new THREE.PlaneGeometry(2 * hw - 4, 0.15).rotateX(-Math.PI / 2), at(0, top + 0.01, z0 + z), z === 5.5 ? 0xe8b81c : 0xe6e3da, false);

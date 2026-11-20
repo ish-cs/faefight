@@ -18,6 +18,8 @@ export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 const UNLIT_BOOST = 2.6;
 const boosted = (hex: number) => new THREE.Color(hex).multiplyScalar(UNLIT_BOOST);
 
+const GPU_TIMING = typeof location !== 'undefined' && new URLSearchParams(location.search).get('gputime') === '1';
+
 type Fx = { mesh: THREE.Mesh; mat: THREE.MeshBasicNodeMaterial; born: number; life: number; grow?: number };
 
 export class Renderer {
@@ -49,6 +51,13 @@ export class Renderer {
   private ghost: THREE.Mesh | null = null;
   private ghostKind: PieceKind | null = null;
   private ghostMat = new THREE.MeshBasicNodeMaterial({ color: 0x3ddc84, transparent: true, opacity: 0.6, depthWrite: false });
+  private ghostLink: THREE.Mesh | null = null;
+  private ghostLinkGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);
+  private ghostT = performance.now();
+  private ghostPulse = 0;
+  private ghostTmp = new THREE.Vector3();
+  private ghostTmp2 = new THREE.Vector3();
+  private ghostWhite = new THREE.Color(0xffffff);
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
   private lootGeo = new THREE.SphereGeometry(0.28, 16, 10).scale(1, 0.8, 1);
   private lootMat = new THREE.MeshStandardNodeMaterial({ color: 0x8b5a2b, roughness: 0.9 });
@@ -65,12 +74,28 @@ export class Renderer {
   localGunPoint: ((which: 'muzzle' | 'eject', out: THREE.Vector3) => THREE.Vector3 | null) | null = null;
 
   private constructor(canvas: HTMLCanvasElement) {
-    this.gpu = new THREE.WebGPURenderer({ canvas, antialias: true });
+    this.gpu = new THREE.WebGPURenderer({ canvas, antialias: true, trackTimestamp: GPU_TIMING });
+  }
+
+  /** ?gputime=1: per-frame GPU render time (ms) from timestamp queries, newest last (debug/perf only). */
+  readonly gpuMs: number[] = [];
+  gpuStats() {
+    const xs = [...this.gpuMs].sort((a, b) => a - b);
+    const q = (k: number) => xs[Math.min(xs.length - 1, Math.floor(xs.length * k))] ?? 0;
+    return { n: xs.length, avg: xs.reduce((a, b) => a + b, 0) / (xs.length || 1), p95: q(0.95) };
+  }
+  private resolveGpuTime() {
+    this.gpu.resolveTimestampsAsync('render').then((ms) => {
+      if (typeof ms !== 'number' || !Number.isFinite(ms)) return;
+      this.gpuMs.push(ms);
+      if (this.gpuMs.length > 600) this.gpuMs.shift();
+    }, (err) => console.warn('[render] GPU timestamp resolve failed', err));
   }
 
   static async create(canvas: HTMLCanvasElement): Promise<Renderer> {
     const r = new Renderer(canvas);
     await r.gpu.init();
+    r.characters.camera = r.camera;
     r.world = new World(r.gpu, r.scene, r.camera, r.collidables); // tone mapping, pixel ratio, shadows, sky
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
@@ -89,6 +114,12 @@ export class Renderer {
     this.gpu.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+  }
+
+  /** The local player changed (0 = none: the host handed its player to a bot and spectates). */
+  setLocalPlayer(id: number) {
+    this.humanId = id;
+    this.local = null;
   }
 
   setMap(def: MapDef, humanId: number) {
@@ -118,6 +149,7 @@ export class Renderer {
   /** Every snapshot as soon as it arrives (before any event delay): drives player interpolation. */
   ingest(snap: Snapshot) {
     this.clock.push(snap.time, performance.now() / 1000);
+    if (snap.time > this.newestSim) this.newestSim = snap.time;
     for (const p of snap.players) {
       let tr = this.tracks.get(p.id);
       if (!tr) { tr = new PlayerTrack(); this.tracks.set(p.id, tr); }
@@ -134,6 +166,13 @@ export class Renderer {
   beginFrame() {
     this.playT = this.clock.advance(performance.now() / 1000);
   }
+
+  /**
+   * Sim time of the other players shown this frame (sent with shots: lag compensation). Never past the
+   * newest snapshot: beyond it tracks only extrapolate/hold, so the host has nothing truer to rewind to.
+   */
+  get renderTime(): number | null { return this.playT === null ? null : Math.min(this.playT, this.newestSim); }
+  private newestSim = -Infinity;
 
   /** Debug: current interpolation delay (s) behind the newest snapshot. */
   get interpDelay() { return this.clock.delay; }
@@ -154,6 +193,11 @@ export class Renderer {
     this.potionSellers.sync(snap.potionShops);
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
+  }
+
+  /** An event made up on this client (predicted shot): same effects as one from a snapshot. */
+  localEvent(e: MatchEvent) {
+    this.onEvent(e);
   }
 
   private onEvent(e: MatchEvent) {
@@ -220,6 +264,8 @@ export class Renderer {
     out.pitch = s.pitch;
     return out;
   }
+  /** scratch feet positions handed to the world each frame (grass bending) */
+  private feet = Array.from({ length: 8 }, () => new THREE.Vector3());
   private sampleTmp = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 };
 
   /** Display-rate feet position for a player. */
@@ -228,26 +274,68 @@ export class Renderer {
     return m ? out.copy(m.pos) : null;
   }
 
-  setGhost(kind: PieceKind | null, pos?: Vec3, rotY = 0, ok = false) {
-    if (!kind || !pos) { if (this.ghost) this.ghost.visible = false; return; }
+  /**
+   * Build ghost. It glides toward a new spot (~50 ms) instead of popping, except across big jumps or a
+   * kind change. `link` draws a thin line from the ghost to what it snaps onto.
+   */
+  setGhost(kind: PieceKind | null, pos?: Vec3, rotY = 0, ok = false, link: Vec3 | null = null) {
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - this.ghostT) / 1000);
+    this.ghostT = now;
+    if (!kind || !pos) {
+      if (this.ghost) this.ghost.visible = false;
+      if (this.ghostLink) this.ghostLink.visible = false;
+      return;
+    }
     if (!this.ghost) {
       this.ghost = new THREE.Mesh(this.geometryFor(kind), this.ghostMat);
       this.ghost.renderOrder = 10;
       this.scene.add(this.ghost);
     }
-    if (this.ghostKind !== kind) { this.ghost.geometry = this.geometryFor(kind); this.ghostKind = kind; }
-    this.ghost.visible = true;
-    this.ghost.position.set(pos.x, pos.y + 0.01, pos.z);
-    this.ghost.rotation.y = rotY;
-    this.ghostMat.color.copy(boosted(ok ? 0x3ddc84 : 0xff4d4d));
+    const g = this.ghost;
+    const jump = this.ghostKind !== kind || !g.visible || g.position.distanceTo(this.ghostTmp.set(pos.x, pos.y + 0.01, pos.z)) > 4;
+    if (this.ghostKind !== kind) { g.geometry = this.geometryFor(kind); this.ghostKind = kind; }
+    g.visible = true;
+    if (jump) { g.position.set(pos.x, pos.y + 0.01, pos.z); g.rotation.y = rotY; }
+    else {
+      const k = 1 - Math.exp(-dt / 0.045);
+      g.position.lerp(this.ghostTmp.set(pos.x, pos.y + 0.01, pos.z), k);
+      g.rotation.y += Math.atan2(Math.sin(rotY - g.rotation.y), Math.cos(rotY - g.rotation.y)) * k;
+    }
+    this.ghostPulse = Math.max(0, this.ghostPulse - dt * 5);
+    g.scale.setScalar(1 + 0.12 * this.ghostPulse);
+    this.ghostMat.color.copy(boosted(ok ? 0x3ddc84 : 0xff4d4d)).lerp(this.ghostWhite, 0.6 * this.ghostPulse);
+
+    if (!link) { if (this.ghostLink) this.ghostLink.visible = false; return; }
+    if (!this.ghostLink) {
+      this.ghostLink = new THREE.Mesh(this.ghostLinkGeo, new THREE.MeshBasicNodeMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false }));
+      this.ghostLink.renderOrder = 11;
+      this.scene.add(this.ghostLink);
+    }
+    const from = this.ghostTmp.copy(g.position);
+    from.y += 0.15;
+    const len = from.distanceTo(this.ghostTmp2.set(link.x, link.y, link.z));
+    this.ghostLink.visible = len > 0.05;
+    this.ghostLink.position.copy(from);
+    this.ghostLink.lookAt(this.ghostTmp2);
+    this.ghostLink.scale.set(0.035, 0.035, len);
   }
 
-  /** Meshes the aim ray may hit: world + pieces + other players. */
+  /** Brief flash/pop on the ghost when a piece is placed from it. */
+  pulseGhost() {
+    this.ghostPulse = 1;
+  }
+
+  /** Meshes the aim ray may hit: world + pieces + other players. Reused array: valid until the next call. */
   aimTargets(): THREE.Object3D[] {
-    const out = [...this.collidables];
+    const out = this.aimList;
+    out.length = 0;
+    for (const o of this.collidables) out.push(o);
     this.characters.aimTargets(this.humanId, out);
     return out;
   }
+  private aimList: THREE.Object3D[] = [];
+  private motionOf = (id: number, out: Motion) => this.playerMotion(id, out);
 
   render(localYaw: number) {
     this.potionSellers.frame(performance.now());
@@ -256,19 +344,26 @@ export class Renderer {
     this.lastFrame = now;
     const snap = this.curr;
     if (snap) {
-      this.characters.sync(snap.hidden?.length ? snap.players.filter((p) => !snap.hidden!.includes(p.id)) : snap.players, this.humanId, localYaw, snap.time, (id, out) => this.playerMotion(id, out));
+      this.characters.sync(snap.players, this.humanId, localYaw, snap.time, this.motionOf, snap.hidden);
       for (const m of this.loot.values()) m.rotation.y += 1.2 * dt;
     }
 
-    for (const f of [...this.fx]) {
+    for (let i = this.fx.length - 1; i >= 0; i--) {
+      const f = this.fx[i];
       const k = (now - f.born) / f.life;
-      if (k >= 1) { this.scene.remove(f.mesh); f.mat.dispose(); this.fx.splice(this.fx.indexOf(f), 1); continue; }
+      if (k >= 1) { this.scene.remove(f.mesh); f.mat.dispose(); this.fx.splice(i, 1); continue; }
       f.mat.opacity = 0.9 * (1 - k);
       if (f.grow) f.mesh.scale.setScalar(0.2 + (f.grow - 0.2) * Math.sqrt(k));
     }
 
     this.gunFx.update((now - this.snapArrived) / 1000);
-    this.world.render(this.waterY, this.camera.position); // tide, shadow focus, post chain, draw
+    let nf = 0;
+    if (snap) for (const p of snap.players) {
+      if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
+      if (this.playerPos(p.id, this.feet[nf])) nf++;
+    }
+    this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
+    if (GPU_TIMING) this.resolveGpuTime();
   }
 
   info() {
