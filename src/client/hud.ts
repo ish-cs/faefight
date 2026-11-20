@@ -218,7 +218,7 @@ export class Hud {
     if (!me || !me.alive) return null;
     const own = this.map[me.island];
     const r = ECONOMY.interactRadius;
-    if (own && dist2D(own.shop, me.pos) <= r) return 'shop';
+    if (this.map.some((m) => dist2D(m.shop, me.pos) <= r)) return 'shop'; // any island's shop NPC
     if (own && dist2D(own.vault, me.pos) <= r) return 'vault';
     if (this.map.some((m) => dist2D(m.generator, me.pos) <= r)) return 'generator';
     return null;

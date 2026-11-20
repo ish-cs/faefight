@@ -244,7 +244,8 @@ export class Match implements MatchApi {
 
     if (input.interact)
       for (const g of this.s.generators) if (near(this.map[g.island].generator)) collect(p, g);
-    if (input.shop && near(isl.shop)) buy(p, input.shop);
+    // Shop NPCs serve anyone standing at them, on any island (vaults stay owner-only).
+    if (input.shop && this.map.some((i) => near(i.shop))) buy(p, input.shop);
     if (input.vault && near(isl.vault) && vaultTransfer(p, input.vault).ok) p.busyUntil = now + ECONOMY.vaultSec;
     if (input.reload) tryReload(p, now);
     if (input.fire) this.events.push(...tryFire(this.ctx, p, now));
