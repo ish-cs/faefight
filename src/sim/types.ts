@@ -3,6 +3,7 @@ export type Vec3 = { x: number; y: number; z: number };
 export type PieceKind = 'sandbags' | 'wood' | 'metal' | 'steel' | 'scaffold' | 'ramp' | 'container';
 export type WeaponKind = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rifle';
 export type Difficulty = 'easy' | 'medium' | 'hard';
+export type PotionKind = 'shieldSmall' | 'shieldBig' | 'healPotion' | 'speedPotion';
 
 export type GunAmmo = { mag: number; spare: number };
 
@@ -13,12 +14,13 @@ export type Inventory = {
   grenades: number;
   charges: number;
   medkits: number;
+  potions: Partial<Record<PotionKind, number>>;
 };
 
 /** Something that occupies a hotbar slot (amounts live in the inventory). */
-export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit';
+export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit' | PotionKind;
 
-export type ShopItem = PieceKind | Exclude<WeaponKind, 'fists'> | 'ammo' | 'grenade' | 'charge' | 'medkit';
+export type ShopItem = PieceKind | Exclude<WeaponKind, 'fists'> | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind;
 export type ShopAction = { buy: ShopItem };
 export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> };
 
@@ -48,6 +50,8 @@ export type PlayerInput = {
   moveSlot: { from: number; to: number } | null;
   /** Start using a medkit (the selected slot must hold one). */
   useMedkit: boolean;
+  /** Start drinking the potion in the selected slot. */
+  drink: boolean;
 };
 
 export type PlayerState = {
@@ -60,6 +64,8 @@ export type PlayerState = {
   yaw: number;
   pitch: number;
   hp: number;
+  /** Shield (0..SHIELD_MAX): soaks damage before hp. Never regenerates; reset to 0 on death. */
+  shield: number;
   alive: boolean;
   eliminated: boolean;
   respawnAt: number | null;
@@ -78,6 +84,12 @@ export type PlayerState = {
   equipped: WeaponKind;
   /** A medkit in use heals at this time (null when not healing). */
   healAt: number | null;
+  /** A potion being drunk takes effect at `doneAt` (null when not drinking). */
+  drinking: { kind: PotionKind; doneAt: number } | null;
+  /** HP still to come from heal potions (heal over time). */
+  healLeft: number;
+  /** Speed potion buff lasts until this sim time (0 = none). */
+  speedUntil: number;
   reloadUntil: number;
   nextFireAt: number;
   busyUntil: number;
@@ -103,11 +115,15 @@ export type Snapshot = {
   waterY: number;
   suddenDeath: boolean;
   winner: number | null;
+  /** Potion seller NPCs (anyone may buy there). */
+  potionShops: PotionShop[];
   events: MatchEvent[];
 };
+
+export type PotionShop = { id: number; pos: Vec3 };
 
 export const NO_INPUT: PlayerInput = {
   moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, fire: false, reload: false,
   interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
-  select: null, drop: null, moveSlot: null, useMedkit: false,
+  select: null, drop: null, moveSlot: null, useMedkit: false, drink: false,
 };

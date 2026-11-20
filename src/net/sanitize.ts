@@ -1,5 +1,5 @@
 import { PIECES, WEAPONS } from '../sim/constants';
-import { validSlot } from '../sim/hotbar';
+import { POTION_KINDS, validSlot } from '../sim/hotbar';
 import type { BuildRequest, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
 import { CHAT_MAX_LEN, type ClientMsg } from './protocol';
 
@@ -14,7 +14,7 @@ const count = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x 
 
 const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 const WEAPON_KINDS = Object.keys(WEAPONS) as WeaponKind[];
-const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge', 'medkit'];
+const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge', 'medkit', ...POTION_KINDS];
 const oneOf = <T extends string>(list: readonly T[], x: unknown): T | null => (list.includes(x as T) ? (x as T) : null);
 
 function vec(x: unknown): Vec3 | null {
@@ -47,6 +47,15 @@ function partialInv(x: unknown): Partial<Inventory> | null {
       const kind = oneOf(PIECE_KINDS, k), n = count(v);
       if (!kind || n === null) return null;
       out.pieces[kind] = n;
+    }
+  }
+  if (x.potions !== undefined) {
+    if (!isObj(x.potions)) return null;
+    out.potions = {};
+    for (const [k, v] of Object.entries(x.potions)) {
+      const kind = oneOf(POTION_KINDS, k), n = count(v);
+      if (!kind || n === null) return null;
+      out.potions[kind] = n;
     }
   }
   if (x.weapons !== undefined) {
@@ -97,6 +106,7 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     drop: oneOf(['one', 'stack'] as const, x.drop),
     moveSlot: moveSlot(x.moveSlot),
     useMedkit: bool(x.useMedkit),
+    drink: bool(x.drink),
   };
 }
 

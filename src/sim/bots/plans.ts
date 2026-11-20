@@ -1,7 +1,9 @@
-import { AMMO_BOX, MAP, PIECES, SEAL, WEAPONS } from '../constants';
+import { AMMO_BOX, MAP, PIECES, POTIONS, SEAL, WEAPONS } from '../constants';
 import { buy } from '../economy';
+import { canAdd, countOf } from '../hotbar';
+import { uselessReason } from '../potions';
 import type { Doorway } from '../map';
-import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
+import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, PotionKind, ShopItem, Vec3, WeaponKind } from '../types';
 import { add, dist2D, forward, scale, v3 } from '../vec';
 
 export const GUNS: Exclude<WeaponKind, 'fists'>[] = ['rifle', 'smg', 'pistol', 'shotgun'];
@@ -130,4 +132,31 @@ export function shoppingPlan(
   sim.inv.cash = Infinity;
   const left = nextPurchase(sim, needs, difficulty, style);
   return { items, covered: left === null || !ESSENTIAL.includes(left), spent };
+}
+
+/** Cash a bot keeps back from potion shopping (for guns, ammo and seal kit). */
+export const POTION_RESERVE = 150;
+const SHIELD_STOCK = 2;
+
+/**
+ * Bots value shields: at a potion seller they stock up on shield potions with spare cash, and out of
+ * combat (no enemy in sight) they drink one whenever it would help, so they walk into the next fight
+ * shielded. Returns the hotbar slot to drink from, or a potion to buy, or null.
+ */
+export function potionAction(p: PlayerState, now: number, enemyInSight: boolean, atSeller: boolean): { drink: number } | { buy: PotionKind } | null {
+  if (!p.alive) return null;
+  if (atSeller) {
+    for (const kind of ['shieldBig', 'shieldSmall'] as const) {
+      if (countOf(p.inv, kind) >= SHIELD_STOCK || p.inv.cash < POTIONS[kind].price + POTION_RESERVE) continue;
+      if (countOf(p.inv, kind) === 0 && !canAdd(p.hotbar, kind)) continue;
+      return { buy: kind };
+    }
+  }
+  if (enemyInSight || p.drinking || now < p.busyUntil) return null;
+  const order: PotionKind[] = ['shieldBig', 'shieldSmall', ...(p.hp <= 60 ? ['healPotion' as const] : [])];
+  for (const kind of order) {
+    const slot = p.hotbar.indexOf(kind);
+    if (slot >= 0 && countOf(p.inv, kind) > 0 && !uselessReason(p, kind, now)) return { drink: slot };
+  }
+  return null;
 }

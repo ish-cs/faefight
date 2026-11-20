@@ -16,7 +16,9 @@ export type ToWorker =
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory> }
-  | { type: 'debug'; cmd: 'hp'; hp: number };
+  | { type: 'debug'; cmd: 'hp'; hp: number }
+  | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
+  | { type: 'debug'; cmd: 'potionShop'; x: number; z: number };
 
 /** worker → main thread */
 export type FromWorker =

@@ -12,7 +12,8 @@ export type SoundId =
   | 'explosion' | 'placed' | 'destroyed'
   | 'coin' | 'loot' | 'purchase' | 'vault'
   | 'kill' | 'death' | 'eliminated' | 'win' | 'lose' | 'draw'
-  | 'alarm' | 'tick' | 'escaped' | 'horn' | 'footstep';
+  | 'alarm' | 'tick' | 'escaped' | 'horn' | 'footstep'
+  | 'shieldHit' | 'shieldBreak' | 'drink' | 'potionDone';
 
 export type Cue = {
   sound: SoundId;
@@ -113,11 +114,18 @@ export class SoundDirector {
         }
         case 'hit': {
           const amount = Number(d.amount) || 0;
+          const shield = Number(d.shieldAmount) || 0;
+          const flesh = amount - shield;
+          // The shield part rings (shieldHit), a break shatters, the rest is the usual flesh hit.
           if (d.target === this.humanId) {
-            out.push({ sound: 'hurt', pos: null, gain: Math.min(1.2, 0.55 + amount / 60) });
+            if (shield > 0) out.push({ sound: 'shieldHit', pos: null, gain: 0.8, own: true });
+            if (d.broke) out.push({ sound: 'shieldBreak', pos: null, gain: 1, own: true });
+            if (flesh > 0) out.push({ sound: 'hurt', pos: null, gain: Math.min(1.2, 0.55 + flesh / 60) });
           } else {
             const at = chest(d.target);
-            if (at) out.push({ sound: 'impact', pos: at, gain: 0.7 });
+            if (at && shield > 0) out.push({ sound: 'shieldHit', pos: at, gain: 0.7 });
+            if (at && d.broke) out.push({ sound: 'shieldBreak', pos: at, gain: 1 });
+            if (at && flesh > 0) out.push({ sound: 'impact', pos: at, gain: 0.7 });
             if (d.by === this.humanId) out.push({ sound: 'hitmarker', pos: null, gain: 0.6 });
           }
           break;
@@ -161,6 +169,7 @@ export class SoundDirector {
     }
 
     if (me && prevMe && me.alive && prevMe.alive) this.economy(me, prevMe, prev!, s, out);
+    this.potions(s, prev, out);
     this.countdown(me, s, out);
     this.footsteps(s, prev, out);
 
@@ -187,6 +196,21 @@ export class SoundDirector {
     } else if (delta < 0) {
       const deposited = me.vault.cash - prevMe.vault.cash;
       if (deposited < -delta) out.push({ sound: 'purchase', pos: null, gain: 0.7 });
+    }
+  }
+
+  /** Gulp when anyone starts drinking (yours 2D); a chime when your own drink finishes (not when you die mid-drink). */
+  private potions(s: Snapshot, prev: Snapshot | null, out: Cue[]) {
+    if (!prev) return;
+    for (const p of s.players) {
+      const was = prev.players.find((q) => q.id === p.id);
+      if (!was) continue;
+      const own = p.id === this.humanId;
+      if (p.alive && p.drinking && !was.drinking) {
+        out.push({ sound: 'drink', pos: own ? null : { x: p.pos.x, y: p.pos.y + 1.5, z: p.pos.z }, gain: own ? 0.7 : 0.6, own });
+      } else if (own && p.alive && !p.drinking && was.drinking) {
+        out.push({ sound: 'potionDone', kind: was.drinking.kind, pos: null, gain: 0.6 });
+      }
     }
   }
 

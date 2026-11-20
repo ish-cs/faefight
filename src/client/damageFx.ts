@@ -1,15 +1,24 @@
 import * as THREE from 'three/webgpu';
 import type { MatchEvent, Snapshot } from '../sim/types';
 
-/** Damage I dealt this update, one number per target (shotgun pellets add up). */
-export function damageNumbers(events: MatchEvent[], me: number): { target: number; amount: number }[] {
-  const per = new Map<number, number>();
+/**
+ * Damage I dealt this update, one entry per target (shotgun pellets add up). `amount` is the total,
+ * `shield` the part their shield soaked (shown blue; the rest, to health, yellow).
+ */
+export function damageNumbers(events: MatchEvent[], me: number): { target: number; amount: number; shield: number }[] {
+  const per = new Map<number, { amount: number; shield: number }>();
   for (const e of events) {
     if (e.type !== 'hit' || e.data.by !== me) continue;
-    const target = e.data.target as number, amount = Number(e.data.amount) || 0;
-    per.set(target, (per.get(target) ?? 0) + amount);
+    const target = e.data.target as number, amount = Number(e.data.amount) || 0, shield = Number(e.data.shieldAmount) || 0;
+    const t = per.get(target) ?? { amount: 0, shield: 0 };
+    t.amount += amount;
+    t.shield += shield;
+    per.set(target, t);
   }
-  return [...per].map(([target, amount]) => ({ target, amount: Math.round(amount) }));
+  return [...per].map(([target, t]) => {
+    const shield = Math.min(Math.round(t.shield), Math.round(t.amount));
+    return { target, amount: Math.round(t.amount), shield };
+  });
 }
 
 /** Screen-relative bearing of an attacker: 0 ahead, +PI/2 right, ±PI behind (camera yaw 0 looks toward -Z). */
@@ -41,13 +50,21 @@ export class DamageFx {
 
   onSnapshot(snap: Snapshot, me: number) {
     const now = performance.now() / 1000;
-    for (const { target, amount } of damageNumbers(snap.events, me)) {
+    for (const { target, amount, shield } of damageNumbers(snap.events, me)) {
       if (amount <= 0) continue;
-      const el = document.createElement('div');
-      el.className = `dmg-number${amount >= 40 ? ' big' : ''}`;
-      el.textContent = `-${amount}`;
-      this.root.append(el);
-      this.floaters.push({ el, target, born: now, jitter: (Math.random() - 0.5) * 40 });
+      const jitter = (Math.random() - 0.5) * 40;
+      const health = amount - shield;
+      // Shield damage in blue, health damage in yellow; both when a hit breaks through.
+      const add = (n: number, cls: string, dx: number) => {
+        const el = document.createElement('div');
+        el.className = `dmg-number ${cls}${amount >= 40 ? ' big' : ''}`;
+        el.textContent = `-${n}`;
+        this.root.append(el);
+        this.floaters.push({ el, target, born: now, jitter: jitter + dx });
+      };
+      const both = shield > 0 && health > 0;
+      if (shield > 0) add(shield, 'shield', both ? -22 : 0);
+      if (health > 0) add(health, 'health', both ? 22 : 0);
     }
     for (const e of snap.events) {
       if (e.type !== 'hit' || e.data.target !== me || typeof e.data.by !== 'number' || e.data.by === me) continue;

@@ -83,7 +83,10 @@ type Backend = {
   input(i: PlayerInput): void;
   preview(req: BuildRequest, key: number): void;
   chat(text: string): void;
-  debug?: { teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void };
+  debug?: {
+    teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void;
+    shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
+  };
 };
 
 /** Simulation in a local worker: vs-bot (session = null) or online host. */
@@ -123,6 +126,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       teleport: (x, z) => send({ type: 'debug', cmd: 'teleport', x, z }),
       give: (inv) => send({ type: 'debug', cmd: 'give', inv }),
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
+      shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
+      potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
     },
   };
 }
@@ -353,8 +358,8 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   let dead: HTMLElement | null = null;
   const buffer = backend.buffered ? new SnapshotBuffer<Snapshot>(0.1) : null;
 
-  const openPanel = (kind: 'shop' | 'vault') => {
-    if (kind === 'shop') hud.openShop(); else { hud.openVault(); audio.ui('vault'); }
+  const openPanel = (kind: 'shop' | 'potions' | 'vault') => {
+    if (kind === 'shop' || kind === 'potions') hud.openShop(kind); else { hud.openVault(); audio.ui('vault'); }
     input.enabled = false;
     chat.enabled = false; // Enter on a focused shop card buys; it must not open chat
     if (document.pointerLockElement) document.exitPointerLock();
@@ -381,7 +386,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   const input = new InputController(canvas, {
     interact: () => {
       const station = hud.nearStation();
-      if (station === 'shop' || station === 'vault') openPanel(station);
+      if (station === 'shop' || station === 'potions' || station === 'vault') openPanel(station);
       else input.queue({ interact: true });
     },
     place: () => {

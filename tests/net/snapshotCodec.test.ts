@@ -9,9 +9,11 @@ function snap(tick: number, pieces: PieceState[], events: Snapshot['events'] = [
   const a = newPlayer(1, 'a', false, 0, v3(1.23456, 2, 3.98765));
   const b = newPlayer(2, 'b', false, 1, v3(40, 2, 0));
   b.vault.cash = 999;
+  b.shield = 37.4;
+  b.inv.potions.shieldBig = 3;
   return {
     time: tick / 30, tick, players: [a, b], pieces, loot: [], generators: [{ island: 0, stored: 12.3456 }, { island: 1, stored: 0 }],
-    sealed: [false, false], waterY: 0, suddenDeath: false, winner: null, events,
+    sealed: [false, false], waterY: 0, suddenDeath: false, winner: null, potionShops: [{ id: 0, pos: v3(0, 2, 0) }], events,
   };
 }
 const steel = (hp = 1200): PieceState => ({ id: 5, kind: 'steel', owner: 1, pos: v3(1, 2, 3), rotY: 0.5, hp });
@@ -25,6 +27,16 @@ describe('snapshot codec', () => {
     expect(out.tick).toBe(1);
     expect(out.pieces).toEqual([steel()]);
     expect(out.players[0].pos.x).toBeCloseTo(1.23456, 2);
+  });
+  test("everyone's shield is sent (it is shown on name tags); others' potions are not", () => {
+    const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();
+    enc.push(snap(1, []));
+    const forA = dec.decode(enc.take(1));
+    expect(forA.players[1].shield).toBe(38);
+    expect(forA.players[1].inv.potions).toEqual({});
+    expect(forA.potionShops).toEqual([{ id: 0, pos: v3(0, 2, 0) }]);
+    const forB = new SnapshotDecoder().decode(enc.take(2));
+    expect(forB.players[1].inv.potions).toEqual({ shieldBig: 3 });
   });
   test('events from ticks between sends are merged, not lost', () => {
     const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();
