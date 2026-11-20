@@ -11,6 +11,8 @@ import type { IslandLayout } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { BuildRequest, Difficulty, Inventory, PlayerInput, Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
+import { AudioSystem } from './audio/engine';
+import { volumeControl } from './audio/ui';
 import { ThirdPersonCamera } from './camera';
 import { ChatUi } from './chatUi';
 import { Hud } from './hud';
@@ -28,6 +30,8 @@ const GHOST_AHEAD = 3;
 const AIM_RANGE = 120;
 const NAME_KEY = 'faefight.name';
 const NAME_MAX = 16;
+/** Created at load so M-mute works from the menu; the AudioContext itself starts on the first click/key. */
+const audio = new AudioSystem();
 
 function toast(msg: string) {
   const t = document.createElement('div');
@@ -255,8 +259,8 @@ function showMenu() {
   const stored = Number(localStorage.getItem('faefight.sensitivity')) || 1;
   const keys = document.createElement('div');
   keys.className = 'keys';
-  keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire · R reload · E interact · Enter chat<br>B build (1–7 piece, Q/E or wheel rotate, hold Alt free-place) · 1–5 weapons · G grenade · C charge';
-  card.append(play, online, status, sensitivityControl(null, stored), keys);
+  keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire · R reload · E interact · Enter chat<br>B build (1–7 piece, Q/E or wheel rotate, hold Alt free-place) · 1–5 weapons · G grenade · C charge · M mute';
+  card.append(play, online, status, sensitivityControl(null, stored), volumeControl(audio), keys);
   menu.append(card);
   app.append(menu);
 }
@@ -346,7 +350,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   const buffer = backend.buffered ? new SnapshotBuffer<Snapshot>(0.1) : null;
 
   const openPanel = (kind: 'shop' | 'vault') => {
-    if (kind === 'shop') hud.openShop(); else hud.openVault();
+    if (kind === 'shop') hud.openShop(); else { hud.openVault(); audio.ui('vault'); }
     input.enabled = false;
     if (document.pointerLockElement) document.exitPointerLock();
   };
@@ -416,7 +420,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     const note = document.createElement('div');
     note.style.cssText = 'font-size:12px;color:var(--muted)';
     note.textContent = 'The match keeps running while paused.';
-    card.append(title, sensitivityControl(input, input.sensitivity), resume, note);
+    card.append(title, sensitivityControl(input, input.sensitivity), volumeControl(audio), resume, note);
     paused.append(card);
     document.body.append(paused);
   }
@@ -467,6 +471,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     const first = !snap;
     snap = s;
     hud.pushEvents(renderer.pushSnapshot(s, intervalMs));
+    audio.snapshot(s);
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
       if (me) input.yaw = me.yaw;
@@ -485,6 +490,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       humanId = id;
       renderer.setMap(map, humanId);
       hud.setMap(map, humanId, island);
+      audio.setMap(map, humanId);
     },
     snapshot: (s) => { if (buffer) buffer.push(s); else applySnapshot(s); },
     preview: (result, key) => {
@@ -506,6 +512,8 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       renderInfo: () => renderer.info(),
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
       input,
+      audio: () => audio.stats(),
+      audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
     };
   }
 
@@ -582,6 +590,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       }
     }
     renderer.render(input.yaw);
+    audio.frame(renderer.camera);
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
