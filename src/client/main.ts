@@ -1,4 +1,5 @@
 import './style.css';
+import type { Object3D } from 'three/webgpu';
 import type { HostMsg, Slot } from '../net/protocol';
 import { SnapshotDecoder } from '../net/snapshotCodec';
 import type { Link } from '../net/transport';
@@ -8,7 +9,7 @@ import { snapPlacement, type Placement } from '../sim/building';
 import { PLAYER, TICK_HZ } from '../sim/constants';
 import type { IslandLayout } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
-import type { BuildRequest, Difficulty, Inventory, PlayerInput, Snapshot } from '../sim/types';
+import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { ChatUi } from './chatUi';
@@ -16,11 +17,13 @@ import { loadGameModules, preloadGame } from './gameModules';
 import { InputAccumulator } from './inputAccum';
 import { InputController } from './input';
 import { ACTIONS, activeKeymap, bindingLabel, isAction, type Action } from './keymap';
-import { loadingScreen } from './loading';
+import { loadingScreen as loadingOverlay } from './loading';
 import { LobbyUi } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
-import { HostSession, JoinError, joinRoom } from './session';
+import { HostSession, JOIN_ERRORS, JoinError, joinRoom } from './session';
 import { SnapshotBuffer } from './snapBuffer';
+import { endButtons, GameScope, type EndRole } from './rematch';
+import { Scoreboard } from './scoreboard';
 import { applyDocumentSettings } from './settings/apply';
 import { openSettings } from './settings/panel';
 import { settings } from './settings/store';
@@ -61,7 +64,7 @@ function keyHelp(): string {
   const slots = ACTIONS.filter((a) => a.group === 'Hotbar').map((a) => k(a.id));
   const slotText = slots.join('') === '123456789' ? '1–9' : slots.join(' ');
   return `${move} move · ${k('sprint')} sprint · ${k('jump')} jump · Click fire / place / throw · ${k('reload')} reload · ${k('interact')} interact · ${k('chat')} chat · ${k('camera')} first person · ${k('mute')} mute<br>`
-    + `${slotText} or wheel pick hotbar slot · ${k('drop')} drop (Ctrl/Shift+${k('drop')} stack) · ${k('inventory')} drag to reorder · ${k('rotateLeft')}/${k('rotateRight')} rotate piece · ${k('freePlace')} free-place`;
+    + `${slotText} or wheel pick hotbar slot · ${k('drop')} drop (Ctrl/Shift+${k('drop')} stack) · ${k('inventory')} drag to reorder · hold ${k('scoreboard')} scoreboard · ${k('rotateLeft')}/${k('rotateRight')} rotate piece · ${k('freePlace')} free-place`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -86,7 +89,12 @@ type Backend = {
   input(i: PlayerInput): void;
   preview(req: BuildRequest, key: number): void;
   chat(text: string): void;
-  debug?: { teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void };
+  /** Stop delivering to the sink (game torn down for a rematch / back to lobby). Remote: the link stays open. */
+  close(): void;
+  debug?: {
+    teleport(x: number, z: number): void; give(inv: Partial<Inventory>): void; hp(hp: number): void;
+    eliminate(playerId: number): void; kill(playerId: number): void;
+  };
 };
 
 /** Simulation in a local worker: vs-bot (session = null) or online host. */
@@ -126,6 +134,13 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       teleport: (x, z) => send({ type: 'debug', cmd: 'teleport', x, z }),
       give: (inv) => send({ type: 'debug', cmd: 'give', inv }),
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
+      eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
+      kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
+    },
+    close() {
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.terminate();
     },
   };
 }
@@ -134,24 +149,27 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
 function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, early: HostMsg[]): Backend {
   const decoder = new SnapshotDecoder();
   let closed = false;
+  let disposed = false;
   return {
     buffered: true,
     inputHz: TICK_HZ,
     connect(sink) {
       sink.map(start.map, start.playerId, start.island);
       const handle = (m: HostMsg) => {
+        if (disposed) return;
         if (m.t === 'snap') sink.snapshot(decoder.decode(m.s));
         else if (m.t === 'preview') sink.preview(m.result, m.key);
         else if (m.t === 'chat') sink.chat(m.from, m.text);
-        else if (m.t === 'ended') { closed = true; sink.fatal('Host left', 'Match over: the host left the game.'); }
+        else if (m.t === 'ended') { closed = true; if (m.reason === 'host-left') sink.fatal('Host left', 'Match over: the host left the game.'); else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`); }
       };
       early.forEach(handle);
       link.onMessage((raw) => handle(raw as HostMsg));
-      link.onClose(() => { if (!closed) { closed = true; sink.fatal('Host left', 'Match over: lost the connection to the host.'); } });
+      link.onClose(() => { if (!closed && !disposed) { closed = true; sink.fatal('Host left', 'Match over: lost the connection to the host.'); } });
     },
-    input: (input) => link.send({ t: 'input', input }),
-    preview: (req, key) => link.send({ t: 'preview', req, key }),
+    input: (input) => { if (!disposed) link.send({ t: 'input', input }); },
+    preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
     chat: (text) => link.send({ t: 'chat', text }),
+    close: () => { disposed = true; },
   };
 }
 
@@ -184,13 +202,7 @@ function showMenu() {
     b.onclick = () => {
       lockMenu();
       status.textContent = 'Loading…';
-      const backend = workerBackend(() => ({
-        // ?debug=1&bots=N (1-7) fills more seats for perf testing
-        setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: DEBUG ? Math.min(7, Math.max(1, Number(new URLSearchParams(location.search).get('bots')) || 1)) : 1 },
-          (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))] },
-        humanId: 1,
-      }), null);
-      startGame(backend, menu).catch((err) => {
+      playSolo(d, menu).catch((err) => {
         console.error('[main] failed to start', err);
         status.textContent = `Failed to start: ${err?.message ?? err}`;
       });
@@ -273,6 +285,43 @@ function showMenu() {
   app.append(menu);
 }
 
+/** Full-screen "starting…" card shown while a rematch tears down the old game and builds the new one. */
+function loadingScreen(text: string): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'menu';
+  el.dataset.testid = 'rematch-loading';
+  const card = document.createElement('div');
+  card.className = 'menu-card glass';
+  card.textContent = text;
+  el.append(card);
+  app.append(el);
+  return el;
+}
+
+/** Vs bot. Play again = same difficulty on a fresh worker. */
+async function playSolo(d: Difficulty, menu: HTMLElement) {
+  const backend = workerBackend(() => ({
+    // ?debug=1&bots=N (1-7) fills more seats for perf testing
+    setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: DEBUG ? Math.min(7, Math.max(1, Number(new URLSearchParams(location.search).get('bots')) || 1)) : 1 },
+      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))] },
+    humanId: 1,
+  }), null);
+  let game: Game | null = null;
+  game = await startGame(backend, menu, undefined, {
+    hostId: null,
+    role: {
+      kind: 'solo',
+      playAgain: () => {
+        game?.destroy();
+        playSolo(d, loadingScreen('Starting a new match…')).catch((err) => {
+          console.error('[main] play again failed', err);
+          toast(`Could not restart: ${err?.message ?? err}`);
+        });
+      },
+    },
+  });
+}
+
 function showJoinError(menu: HTMLElement, message: string) {
   menu.remove();
   const ui = new LobbyUi(app, '', null, () => location.reload());
@@ -286,20 +335,37 @@ async function hostLobby(name: string, menu: HTMLElement) {
     chat: (from, text) => chat?.add(from, text),
   });
   let chat: ChatUi | null = null;
+  let game: Game | null = null;
+  const launch = (setupFor: (w: Worker) => { setup: MatchSetup; humanId: number }, screen: HTMLElement) => {
+    const backend = workerBackend(setupFor, session);
+    startGame(backend, screen, (c) => (chat = c), { hostId: 1, role }).then((g) => { game = g; }, (err) => {
+      console.error('[host] failed to start', err);
+      screen.remove();
+      app.append(ui!.root);
+      ui!.error(`Failed to start: ${err?.message ?? err}`);
+    });
+  };
+  const role: EndRole = {
+    kind: 'host',
+    rematch: () => {
+      game?.destroy();
+      game = null;
+      launch((w) => session.restart(w), loadingScreen('Starting rematch…'));
+    },
+    toLobby: () => {
+      game?.destroy();
+      game = null;
+      app.append(ui!.root);
+      session.backToLobby(); // re-renders the lobby (ev.lobby)
+    },
+  };
   menu.remove();
   ui = new LobbyUi(app, session.code, {
     setSeat: (i, slot: Slot) => session.setSeat(i, slot),
     addSeat: () => session.addSeat(),
     removeSeat: (i) => session.removeSeat(i),
     kick: (i) => session.kick(i),
-    start: () => {
-      const backend = workerBackend((w) => session.start(w), session);
-      const lobbyRoot = ui!.root;
-      startGame(backend, lobbyRoot, (c) => (chat = c)).catch((err) => {
-        console.error('[host] failed to start', err);
-        ui!.error(`Failed to start: ${err?.message ?? err}`);
-      });
-    },
+    start: () => launch((w) => session.start(w), ui!.root),
     back: () => location.reload(),
   }, () => location.reload());
   ui.render(session.lobby.slots(), 0);
@@ -311,29 +377,45 @@ async function joinLobby(code: string, name: string, menu: HTMLElement) {
   menu.remove();
   const ui = new LobbyUi(app, code, null, () => { link.close(); location.reload(); });
   ui.render(lobby.slots, lobby.you);
-  let phase: 'lobby' | 'starting' | 'game' = 'lobby';
-  const early: HostMsg[] = [];
+  let phase: 'lobby' | 'starting' | 'game' | 'over' = 'lobby';
+  let early: HostMsg[] = [];
+  let game: Game | null = null;
+  const launch = (m: Extract<HostMsg, { t: 'start' }>, screen: HTMLElement) => {
+    phase = 'starting';
+    early = [];
+    const backend = remoteBackend(link, m, early);
+    startGame(backend, screen, undefined, { hostId: 1, role: { kind: 'client' } }).then((g) => { game = g; phase = 'game'; }, (err) => {
+      console.error('[join] failed to start', err);
+      phase = 'over';
+      screen.remove();
+      app.append(ui.root);
+      ui.error(`Failed to start: ${err?.message ?? err}`);
+    });
+  };
   link.onClose(() => { if (phase === 'lobby') ui.error('The host closed the lobby.'); });
   link.onMessage((raw) => {
     const m = raw as HostMsg;
-    if (phase === 'game') return; // the game's backend handles messages from here on
+    if (phase === 'over') return;
     if (phase === 'starting') { early.push(m); return; }
-    if (m.t === 'lobby') ui.render(m.slots, m.you);
-    else if (m.t === 'ended') { phase = 'game'; ui.error(m.reason === 'host-left' ? 'The host closed the lobby.' : `Removed from lobby (${m.reason}).`); }
-    else if (m.t === 'start') {
-      phase = 'starting';
-      const backend = remoteBackend(link, m, early);
-      startGame(backend, ui.root).then(() => { phase = 'game'; }, (err) => {
-        console.error('[join] failed to start', err);
-        ui.error(`Failed to start: ${err?.message ?? err}`);
-      });
+    if (phase === 'game') {
+      // The game's backend handles everything else; the host restarting or returning to the lobby is ours.
+      if (m.t === 'start') { game?.destroy(); game = null; launch(m, loadingScreen('Host started a rematch…')); }
+      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; app.append(ui.root); ui.render(m.slots, m.you); }
+      return;
     }
+    if (m.t === 'lobby') ui.render(m.slots, m.you);
+    else if (m.t === 'ended') { phase = 'over'; ui.error(m.reason === 'host-left' ? 'The host closed the lobby.' : `Removed from lobby (${m.reason}).`); }
+    else if (m.t === 'start') launch(m, ui.root);
   });
 }
 
 // ---------------------------------------------------------------------------------------------
 // Game
 // ---------------------------------------------------------------------------------------------
+
+/** A running game; destroy() removes every trace of it (rematch / back to lobby). */
+type Game = { destroy(): void };
+type EndCtx = { role: EndRole; hostId: number | null };
 
 /** Loading-screen phases for a match and their share of the bar (real progress, see loading.ts). */
 const MATCH_PHASES = { code: 15, gpu: 10, characters: 25, map: 15, shaders: 30, frames: 5 };
@@ -342,26 +424,28 @@ const WARM_FRAMES = 3;
 /** Never leave the player staring at the loading screen if a step hangs. */
 const REVEAL_TIMEOUT_MS = 25_000;
 
-async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi) => void) {
-  const loading = loadingScreen();
+async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi) => void,
+  end: EndCtx = { role: { kind: 'client' }, hostId: null }): Promise<Game> {
+  const loading = loadingOverlay();
   loading.show('match', MATCH_PHASES);
   try {
-    await runGame(backend, menu, onChat);
+    return await runGame(backend, menu, onChat, end);
   } catch (err) {
     void loading.hide();
     throw err;
   }
 }
 
-async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi) => void) {
-  const loading = loadingScreen();
+async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi) => void) | undefined, end: EndCtx): Promise<Game> {
+  const loading = loadingOverlay();
   const loadStart = performance.now();
   const mods = await loadGameModules((done, total) => loading.progress('code', done / total, 'Loading game code'));
   const THREE = mods.three;
   const { Renderer } = mods.render, { ThirdPersonCamera } = mods.camera, { FirstPersonView } = mods.viewmodel;
-  const { DamageFx } = mods.damageFx, { Hud } = mods.hud;
+  const { DamageFx } = mods.damageFx, { Hud } = mods.hud, { Spectator } = mods.spectator;
   const offCharProgress = mods.characters.onCharacterProgress((f) => loading.progress('characters', f, 'Downloading characters'));
 
+  const scope = new GameScope([app, document.body]);
   const canvas = document.createElement('canvas');
   canvas.className = 'game';
   canvas.tabIndex = 0;
@@ -370,7 +454,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi)
   const renderer = await Renderer.create(canvas);
   loading.progress('gpu', 1, 'Starting the simulation');
   console.info(`[render] backend: ${renderer.backend}`);
-  settings.subscribe((st) => {
+  scope.begin(); // window/document listeners from here on are removed by destroy()
+  let running = true;
+  /** Free-fly chosen from the end screen (otherwise spectating = being dead). */
+  let spectateChosen = false;
+  const offSettings = settings.subscribe((st) => {
     renderer.world.sky.setQuality(st.video.quality);
     renderer.world.sky.setResolutionScale(st.video.resolutionScale);
   });
@@ -440,6 +528,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi)
     vault: (a) => input.queue({ vault: a }),
     closePanel,
     backToMenu: () => location.reload(),
+    endButtons: (over) => endButtons(end.role, over, {
+      spectate: () => { spectateChosen = true; hud.setEndVisible(false); input.enabled = !dead; canvas.focus(); input.requestLock(); },
+      backToMenu: () => location.reload(),
+    }),
     select: (i) => input.select(i),
     moveSlot: (from, to) => input.queue({ moveSlot: { from, to } }),
   });
@@ -463,6 +555,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi)
         if (input.inventory) input.setInventory(false);
         return;
       }
+      if (spectateChosen && !chat.open && !dead) {
+        // Esc while spectating from the end screen: back to it (it's the pause menu here).
+        spectateChosen = false;
+        input.enabled = false;
+        hud.setEndVisible(true);
+        return;
+      }
       if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead) showPause();
     },
     inventoryChange: (open) => {
@@ -482,6 +581,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi)
     },
   });
   onChat?.(chat);
+
+  const spectator = new Spectator(app, renderer.camera, () => renderer.collidables, canvas, () => input.enabled);
+  const scoreboard = new Scoreboard(app);
+  const scoreOpts = () => ({ humanId, hostId: end.hostId });
+  window.addEventListener('keydown', (e) => {
+    if (!isAction('scoreboard', e.code) || hud.panelOpen || e.target instanceof HTMLInputElement) return;
+    e.preventDefault();
+    if (!scoreboard.visible) { scoreboard.setVisible(true); if (snap) scoreboard.update(snap, scoreOpts()); }
+  });
+  window.addEventListener('keyup', (e) => { if (isAction('scoreboard', e.code)) scoreboard.setVisible(false); });
+  window.addEventListener('blur', () => scoreboard.setVisible(false));
 
   const hint = document.createElement('div');
   hint.className = 'click-hint glass';
@@ -572,7 +682,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi)
     damageFx.onSnapshot(s, humanId);
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
+    const wasEnded = hud.ended;
     hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, free: input.free, inventory: input.inventory });
+    if (hud.ended && !wasEnded) spectateChosen = false; // a (new) result popped the end screen up
+    scoreboard.update(s, scoreOpts());
     chat.enabled = !hud.ended && !dead && !hud.panelOpen;
     if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
   };
@@ -609,6 +722,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi)
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
       input,
       cameraMode: () => fpv.mode,
+      spectator: () => ({
+        ...spectator.info(),
+        camera: { x: renderer.camera.position.x, y: renderer.camera.position.y, z: renderer.camera.position.z },
+        // Own avatar shown? (hiddenId hides it; a dead avatar is hidden after its death pose.)
+        selfVisible: renderer.characters.hiddenId !== humanId &&
+          !!(renderer.characters as unknown as { avatars: Map<number, { group: Object3D }> }).avatars.get(humanId)?.group.visible,
+      }),
+      scoreboard: () => scoreboard.visible,
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
@@ -636,7 +757,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi)
     hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead ? '' : 'none';
 
     const me = snap?.players.find((p) => p.id === humanId);
-    if (me && renderer.playerPos(humanId, feet)) {
+    // Dead (respawning or eliminated), or free fly picked on the end screen: invisible spectator camera.
+    const spectating = !!me && (!me.alive || spectateChosen);
+    if (spectating) {
+      spectator.enter(renderer.camera.position);
+      renderer.characters.hiddenId = humanId;
+      renderer.setGhost(null);
+      lastReq = null;
+      spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId, players: snap!.players,
+        posOf: (id, out) => renderer.playerPos(id, out) });
+    } else spectator.exit();
+    if (me && !spectating && renderer.playerPos(humanId, feet)) {
       if (!fpv.updateCamera(feet, input.yaw, input.pitch, me, humanId)) camera.update(feet, input.yaw, input.pitch, dt);
 
       // Build ghost (holding a piece): ~3 m ahead on the ground, snapped like the sim snaps it, validated by the sim.
@@ -672,8 +803,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi)
       }
     }
 
-    const sample = input.sample();
-    if (me?.alive && !fpv.isActive) { // first person: the eye ray already is the crosshair ray
+    let sample = input.sample();
+    // Spectating: the sim ignores a dead player anyway; an alive winner flying around must not move either.
+    if (spectating) sample = { ...NO_INPUT, yaw: me!.yaw, pitch: me!.pitch, select: input.selected };
+    else if (me?.alive && !fpv.isActive) { // first person: the eye ray already is the crosshair ray
       // Aim the sim's eye ray (from the player's head) at whatever is under the crosshair; the camera
       // sits over the shoulder, so the raw look angles would shoot ~0.6 m right of the crosshair.
       // Targets nearer than the head itself would flip the aim backwards, so clamp just past the eye.
@@ -696,21 +829,40 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatUi)
     }
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     renderer.render(input.yaw);
-    fpv.render(me, input.yaw, input.pitch, dt);
+    fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt);
     audio.frame(renderer.camera);
     if (warmed && !revealed) {
       framesAfterWarm++;
       loading.progress('frames', framesAfterWarm / WARM_FRAMES);
       if (framesAfterWarm >= WARM_FRAMES) reveal();
     }
-    requestAnimationFrame(frame);
+    if (running) requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
+  scope.end();
+
+  return {
+    destroy() {
+      if (!running) return;
+      running = false;
+      offSettings();
+      clearTimeout(revealTimer);
+      if (!revealed) { revealed = true; void loading.hide(); }
+      input.enabled = false;
+      chat.enabled = false;
+      chat.close();
+      if (document.pointerLockElement) document.exitPointerLock();
+      backend.close();
+      scope.dispose(); // listeners + every element this game added (canvas, HUD, chat, overlays)
+      renderer.gpu.dispose();
+      console.info('[game] torn down');
+    },
+  };
 }
 
 /** First load: branded loading screen (already painted by index.html) → styles + fonts → menu → fade; then preload the game. */
 async function boot() {
-  const loading = loadingScreen();
+  const loading = loadingOverlay();
   if (DEBUG) (window as unknown as { __faefightLoading: unknown }).__faefightLoading = {
     visible: () => loading.visible,
     events: () => loading.events,

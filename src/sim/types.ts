@@ -62,6 +62,9 @@ export type PlayerState = {
   hp: number;
   alive: boolean;
   eliminated: boolean;
+  /** Scoreboard: kills credited to this player (not suicides or environment deaths) and times died. */
+  kills: number;
+  deaths: number;
   respawnAt: number | null;
   /** Set while trapped in a sealed bunker after respawning: eliminated at this time unless out. */
   breakoutUntil: number | null;
@@ -104,6 +107,11 @@ export type Snapshot = {
   suddenDeath: boolean;
   winner: number | null;
   events: MatchEvent[];
+  /**
+   * Remote clients only (net/interest.ts): players this client can't currently perceive. They stay
+   * in `players` (name, alive, eliminated) with a stale position and neutral state; don't render them.
+   */
+  hidden?: number[];
 };
 
 export const NO_INPUT: PlayerInput = {

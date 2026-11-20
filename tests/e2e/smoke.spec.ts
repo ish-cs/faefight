@@ -80,7 +80,7 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await expect(page.getByTestId('weapon')).toHaveText(/pistol\s*12\/36/i);
   await expect.poll(async () => (await me()).equipped).toBe('pistol');
 
-  // I (reorder key) releases the mouse; drag the pistol from slot 1 to slot 5 to reorder.
+  // I releases the mouse; drag the pistol from slot 1 to slot 5 to reorder.
   await page.keyboard.press('KeyI');
   await expect(page.getByTestId('hotbar')).toHaveClass(/editing/);
   await page.getByTestId('hotbar-slot-0').dragTo(page.getByTestId('hotbar-slot-4'));
