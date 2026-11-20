@@ -14,6 +14,7 @@ import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { volumeControl } from './audio/ui';
 import { ThirdPersonCamera } from './camera';
+import { FirstPersonView } from './viewmodel';
 import { DamageFx } from './damageFx';
 import { ChatUi } from './chatUi';
 import { Hud } from './hud';
@@ -260,7 +261,7 @@ function showMenu() {
   const stored = Number(localStorage.getItem('faefight.sensitivity')) || 1;
   const keys = document.createElement('div');
   keys.className = 'keys';
-  keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire · R reload · E interact · Enter chat<br>B build (1–7 piece, Q/E or wheel rotate, hold Alt free-place) · 1–5 weapons · G grenade · C charge · M mute';
+  keys.innerHTML = 'WASD move · Shift sprint · Space jump · Click fire · R reload · E interact · Enter chat<br>B build (1–7 piece, Q/E or wheel rotate, hold Alt free-place) · 1–5 weapons · G grenade · C charge · V first person · M mute';
   card.append(play, online, status, sensitivityControl(null, stored), volumeControl(audio), keys);
   menu.append(card);
   app.append(menu);
@@ -336,6 +337,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
   const renderer = await Renderer.create(canvas);
   console.info(`[render] backend: ${renderer.backend}`);
   const camera = new ThirdPersonCamera(renderer.camera, () => renderer.collidables);
+  const fpv = new FirstPersonView(renderer, () => input.enabled);
 
   let map: IslandLayout[] = [];
   let humanId = 0;
@@ -474,6 +476,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     const first = !snap;
     snap = s;
     hud.pushEvents(renderer.pushSnapshot(s, intervalMs));
+    fpv.onEvents(s.events, humanId);
     audio.snapshot(s);
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
@@ -516,6 +519,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
       renderInfo: () => renderer.info(),
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
       input,
+      cameraMode: () => fpv.mode,
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
     };
@@ -538,7 +542,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
 
     const me = snap?.players.find((p) => p.id === humanId);
     if (me && renderer.playerPos(humanId, feet)) {
-      camera.update(feet, input.yaw, input.pitch, dt);
+      if (!fpv.updateCamera(feet, input.yaw, input.pitch, me, humanId)) camera.update(feet, input.yaw, input.pitch, dt);
 
       // Build ghost: ~3 m ahead on the ground, snapped like the sim snaps it, validated by the sim.
       if (input.buildMode && me.alive) {
@@ -572,7 +576,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     }
 
     const sample = input.sample();
-    if (me?.alive) {
+    if (me?.alive && !fpv.isActive) { // first person: the eye ray already is the crosshair ray
       // Aim the sim's eye ray (from the player's head) at whatever is under the crosshair; the camera
       // sits over the shoulder, so the raw look angles would shoot ~0.6 m right of the crosshair.
       // Targets nearer than the head itself would flip the aim backwards, so clamp just past the eye.
@@ -595,6 +599,7 @@ async function startGame(backend: Backend, menu: HTMLElement, onChat?: (c: ChatU
     }
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     renderer.render(input.yaw);
+    fpv.render(me, input.yaw, input.pitch, dt);
     audio.frame(renderer.camera);
     requestAnimationFrame(frame);
   };
