@@ -2,8 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 type Snap = {
   players: {
-    id: number; island: number; pos: { x: number; y: number; z: number }; inv: { cash: number; pieces: Record<string, number> };
-    hotbar: (string | null)[]; selected: number; equipped: string;
+    id: number; island: number; pos: { x: number; y: number; z: number }; inv: { cash: number; pieces: Record<string, number>; medkits: number };
+    hotbar: (string | null)[]; selected: number; equipped: string; hp: number;
   }[];
   pieces: { id: number; owner: number; kind: string }[];
   loot: { id: number; inv: { weapons: Record<string, unknown> } }[];
@@ -42,9 +42,9 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
 
   // Give cash and stand next to our own shop (1.5 m toward the island centre).
   // debugGive may add or set; either way we end up with more than the starting $50.
-  await dbg(page, 'give', { cash: 100 });
+  await dbg(page, 'give', { cash: 200 });
   const myCash = async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!.inv.cash;
-  await expect.poll(myCash).toBeGreaterThanOrEqual(100);
+  await expect.poll(myCash).toBeGreaterThanOrEqual(200);
   const cash = await myCash();
   await expect(page.getByTestId('cash')).toHaveText(`$${cash}`);
   const dx = home.center.x - home.shop.x, dz = home.center.z - home.shop.z, d = Math.hypot(dx, dz);
@@ -59,6 +59,10 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await expect(page.getByTestId('buy-pistol')).toBeDisabled();
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', 'pistol');
   await expect(page.getByTestId('hotbar-slot-0')).toContainText(/pistol\s*12\/36/i);
+  // A medkit is a hotbar item too: next free slot.
+  await page.getByTestId('buy-medkit').click();
+  await expect(page.getByTestId('cash')).toHaveText(`$${cash - 125}`);
+  await expect(page.getByTestId('hotbar-slot-1')).toHaveAttribute('data-item', 'medkit');
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('panel')).toBeHidden();
 
@@ -76,7 +80,7 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await page.keyboard.press('Tab');
   await expect(page.getByTestId('hotbar')).toHaveClass(/editing/);
   await page.getByTestId('hotbar-slot-0').dragTo(page.getByTestId('hotbar-slot-4'));
-  await expect.poll(async () => (await me()).hotbar.slice(0, 5)).toEqual([null, null, null, null, 'pistol']);
+  await expect.poll(async () => (await me()).hotbar.slice(0, 5)).toEqual([null, 'medkit', null, null, 'pistol']);
   await expect(page.getByTestId('hotbar-slot-4')).toHaveAttribute('data-item', 'pistol');
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', '');
   await page.keyboard.press('Tab');
@@ -106,6 +110,22 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await expect(page.getByTestId('hotbar-slot-4')).toHaveAttribute('data-item', '');
   await expect(page.getByTestId('weapon')).toHaveText(/fists/i);
   expect((await me()).inv).not.toHaveProperty('weapons.pistol');
+
+  // Medkit: select its slot, click; "Healing…" shows for 2 s, then +50 HP. The slot count follows the inventory.
+  await dbg(page, 'give', { medkits: 1 });
+  await expect(page.locator('[data-testid="hotbar-slot-1"] .hb-count')).toHaveText('2');
+  await dbg(page, 'hp', 40);
+  await expect.poll(async () => (await me()).hp).toBe(40);
+  await page.keyboard.press('Digit2');
+  await expect(page.getByTestId('weapon')).toHaveText(/medkit/i);
+  await expect(async () => {
+    if ((await me()).inv.medkits === 2) await page.mouse.click(640, 360);
+    await expect.poll(async () => (await me()).inv.medkits, { timeout: 1000 }).toBe(1);
+  }).toPass({ timeout: 10_000 });
+  await expect(page.getByTestId('healing')).toBeVisible();
+  await expect(page.locator('[data-testid="hotbar-slot-1"] .hb-count')).toHaveText('1');
+  await expect.poll(async () => (await me()).hp, { timeout: 5000 }).toBe(90);
+  await expect(page.getByTestId('healing')).toBeHidden();
 
   expect(errors, errors.join('\n')).toEqual([]);
 });

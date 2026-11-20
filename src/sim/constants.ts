@@ -43,6 +43,7 @@ export const AMMO_BOX = { price: 20, mags: 2 };
 export const SHOTGUN_SPREAD_DEG = 4;
 
 export const GRENADE = { price: 100, dmg: 100, radius: 4, fuseSec: 2.5, throwSpeed: 14 };
+export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
 export const CHARGE = { price: 250, pieceDmg: 1500, radius: 2, playerRadius: 1, playerDmg: 100, fuseSec: 3 };
 
 export type DamageSource = 'bullet' | 'fist' | 'explosive';

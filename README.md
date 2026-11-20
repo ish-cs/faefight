@@ -17,7 +17,7 @@ Pick a bot difficulty on the menu, then click the game to capture the mouse.
 |---|---|
 | WASD / Shift / Space | Move / sprint / jump |
 | Mouse | Aim (click to capture) · LMB fire / place / throw · R reload |
-| 1–9 / wheel | Select hotbar slot: a gun to shoot, a piece to build (click places), a grenade/charge (click throws/places), an empty slot for fists |
+| 1–9 / wheel | Select hotbar slot: a gun to shoot, a piece to build (click places), a grenade/charge (click throws/places), a medkit (click: +50 HP after 2 s), an empty slot for fists |
 | Q / Ctrl+Q (or Shift+Q) | Drop one from the selected slot / drop the whole stack |
 | Tab | Release the mouse and drag hotbar slots to reorder (Tab again or click the game to resume) |
 | Z / X | Rotate the held piece · hold Alt for free placement |

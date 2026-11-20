@@ -39,7 +39,9 @@ describe('hotbar helpers', () => {
     expect(countOf(inv, 'ramp')).toBe(3);
     expect(countOf(inv, 'grenade')).toBe(2);
     expect(countOf(inv, 'charge')).toBe(0);
-    expect(heldKinds(inv)).toEqual(['rifle', 'ramp', 'grenade']);
+    inv.medkits = 3;
+    expect(countOf(inv, 'medkit')).toBe(3);
+    expect(heldKinds(inv)).toEqual(['rifle', 'ramp', 'grenade', 'medkit']);
   });
 
   test('removeIfEmpty clears slots for kinds no longer held', () => {
@@ -112,5 +114,10 @@ describe('hotbar helpers', () => {
     expect(takeOut(inv, 'grenade', 'stack')!.grenades).toBe(2);
     expect(inv.grenades).toBe(0);
     expect(takeOut(inv, 'charge', 'one')).toBeNull();
+    inv.medkits = 2;
+    expect(takeOut(inv, 'medkit', 'one')!.medkits).toBe(1);
+    expect(inv.medkits).toBe(1);
+    expect(takeOut(inv, 'medkit', 'stack')!.medkits).toBe(1);
+    expect(inv.medkits).toBe(0);
   });
 });

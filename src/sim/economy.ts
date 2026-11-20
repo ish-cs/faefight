@@ -1,4 +1,4 @@
-import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, PIECES, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
+import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, MEDKIT, PIECES, PLAYER, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
 import { addKind, canAdd, countOf, isHotbarItem, removeIfEmpty, syncFromInventory } from './hotbar';
 import type { HotbarItem, Inventory, PieceKind, PlayerState, ShopAction, VaultAction, WeaponKind } from './types';
 
@@ -6,7 +6,7 @@ export type Result = { ok: true } | { ok: false; reason: string };
 const fail = (reason: string): Result => ({ ok: false, reason });
 
 export function emptyInventory(): Inventory {
-  return { cash: 0, weapons: {}, pieces: {}, grenades: 0, charges: 0 };
+  return { cash: 0, weapons: {}, pieces: {}, grenades: 0, charges: 0, medkits: 0 };
 }
 
 export function tickGenerator(stored: number, dt: number, active: boolean): number {
@@ -30,6 +30,7 @@ function priceOf(item: ShopAction['buy']): number {
   if (isPiece(item)) return PIECES[item].price;
   if (item === 'ammo') return AMMO_BOX.price;
   if (item === 'grenade') return GRENADE.price;
+  if (item === 'medkit') return MEDKIT.price;
   return CHARGE.price;
 }
 
@@ -55,6 +56,8 @@ export function buy(player: PlayerState, action: ShopAction): Result {
     ammo.spare += WEAPONS[gun].mag * AMMO_BOX.mags;
   } else if (item === 'grenade') {
     inv.grenades += 1;
+  } else if (item === 'medkit') {
+    inv.medkits += 1;
   } else {
     inv.charges += 1;
   }
@@ -65,11 +68,12 @@ export function buy(player: PlayerState, action: ShopAction): Result {
 
 /** Checks `from` holds everything `req` asks for. Weapon entries in `req` are matched by key only. */
 function holds(from: Inventory, req: Partial<Inventory>): string | null {
-  const amounts = [req.cash, req.grenades, req.charges, ...Object.values(req.pieces ?? {})];
+  const amounts = [req.cash, req.grenades, req.charges, req.medkits, ...Object.values(req.pieces ?? {})];
   if (amounts.some((n) => n !== undefined && (!Number.isFinite(n) || n < 0))) return 'amounts must be zero or more';
   if ((req.cash ?? 0) > from.cash) return `only $${from.cash} available`;
   if ((req.grenades ?? 0) > from.grenades) return 'not enough grenades';
   if ((req.charges ?? 0) > from.charges) return 'not enough charges';
+  if ((req.medkits ?? 0) > from.medkits) return 'not enough medkits';
   for (const [k, n] of Object.entries(req.pieces ?? {})) if ((n ?? 0) > (from.pieces[k as PieceKind] ?? 0)) return `not enough ${k}`;
   for (const k of Object.keys(req.weapons ?? {})) if (!from.weapons[k as WeaponKind]) return `no ${k} to move`;
   return null;
@@ -80,9 +84,11 @@ function move(from: Inventory, to: Inventory, req: Partial<Inventory>) {
   moved.cash = req.cash ?? 0;
   moved.grenades = req.grenades ?? 0;
   moved.charges = req.charges ?? 0;
+  moved.medkits = req.medkits ?? 0;
   from.cash -= moved.cash;
   from.grenades -= moved.grenades;
   from.charges -= moved.charges;
+  from.medkits -= moved.medkits;
   for (const [k, n] of Object.entries(req.pieces ?? {})) {
     const kind = k as PieceKind;
     from.pieces[kind] = (from.pieces[kind] ?? 0) - (n ?? 0);
@@ -119,6 +125,7 @@ function kindsIn(req: Partial<Inventory>): HotbarItem[] {
   for (const [k, n] of Object.entries(req.pieces ?? {})) if (n && isHotbarItem(k)) out.push(k);
   if (req.grenades) out.push('grenade');
   if (req.charges) out.push('charge');
+  if (req.medkits) out.push('medkit');
   return out;
 }
 
@@ -136,6 +143,7 @@ export function mergeInventory(into: Inventory, from: Inventory): void {
   into.cash += from.cash;
   into.grenades += from.grenades;
   into.charges += from.charges;
+  into.medkits += from.medkits;
   for (const [k, n] of Object.entries(from.pieces)) {
     const kind = k as PieceKind;
     into.pieces[kind] = (into.pieces[kind] ?? 0) + (n ?? 0);
@@ -147,4 +155,25 @@ export function mergeInventory(into: Inventory, from: Inventory): void {
     if (have) have.spare += ammo.mag + ammo.spare;
     else into.weapons[kind] = { mag: ammo.mag, spare: ammo.spare };
   }
+}
+
+/** Starts using a medkit from the selected slot: consumes it now, heals when the use time is up. */
+export function startMedkit(player: PlayerState, now: number): Result {
+  if (!player.alive) return fail('dead');
+  if (player.hotbar[player.selected] !== 'medkit') return fail('select a medkit first');
+  if (player.inv.medkits <= 0) return fail('no medkits');
+  if (now < player.busyUntil) return fail('busy');
+  if (player.hp >= PLAYER.hp) return fail('already at full health');
+  player.inv.medkits -= 1;
+  removeIfEmpty(player.hotbar, player.inv);
+  player.healAt = now + MEDKIT.useSec;
+  player.busyUntil = player.healAt;
+  return { ok: true };
+}
+
+/** Applies a finished medkit heal (capped at full health). */
+export function tickHealing(player: PlayerState, now: number): void {
+  if (player.healAt === null || now < player.healAt) return;
+  player.healAt = null;
+  if (player.alive) player.hp = Math.min(PLAYER.hp, player.hp + MEDKIT.heal);
 }

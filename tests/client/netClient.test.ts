@@ -29,6 +29,14 @@ describe('InputAccumulator', () => {
     expect(a.take().drop).toBe('stack');
   });
 
+  it('useMedkit is a one-shot', () => {
+    const a = new InputAccumulator();
+    a.push({ ...NO_INPUT, useMedkit: true });
+    a.push({ ...NO_INPUT });
+    expect(a.take().useMedkit).toBe(true);
+    expect(a.take().useMedkit).toBe(false);
+  });
+
   it('takes held controls from the latest sample', () => {
     const a = new InputAccumulator();
     a.push({ ...NO_INPUT, yaw: 1, sprint: true });

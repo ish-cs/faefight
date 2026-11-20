@@ -131,6 +131,7 @@ export class InputController {
     if (this.buildMode) { this.hooks.place(); return; }
     if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
     if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }
+    if (this.held === 'medkit') { this.oneShot.useMedkit = true; return; }
     this.fireHeld = true;
     this.oneShot.fire = true; // a click shorter than a frame still fires once
   }
@@ -178,7 +179,7 @@ export class InputController {
       sprint: on('ShiftLeft') === 1 || on('ShiftRight') === 1,
       fire: this.enabled && this.fireHeld && !this.buildMode,
       reload: false, interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
-      select: this.selected, drop: null, moveSlot: null,
+      select: this.selected, drop: null, moveSlot: null, useMedkit: false,
       ...this.oneShot,
     };
     this.oneShot = {};

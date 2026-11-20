@@ -12,12 +12,13 @@ export type Inventory = {
   pieces: Partial<Record<PieceKind, number>>;
   grenades: number;
   charges: number;
+  medkits: number;
 };
 
 /** Something that occupies a hotbar slot (amounts live in the inventory). */
-export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge';
+export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit';
 
-export type ShopItem = PieceKind | Exclude<WeaponKind, 'fists'> | 'ammo' | 'grenade' | 'charge';
+export type ShopItem = PieceKind | Exclude<WeaponKind, 'fists'> | 'ammo' | 'grenade' | 'charge' | 'medkit';
 export type ShopAction = { buy: ShopItem };
 export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> };
 
@@ -45,6 +46,8 @@ export type PlayerInput = {
   drop: 'one' | 'stack' | null;
   /** Swap two hotbar slots. */
   moveSlot: { from: number; to: number } | null;
+  /** Start using a medkit (the selected slot must hold one). */
+  useMedkit: boolean;
 };
 
 export type PlayerState = {
@@ -71,6 +74,8 @@ export type PlayerState = {
   selected: number;
   /** Derived from the selected slot: its gun, else fists. */
   equipped: WeaponKind;
+  /** A medkit in use heals at this time (null when not healing). */
+  healAt: number | null;
   reloadUntil: number;
   nextFireAt: number;
   busyUntil: number;
@@ -102,5 +107,5 @@ export type Snapshot = {
 export const NO_INPUT: PlayerInput = {
   moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, fire: false, reload: false,
   interact: false, slot: null, build: null, throwGrenade: false, placeCharge: false, shop: null, vault: null,
-  select: null, drop: null, moveSlot: null,
+  select: null, drop: null, moveSlot: null, useMedkit: false,
 };

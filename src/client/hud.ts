@@ -1,4 +1,4 @@
-import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, LIFECYCLE, PIECES, WEAPONS } from '../sim/constants';
+import { AMMO_BOX, CHARGE, ECONOMY, GRENADE, LIFECYCLE, MEDKIT, PIECES, WEAPONS } from '../sim/constants';
 import type { IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem } from '../sim/hotbar';
 import type { HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
@@ -11,7 +11,7 @@ const GUNS = ['pistol', 'smg', 'shotgun', 'rifle'] as const;
 const LABEL: Record<string, string> = {
   fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
-  ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge',
+  ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit',
 };
 
 function priceOf(item: ShopItem): number {
@@ -19,6 +19,7 @@ function priceOf(item: ShopItem): number {
   if (item in PIECES) return PIECES[item as PieceKind].price;
   if (item === 'ammo') return AMMO_BOX.price;
   if (item === 'grenade') return GRENADE.price;
+  if (item === 'medkit') return MEDKIT.price;
   return CHARGE.price;
 }
 
@@ -41,7 +42,7 @@ const fmtClock = (s: number) => {
 const SHORT: Record<HotbarItem, string> = {
   pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
-  grenade: 'Grenade', charge: 'Charge',
+  grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit',
 };
 const category = (k: HotbarItem) => (isGunItem(k) ? 'gun' : isPieceItem(k) ? 'piece' : k);
 // Tiny line icons per category, drawn in currentColor.
@@ -50,6 +51,7 @@ const ICONS: Record<string, string> = {
   piece: '<svg viewBox="0 0 24 24"><path d="M3 6h18v12H3zM3 12h18M9 6v6M15 12v6" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
   grenade: '<svg viewBox="0 0 24 24"><circle cx="12" cy="14" r="6.5" fill="currentColor"/><path d="M10 7h4v-2h-4zM14 6l4-2" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
   charge: '<svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="2" fill="currentColor"/><path d="M12 8V4h5" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
+  medkit: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="3" fill="currentColor"/><path d="M9 6V4h6v2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 9.5v7M8.5 13h7" stroke="#0e1218" stroke-width="2.6"/></svg>',
 };
 
 export type HudContext = {
@@ -85,6 +87,8 @@ export class Hud {
   private weapon = el('div', 'weapon');
   private extras = el('div', 'extras');
   private hotbar = el('div', 'hotbar');
+  private heal = el('div', 'heal');
+  private healFill = el('div', 'heal-fill');
   private hotbarSig = '';
   private dragFrom: number | null = null;
   private timer = el('div', 'timer');
@@ -114,9 +118,12 @@ export class Hud {
     this.weapon.dataset.testid = 'weapon';
     this.cash.dataset.testid = 'cash';
     this.hotbar.dataset.testid = 'hotbar';
+    this.heal.dataset.testid = 'healing';
+    this.heal.append(el('div', 'heal-label', 'Healing…'), el('div', 'heal-bar'));
+    (this.heal.lastChild as HTMLElement).append(this.healFill);
     this.panel.dataset.testid = 'panel';
     this.buildHotbar();
-    this.root.append(tl, bl, br, tc, this.hotbar, this.prompt, this.killfeed, this.crosshair, this.center,
+    this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.prompt, this.killfeed, this.crosshair, this.center,
       this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
     parent.append(this.root);
   }
@@ -178,7 +185,7 @@ export class Hud {
   private updateHotbar(me: PlayerState, ctx: HudContext) {
     const inv = me.inv;
     const reloading = me.reloadUntil > 0;
-    const sig = JSON.stringify([me.hotbar, inv.weapons, inv.pieces, inv.grenades, inv.charges, ctx.selected, reloading]);
+    const sig = JSON.stringify([me.hotbar, { ...inv, cash: 0 }, ctx.selected, reloading]);
     this.hotbar.classList.toggle('editing', ctx.inventory);
     this.hotbar.dataset.ghost = ctx.ghostOk === null ? 'none' : ctx.ghostOk ? 'ok' : 'blocked';
     if (sig === this.hotbarSig) return;
@@ -262,6 +269,9 @@ export class Hud {
     this.extras.style.display = reloading ? '' : 'none';
 
     this.updateHotbar(me, ctx);
+    const healing = me.alive && me.healAt != null;
+    this.heal.style.display = healing ? '' : 'none';
+    if (healing) this.healFill.style.width = `${Math.round(100 * Math.min(1, Math.max(0, 1 - (me.healAt! - snap.time) / MEDKIT.useSec)))}%`;
     this.crosshair.classList.toggle('build', !!buildKind);
 
     const left = LIFECYCLE.suddenDeathAt - snap.time;
@@ -410,7 +420,7 @@ export class Hud {
           grid.append(b);
         }
       };
-      section('Weapons', [...GUNS, 'ammo', 'grenade', 'charge']);
+      section('Weapons', [...GUNS, 'ammo', 'grenade', 'charge', 'medkit']);
       section('Building', PIECE_ORDER);
       this.panel.replaceChildren(this.header('Shop'), el('div', 'panel-cash'), grid);
     }
@@ -427,6 +437,7 @@ export class Hud {
       } else if (item in PIECES) note = `have ${me.inv.pieces[item as PieceKind] ?? 0}`;
       else if (item === 'grenade') note = `have ${me.inv.grenades}`;
       else if (item === 'charge') note = `have ${me.inv.charges}`;
+      else if (item === 'medkit') note = `have ${me.inv.medkits} · +${MEDKIT.heal} HP`;
       if (b.disabled !== disabled) b.disabled = disabled;
       setText(b.querySelector('.inote') as HTMLElement, note);
     }
@@ -476,6 +487,7 @@ export class Hud {
       for (const [k, n] of Object.entries(inv.pieces)) if (n) row(`${LABEL[k]} ×${n}`, { pieces: { [k]: n } });
       if (inv.grenades) row(`Grenades ×${inv.grenades}`, { grenades: inv.grenades });
       if (inv.charges) row(`Charges ×${inv.charges}`, { charges: inv.charges });
+      if (inv.medkits) row(`Medkits ×${inv.medkits}`, { medkits: inv.medkits });
       if (rows.length === 1) rows.push(el('div', 'vault-empty', 'No gear'));
       node.replaceChildren(...rows);
     };

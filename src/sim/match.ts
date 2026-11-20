@@ -1,4 +1,4 @@
-import { buy, collect, mergeInventory, emptyInventory, tickGenerator, vaultTransfer } from './economy';
+import { buy, collect, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { placeCharge, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER } from './constants';
@@ -110,7 +110,7 @@ export class Match implements MatchApi {
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath);
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
-    for (const p of this.s.players.values()) this.syncHand(p);
+    for (const p of this.s.players.values()) { tickHealing(p, now); this.syncHand(p); }
     this.updateSeals(now);
     return this.snapshot();
   }
@@ -163,6 +163,11 @@ export class Match implements MatchApi {
     if (overflow.length) console.warn(`debugGive: hotbar full, ${overflow.join(', ')} carried without a slot`);
   }
 
+  debugSetHp(playerId: number, hp: number): void {
+    if (!Number.isFinite(hp) || hp <= 0) throw new Error(`debugSetHp: hp must be > 0, got ${hp}`);
+    this.mustPlayer(playerId).hp = Math.min(PLAYER.hp, hp);
+  }
+
   debugKill(playerId: number): void {
     this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
   }
@@ -192,6 +197,7 @@ export class Match implements MatchApi {
     if (input.fire) this.events.push(...tryFire(this.ctx, p, now));
     if (input.throwGrenade) throwGrenade(this.ctx, p, now);
     if (input.placeCharge) placeCharge(this.ctx, p, now);
+    if (input.useMedkit) startMedkit(p, now);
     if (input.build) this.build(p, input.build, now);
     this.syncHand(p);
   }

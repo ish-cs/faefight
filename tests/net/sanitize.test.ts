@@ -50,6 +50,14 @@ describe('sanitizeInput', () => {
     const extra = sanitizeInput({ ...NO_INPUT, moveSlot: { from: 2, to: 3, evil: 'x' } })!.moveSlot;
     expect(extra).toEqual({ from: 2, to: 3 });
   });
+  test('useMedkit is a strict boolean; vault medkits must be counts', () => {
+    expect(sanitizeInput({ ...NO_INPUT, useMedkit: true })!.useMedkit).toBe(true);
+    for (const bad of ['yes', 1, {}, null, undefined]) expect(sanitizeInput({ ...NO_INPUT, useMedkit: bad })!.useMedkit).toBe(false);
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { medkits: 2 } } })!.vault).toEqual({ deposit: { medkits: 2 } });
+    expect(sanitizeInput({ ...NO_INPUT, vault: { deposit: { medkits: -1 } } })!.vault).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, vault: { withdraw: { medkits: 'lots' } } })!.vault).toBeNull();
+    expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'medkit' } })!.shop).toEqual({ buy: 'medkit' });
+  });
   test('booleans are coerced strictly', () => {
     expect(sanitizeInput({ ...NO_INPUT, fire: 'yes' })!.fire).toBe(false);
   });

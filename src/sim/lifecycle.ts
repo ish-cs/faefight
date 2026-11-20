@@ -40,7 +40,7 @@ const ev = (t: number, type: MatchEvent['type'], data: Record<string, unknown>):
 const PARKED = v3(0, -1000, 0);
 
 const isEmpty = (inv: Inventory) =>
-  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 &&
+  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 &&
   Object.keys(inv.weapons).length === 0 && Object.values(inv.pieces).every((n) => !n);
 
 /**
@@ -72,6 +72,7 @@ export function killPlayer(
   }
   p.inv = emptyInventory();
   p.hotbar = emptyHotbar();
+  p.healAt = null;
   p.equipped = 'fists';
   p.reloadUntil = 0;
   p.hp = 0;

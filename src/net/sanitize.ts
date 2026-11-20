@@ -14,7 +14,7 @@ const count = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x 
 
 const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 const WEAPON_KINDS = Object.keys(WEAPONS) as WeaponKind[];
-const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge'];
+const SHOP_ITEMS: ShopItem[] = [...PIECE_KINDS, 'pistol', 'smg', 'shotgun', 'rifle', 'ammo', 'grenade', 'charge', 'medkit'];
 const oneOf = <T extends string>(list: readonly T[], x: unknown): T | null => (list.includes(x as T) ? (x as T) : null);
 
 function vec(x: unknown): Vec3 | null {
@@ -34,7 +34,7 @@ function buildReq(x: unknown): BuildRequest | null {
 function partialInv(x: unknown): Partial<Inventory> | null {
   if (!isObj(x)) return null;
   const out: Partial<Inventory> = {};
-  for (const k of ['cash', 'grenades', 'charges'] as const) {
+  for (const k of ['cash', 'grenades', 'charges', 'medkits'] as const) {
     if (x[k] === undefined) continue;
     const n = count(x[k]);
     if (n === null) return null;
@@ -96,6 +96,7 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     select: validSlot(x.select) ? x.select : null,
     drop: oneOf(['one', 'stack'] as const, x.drop),
     moveSlot: moveSlot(x.moveSlot),
+    useMedkit: bool(x.useMedkit),
   };
 }
 
