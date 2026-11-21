@@ -47,7 +47,7 @@ class Writer {
   f32(v: number) { this.need(4); this.dv.setFloat32(this.n, v, true); this.n += 4; }
   f64(v: number) { this.need(8); this.dv.setFloat64(this.n, v, true); this.n += 8; }
   num(v: number) {
-    if (Number.isInteger(v) && !Object.is(v, -0) && Math.abs(v) < 2 ** 40) { this.u8(0); this.zigzag(v); }
+    if (Number.isInteger(v) && !Object.is(v, -0) && Math.abs(v) < 1099511627776 /* 2^40 */) { this.u8(0); this.zigzag(v); }
     else if (Math.fround(v) === v || Number.isNaN(v)) { this.u8(1); this.f32(v); }
     else { this.u8(2); this.f64(v); }
   }

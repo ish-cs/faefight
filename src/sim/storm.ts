@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import { applyPlayerDamage, type CombatCtx } from './combat';
 import { MAP, STORM } from './constants';
 import type { IslandLayout } from './map';
@@ -78,7 +79,7 @@ export function addStrike(st: StormState, x: number, z: number, at: number): voi
 
 function placeStrike(ctx: CombatCtx, st: StormState, at: number): void {
   const r = stormRadius(st, at);
-  const ring = (d: number, a: number) => addStrike(st, st.cx + Math.cos(a) * d, st.cz + Math.sin(a) * d, at);
+  const ring = (d: number, a: number) => addStrike(st, st.cx + dm.cos(a) * d, st.cz + dm.sin(a) * d, at);
   if (rand(st) < STORM.edgeStrikeFrac) {
     // Pressure on whoever hugs the edge: just inside the ring.
     ring(Math.max(0, r - 0.5 - rand(st) * (STORM.edgeStrikeDepth - 0.5)), rand(st) * Math.PI * 2);
@@ -89,7 +90,7 @@ function placeStrike(ctx: CombatCtx, st: StormState, at: number): void {
     // Near someone standing in the storm (never on top of them: the telegraph gives them a chance).
     const p = out[Math.min(out.length - 1, Math.floor(rand(st) * out.length))];
     const a = rand(st) * Math.PI * 2, off = 1.5 + rand(st) * 3.5;
-    addStrike(st, p.pos.x + Math.cos(a) * off, p.pos.z + Math.sin(a) * off, at);
+    addStrike(st, p.pos.x + dm.cos(a) * off, p.pos.z + dm.sin(a) * off, at);
     return;
   }
   ring(r + 1 + rand(st) * STORM.zoneDepth, rand(st) * Math.PI * 2);

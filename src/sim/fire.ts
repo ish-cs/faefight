@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import { ISLAND_DECOR } from '../client/world/decor';
 import { applyPlayerDamage, type CombatCtx } from './combat';
 import { damagePiece } from './building';
@@ -31,7 +32,7 @@ export function piecesTouch(a: PieceState, b: PieceState, eps: number): boolean 
   const sa = PIECES[a.kind], sb = PIECES[b.kind];
   const ca = center(a), cb = center(b);
   if (Math.abs(ca.y - cb.y) > sa.h / 2 + sb.h / 2 + eps) return false;
-  const axes = (r: number) => [[Math.cos(r), -Math.sin(r)], [Math.sin(r), Math.cos(r)]];
+  const axes = (r: number) => [[dm.cos(r), -dm.sin(r)], [dm.sin(r), dm.cos(r)]];
   const ua = axes(a.rotY), ub = axes(b.rotY);
   const dx = cb.x - ca.x, dz = cb.z - ca.z;
   const ext = (u: number[][], w: number, d: number, ax: number[]) => (w / 2) * Math.abs(u[0][0] * ax[0] + u[0][1] * ax[1]) + (d / 2) * Math.abs(u[1][0] * ax[0] + u[1][1] * ax[1]);
@@ -116,7 +117,7 @@ export class Fire {
     this.rng = mulberry32((seed * 0x9e3779b1) ^ 0xf12e);
     if (def.template === 'harbor') {
       for (const isl of def.islands) {
-        const c = Math.cos(isl.bunker.facingYaw), s = Math.sin(isl.bunker.facingYaw);
+        const c = dm.cos(isl.bunker.facingYaw), s = dm.sin(isl.bunker.facingYaw);
         for (const e of ISLAND_DECOR.grassBeds) {
           const w = add(isl.center, rotateY(v3(e.x, 0, e.z), isl.bunker.facingYaw));
           this.beds.push({ cx: w.x, cz: w.z, rx: e.rx, rz: e.rz, c, s, y: isl.groundY });
@@ -142,7 +143,7 @@ export class Fire {
       const dx = x - b.cx, dz = z - b.cz;
       // world → island-local (inverse of rotateY by the island yaw)
       const lx = dx * b.c - dz * b.s, lz = dx * b.s + dz * b.c;
-      if ((lx / b.rx) ** 2 + (lz / b.rz) ** 2 <= 1) return i;
+      if ((lx / b.rx) * (lx / b.rx) + (lz / b.rz) * (lz / b.rz) <= 1) return i;
     }
     return -1;
   }
@@ -243,7 +244,7 @@ export class Fire {
       if (age < FIRE.patch.spreadAfterSec) continue;
       if (f.kind === 'grass' && f.bed >= 0 && this.rng() < FIRE.patch.spreadChance) {
         const a = this.rng() * Math.PI * 2;
-        const x = f.pos.x + Math.cos(a) * FIRE.patch.spreadStep, z = f.pos.z + Math.sin(a) * FIRE.patch.spreadStep;
+        const x = f.pos.x + dm.cos(a) * FIRE.patch.spreadStep, z = f.pos.z + dm.sin(a) * FIRE.patch.spreadStep;
         const crowded = [...this.patches, ...born].some((o) => dist2D(o.pos, { x, z }) < 1.2);
         if (!crowded && this.bedAt(x, z, f.pos.y) === f.bed) born.push({ ...f, pos: v3(x, f.pos.y, z) });
       }
