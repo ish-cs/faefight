@@ -1,0 +1,165 @@
+name: bot-measure
+
+# Headless bot measurement series on GitHub runners (Node only, no browser). Instead of running long
+# vitest measurement series on a dev machine. See docs/bots-on-ci.md.
+#   gh workflow run bot-measure.yml --ref <branch with this file> -f ref=<code to measure> -f scenario=ffa8-pro -f seeds=20
+# Or: scripts/gh-measure.sh <ref> <scenario> [seeds]
+#
+# The measurement script (scripts/ci/measure.ts) always comes from the commit this workflow runs from and is
+# copied into the checkout of `ref`, so any ref can be measured, including ones older than this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref (branch, tag or SHA) whose bots to measure
+        required: true
+        default: main
+      scenario:
+        description: Scenario
+        required: true
+        default: ffa8-pro
+        type: choice
+        options: [1v1-hard, 1v1-pro-vs-hard, ffa8-pro, ffa8-hard, ffa8-mixed, all]
+      seeds:
+        description: Seeds per scenario (seeds 1..N)
+        required: true
+        default: '20'
+      params:
+        description: Optional BotParams JSON path inside the ref (e.g. tests/fixtures/run2-params.json)
+        required: false
+        default: ''
+      label:
+        description: Optional free-text label (shown in the summary; lets scripts find their run)
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      ref: { type: string, required: true }
+      scenario: { type: string, required: false, default: ffa8-pro }
+      seeds: { type: string, required: false, default: '20' }
+      params: { type: string, required: false, default: '' }
+      label: { type: string, required: false, default: '' }
+    outputs:
+      ship_check:
+        description: "pass, fail or n/a"
+        value: ${{ jobs.aggregate.outputs.ship_check }}
+
+run-name: "bot-measure ${{ inputs.scenario }} ×${{ inputs.seeds }} @ ${{ inputs.ref }} ${{ inputs.label }}"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      total: ${{ steps.plan.outputs.total }}
+    steps:
+      - id: plan
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+          SEEDS: ${{ inputs.seeds }}
+        run: |
+          set -euo pipefail
+          all="1v1-hard 1v1-pro-vs-hard ffa8-pro ffa8-hard ffa8-mixed"
+          if [ "$SCENARIO" = all ]; then scs=$all; else
+            case " $all " in *" $SCENARIO "*) scs=$SCENARIO ;; *) echo "::error::unknown scenario '$SCENARIO'"; exit 1 ;; esac
+          fi
+          [[ "$SEEDS" =~ ^[0-9]+$ ]] && [ "$SEEDS" -ge 1 ] && [ "$SEEDS" -le 200 ] || { echo "::error::seeds must be 1..200, got '$SEEDS'"; exit 1; }
+          tasks=()
+          # Seed-major order so each shard gets a mix of scenarios (FFAs are the slow ones).
+          for s in $(seq 1 "$SEEDS"); do for sc in $scs; do tasks+=("$sc:$s"); done; done
+          n=${#tasks[@]}; shards=$(( n < 20 ? n : 20 ))
+          json=$(for i in $(seq 0 $((shards-1))); do
+            list=""; for j in $(seq $i $shards $((n-1))); do list="$list${list:+,}${tasks[$j]}"; done
+            jq -nc --argjson id $((i+1)) --arg t "$list" '{id:$id,tasks:$t}'
+          done | jq -sc .)
+          echo "shards=$json" >> "$GITHUB_OUTPUT"
+          echo "total=$n" >> "$GITHUB_OUTPUT"
+          echo "$n games over $shards shards"
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    name: shard ${{ matrix.shard.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: tools }
+      - uses: actions/checkout@v4
+        with: { path: target, ref: '${{ inputs.ref }}' }
+      - uses: pnpm/action-setup@v4
+        with: { version: 9.15.9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: target/pnpm-lock.yaml
+      - name: install
+        working-directory: target
+        run: |
+          pnpm install --frozen-lockfile
+          npm i -g tsx@4.19.2
+          mkdir -p scripts/ci && cp ../tools/scripts/ci/measure.ts scripts/ci/measure.ts
+      - name: games
+        working-directory: target
+        env:
+          PARAMS: ${{ inputs.params }}
+          TASKS: ${{ matrix.shard.tasks }}
+          SHARD: ${{ matrix.shard.id }}
+        run: |
+          set -euo pipefail
+          args=(run --tasks "$TASKS" --out "$RUNNER_TEMP/shard-$SHARD.json")
+          [ -n "$PARAMS" ] && args+=(--params "$PARAMS")
+          tsx scripts/ci/measure.ts "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: measure-shard-${{ matrix.shard.id }}
+          path: ${{ runner.temp }}/shard-${{ matrix.shard.id }}.json
+          retention-days: 7
+
+  aggregate:
+    needs: [plan, run]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      ship_check: ${{ steps.agg.outputs.ship_check }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: measure-shard-*, path: shards }
+      - run: npm i -g tsx@4.19.2
+      - id: agg
+        env:
+          REF: ${{ inputs.ref }}
+          SCENARIO: ${{ inputs.scenario }}
+          SEEDS: ${{ inputs.seeds }}
+          PARAMS: ${{ inputs.params }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          set -euo pipefail
+          sha=$(git ls-remote origin "$REF" | head -1 | cut -c1-10 || true)
+          args=(aggregate --in shards --json measure-summary.json --md summary.md --expect "${{ needs.plan.outputs.total }}"
+                --ref "$REF" --scenario "$SCENARIO" --seeds "$SEEDS" --run "${{ github.run_id }}")
+          [ -n "$sha" ] && args+=(--sha "$sha")
+          [ -n "$PARAMS" ] && args+=(--params "$PARAMS")
+          [ -n "$LABEL" ] && args+=(--label "$LABEL")
+          tsx scripts/ci/measure.ts "${args[@]}"
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "ship_check=$(jq -r 'if .shipCheckPass == null then "n/a" elif .shipCheckPass then "pass" else "fail" end' measure-summary.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: measure-summary
+          path: |
+            measure-summary.json
+            summary.md
+          retention-days: 30
