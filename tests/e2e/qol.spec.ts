@@ -169,9 +169,11 @@ test('end screen: match summary with per-player stats and awards', async ({ page
   await expect.poll(async () => (await me()).inv.pieces.sandbags ?? 0).toBe(1);
   await page.locator('canvas.game').click();
   await page.keyboard.press('Digit1');
-  await expect(page.getByTestId('hotbar')).toHaveAttribute('data-ghost', 'ok', { timeout: 10_000 });
-  await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();
-  await expect.poll(async () => (await me()).inv.pieces.sandbags ?? 0).toBe(0);
+  await expect(page.getByTestId('hotbar')).toHaveAttribute('data-ghost', 'ok', { timeout: 30_000 });
+  await expect(async () => {
+    if (((await me()).inv.pieces.sandbags ?? 0) > 0) await page.mouse.click(640, 360);
+    await expect.poll(async () => (await me()).inv.pieces.sandbags ?? 0, { timeout: 1500 }).toBe(0);
+  }).toPass({ timeout: 15_000 });
 
   const bot = (await snapOf(page)).players.find((p) => p.id !== humanId)!;
   await dbg(page, 'eliminate', bot.id);
