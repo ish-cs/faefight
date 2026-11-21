@@ -124,6 +124,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
             match.debugPlacePiece(kinds[i % kinds.length], { x, y: groundYFor(x, z), z }, a);
           }
         }
+        else if (msg.cmd === 'place') match.debugPlacePiece(msg.kind, { x: msg.x, y: groundYFor(msg.x, msg.z) + msg.up, z: msg.z }, msg.rotY, msg.owner);
+        else if (msg.cmd === 'explode') match.debugExplode(msg.kind, { x: msg.x, y: groundYFor(msg.x, msg.z) + msg.up, z: msg.z }, humanId);
         else if (msg.cmd === 'eliminate') match.debugEliminate(msg.playerId);
         else if (msg.cmd === 'kill') match.debugKill(msg.playerId);
         else if (msg.cmd === 'give') match.debugGive(msg.id ?? humanId, msg.inv);

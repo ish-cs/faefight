@@ -13,7 +13,7 @@ import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
-import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { reloadClock } from './firstPerson';
@@ -128,6 +128,10 @@ type Backend = {
     eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
+    /** Place one piece (rules skipped) on the ground at (x, z) + `up` m, owned by `owner` (default: nobody). */
+    place(kind: PieceKind, x: number, z: number, rotY: number, up?: number, owner?: number): void;
+    /** Detonate a rocket / grenade / charge at (x, ground + up, z). */
+    explode(kind: 'rocket' | 'grenade' | 'charge', x: number, z: number, up?: number): void;
   };
 };
 
@@ -174,6 +178,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
       potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
+      place: (kind, x, z, rotY, up = 0, owner = 0) => send({ type: 'debug', cmd: 'place', kind, x, z, rotY, up, owner }),
+      explode: (kind, x, z, up = 0) => send({ type: 'debug', cmd: 'explode', kind, x, z, up }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
     },

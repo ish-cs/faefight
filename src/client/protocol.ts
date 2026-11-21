@@ -2,7 +2,7 @@ import type { Placement } from '../sim/building';
 import type { MapDef } from '../sim/map';
 import type { MoveCmd } from '../sim/movement';
 import type { MatchSetup } from '../sim/matchApi';
-import type { BuildRequest, Inventory, PlayerInput, Snapshot } from '../sim/types';
+import type { BuildRequest, Inventory, PieceKind, PlayerInput, Snapshot } from '../sim/types';
 
 /** main thread → worker */
 export type ToWorker =
@@ -26,7 +26,9 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
   | { type: 'debug'; cmd: 'potionShop'; x: number; z: number }
   /** Perf testing: n pieces on rings around (x, z), placement rules skipped. */
-  | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number };
+  | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number }
+  | { type: 'debug'; cmd: 'place'; kind: PieceKind; x: number; z: number; rotY: number; up: number; owner: number }
+  | { type: 'debug'; cmd: 'explode'; kind: 'rocket' | 'grenade' | 'charge'; x: number; z: number; up: number };
 
 /** worker → main thread */
 export type FromWorker =
