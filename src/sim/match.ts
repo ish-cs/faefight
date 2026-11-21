@@ -4,9 +4,11 @@ import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosiv
 import { BUILD, DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
-import { buildMapDef, type IslandLayout, type MapDef } from './map';
+import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
+import { Hazards, isExplosive, type HazardHost } from './hazards';
+import { HAZARD } from './constants';
 import { Fire, fireZones, type FireCtx } from './fire';
 import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
@@ -23,6 +25,8 @@ import { PracticeRange, practiceMapDef, type PracticeCmd } from './practice';
 import { isPlaceholderBotName, nickname } from './names';
 import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
+import { Banter } from './bots/banter';
+import { QUIP_SHOW_SEC, WheelLimiter, emoteEnd, isEmoteId, isQuipId, isWheelId, type WheelId } from './emotes';
 import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { clampSettings, resolveColors, type GameSettings } from './settings';
@@ -39,6 +43,8 @@ const SIGHT_RANGE = 120;
 const RECENT_SEC = 4;
 const FEED_SEC = 30;
 
+const add3 = (o: Vec3, d: Vec3, t: number): Vec3 => v3(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t);
+
 export class Match implements MatchApi {
   private s: MatchStateCore;
   private tickNo = 0;
@@ -48,6 +54,8 @@ export class Match implements MatchApi {
   private stats = new MatchStats();
 
   private bots = new Map<number, BotBrain>();
+  /** Events from debug actions taken between ticks, emitted with the next tick. */
+  private debugEvents: MatchEvent[] = [];
   private rng: Rng;
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
@@ -63,6 +71,11 @@ export class Match implements MatchApi {
   readonly map: IslandLayout[];
   private center: CenterState = newCenterState();
   private cosmetics: Cosmetics;
+  /** Explosive barrels / propane tanks and lootable crates (hazards.ts). */
+  private hazards: Hazards;
+  /** Bound to ctx: rebuilt by rebind(), never saved. */
+  private hazardHost!: HazardHost;
+  private hazardSeed: number;
   /** Burning pieces and ground fires (sim/fire.ts). */
   private fire: Fire;
   private fireCtx: FireCtx;
@@ -80,6 +93,10 @@ export class Match implements MatchApi {
   cloneSnapshots = true;
   /** Lag-compensated shots resolved so far, and the total rewind (tests/debug). */
   lagStats = { shots: 0, rewindSec: 0 };
+  /** Emote / quick-chat wheel: requests waiting for the next tick, the per-player cooldown, bots' winner emote. */
+  private wheelQueue: { id: number; what: WheelId }[] = [];
+  private wheelLimit = new WheelLimiter();
+  private banter: Banter;
   /** Practice range (MatchSetup.practice); null in every real match. */
   private practice: PracticeRange | null = null;
 
@@ -93,6 +110,8 @@ export class Match implements MatchApi {
     def.settings = { ...this.settings };
     def.colors = resolveColors(setup.players.map((p) => p.color));
     this.cosmetics = new Cosmetics(def.cosmetics);
+    this.hazards = new Hazards(def.hazards);
+    this.hazardSeed = setup.seed ?? 1;
     this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
     this.potionShops = potionShopsAt([def.center.potionShop]);
     this.s = newMatchState(map, setup.seed ?? 1);
@@ -103,6 +122,7 @@ export class Match implements MatchApi {
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
     this.makeBot = opts.makeBot;
+    this.banter = new Banter(mulberry32(((setup.seed ?? 1) * 40503) ^ 0x2c1b3c6d));
     // Bot seats with a placeholder name ("Bot (hard)") get a human-looking nickname; a separate stream so
     // names don't shift the bots' own random choices.
     const nameRng = mulberry32(((setup.seed ?? 1) * 2654435761) ^ 0x5bd1e995);
@@ -111,7 +131,8 @@ export class Match implements MatchApi {
       const id = i + 1;
       const name = cfg.isBot && isPlaceholderBotName(cfg.name) ? nickname(nameRng, taken) : cfg.name;
       const p = newPlayer(id, name, cfg.isBot, i, map[i].spawn, this.settings.startCash);
-      p.yaw = map[i].bunker.facingYaw;
+      p.yaw = spawnYaw(map[i].bunker, p.pos);
+      p.pitch = 0;
       this.s.players.set(id, p);
       physics.addPlayer(id, p.pos);
       if (cfg.isBot && opts.makeBot) {
@@ -120,6 +141,7 @@ export class Match implements MatchApi {
     });
     this.ctx = this.makeCtx();
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
+    this.hazardHost = { ctx: this.ctx, loot: this.s.loot, seed: this.hazardSeed };
     if (setup.practice) {
       this.s.practice = true;
       this.practice = new PracticeRange({ s: this.s, physics: this.physics, removePiece: (id) => this.ctx.onPieceDestroyed(id) }, 1);
@@ -133,6 +155,7 @@ export class Match implements MatchApi {
   rebind(): void {
     this.ctx = this.makeCtx();
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
+    this.hazardHost = { ctx: this.ctx, loot: this.s.loot, seed: this.hazardSeed };
     this.fire.nextId = () => this.s.nextId++;
   }
 
@@ -166,8 +189,12 @@ export class Match implements MatchApi {
         this.kills.push({ victim, killer });
         // Only environment causes go on the kill event (death recap / feed); weapon kills are told by the killer.
         const env = killer === null && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
-        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env));
+        // A barrel / tank someone set off: the feed says "X via barrel".
+        const via = cause === 'barrel' || cause === 'propane' ? cause : undefined;
+        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env, via));
       },
+      castHazard: (o, d, max) => this.hazards.ray(o, d, max),
+      hitHazard: (id, amount, source, by, now, at) => this.hazards.damage(this.hazardHost, id, amount, source, by, now, at),
     };
   }
 
@@ -186,6 +213,9 @@ export class Match implements MatchApi {
     return new Match(def, await Physics.create(def), setup, opts);
   }
 
+  /** Ticks run so far (the next snapshot's tick is this + 1). */
+  get tickCount(): number { return this.tickNo; }
+
   humanIds(): number[] {
     return [...this.s.players.values()].filter((p) => !p.isBot).map((p) => p.id);
   }
@@ -199,7 +229,7 @@ export class Match implements MatchApi {
     const m = Object.create(Match.prototype) as Match;
     const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
     const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
-    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
+    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx' && k !== 'hazardHost') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
     m.rebind();
     return m;
   }
@@ -217,7 +247,10 @@ export class Match implements MatchApi {
     const now = this.s.time + DT;
     this.s.time = now;
     this.tickNo++;
-    this.events = [];
+    // Debug kills between ticks land in this tick's events (kill feed, killcam), not lost.
+    this.events = this.debugEvents;
+    this.debugEvents = [];
+    this.applyWheel(now);
     this.practice?.before();
 
     for (const p of this.s.players.values()) {
@@ -225,14 +258,23 @@ export class Match implements MatchApi {
       if (!p.alive) {
         // Dead: commands are consumed (acked) but do nothing.
         if (cmds?.length) (p.mv ??= newMoveState()).ack = cmds[cmds.length - 1].seq;
+        if (p.emote) delete p.emote;
         continue;
       }
       const bot = this.bots.get(p.id);
-      const input = bot ? bot.think(this.botView(p)) : this.practice?.isDummy(p.id) ? this.practice.inputFor(p, now) : inputs.get(p.id) ?? NO_INPUT;
+      // No input from a human (none sent yet, e.g. right after spawning): do nothing, but keep looking where
+      // they look (the spawn facing), not at yaw 0.
+      let input = bot ? bot.think(this.botView(p)) : this.practice?.isDummy(p.id) ? this.practice.inputFor(p, now) : inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
+      // Bots only emote once the match is decided (Banter): then one stands still for it unless it wants to
+      // shoot (which ends the emote, as for anyone). Mid-match bot play is never changed by emotes.
+      if (bot && p.emote && this.s.winner !== null && !input.fire) input = { ...input, moveX: 0, moveZ: 0, jump: false, sprint: false, build: null, throwGrenade: false, placeCharge: false };
+      if (p.emote && emoteEnd(p, input, cmds, now)) delete p.emote;
       this.applyInput(p, input, now, cmds);
     }
 
     this.events.push(...tickExplosives(this.ctx, now));
+    this.events.push(...this.hazards.onExplosions(this.hazardHost, this.events, now));
+    this.events.push(...this.hazards.tick(this.hazardHost, now));
     this.fire.onEvents(this.events, now, this.fireCtx);
     this.events.push(...this.fire.tick(now, this.s.waterY, this.fireCtx, !!this.s.storm));
     this.collapseUnsupported(now);
@@ -248,8 +290,36 @@ export class Match implements MatchApi {
     this.updateSeals(now);
     this.remember(now);
     this.stats.onTick(this.events, this.s.players.values(), now);
+    for (const b of this.banter.onTick(this.events, this.s.players, now)) if (this.bots.has(b.id)) this.wheel(b.id, b.what);
+    for (const p of this.s.players.values()) {
+      if (p.emote && (!p.alive || p.lastDamagedAt >= p.emote.at)) delete p.emote; // hit or killed later this tick
+      if (p.quip && now - p.quip.at >= QUIP_SHOW_SEC) delete p.quip;
+    }
     this.history.record(now, this.s.players.values());
     return this.snapshot();
+  }
+
+  /**
+   * Emote / quick-chat wheel request (humans; bots only emote via Banter, they never chat). Applied at the start of the next tick,
+   * at most one per player per WHEEL_COOLDOWN_SEC; emotes need the player alive. Unknown ids throw (callers sanitize).
+   */
+  wheel(playerId: number, what: WheelId): void {
+    if (!isWheelId(what)) throw new Error(`Match.wheel: unknown wheel id ${String(what)}`);
+    this.mustPlayer(playerId);
+    this.wheelQueue.push({ id: playerId, what });
+  }
+
+  private applyWheel(now: number) {
+    if (!this.wheelQueue.length) return;
+    const q = this.wheelQueue;
+    this.wheelQueue = [];
+    for (const { id, what } of q) {
+      const p = this.s.players.get(id);
+      if (!p || (isEmoteId(what) && !p.alive) || !this.wheelLimit.allow(id, now)) continue;
+      if (isEmoteId(what)) p.emote = { id: what, at: now };
+      else if (isQuipId(what)) p.quip = { id: what, at: now };
+      this.events.push({ t: now, type: 'wheel', data: { by: id, id: what } });
+    }
   }
 
   previewBuild(playerId: number, req: BuildRequest): Placement {
@@ -258,6 +328,8 @@ export class Match implements MatchApi {
     return validatePlacement(this.physics, req.kind, snapped.pos, snapped.rotY, p.pos);
   }
 
+  /** A seat's bot brain (null for humans), for read-only spectator introspection (bots/introspect.ts). */
+  botBrain(id: number): BotBrain | null { return this.bots.get(id) ?? null; }
   /** Practice panel commands (reset, clear pieces, dummy toggles). Throws outside practice. */
   practiceCommand(cmd: PracticeCmd): void {
     if (!this.practice) throw new Error('Match.practiceCommand: not a practice match');
@@ -296,6 +368,16 @@ export class Match implements MatchApi {
 
   debugDamagePlayer(playerId: number, amount: number): void {
     this.events.push(...applyPlayerDamage(this.ctx, this.mustPlayer(playerId), amount, null, this.s.time));
+  }
+
+  /** Hazard state (tests/debug/e2e). */
+  debugHazards() {
+    return this.hazards.list.map((h) => ({ id: h.def.id, kind: h.def.kind, pos: clone(h.pos), hp: h.hp, st: h.st, by: h.by }));
+  }
+
+  /** Damage a hazard as if `by` shot it (tests/e2e). */
+  debugDamageHazard(id: number, amount: number, by: number | null = null, source: 'bullet' | 'explosive' = 'bullet'): void {
+    this.events.push(...this.hazards.damage(this.hazardHost, id, amount, source, by, this.s.time, undefined));
   }
 
   /** Every kill so far (tests/debug). */
@@ -400,14 +482,15 @@ export class Match implements MatchApi {
     this.physics.setPotionShops(positions);
   }
 
-  debugKill(playerId: number): void {
-    this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
+  /** Debug: kill a player, optionally credited to `killer` (e2e: killcam / kill feed). */
+  debugKill(playerId: number, killer: number | null = null): void {
+    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false, killer));
   }
 
   /** Kill (if alive) and eliminate for good: no respawn. The win check runs on the next tick. */
   debugEliminate(playerId: number): void {
     const p = this.mustPlayer(playerId);
-    this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
+    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
     if (p.eliminated) return;
     p.eliminated = true;
     p.respawnAt = null;
@@ -425,6 +508,7 @@ export class Match implements MatchApi {
     this.syncHand(p);
     // Sights need a gun in hand and no reload; aiming rules out sprinting (see move).
     p.ads = input.ads && p.alive && p.equipped !== 'fists' && p.reloadUntil === 0;
+    if (input.view !== undefined) p.view = input.view === 1 ? 1 : 0;
 
     if (cmds) {
       for (const c of cmds) {
@@ -659,7 +743,19 @@ export class Match implements MatchApi {
       hurt: this.hits.filter((h) => h.target === self.id).map(({ t, by, amount }) => ({ t, by, amount })),
       shots: this.shots.filter((s) => s.by !== self.id && dist(s.from, eye) <= SIGHT_RANGE),
       feed: [...this.feed],
-      loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE).map((b) => clone(b.pos)),
+      // Crate ammo is only worth walking to for someone with that gun.
+      loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE && (!b.ammoOnly || Object.keys(b.inv.weapons).some((g) => !!self.inv.weapons[g as WeaponKind])))
+        .map((b) => clone(b.pos)),
+      hazards: this.hazards.list.filter((h) => h.st !== 2 && dist(h.pos, eye) <= SIGHT_RANGE).map((h) => ({
+        id: h.def.id, kind: h.def.kind, pos: clone(h.pos), center: this.hazards.center(h), radius: isExplosive(h.def.kind) ? HAZARD[h.def.kind].radius : 0, fusing: h.st === 1,
+      })),
+      clearShot: (to) => {
+        const d = dist(eye, to);
+        const dir = norm(sub(to, eye));
+        if (this.physics.raycast(eye, dir, d, self.id, true)) return false;
+        const hz = this.hazards.ray(eye, dir, d + 0.5);
+        return !hz || dist(add3(eye, dir, hz.dist), to) < 1;
+      },
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
       fires: fireZones(this.s.pieces.values(), this.fire.snapshotFires()),
@@ -672,6 +768,7 @@ export class Match implements MatchApi {
   }
 
   private snapshot(): Snapshot {
+    const hz = this.hazards.net();
     const s: Snapshot = {
       time: this.s.time,
       tick: this.tickNo,
@@ -683,6 +780,7 @@ export class Match implements MatchApi {
       generators: this.s.generators,
       center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       broken: this.cosmetics.broken,
+      ...(hz ? { hz } : {}),
       genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,

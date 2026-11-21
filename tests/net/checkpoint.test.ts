@@ -28,6 +28,19 @@ describe('match checkpoint', () => {
     m.dispose(); r.dispose();
   }, 120_000);
 
+  it('a match with a spectated bot (brain probe on) checkpoints and ticks identically', async () => {
+    const m = await Match.create({ players: bots(3), seed: 9 });
+    const b = m.botBrain(2) as unknown as { debugBrain(): { id: number } };
+    for (let i = 0; i < 300; i++) { m.tick(new Map()); if (i % 8 === 0) b.debugBrain(); }
+    const r = await loadMatch(saveMatch(m));
+    for (let i = 0; i < 300; i++) {
+      const x = m.tick(new Map()), y = r.tick(new Map());
+      if (i % 30 === 0) expect(stateHash(y), `tick ${x.tick}`).toBe(stateHash(x));
+    }
+    expect((r.botBrain(2) as unknown as { debugBrain(): { id: number } }).debugBrain().id).toBe(2);
+    m.dispose(); r.dispose();
+  }, 60_000);
+
   it('a restored match is independent of the original', async () => {
     const m = await Match.create({ players: bots(2), seed: 3 });
     for (let i = 0; i < 300; i++) m.tick(new Map());

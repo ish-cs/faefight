@@ -5,6 +5,7 @@ import { sanitizeClientMsg } from '../net/sanitize';
 import type { HostRoom, Link, Transport } from '../net/transport';
 import { TICK_HZ } from '../sim/constants';
 import type { MapDef } from '../sim/map';
+import type { RecordingLink } from '../sim/replay/format';
 import type { ToWorker } from './protocol';
 import { HostSession, type HostEvents } from './session';
 
@@ -108,12 +109,12 @@ export class HostMigrator {
     }
   }
 
-  /** The worker's gzipped match at `tick`: seal it and send it to the backup. */
-  async onCheckpoint(match: Uint8Array, tick: number): Promise<void> {
+  /** The worker's gzipped match at `tick` (and its recording's link): seal it and send it to the backup. */
+  async onCheckpoint(match: Uint8Array, tick: number, recording?: RecordingLink): Promise<void> {
     this.pendingSince = null;
     const bk = this.backup, epoch = this.epoch;
     if (!bk) return;
-    const sealed = await sealCheckpoint({ meta: { ...this.io.meta(), tick }, match }, bk.key);
+    const sealed = await sealCheckpoint({ meta: { ...this.io.meta(), tick, ...(recording ? { recording } : {}) }, match }, bk.key);
     if (epoch !== this.epoch) return; // backup changed while sealing: the next tick asks again
     this.io.send(bk.peerId, { t: 'ckpt', epoch, b: sealed });
     const interval = checkpointDelayMs(sealed.byteLength);
@@ -189,8 +190,11 @@ export type TakeOverOpts = {
   /** Newest snapshot tick this guest saw, and when (performance.now ms): the restored match catches up to now. */
   lastTick: number;
   lastTickAt: number;
-  /** Start a worker on the checkpoint (restore, botify `botify`, fast-forward to `toTick`, then run). */
-  startWorker(match: Uint8Array, humanId: number, botify: number[], toTick: number): Promise<HostWorker>;
+  /**
+   * Start a worker on the checkpoint (restore, botify `botify`, fast-forward to `toTick`, then run).
+   * `recording`: the old host's recording link from the checkpoint (unvalidated), to record the next segment.
+   */
+  startWorker(match: Uint8Array, humanId: number, botify: number[], toTick: number, recording: unknown): Promise<HostWorker>;
   events: HostEvents;
   keyWaitMs?: number;
   now?: () => number;
@@ -248,7 +252,7 @@ export async function takeOver(o: TakeOverOpts): Promise<{ session: HostSession;
     const caughtUp = o.lastTick + Math.round(((now() - o.lastTickAt) / 1000) * TICK_HZ);
     const toTick = Math.max(meta.tick, Math.min(caughtUp, meta.tick + TICK_HZ * 20));
     console.info(`[migrate] restoring checkpoint tick ${meta.tick} (${ck.match.byteLength} B), catching up to tick ${toTick}`);
-    const worker = await o.startWorker(ck.match, myId, oldHostId === null ? [] : [oldHostId], toTick);
+    const worker = await o.startWorker(ck.match, myId, oldHostId === null ? [] : [oldHostId], toTick, meta.recording);
     session = HostSession.adopt(room, o.name, o.events, { meta, seat: o.gm.seat, map: o.map, worker });
     for (const p of pending) if (p.hello && !p.handed) { p.handed = true; session.accept(p.link, p.hello); }
     return { session, worker, checkpoint: ck };

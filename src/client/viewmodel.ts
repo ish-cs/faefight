@@ -196,7 +196,8 @@ export class FirstPersonView {
    */
   updateCamera(feet: THREE.Vector3, yaw: number, pitch: number, me: PlayerState, humanId: number): boolean {
     const cam = this.renderer.camera;
-    this.active = this.mode === 'first' && me.alive;
+    // An emote is meant to be seen: third person while it plays, whatever the camera setting.
+    this.active = this.mode === 'first' && me.alive && !me.emote;
     const v = settings.get().video;
     // Aiming zooms both views (rifle 2x, others less).
     const fov = adsFov(this.active ? v.fovFirst : v.fovThird, me.equipped, me.alive ? this.adsK : 0);

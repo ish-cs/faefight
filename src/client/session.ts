@@ -12,13 +12,17 @@ import type { Placement } from '../sim/building';
 import { resolveMapChoice, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { Snapshot } from '../sim/types';
+import type { BrainDigest } from '../sim/bots/introspect';
+import type { ViewExtras } from '../net/protocol';
 import { clampSettings, DEFAULT_SETTINGS, type GameSettings } from '../sim/settings';
 import type { ToWorker } from './protocol';
 import { MONEY_MAX, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven } from './commands';
 import { PING_EVERY_MS, PingTracker, TickMonitor, type HostTick } from './qol/netQuality';
 import { newRejoinToken, REJOIN_GRACE_MS } from './qol/rejoin';
+import { quipLines, WheelLimiter, type WheelId } from '../sim/emotes';
 import { HostMigrator } from './migration';
 import type { SessionMeta } from '../net/checkpoint';
+import type { RecordingLink } from '../sim/replay/format';
 
 const HELLO_TIMEOUT_MS = 10_000;
 // Lobby key for the host. Contains a NUL so no remote peer id (PeerJS, BroadcastChannel, loopback) can equal it.
@@ -53,6 +57,8 @@ export class HostSession {
   private encoder = new SnapshotEncoder();
   private tickNo = 0;
   private limiter = new ChatLimiter();
+  /** Emote / quick-chat wheel: one per peer per 2 s, checked before anything reaches the worker. */
+  private wheelLimiter = new WheelLimiter();
   /** Per-peer budgets: build previews (the ghost only re-asks when it moves) and malformed-message warnings. */
   private previewBudget = new Map<string, { windowStart: number; n: number }>();
   private warned = new Map<string, number>();
@@ -148,10 +154,10 @@ export class HostSession {
   /** A link from a room someone else listened on (migration.ts), with its hello if already read. */
   accept(link: Link, hello?: ClientMsg) { this.onJoin(link, hello); }
 
-  /** Worker checkpoint (gzipped match at `tick`) for the backup host. */
-  onCheckpoint(match: Uint8Array, tick: number) {
+  /** Worker checkpoint (gzipped match at `tick`, and its recording's link) for the backup host. */
+  onCheckpoint(match: Uint8Array, tick: number, rec?: RecordingLink) {
     if (!this.started) return;
-    this.migrator.onCheckpoint(match, tick).catch((err) => console.error('[migrate] sealing the checkpoint failed', err));
+    this.migrator.onCheckpoint(match, tick, rec).catch((err) => console.error('[migrate] sealing the checkpoint failed', err));
   }
 
   static async create(transport: Transport, hostName: string, ev: HostEvents): Promise<HostSession> {
@@ -349,11 +355,17 @@ export class HostSession {
         case 'chat':
           this.relayChat(link.peerId, this.nameOf(seat), msg.text);
           break;
+        case 'wheel':
+          this.relayWheel(link.peerId, playerId, msg.id);
+          break;
         case 'pong':
           this.pings.pong(link.peerId, msg.n, performance.now());
           break;
         case 'follow':
           if (playerId !== null) this.follows.set(playerId, msg.id);
+          break;
+        case 'view':
+          if (playerId !== null) this.views.set(playerId, msg.v);
           break;
       }
     };
@@ -377,7 +389,7 @@ export class HostSession {
     const seat = this.lobby.seatOf(peerId);
     this.links.delete(peerId);
     if (seat === null) return;
-    { const gone = this.idOf(seat); if (gone !== null) { this.interest?.forget(gone); this.streams.delete(gone); this.follows.delete(gone); } }
+    { const gone = this.idOf(seat); if (gone !== null) { this.interest?.forget(gone); this.streams.delete(gone); this.follows.delete(gone); this.views.delete(gone); } }
     if (!this.started) { this.lobby.removePeer(peerId); this.broadcastLobby(); return; }
     const playerId = this.idOf(seat);
     if (playerId === null) throw new Error(`HostSession.onLeave: seat ${seat} has no player`);
@@ -475,6 +487,16 @@ export class HostSession {
   /** Chat typed by the host player. */
   localChat(text: string) { this.relayChat(HOST_PEER, this.hostName, text); }
 
+  // ---- emote / quick-chat wheel ----
+  /** A player's wheel pick → the sim (rate-limited here first; the sim keeps its own cooldown too). */
+  private relayWheel(sender: string, playerId: number | null, id: WheelId) {
+    if (!this.started || playerId === null || !this.worker) return;
+    if (!this.wheelLimiter.allow(sender, Date.now() / 1000)) { console.info(`[host] wheel from ${sender} rate-limited`); return; }
+    this.worker.postMessage({ type: 'wheel', playerId, id });
+  }
+  /** The host player's own wheel pick. */
+  localWheel(id: WheelId) { this.relayWheel(HOST_PEER, this.hostPlayerId, id); }
+
   // ---- match ----
   /**
    * Lock the lobby and produce the setup for the worker. A playing host is seat 0 → player id 1;
@@ -549,6 +571,7 @@ export class HostSession {
     this.encoder = new SnapshotEncoder();
     this.streams.clear();
     this.follows.clear();
+    this.views.clear();
     this.tickNo = 0;
     this.previewBudget.clear();
   }
@@ -571,7 +594,11 @@ export class HostSession {
    * newest snapshot they acknowledged (wire.ts).
    */
   onSnapshot(snap: Snapshot) {
+    this.lastSnap = snap;
+    if (this.tickNo % 8 === 0) this.sendViews(snap);
     this.ticks.onTick(performance.now());
+    // Quick chat (humans only; bots never chat) becomes an ordinary chat line from that player, for every client.
+    for (const l of quipLines(snap.events, snap.players)) this.broadcastChat(l.from, l.text);
     this.encoder.push(snap);
     const tick = this.tickNo++;
     let updated = false;
@@ -588,6 +615,54 @@ export class HostSession {
       const b = st.wire.encode(snap.tick, this.interest ? this.interest.apply(id, s, follow) : s);
       st.rate.sent(b.byteLength, wireHeader(b).baseSeq === 0);
       this.send(link, { t: 'snap', b });
+    }
+  }
+
+  private lastSnap: Snapshot | null = null;
+  /** Each human's ghost / open panel (ViewExtras): friends' from their 'view' messages, the host's own via setLocalView. */
+  private views = new Map<number, ViewExtras>();
+
+  setLocalView(v: ViewExtras) { if (this.hostPlayerId !== null) this.views.set(this.hostPlayerId, v); }
+  viewOf(id: number): ViewExtras | null { return this.views.get(id) ?? null; }
+
+  /** ~4 Hz: a dead friend following a human gets that human's ViewExtras (never a living player). */
+  private sendViews(snap: Snapshot) {
+    for (const [peerId, link] of this.links) {
+      const seat = this.lobby.seatOf(peerId);
+      const id = seat === null ? null : this.idOf(seat);
+      if (id === null) continue;
+      const t = spectateTarget(snap, id, this.follows.get(id));
+      const v = t === null || snap.players.find((p) => p.id === t)?.isBot ? undefined : this.views.get(t);
+      if (v) this.send(link, { t: 'view', id: t!, v });
+    }
+  }
+
+  /** Bots that spectating friends follow right now (dead and watching a living bot): the worker digests these. */
+  brainWants(): number[] {
+    const snap = this.lastSnap;
+    if (!snap) return [];
+    const out: number[] = [];
+    for (const [id, f] of this.follows) {
+      const t = spectateTarget(snap, id, f);
+      if (t !== null && snap.players.find((p) => p.id === t)?.isBot && !out.includes(t)) out.push(t);
+    }
+    return out;
+  }
+
+  /**
+   * Brain digests from the worker: each goes only to a friend who is dead and following that very bot (anti-cheat:
+   * never to a living player), outside the snapshot stream and never recorded.
+   */
+  onBrains(digests: BrainDigest[]) {
+    const snap = this.lastSnap;
+    if (!snap) return;
+    for (const [peerId, link] of this.links) {
+      const seat = this.lobby.seatOf(peerId);
+      const id = seat === null ? null : this.idOf(seat);
+      if (id === null) continue;
+      const t = spectateTarget(snap, id, this.follows.get(id));
+      const d = t === null ? undefined : digests.find((x) => x.id === t);
+      if (d) this.send(link, { t: 'brain', d });
     }
   }
 

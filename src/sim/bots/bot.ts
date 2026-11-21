@@ -1,3 +1,4 @@
+import * as dm from '../dmath';
 import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
@@ -7,7 +8,8 @@ import type {
   BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, VaultAction, Vec3, WeaponKind,
 } from '../types';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
-import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
+import { isRng, mulberry32 } from '../rng';
+import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
 import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
@@ -22,6 +24,7 @@ import {
 import { Brain, fightOdds, type BrainGoal, type BrainInput } from './brain';
 import { DODGE_SKILL, Dodger } from './tactics';
 import type { BotView, OtherStatus } from './view';
+import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, type ScoreRow } from './introspect';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
@@ -83,6 +86,17 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
 /**
+ * Explosive props. PRO bots sometimes shoot a barrel standing next to an enemy instead of the enemy (a
+ * roll every BARREL_ROLL_SEC while such a shot is on, so it's a choice, not a reflex); everyone keeps out of
+ * blast range of live barrels while fighting and runs from a fusing one.
+ */
+// PRO only: reading a barrel next to an enemy is a PRO skill (measured: it is part of what keeps PRO ahead of hard).
+const BARREL_CHANCE: Record<Difficulty, number> = { easy: 0, medium: 0, hard: 0, pro: 0.5 };
+const BARREL_ROLL_SEC = 1.2, BARREL_AIM_SEC = 1.5;
+/** Supply crates: only when this close (a short detour) and nothing else is going on. */
+const CRATE_RANGE = 8;
+const RAID_AT = 60;
+/**
  * Sudden-death storm awareness: how many seconds ahead of the closing ring a bot moves in, the margin it keeps
  * inside the edge, and how long it takes to react to a telegraphed lightning strike (easy ones often don't).
  */
@@ -92,6 +106,8 @@ const BOLT_REACT: Record<Difficulty, number> = { easy: 0.6, medium: 0.35, hard: 
 const EASY_DODGE = 0.4;
 /** Medium+ bots bridge to the centre island (where the storm ends) from this long before sudden death. */
 const STORM_PREP_SEC = 150;
+/** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
+const STORM_SPARE_DECKS = 2, STORM_SHOP_GRACE = 45;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Walls a bot throws down for cover, best first (sandbags go up two high). */
 const WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
@@ -237,6 +253,13 @@ export class Bot {
   private winded = false;
   private lastScores: { goal: string; score: number }[] = [];
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
+  /** The enemy my gun is on (target hysteresis, see aimTarget) and since when; where I last saw them. */
+  private aimId: number | null = null;
+  private aimSince = 0;
+  private aimAt: Vec3 | null = null;
+  private aimLost: { at: Vec3; until: number } | null = null;
+  private barrelPlan: { id: number; until: number } | null = null;
+  private nextBarrelRollAt = 0;
   private view!: BotView;
   /** Strategy/tactics weights: the trained defaults with this bot's personality folded in. */
   readonly params: BrainParams;
@@ -252,6 +275,10 @@ export class Bot {
   private fireFrom: Vec3 | null = null;
   /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
   private readonly centerMinded: boolean;
+  /** Spectator introspection (introspect.ts): set only while someone watches this bot; decisions never read it. */
+  probe: BrainProbe | null = null;
+  /** Last goal switches (introspect.ts decision log): one small entry per switch. */
+  readonly switches: GoalSwitch[] = [];
 
   /**
    * `P`: tunable strategy (params.ts; drive, build skill/tuning, brain weights); the trained defaults unless a
@@ -277,7 +304,12 @@ export class Bot {
       invest: t.patience > 0.75,
       buildFirst: t.builder > 0.7,
     };
-    this.aim = new Aim(AIM[difficulty], rng);
+    // Aim noise draws every tick while tracking: its own stream (seeded from the match rng's state without
+    // drawing from it), so how a bot's hand wobbles never shifts the match's other random rolls. A plain function
+    // (hand-made test rng) has no state to read: one draw seeds it.
+    const base = isRng(rng) ? rng.state.a : Math.floor(rng() * 4294967296);
+    const aimSeed = (base ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
+    this.aim = new Aim(AIM[difficulty], mulberry32(aimSeed), P.aim.feel[difficulty]);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
@@ -299,8 +331,14 @@ export class Bot {
       target: this.targetId, underFire: this.fireFrom !== null, enemy: this.lastEnemy, fightOdds: this.lastOdds,
     };
   }
+  /** Hazard id this bot is deliberately shooting to catch an enemy in the blast, if any. */
+  get barrelTarget(): number | null { return this.barrelPlan?.id ?? null; }
   /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
   get planScores(): { goal: string; score: number }[] { return this.lastScores; }
+  /** Start / stop recording decisions for a spectator (read-only: never changes what the bot does). */
+  watch(on: boolean) { this.probe = on ? this.probe ?? new BrainProbe(this) : null; }
+  /** What it's thinking, for the brain inspector (starts recording if it wasn't). */
+  debugBrain(): BrainDigest { this.watch(true); return debugBrain(this); }
 
   think(view: BotView): PlayerInput {
     const me = view.self;
@@ -308,7 +346,11 @@ export class Bot {
     if (view.generators.length !== view.map.length || view.sealed.length !== view.map.length)
       throw new Error(`Bot ${this.id}: view has ${view.map.length} islands but ${view.generators.length} generators / ${view.sealed.length} seal flags`);
     const now = view.now;
-    const dt = Number.isNaN(this.lastNow) ? DT : Math.min(0.25, Math.max(0, now - this.lastNow));
+    // Match doesn't call dead bots: a gap of more than a couple of ticks means I just respawned (new body, new
+    // facing). Start the aim hand fresh instead of whipping it over the whole gap or "compensating" toward my old aim.
+    const skipped = !Number.isNaN(this.lastNow) && now - this.lastNow > 2.5 * DT;
+    if (skipped) { this.aim.reset(); this.aimId = null; this.aimLost = null; }
+    const dt = Number.isNaN(this.lastNow) || skipped ? DT : Math.max(0, now - this.lastNow);
     this.lastNow = now;
     this.mem.update(view);
     if (!me.alive) {
@@ -316,11 +358,14 @@ export class Bot {
       this.wasAlive = false;
       this.fireFrom = null;
       this.aim.reset();
+      this.aimId = null;
+      this.aimLost = null;
       this.stuckRef = null;
       this.retreat = null;
       this.pendingBuy = null;
       this.nadePlan = null;
       this.hideFrom = null;
+      this.barrelPlan = null;
       this.cover = null;
       this.perch = null;
       this.fightSince = null;
@@ -346,7 +391,10 @@ export class Bot {
     }
     if (rescore) {
       const next = this.pick(ctx);
-      if (next !== this.goal) this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
+      if (next !== this.goal) {
+        this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
+        noteSwitch(this.switches, this.probe, this.lastScores, now, this.goal, next);
+      }
       this.goal = next;
       if (next === 'disengage' || next === 'heal') this.retreatSince ??= now;
       else this.retreatSince = null;
@@ -365,11 +413,14 @@ export class Bot {
     // Aim: enemies first, then whatever the goal wants to look or shoot at, else along the walk.
     const eye = eyePos(me);
     const cur: Angles = { yaw: me.yaw, pitch: me.pitch };
-    let look: Angles = cur;
+    // Every look goes through the aim hand (Aim.look: eased, speed- and acceleration-capped); `want` is where to.
+    const hand = (want: Angles, rate: number) => this.aim.look(cur, want, dt, rate);
+    let look: Angles;
     let fire = false;
     const enemy = ctx.enemy;
     // Rockets: for a rival dug in behind cover or up on a structure (splash at their feet), and for hard plugs.
     const rocketAtEnemy = !!enemy && this.rocketTarget(ctx);
+    const foe = this.aimTarget(view, enemy, now);
     // Medium+ tactic: a rocket into a rival's wooden base sets it burning (fire.ts).
     const torch = enemy || this.goal === 'disengage' ? null : this.torchTarget(ctx);
     const best = act.weapon && hasAmmo(me.inv, act.weapon) ? act.weapon
@@ -381,20 +432,26 @@ export class Bot {
     };
     let throwGrenade = false;
     const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
-    if (act.shootAt && act.shootFirst) {
-      look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
+    const barrel = enemy ? this.barrelShot(ctx) : null;
+    if (barrel) {
+      // Set the barrel next to them off: aim at its middle like any other shot.
+      look = hand(lookAt(eye, barrel), TURN_RATE * 1.2);
+      fire = angleBetween(look, lookAt(eye, barrel)) < 0.04 && gunReady(dist2D(me.pos, barrel));
+    } else if (act.shootAt && act.shootFirst) {
+      look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
-    } else if (enemy) {
-      const r = this.aim.track(now, dt, eye, add(enemy.pos, v3(0, rocketAtEnemy ? 0.15 : CHEST, 0)), enemy.id, cur);
+    } else if (foe) {
+      const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, rocketAtEnemy && foe === enemy ? 0.15 : CHEST, 0)), foe.id, cur);
       look = r;
+      const foeDist = dist2D(foe.pos, me.pos);
       // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
       // unless they're the one shooting at me.
       const w = WEAPONS[me.equipped];
-      const scratch = this.difficulty !== 'easy' && ctx.enemyDist > w.falloff.end * this.P.drive.fireRangeMult &&
-        !(this.mem.lastHurtBy === enemy.id && now - this.mem.lastHurtAt < 3);
-      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist) && !scratch;
+      const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult &&
+        !(this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3);
+      fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch;
     } else if (nade) {
-      look = turnToward(cur, nade, TURN_RATE, dt);
+      look = hand(nade, TURN_RATE);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
         throwGrenade = true;
         this.lastNadeAt = now;
@@ -402,16 +459,22 @@ export class Bot {
       }
     } else if (torch) {
       const want = lookAt(eye, torch);
-      look = turnToward(cur, want, TURN_RATE, dt);
+      look = hand(want, TURN_RATE);
       fire = me.equipped === 'rocket' && angleBetween(look, want) < 0.03 && gunReady(dist2D(me.pos, torch));
       if (fire) this.lastTorchAt = now;
     } else if (act.shootAt) {
-      look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
+      look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
     } else if (act.face) {
-      look = turnToward(cur, lookAt(eye, act.face), TURN_RATE, dt);
+      look = hand(lookAt(eye, act.face), TURN_RATE);
+    } else if (this.aimLost && !act.build) {
+      // Just lost sight of who I was shooting at: keep my eyes on where they were a moment (walking still works:
+      // movement is relative to the view), instead of whipping round to the walk direction and back.
+      look = hand(lookAt(eye, this.aimLost.at), this.aim.maxTurn);
     } else if (act.dir) {
-      look = turnToward(cur, { yaw: yawOf(act.dir), pitch: 0 }, TURN_RATE, dt);
+      look = hand({ yaw: yawOf(act.dir), pitch: 0 }, TURN_RATE);
+    } else {
+      look = hand(cur, TURN_RATE); // nothing to look at: the hand comes to rest
     }
 
     // Weapons: hold the best gun, reload when nobody is in sight.
@@ -437,6 +500,7 @@ export class Bot {
       dir = j.dir;
       jump ||= j.jump;
     }
+    if (!dodge) dir = this.hazardAvoid(ctx, dir);
     if (dir && !dodge) dir = this.stormFence(me, view, dir);
     if (dir) dir = this.nav.safeDir(dir);
     // Never walk into (or stand in) fire: slide around burning pieces and ground fires (a lightning dodge wins).
@@ -476,6 +540,7 @@ export class Bot {
     if (act.build) {
       this.lastPieceAt = now;
     }
+    this.probe?.acted(act, look, fire);
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
       // Sprint travelling to a goal, closing in, or getting away; never while shooting (it spoils the aim); winded
@@ -545,6 +610,27 @@ export class Bot {
     return high || c.view.pieces.some((p) => COVER_KINDS.has(p.kind) && dist2D(p.pos, e.pos) < 2.5);
   }
 
+  /**
+   * The visible enemy my gun is on. The nearest, but once on someone I stay on them at least `aim.commitSec`, then
+   * switch only to one clearly closer (`aim.switchRatio` × their distance) or when they drop out of sight. Losing
+   * sight of a living target holds my eyes on where they were for `holdSec` (the look chain in think uses it).
+   */
+  private aimTarget(view: BotView, nearest: PlayerState | null, now: number): PlayerState | null {
+    const me = view.self, A = this.P.aim;
+    let cur = this.aimId === null ? null : view.enemies.find((e) => e.id === this.aimId && e.alive) ?? null;
+    if (!cur && this.aimId !== null) {
+      const alive = view.others.find((o) => o.id === this.aimId)?.alive ?? false;
+      this.aimLost = alive && this.aimAt ? { at: this.aimAt, until: now + A.feel[this.difficulty].holdSec } : null;
+      this.aimId = null;
+    }
+    if (cur && nearest && nearest.id !== cur.id && now - this.aimSince >= A.commitSec &&
+        dist2D(nearest.pos, me.pos) < A.switchRatio * dist2D(cur.pos, me.pos)) cur = null;
+    if (!cur && nearest) { cur = nearest; this.aimId = nearest.id; this.aimSince = now; }
+    if (cur) { this.aimAt = add(cur.pos, v3(0, CHEST, 0)); this.aimLost = null; }
+    else if (this.aimLost && now >= this.aimLost.until) this.aimLost = null;
+    return cur;
+  }
+
   /** Did the last purchase go through? A buy that keeps failing (e.g. nowhere to carry it) is left alone a while. */
   private checkPurchase(me: PlayerState, now: number) {
     const p = this.pendingBuy;
@@ -569,7 +655,7 @@ export class Bot {
   private scaffoldsTo(from: number, to: number): number {
     if (this.alt.has(to) && from === this.view.self.island && to < this.view.map.length) {
       const f = this.mirrorFrontier(to);
-      return Math.max(1, Math.ceil((f.s - Math.sqrt(this.view.map[to].radius ** 2 - 9)) / SCAFFOLD_STEP));
+      return Math.max(1, Math.ceil((f.s - Math.sqrt(this.view.map[to].radius * this.view.map[to].radius - 9)) / SCAFFOLD_STEP));
     }
     return this.nav.scaffoldsTo(from, to, SCAFFOLD_STEP);
   }
@@ -589,7 +675,7 @@ export class Bot {
   private scanMirror(to: number): { l: Lane; s: number; complete: boolean } {
     const map = this.view.map, home = this.view.self.island;
     const l = lane(map, to, home);
-    for (let s = l.length - Math.sqrt(map[home].radius ** 2 - 9) + 2; s >= 0; s -= 0.25) {
+    for (let s = l.length - Math.sqrt(map[home].radius * map[home].radius - 9) + 2; s >= 0; s -= 0.25) {
       const p = laneAt(l, s);
       if (this.view.groundAt(p.x, p.z) === null) return { l, s: s + 0.25, complete: false };
       if (islandAt(map, p) === to) return { l, s, complete: true };
@@ -805,7 +891,8 @@ export class Bot {
       c.view.pieces.some((p) => p.owner !== c.me.id && p.owner > 0 && isFlammable(p.kind) && this.woodNear(c.view.pieces, p) >= 3);
     return {
       rocket: wooden,
-      scaffolds: this.scaffoldsNeeded(c),
+      // Bridging to the center before the storm: spares for decks that get shot out under me (one trip, not five).
+      scaffolds: this.scaffoldsNeeded(c) + (c.bridgeTo !== null && c.bridgeTo === this.nav.centerNode && this.stormPrep(c.view) ? STORM_SPARE_DECKS : 0),
       // A full seal kit whenever there's someone to seal: their doors get reopened, the next rival has three.
       kit: c.rival ? Math.max(c.openDoors.length, MAP_DOORS) : 0,
       // A hard plug in my own doorway: only a charge gets through.
@@ -1172,11 +1259,15 @@ export class Bot {
       }
       case 'loot': {
         const bag = this.nearestLoot(c);
-        if (!bag) return 0;
+        const crate = this.nearestCrate(c);
+        if (!bag && !crate) return 0;
         // Final circle with someone in sight: the fight is the only thing left to do (a bag out of reach kept the
         // last two circling forever).
         if (c.enemy && view.storm && view.storm.r <= view.storm.rf + 0.5) return 0;
-        return 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70;
+        const bagScore = bag ? 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70 : 0;
+        // A crate is a small, uncertain prize: worth a short detour, never a trip.
+        const crateScore = crate ? 0.2 + 0.3 * t.greed - dist2D(crate.pos, me.pos) / 30 : 0;
+        return Math.max(bagScore, crateScore);
       }
       case 'cover': {
         const cv = this.cover;
@@ -1210,7 +1301,8 @@ export class Bot {
    * in my face, getting out of one I'd lose) or a quick errand is worth it on the way (cash about to cap, a loot bag).
    */
   private pick(c: Ctx): Goal {
-    if (this.trapped(c)) return 'defend';
+    if (this.trapped(c)) { this.probe?.decided(c, null, 'defend'); return 'defend'; }
+    const rows: ScoreRow[] | null = this.probe ? [] : null;
     const step = this.brain.stepAct;
     const retreating = this.brain.goal?.kind === 'retreat';
     let best: Goal = step ?? ((c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack'), bestScore = -Infinity;
@@ -1218,24 +1310,28 @@ export class Bot {
     for (const g of GOALS) {
       if (g !== step && !REFLEXES.has(g)) continue;
       if (this.bannedAct && this.bannedAct.goal === g && this.view.now < this.bannedAct.until) continue;
-      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrep(c.view)) continue;
+      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrep(c.view)) continue; // banned for a while (goal watchdog)
       // Running from a fight I'd lose: only shoot back when cornered.
       if (g === 'fight' && retreating && c.enemyDist > 5) continue;
       // A step whose own situational score is nil (e.g. "heal up" while already home) still runs: walking home,
       // hanging around the generator or the target's door is harmless.
-      const base = Math.max(this.drive(g, c, this.score(g, c)), g === step && SAFE_STEPS.has(g) ? 0.05 : 0);
-      if (base <= 0 && g !== best) continue;
+      const raw = this.score(g, c);
+      const base = Math.max(this.drive(g, c, raw), g === step && SAFE_STEPS.has(g) ? 0.05 : 0);
+      if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
       const bias = GOAL_BIAS[g];
       // The storm outranks any plan step: staying inside the ring is survival. Early on a keen builder's home
       // fortification does too, except a bank step (two seconds at the vault; walking off to fortify would undo
       // "the vault is right here" and the step order would ping-pong).
       const earlyFort = g === 'fortify' && step !== 'bank' && this.t.builder > 0.6 && c.view.now < this.params.turtleUntil;
+      const noise = (this.rng() - 0.5) * NOISE[this.difficulty], sticky = g === this.goal ? STICKY : 0;
       const s = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' || g === 'cover' || earlyFort ? STEP_BONUS + this.params.stepPush : 0) +
-        (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
+        noise + sticky;
+      rows?.push({ goal: g, raw, base, noise, sticky, score: s });
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
     }
     this.lastScores = scored.sort((a, b) => b.score - a.score).slice(0, 4);
+    if (rows) this.probe!.decided(c, rows, best);
     return best;
   }
 
@@ -1331,6 +1427,7 @@ export class Bot {
 
   /** Walk toward dest via the route planner; null dir once within `arrive` m (or when no route exists). */
   private goTo(dest: Vec3, arrive = ARRIVE): Act {
+    if (this.probe) this.probe.dest = dest;
     const self = this.view.self;
     if (dist2D(self.pos, dest) <= arrive) return IDLE;
     const home = this.view.map[self.island];
@@ -1428,7 +1525,7 @@ export class Bot {
     const ahead = at(4);
     if (c.me.busyUntil > now) return { dir: null, face: ahead };
     // Long bridge: a wall along the deck edge facing the nearest third island (flank fire), walkway left free.
-    const shore = Math.sqrt(c.home.radius ** 2 - 9);
+    const shore = Math.sqrt(c.home.radius * c.home.radius - 9);
     const out = mirror ? l.length - shore - f.s : f.s - shore;
     const lastWall = this.lastWallS.get(key) ?? -Infinity;
     const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
@@ -1496,7 +1593,7 @@ export class Bot {
       const front = b.doorways[0];
       const base = add(front.center, scale(forward(front.yaw), 7));
       const a = this.rng() * 2 * Math.PI, r = this.rng() * 3;
-      this.wander = { to: add(base, v3(Math.cos(a) * r, 0, Math.sin(a) * r)), until: now + 3 + this.rng() * 2 };
+      this.wander = { to: add(base, v3(dm.cos(a) * r, 0, dm.sin(a) * r)), until: now + 3 + this.rng() * 2 };
     }
     return this.goTo(this.wander.to, 1.0);
   }
@@ -1696,7 +1793,7 @@ export class Bot {
       // Thrown by hand: as accurate as this player's aim.
       const cone = AIM[this.difficulty].coneRad * (low ? 0.5 : 1);
       const r = this.rng() * cone, th = this.rng() * 2 * Math.PI;
-      this.nadePlan = { yaw: a.yaw + Math.cos(th) * r, pitch: a.pitch + Math.sin(th) * r, until: now + 1.2 };
+      this.nadePlan = { yaw: a.yaw + dm.cos(th) * r, pitch: a.pitch + dm.sin(th) * r, until: now + 1.2 };
       return this.nadePlan;
     }
     return null;
@@ -1725,8 +1822,79 @@ export class Bot {
 
   private doLoot(c: Ctx): Act {
     const bag = this.nearestLoot(c);
+    const crate = this.nearestCrate(c);
+    if (crate && (!bag || dist2D(crate.pos, c.me.pos) + 4 < dist2D(bag, c.me.pos))) {
+      // Walk up and break it (a punch or two shots), the loot bag lands where it stood.
+      const d = dist2D(crate.pos, c.me.pos);
+      const fists = c.me.equipped === 'fists';
+      if (d > (fists ? 1.3 : 4)) return { ...this.goTo(crate.pos, fists ? 1.1 : 3.5), shootAt: undefined };
+      return { dir: null, shootAt: crate.center };
+    }
     if (!bag) { this.nextScoreAt = c.view.now; return IDLE; }
     return this.goTo(bag, 0.3);
+  }
+
+  /** A standing supply crate close by on ground I can walk to (only when it's cheap: near and quiet). */
+  private nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null {
+    // Never a detour while the storm closes in (sudden death): getting inside the ring comes first.
+    if (c.enemy || c.danger || c.view.suddenDeath || c.view.storm) return null;
+    let best: { pos: Vec3; center: Vec3 } | null = null, bestD = CRATE_RANGE;
+    for (const h of c.view.hazards ?? []) {
+      if (h.kind !== 'crate') continue;
+      const d = dist2D(h.pos, c.me.pos);
+      if (d >= bestD || Math.abs(h.pos.y - c.me.pos.y) > 1.5) continue;
+      if (islandAt(c.view.map, h.pos) !== c.on) continue;
+      best = h; bestD = d;
+    }
+    return best;
+  }
+
+  /**
+   * PRO: a live barrel or tank right next to the enemy, out of my own blast range, in clear view: now
+   * and then shoot it instead of them. Returns the point to shoot, or null.
+   */
+  private barrelShot(c: Ctx): Vec3 | null {
+    const e = c.enemy, view = c.view, me = c.me;
+    if (!e || BARREL_CHANCE[this.difficulty] <= 0 || me.equipped === 'fists') return null;
+    const live = (id: number) => (view.hazards ?? []).find((h) => h.id === id && !h.fusing);
+    if (this.barrelPlan) {
+      const h = live(this.barrelPlan.id);
+      if (h && view.now < this.barrelPlan.until && dist2D(h.pos, e.pos) < h.radius * 0.7) return h.center;
+      this.barrelPlan = null;
+    }
+    if (view.now < this.nextBarrelRollAt) return null;
+    let pick: { id: number; center: Vec3 } | null = null, bestD = Infinity;
+    for (const h of view.hazards ?? []) {
+      if (h.radius <= 0 || h.fusing) continue;
+      const toEnemy = dist2D(h.pos, e.pos);
+      const mine = dist2D(h.pos, me.pos);
+      if (toEnemy >= h.radius * 0.6 || mine < h.radius + 1.5 || mine > WEAPONS[me.equipped].range * 0.8 || toEnemy >= bestD) continue;
+      pick = h; bestD = toEnemy;
+    }
+    if (!pick) return null;
+    this.nextBarrelRollAt = view.now + BARREL_ROLL_SEC;
+    if (this.rng() >= BARREL_CHANCE[this.difficulty] || !view.clearShot?.(pick.center)) return null;
+    this.barrelPlan = { id: pick.id, until: view.now + BARREL_AIM_SEC };
+    return pick.center;
+  }
+
+  /** Run from a fusing barrel; in a fight (outside the storm), also step out of blast range of live ones (they could be shot). */
+  private hazardAvoid(c: Ctx, dir: Vec3 | null): Vec3 | null {
+    const me = c.me;
+    let push: Vec3 | null = null;
+    for (const h of c.view.hazards ?? []) {
+      // A live barrel is only a maybe; in the storm, staying inside the ring matters more (fusing ones still send everyone running).
+      if (h.radius <= 0 || (!h.fusing && (!c.enemy || c.view.storm))) continue;
+      const d = dist2D(h.pos, me.pos);
+      // Fights: only out of the inner part of a live barrel's blast, where it would really hurt (measured on the
+      // bot ladder: a wider berth costs the stronger bot its fights).
+      const R = h.fusing ? h.radius + 1 : h.radius * 0.6;
+      if (d >= R) continue;
+      const away = d < 0.05 ? right(me.yaw) : norm(flat(sub(me.pos, h.pos)));
+      push = add(push ?? v3(), scale(away, (h.fusing ? 3 : 2) * (1 - d / R) + 0.4));
+    }
+    if (!push) return dir;
+    return norm(add(dir ?? v3(), push));
   }
 
   private doRaid(c: Ctx): Act {
@@ -1799,8 +1967,8 @@ export class Bot {
     }
 
     const gapM = c.enemyDist - want;
-    // Fists reach 1.2 m: a 2 m dead band leaves two punchers strafing just out of reach while they regenerate.
-    const radial = Math.abs(gapM) < (gun === 'fists' ? 0.3 : 2) ? 0 : Math.sign(gapM);
+    // Hold range within a couple of metres; with fists (reach 2 m) only a step's slack, or they circle out of reach.
+    const radial = Math.abs(gapM) < (want < 2 ? 0.4 : 2) ? 0 : Math.sign(gapM);
     const dir = add(scale(to, radial), side);
     // Well out of my range: sprint in to close (sprinting spoils aim, so not while in range).
     const rush = this.difficulty !== 'easy' && gapM > this.P.drive.sprintGap;
@@ -2050,7 +2218,7 @@ export class Bot {
       // Only while the shop (and the vault, if I need cash from it) is still inside the ring: a trip out into the
       // storm to shop kills just as surely.
       const shopSafe = [c.home.shop, ...(me.inv.cash < PIECES.scaffold.price ? [c.home.vault] : [])]
-        .every((p) => dist2D(p, ctr) < st.r - 2);
+        .every((p) => dist2D(p, ctr) < st.r - 2) || view.now - LIFECYCLE.suddenDeathAt < STORM_SHOP_GRACE;
       const buy = have < need && c.homeReach && shopSafe && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
       if (buy) return buy;
       if (have > 0) {
@@ -2119,7 +2287,7 @@ export class Bot {
       const away = d > 0.3 ? norm(v3(me.pos.x - b.x, 0, me.pos.z - b.z)) : forward(me.yaw + Math.PI / 2);
       const inside = (dir: Vec3) => Math.hypot(me.pos.x + dir.x * 3 - st.x, me.pos.z + dir.z * 3 - st.z) < st.r - 1;
       for (const a of [0, 0.8, -0.8, 1.4, -1.4]) {
-        const dir = a ? norm(v3(away.x * Math.cos(a) - away.z * Math.sin(a), 0, away.x * Math.sin(a) + away.z * Math.cos(a))) : away;
+        const dir = a ? norm(v3(away.x * dm.cos(a) - away.z * dm.sin(a), 0, away.x * dm.sin(a) + away.z * dm.cos(a))) : away;
         if (inside(dir)) return dir;
       }
       return away;
@@ -2199,7 +2367,7 @@ export function throwAngles(eye: Vec3, to: Vec3, low: boolean): Angles | null {
   const d = dist2D(eye, to), dy = to.y - eye.y;
   const yaw = lookAt(eye, to).yaw;
   const heightAt = (pitch: number) => {
-    const vx = GRENADE.throwSpeed * Math.cos(pitch), vy = GRENADE.throwSpeed * Math.sin(pitch) + 3;
+    const vx = GRENADE.throwSpeed * dm.cos(pitch), vy = GRENADE.throwSpeed * dm.sin(pitch) + 3;
     const tt = d / vx;
     return { y: vy * tt - (PLAYER.gravity * tt * (tt + DT)) / 2, t: tt, falling: vy - PLAYER.gravity * tt < 0 };
   };

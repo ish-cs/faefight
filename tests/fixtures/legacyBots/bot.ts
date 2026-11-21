@@ -8,6 +8,7 @@ import type {
 } from '../../../src/sim/types';
 import { add, clone, dist2D, forward, norm, right, scale, sub, v3, yawOf } from '../../../src/sim/vec';
 import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from '../../../src/sim/bots/aim'; // aim is execution skill: shared with the current bots
+import { AIM_PARAMS } from '../../../src/sim/bots/params';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, lane, laneAt, laneS, type Lane } from './nav';
@@ -156,7 +157,7 @@ export class Bot {
       coverWood: t.builder > 0.6 ? 2 : 0,
       invest: t.patience > 0.75,
     };
-    this.aim = new Aim(AIM[difficulty], rng);
+    this.aim = new Aim(AIM[difficulty], rng, AIM_PARAMS.feel[difficulty]);
   }
 
   get currentGoal(): Goal { return this.goal; }

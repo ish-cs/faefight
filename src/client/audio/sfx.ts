@@ -188,7 +188,7 @@ function gunshot(k: Kit, out: AudioNode, t: number, cue: Cue, d: number): number
 }
 
 function explosion(k: Kit, out: AudioNode, t: number, cue: Cue): number {
-  const big = cue.kind === 'charge' || cue.kind === 'rocket';
+  const big = cue.kind === 'charge' || cue.kind === 'rocket' || cue.kind === 'barrel' || cue.kind === 'propane';
   const p = jitter(k.rnd(), 0.06);
   noise(k, out, t, { type: 'highpass', freq: 1200, dur: 0.08, peak: 1.0 });
   tone(k, out, t, { f0: (big ? 62 : 78) * p, f1: 22, dur: big ? 1.7 : 1.3, peak: 1.4, attack: 0.004 });
@@ -199,6 +199,33 @@ function explosion(k: Kit, out: AudioNode, t: number, cue: Cue): number {
     len = Math.max(len, at - t + noise(k, out, at, { type: 'bandpass', freq: 1500 + k.rnd() * 3500, q: 4, dur: 0.02 + k.rnd() * 0.04, peak: 0.12 + k.rnd() * 0.25 }));
   }
   return len;
+}
+
+/** Barrels, tanks and crates: gas hiss (the fuse), a drum clang, a crate knock, a crate splintering. */
+function hazardSound(k: Kit, out: AudioNode, t: number, cue: Cue): number {
+  const p = jitter(k.rnd(), 0.06);
+  switch (cue.kind) {
+    case 'hiss':
+      // pressurised leak: a bright noise jet that rises in pitch for the whole ~1 s fuse, plus a little metal tick
+      partials(k, out, t, 900 * p, 0.25, [[1, 1, 0.12], [2.7, 0.5, 0.08]]);
+      noise(k, out, t, { type: 'bandpass', freq: 3500 * p, freqEnd: 7000, q: 1.2, dur: 1.0, peak: 0.55, attack: 0.04 });
+      return noise(k, out, t, { type: 'highpass', freq: 5000, dur: 1.0, peak: 0.25, attack: 0.1 });
+    case 'clang':
+      noise(k, out, t, { type: 'highpass', freq: 3000, dur: 0.02, peak: 0.5 });
+      return partials(k, out, t, 310 * p, 0.45, [[1, 1, 0.45], [2.4, 0.7, 0.3], [4.1, 0.4, 0.2], [6.3, 0.25, 0.12]]);
+    case 'crateHit':
+      return woodKnock(k, out, t, 0.8, p);
+    default: {
+      // crate breaking: a crack, then planks clattering down
+      noise(k, out, t, { type: 'bandpass', freq: 1400 * p, q: 1.5, dur: 0.06, peak: 0.9 });
+      let len = woodKnock(k, out, t, 1.0, p * 0.9);
+      for (let i = 0; i < 6; i++) {
+        const at = t + 0.08 + k.rnd() * 0.5;
+        len = Math.max(len, at - t + woodKnock(k, out, at, 0.25 + k.rnd() * 0.35, p * (0.9 + k.rnd() * 0.4)));
+      }
+      return len;
+    }
+  }
 }
 
 function woodKnock(k: Kit, out: AudioNode, t: number, peak: number, p: number): number {
@@ -288,6 +315,20 @@ function footstep(k: Kit, out: AudioNode, t: number, cue: Cue): number {
   }
 }
 
+/** Touching down after a fall: a low body thud plus the surface's own character. */
+function land(k: Kit, out: AudioNode, t: number, cue: Cue): number {
+  const p = jitter(k.rnd(), 0.08);
+  noise(k, out, t, { type: 'lowpass', freq: 260 * p, dur: 0.12, peak: 0.9 });
+  tone(k, out, t, { f0: 95 * p, f1: 48, dur: 0.14, peak: 0.6, attack: 0.002 });
+  switch (cue.kind) {
+    case 'metal': return Math.max(0.16, partials(k, out, t, 620 * p, 0.3, [[1, 0.6, 0.25], [2.7, 0.35, 0.15], [4.1, 0.2, 0.1]]));
+    case 'wood': case 'hollow': return Math.max(0.16, noise(k, out, t, { type: 'bandpass', freq: 340 * p, q: 4, dur: 0.14, peak: 0.8 }));
+    case 'concrete': return Math.max(0.16, noise(k, out, t, { type: 'bandpass', freq: 2200 * p, q: 1, dur: 0.04, peak: 0.5 }));
+    case 'sand': return Math.max(0.16, noise(k, out, t, { type: 'bandpass', freq: 1600 * p, q: 0.7, dur: 0.16, peak: 0.45, attack: 0.01 }));
+    default: return Math.max(0.16, noise(k, out, t, { type: 'lowpass', freq: 1100 * p, dur: 0.1, peak: 0.45, attack: 0.004 }));
+  }
+}
+
 /** Play `cue` into `out` at time `t`. `d` = distance to the listener (0 for 2D cues). Returns ring time. */
 export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: number): number {
   const p = jitter(k.rnd(), 0.04);
@@ -308,13 +349,24 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       noise(k, out, t, { type: 'bandpass', freq: 3000 * p, q: 1, dur: 0.08, peak: 0.15 });
       noise(k, out, t, { type: 'lowpass', freq: 250, dur: 0.2, peak: 0.6 });
       return tone(k, out, t, { f0: 90 * p, f1: 38, dur: 0.3, peak: 1.0, attack: 0.002 });
-    case 'hitmarker':
+    case 'hitmarker': // crisp tick: a tiny bright click + two short high tones
+      noise(k, out, t, { type: 'highpass', freq: 6500, dur: 0.008, peak: 0.35, attack: 0.0005 });
       tone(k, out, t, { type: 'triangle', f0: 2600 * p, dur: 0.035, peak: 0.5, attack: 0.001 });
       return 0.005 + tone(k, out, t + 0.005, { f0: 3900 * p, dur: 0.025, peak: 0.25, attack: 0.001 });
+    case 'headshot': // a clear metallic ding over the tick
+      return 0.01 + partials(k, out, t + 0.01, 1975 * p, 0.32, [[1, 1, 0.45], [2.76, 0.45, 0.25], [5.4, 0.2, 0.12]]);
+    case 'shieldCrack': { // you broke their shield: a dry crack + a quick falling glassy zap
+      noise(k, out, t, { type: 'highpass', freq: 3500, dur: 0.035, peak: 0.8, attack: 0.0005 });
+      noise(k, out, t + 0.012, { type: 'bandpass', freq: 5200, q: 2, dur: 0.05, peak: 0.4 });
+      tone(k, out, t, { type: 'square', f0: 2400, f1: 600, dur: 0.14, peak: 0.12, lp: 5000, attack: 0.001 });
+      return partials(k, out, t + 0.02, 3100 * p, 0.18, [[1, 1, 0.12], [1.83, 0.6, 0.08]]) + 0.02;
+    }
+    case 'land': return land(k, out, t, cue);
     case 'splash':
       noise(k, out, t, { type: 'bandpass', freq: 3000, dur: 0.25, peak: 0.3, attack: 0.01 });
       return noise(k, out, t, { type: 'lowpass', freq: 1500 * p, freqEnd: 400, dur: 0.5, peak: 0.8, attack: 0.01 });
     case 'explosion': return explosion(k, out, t, cue);
+    case 'hazard': return hazardSound(k, out, t, cue);
     case 'placed': return placed(k, out, t, cue);
     case 'destroyed': return destroyed(k, out, t, cue);
     case 'coin': return coin(k, out, t);

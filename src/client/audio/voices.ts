@@ -27,10 +27,46 @@ export function echoSend(d: number): number {
   return Math.min(1, Math.max(0, (d - 15) / 60)) * 0.6;
 }
 
-/** Low-health muffle: full range at/above 30 HP, closing to ~600 Hz near death. */
+/** Low-health muffle floor (Hz) at 0 HP: slightly muffled, never deaf. */
+export const MUFFLE_FLOOR = 1600;
+
+/**
+ * Low-health muffle: full range at/above 30 HP, then a low-pass that closes smoothly (log scale) toward
+ * MUFFLE_FLOOR as HP drops, so it fades in as you get hurt and back out as you heal (no step at 30).
+ */
 export function muffleCutoff(hp: number, alive = true): number {
   if (!alive || hp >= 30) return 20000;
-  return 600 + (Math.max(0, hp) / 30) * 1400;
+  const k = Math.max(0, hp) / 30;
+  return MUFFLE_FLOOR * Math.pow(20000 / MUFFLE_FLOOR, k);
+}
+
+/**
+ * Hearing caps (m) for positional gameplay cues: someone else's steps, landings, reloads, building and
+ * potions are only heard this close (fair: nobody hears the whole map). Unlisted sounds (shots,
+ * explosions) carry to MAX_DISTANCE.
+ */
+export const HEARING: Readonly<Record<string, number>> = { footstep: 32, land: 36, reload: 24, dry: 20, drink: 22, placed: 48 };
+
+/** Whether a positional cue at distance `d` is within its hearing cap. Your own sounds always play. */
+export function withinHearing(sound: string, d: number, own = false): boolean {
+  if (own) return true;
+  const cap = HEARING[sound];
+  return cap === undefined || d <= cap;
+}
+
+/** Feedback for your own actions (hit tick, headshot ding, kill confirm, shield crack): never stolen. */
+const FEEDBACK = new Set(['hitmarker', 'headshot', 'kill', 'shieldCrack', 'hurt', 'shieldBreak', 'death']);
+/** Positional cues that tell you where an enemy is. */
+const TACTICAL = new Set(['footstep', 'land', 'reload', 'shot', 'explosion', 'placed', 'dry']);
+
+/**
+ * Voice priority (multiplies the cue's audible level when the voice cap is reached, so a full mix keeps
+ * the sounds that matter): your own feedback 3, enemy position cues 2, everything else 1.
+ */
+export function voicePriority(sound: string, positional: boolean, own = false): number {
+  if (FEEDBACK.has(sound) && (!positional || own)) return 3;
+  if (TACTICAL.has(sound) && positional && !own) return 2;
+  return 1;
 }
 
 /** Seconds between heartbeats while low: ~0.95 s at 29 HP → ~0.55 s near death. */
@@ -73,7 +109,7 @@ export type LimiterOptions = {
 export const DEFAULT_LIMITS: LimiterOptions = {
   maxVoices: 24,
   perFrame: 2,
-  perFrameByKey: { footstep: 3, impact: 3, hitmarker: 1, coin: 1, tick: 1, reload: 3 },
+  perFrameByKey: { footstep: 3, land: 2, impact: 3, hitmarker: 1, headshot: 1, shieldCrack: 1, coin: 1, tick: 1, reload: 3 },
   minLevel: 0.02,
 };
 

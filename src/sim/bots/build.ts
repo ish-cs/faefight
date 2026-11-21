@@ -1,3 +1,4 @@
+import * as dm from '../dmath';
 import { PIECES } from '../constants';
 import type { Bunker, IslandLayout } from '../map';
 import { isSealed } from '../seal';
@@ -72,7 +73,7 @@ export function fortPlan(map: IslandLayout[], home: number, t: Traits): Slot[] {
   const at = (p: Vec3) => v3(p.x, g, p.z);
   const post = (j: number) => {
     const l = lane(map, j, home);
-    const shore = l.length - Math.sqrt(isl.radius ** 2 - LANE_OFFSET ** 2);
+    const shore = l.length - Math.sqrt(isl.radius * isl.radius - LANE_OFFSET * LANE_OFFSET);
     const c = laneAt(l, shore + 6);
     const face = yawOf(scale(l.dir, -1));
     for (const side of [-1.6, 1.6]) out.push({ kind: 'sandbags', pos: at(add(c, scale(right(face), side))), rotY: face, tag: 'post' });
@@ -123,7 +124,7 @@ export function missing(pieces: PieceState[], slots: Slot[]): Partial<Record<Pie
 /** Easy players sometimes put a piece somewhere silly: up to a few metres off and skewed. */
 export function fumble(pos: Vec3, rotY: number, rng: () => number): { pos: Vec3; rotY: number } {
   const a = rng() * 2 * Math.PI, r = 1 + rng() * 2;
-  return { pos: v3(pos.x + Math.cos(a) * r, pos.y, pos.z + Math.sin(a) * r), rotY: rotY + (rng() - 0.5) * 1.6 };
+  return { pos: v3(pos.x + dm.cos(a) * r, pos.y, pos.z + dm.sin(a) * r), rotY: rotY + (rng() - 0.5) * 1.6 };
 }
 
 /** Which side of a lane (+1 right, -1 left) faces the nearest other island: that's where flank fire comes from. */
