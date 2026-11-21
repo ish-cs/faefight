@@ -3,7 +3,7 @@ import { killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from '.
 import { Physics } from '../../src/sim/physics';
 import { buildMap, type IslandLayout } from '../../src/sim/map';
 import { newPlayer } from '../../src/sim/player';
-import { LIFECYCLE, PIECES } from '../../src/sim/constants';
+import { LIFECYCLE, MAP, PIECES } from '../../src/sim/constants';
 import { add, forward, right, scale, v3 } from '../../src/sim/vec';
 import type { PieceState, Vec3 } from '../../src/sim/types';
 
@@ -169,13 +169,14 @@ describe('lifecycle', () => {
     expect(b.eliminated).toBe(true);
   });
 
-  test('sudden death at 900 s: tide rises, generators stop, bunkers count as sealed', async () => {
+  test('sudden death at 900 s: storm starts, water stays put, bunkers count as sealed', async () => {
     const { s, physics, b, run } = await setup();
     const evs = run(LIFECYCLE.suddenDeathAt - 0.1, LIFECYCLE.suddenDeathAt + 10);
     expect(s.suddenDeath).toBe(true);
     expect(s.forcedSeal).toBe(true);
     expect(evs.some((e) => e.type === 'suddenDeath')).toBe(true);
-    expect(s.waterY).toBeCloseTo(LIFECYCLE.tideRate * 10, 0);
+    expect(s.waterY).toBe(MAP.waterY);
+    expect(s.storm).not.toBeNull();
     killPlayer(s, physics, 2, s.time, false);
     run(s.time, s.time + 3.2);
     expect(b.eliminated).toBe(true);

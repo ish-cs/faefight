@@ -254,7 +254,11 @@ describe('no cheating: bots only see BotView', () => {
   });
 
   test('a bot reads only BotView fields, and only enemies it can see', async () => {
-    const keys = new Set(['now', 'self', 'enemies', 'others', 'map', 'center', 'statics', 'pieces', 'generators', 'genLevels', 'sealed', 'hurt', 'shots', 'feed', 'loot', 'waterY', 'suddenDeath', 'potionShops', 'groundAt', 'canPlace']);
+    // Exactly the fields declared on BotView (view.ts), so new public fields are allowed and anything else is not.
+    const viewSrc = fs.readFileSync(path.resolve(__dirname, '../../src/sim/bots/view.ts'), 'utf8');
+    const block = viewSrc.slice(viewSrc.indexOf('export type BotView = {'), viewSrc.indexOf('\n};', viewSrc.indexOf('export type BotView = {')));
+    const keys = new Set([...block.matchAll(/^ {2}([a-zA-Z]+)\??[:(]/gm)].map((m) => m[1]));
+    expect(keys.has('enemies') && keys.has('self')).toBe(true);
     const touched = new Set<string>();
     const m = await Match.create({ players: Array.from({ length: 4 }, () => ({ name: '', isBot: true, difficulty: 'pro' as const })), seed: 9 }, {
       makeBot: (id, d, rng) => {

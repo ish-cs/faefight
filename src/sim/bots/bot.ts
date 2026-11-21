@@ -1,4 +1,4 @@
-import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, WEAPONS } from '../constants';
+import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import type { Doorway, IslandLayout } from '../map';
 import { NO_INPUT } from '../types';
@@ -23,13 +23,13 @@ import type { BotView, OtherStatus } from './view';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'fleeTide' | 'heal' | 'potions' | 'contest';
+  | 'fight' | 'disengage' | 'storm' | 'heal' | 'potions' | 'contest';
 const GOALS: Goal[] = [
-  'fleeTide', 'defend', 'disengage', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
+  'storm', 'defend', 'disengage', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
   'shop', 'heal', 'potions', 'contest', 'collect',
 ];
 /** Actions that may interrupt the brain's current step (reflexes and quick errands). */
-const REFLEXES = new Set<Goal>(['fleeTide', 'defend', 'fight', 'disengage', 'collect', 'loot', 'contest']);
+const REFLEXES = new Set<Goal>(['storm', 'defend', 'fight', 'disengage', 'collect', 'loot', 'contest']);
 /** How much the brain's current step outweighs those. */
 const STEP_BONUS = 0.4;
 const SAFE_STEPS = new Set<Goal>(['heal', 'attack', 'collect', 'bank']);
@@ -78,11 +78,17 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
-/** Sandbags carried into sudden death to climb above the tide, bought in the last minutes before it. */
-const TOWER_BAGS = 10, TOWER_PREP_SEC = 150;
+/**
+ * Sudden-death storm awareness: how many seconds ahead of the closing ring a bot moves in, the margin it keeps
+ * inside the edge, and how long it takes to react to a telegraphed lightning strike (easy ones often don't).
+ */
+const STORM_LEAD: Record<Difficulty, number> = { easy: 1, medium: 8, hard: 12, pro: 14 };
+const STORM_MARGIN: Record<Difficulty, number> = { easy: 0, medium: 3, hard: 4, pro: 4 };
+const BOLT_REACT: Record<Difficulty, number> = { easy: 0.6, medium: 0.35, hard: 0.2, pro: 0.15 };
+const EASY_DODGE = 0.4;
+/** Medium+ bots bridge to the centre island (where the storm ends) from this long before sudden death. */
+const STORM_PREP_SEC = 150;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
-/** Snipers go up a sandbag tower this long before sudden death. */
-const HIGH_GROUND_SEC = 75;
 /** Generator cash worth grabbing on the way out, and the level at which it is about to be wasted at the cap. */
 const COLLECT_BEFORE_LEAVING = 40, COLLECT_NEAR_CAP = 400;
 /** Grenades: minimum gap between throws, how stale a sighting may be (range is in BotParams). */
@@ -114,7 +120,7 @@ type Act = {
   placeCharge?: boolean;
   sprint?: boolean;
   jump?: boolean;
-  /** Skip the don't-step-toward-water check (climbing a tower in the tide). */
+  /** Skip the don't-step-toward-water check. */
   raw?: boolean;
   /** Stay put on purpose (hiding behind cover): no dodging. */
   hold?: boolean;
@@ -173,11 +179,15 @@ export class Bot {
   private buyFails = new Map<ShopItem, number>();
   private buyBlockedUntil = new Map<ShopItem, number>();
   private lastCoverAt = -Infinity;
-  private towerYaw: number | null = null;
+  /** Telegraphed strikes already judged (easy bots notice only some), keyed by spot and time. */
+  private bolts = new Map<string, boolean>();
   private wander: { to: Vec3; until: number } | null = null;
   private lastNadeAt = -Infinity;
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
+  /** Low on stamina: walk (save it for escapes) until it's back up. */
+  private winded = false;
+  private lastScores: { goal: string; score: number }[] = [];
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
   private view!: BotView;
   /** Strategy/tactics weights: the trained defaults with this bot's personality folded in. */
@@ -235,6 +245,8 @@ export class Bot {
       target: this.targetId, underFire: this.fireFrom !== null, enemy: this.lastEnemy, fightOdds: this.lastOdds,
     };
   }
+  /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
+  get planScores(): { goal: string; score: number }[] { return this.lastScores; }
 
   think(view: BotView): PlayerInput {
     const me = view.self;
@@ -281,7 +293,7 @@ export class Bot {
     }
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
     // Still deciding what to do next: stand and look around (fighting back still happens below).
-    const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage';
+    const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
     // Never hang around inside my own bunker (one plug per door and I'm sealed in): step out.
     if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) act = { ...act, ...this.escape(ctx) };
@@ -335,6 +347,8 @@ export class Bot {
     // Movement: stuck recovery, then never step toward water.
     let dir = act.dir;
     let jump = !!act.jump;
+    const dodge = this.dodgeBolt(me, view);
+    if (dodge) { dir = dodge; act = { ...act, sprint: true }; }
     this.trackStuck(now, me, dir !== null);
     if (now < this.unstickUntil) {
       dir = scale(right(look.yaw), this.unstickSide);
@@ -345,7 +359,8 @@ export class Bot {
       dir = j.dir;
       jump ||= j.jump;
     }
-    if (dir && !act.raw) dir = this.nav.safeDir(dir);
+    if (dir && !dodge) dir = this.stormFence(me, view, dir);
+    if (dir) dir = this.nav.safeDir(dir);
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
@@ -357,16 +372,18 @@ export class Bot {
         (!enemy || ctx.enemyDist > 30) && now - this.mem.lastHurtAt > 0.5) {
       select = kit; useMedkit = true; fire = false;
     }
+    // Stamina (movement.ts): like a human, stop sprinting around when winded and keep the rest for getting away.
+    if (me.stamina < 30) this.winded = true; else if (me.stamina > 70) this.winded = false;
     const cv = view.center;
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
       (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
-      // Sprint travelling to a goal, closing in, or getting away; never while shooting (it spoils the aim), and
-      // keep a little stamina back for an escape (when the movement code has stamina).
+      // Sprint travelling to a goal, closing in, or getting away; never while shooting (it spoils the aim); winded
+      // (stamina low) only to get away.
       sprint: !!act.sprint && !fire && (!enemy || this.goal === 'disengage' || this.goal === 'fight' || this.brain.goal?.kind === 'retreat') &&
-        (staminaFrac(me) > 0.15 || this.goal === 'disengage'),
+        (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
       // Same spread rules as players: aim down sights for anything past close range.
@@ -389,11 +406,11 @@ export class Bot {
   }
 
   /**
-   * Jukes would wreck what I'm doing: placing a piece or charge, buying, banking, climbing the tide tower,
+   * Jukes would wreck what I'm doing: placing a piece or charge, buying, banking, running from the storm,
    * getting out of my own bunker. Low on health, a human drops the task and dodges anyway.
    */
   private mayDodge(act: Act, c: Ctx): boolean {
-    if (act.raw || act.hold || this.retreat || this.goal === 'fleeTide' || this.trapped(c) || insideBunker(c.home.bunker, c.me.pos)) return false;
+    if (act.raw || act.hold || this.retreat || this.goal === 'storm' || this.trapped(c) || insideBunker(c.home.bunker, c.me.pos)) return false;
     const busy = !!(act.build || act.placeCharge || act.shop || act.vault) || this.goal === 'seal' || this.goal === 'bridge' || this.goal === 'defend';
     return !busy || c.me.hp < 100 * this.params.breakLosHp * 0.6;
   }
@@ -592,6 +609,8 @@ export class Bot {
     // Center-minded: bridge to the center island first when it isn't much further than the rival.
     if (C >= 0 && this.centerMinded && !centerReach && !view.suddenDeath &&
         (bridgeTo === null || this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + 2)) bridgeTo = C;
+    // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
+    if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
     return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, homeReach, openDoors, bridgeTo, centerReach, danger, fire, armedNear };
   }
 
@@ -608,8 +627,6 @@ export class Bot {
       kit: c.openDoors.length,
       // A hard plug in my own doorway: only a charge gets through.
       charge: this.blockers(c).some((p) => isHard(p.kind)),
-      // Every 1 m of tower buys 20 s against the tide: the richer, the taller.
-      tower: c.view.now >= LIFECYCLE.suddenDeathAt - TOWER_PREP_SEC ? TOWER_BAGS + Math.min(4, Math.floor(total / 250)) : 0,
       grenades: total >= this.params.nadeRich * RICH_MULT[this.difficulty] ? (skilled ? 2 : 1) : 0,
       medkits: total >= this.params.nadeRich * RICH_MULT[this.difficulty] ? (skilled ? 2 : 1) : 0,
       steel: skilled && total >= this.params.steelRich,
@@ -722,17 +739,14 @@ export class Bot {
     const rivalDown = !!c.rival && !c.rival.alive && c.rival.respawnAt !== null;
     const trapped = this.trapped(c);
     switch (g) {
-      case 'fleeTide': {
-        const g0 = view.groundAt(me.pos.x, me.pos.z) ?? me.pos.y;
-        const up = c.on >= 0 && g0 - view.map[c.on].groundY > 0.6;
-        if (!view.suddenDeath) {
-          // Snipers take the high ground before sudden death and shoot from up there.
-          if (t.range <= 0.7 || view.now < LIFECYCLE.suddenDeathAt - HIGH_GROUND_SEC) return 0;
-          return up ? 1.6 : (me.inv.pieces.sandbags ?? 0) >= 4 && c.on >= 0 ? 1.0 : 0;
-        }
-        // Up on a tower: stay there (stepping off means a fall, then the tide).
-        if (up || (c.on < 0 && g0 - view.waterY > 0.6)) return 1.6;
-        return g0 - view.waterY < 2.5 || (me.inv.pieces.sandbags ?? 0) > 0 ? 1.2 : 0;
+      case 'storm': {
+        const st = view.storm;
+        if (!st) return 0;
+        const d = Math.hypot(me.pos.x - st.x, me.pos.z - st.z);
+        if (d > st.r) return this.difficulty === 'easy' ? 0.9 : 1.7;
+        if (d > this.stormSafeR(st)) return this.difficulty === 'easy' ? 0.4 : 1.3;
+        // No way onto the center island yet: the ring will end there, so the bridge comes first.
+        return this.needCenterBridge(c) ? 1.2 : 0;
       }
       case 'fight': {
         if (!c.enemy) return 0;
@@ -828,7 +842,7 @@ export class Bot {
         const need = this.scaffoldsNeeded(c);
         const toRival = c.bridgeTo !== this.nav.centerNode;
         if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
-        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed) +
+        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed + (this.stormPrep(view) ? 0.45 : 0)) +
           (toRival && this.endgame(c) && sealKit(me.inv) > 0 ? 0.2 : 0);
       }
       case 'contest': {
@@ -902,6 +916,7 @@ export class Bot {
     const step = this.brain.stepAct;
     const retreating = this.brain.goal?.kind === 'retreat';
     let best: Goal = step ?? (c.homeReach || !c.reach ? 'collect' : 'attack'), bestScore = -Infinity;
+    const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
       if (g !== step && !REFLEXES.has(g)) continue;
       if (this.bannedAct && this.bannedAct.goal === g && this.view.now < this.bannedAct.until) continue;
@@ -914,8 +929,10 @@ export class Bot {
       const bias = GOAL_BIAS[g];
       const s = base + (bias ? this.params[bias] : 0) + (g === step ? STEP_BONUS + this.params.stepPush : 0) +
         (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
+      scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
     }
+    this.lastScores = scored.sort((a, b) => b.score - a.score).slice(0, 4);
     return best;
   }
 
@@ -940,7 +957,7 @@ export class Bot {
       }
       case 'fight': return this.doFight(c);
       case 'disengage': return this.doDisengage(c);
-      case 'fleeTide': return this.doFleeTide(c);
+      case 'storm': return this.doStorm(c);
       case 'contest': return this.doContest(c);
     }
   }
@@ -1384,45 +1401,116 @@ export class Bot {
     return { dir: away, sprint: true };
   }
 
+  /** Radius I want to be inside: the ring as it will be a few seconds from now, minus a margin. */
+  private stormSafeR(st: NonNullable<BotView['storm']>): number {
+    const ahead = st.r - st.rate * STORM_LEAD[this.difficulty] - STORM_MARGIN[this.difficulty];
+    return Math.max(Math.min(st.rf - 2, st.r), ahead);
+  }
+
   /**
-   * Sudden death: climb. With sandbags, stack a staircase (place one ahead at my feet, hop onto it, repeat);
-   * without, go to the highest piece around.
+   * Sudden-death storm: get inside the ring ahead of it. Straight toward the centre when that stays on land
+   * I can walk to; otherwise to the walkable spot closest to the centre (the near shore of my island or of one
+   * I can reach by bridge).
    */
-  private doFleeTide(c: Ctx): Act {
+  private doStorm(c: Ctx): Act {
     const { view, me } = c;
-    const now = view.now;
-    const step = view.pieces.find((p) => p.kind === 'sandbags' && dist2D(p.pos, me.pos) < 1.9 &&
-      p.pos.y + PIECES.sandbags.h - me.pos.y > 0.6 && p.pos.y + PIECES.sandbags.h - me.pos.y < 1.3);
-    if (step) return { dir: norm(flat(sub(step.pos, me.pos))), jump: true, raw: true, face: add(step.pos, v3(0, 1, 0)) };
-    if ((me.inv.pieces.sandbags ?? 0) > 0) {
-      // Start in the open middle of the island I'm on, away from walls.
-      if (this.towerYaw === null && c.on >= 0 && dist2D(me.pos, view.map[c.on].center) > 3 && me.pos.y - view.map[c.on].groundY < 0.5) {
-        const walk = this.goTo(view.map[c.on].center, 2.5);
-        if (walk.dir) return walk;
+    const st = view.storm;
+    if (!st) return IDLE;
+    const ctr = v3(st.x, me.pos.y, st.z);
+    const want = this.stormSafeR(st) - 1;
+    const d = dist2D(me.pos, ctr);
+    const out = d > 0.5 ? norm(flat(sub(me.pos, ctr))) : forward(me.yaw);
+    const spot = add(ctr, scale(out, Math.min(d, want)));
+    const here = this.nav.nodeAt(me.pos);
+    const target = this.nav.nodeAt(spot);
+    if (d > want && target >= 0 && (target === here || this.nav.routeTo(spot))) return { ...this.goTo(spot, 1), sprint: true };
+    // The walkable spot closest to the centre: on my island, or one I can reach (center island included).
+    let best: Vec3 | null = null, bestD = Infinity;
+    for (const n of this.nav.nodes) {
+      if (n.index !== here && (here < 0 || this.nav.hop(here, n.index) === null)) continue;
+      const toC = dist2D(n.center, ctr);
+      const k = toC < 0.5 ? 0 : Math.max(0, toC - n.radius + 2.5) / toC;
+      const p = v3(n.center.x + (ctr.x - n.center.x) * (1 - k), n.groundY, n.center.z + (ctr.z - n.center.z) * (1 - k));
+      const pd = dist2D(p, ctr) + dist2D(p, me.pos) * 0.05;
+      if (pd < bestD) { bestD = pd; best = p; }
+    }
+    // Nothing walkable inside the ring, or no way onto the center island where it ends: bridge there
+    // (buy the decks first if I have none).
+    if ((bestD > want || this.needCenterBridge(c)) && c.bridgeTo !== null && c.bridgeTo === this.nav.centerNode) {
+      const have = me.inv.pieces.scaffold ?? 0, need = this.scaffoldsNeeded(c);
+      // Stock up in one shop visit (not one deck per trip) while still on my island.
+      const buy = have < need && c.homeReach && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
+      if (buy) return buy;
+      if (have > 0) {
+        const b = this.doBridge(c);
+        if (b.dir || b.build || b.face) return b;
       }
-      if (me.busyUntil > now) return IDLE;
-      const base = this.towerYaw ?? me.yaw;
-      for (const turn of [0, Math.PI / 2, -Math.PI / 2, Math.PI])
-        for (const d of [1.3, 1.1, 1.5]) {
-          const yaw = base + turn;
-          const pos = add(me.pos, scale(forward(yaw), d));
-          const r = view.canPlace('sandbags', pos, yaw);
-          if (!r.ok || Math.abs(r.pos.y - me.pos.y) > 0.35) continue;
-          this.towerYaw = yaw;
-          return { dir: null, face: add(pos, v3(0, 0.5, 0)), build: { kind: 'sandbags', pos, rotY: yaw, free: true } };
-        }
     }
-    const here = view.groundAt(me.pos.x, me.pos.z) ?? me.pos.y;
-    let best: Vec3 | null = null, bestScore = here + 0.3;
-    for (const p of view.pieces) {
-      if (p.kind !== 'scaffold' && p.kind !== 'container' && p.kind !== 'sandbags') continue;
-      const top = p.pos.y + PIECES[p.kind].h;
-      const s = top - dist2D(p.pos, me.pos) * 0.02;
-      if (s > bestScore) { bestScore = s; best = p.pos; }
+    if (!best) return { dir: norm(flat(sub(ctr, me.pos))), sprint: true };
+    return { ...this.goTo(best, 1), sprint: true };
+  }
+
+  /** Walk to my shop and buy scaffolds (cash from the vault if needed); null when I can't afford one. */
+  private buyDecks(c: Ctx): Act | null {
+    const me = c.me, now = c.view.now, price = PIECES.scaffold.price;
+    if (me.inv.cash < price) {
+      if (me.vault.cash < price) return null;
+      const walk = this.goTo(c.home.vault, 1.8);
+      if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > now) return walk;
+      return { ...walk, vault: { withdraw: { cash: Math.min(me.vault.cash, price * 20) } } };
     }
-    const elevated = c.on >= 0 && here - view.map[c.on].groundY > 0.6;
-    if (!best || elevated) return { dir: null, face: add(me.pos, forward(me.yaw)) };
-    return this.goTo(best, 0.5);
+    const walk = this.goTo(c.home.shop, 2.0);
+    if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt || this.buyBlocked('scaffold')) return { ...walk, sprint: true };
+    this.nextBuyAt = now + BUY_GAP[this.difficulty];
+    return { ...walk, shop: 'scaffold' };
+  }
+
+  /** Sudden death and no walkable route onto the center island (medium+). */
+  private needCenterBridge(c: Ctx): boolean {
+    return !!c.view.storm && this.nav.centerNode >= 0 && !c.centerReach && this.stormPrep(c.view);
+  }
+
+  /** Bridging to the center island ahead of the storm (medium+, from STORM_PREP_SEC before sudden death). */
+  private stormPrep(view: BotView): boolean {
+    return this.difficulty !== 'easy' && (view.suddenDeath || view.now >= LIFECYCLE.suddenDeathAt - STORM_PREP_SEC);
+  }
+
+  /** Whatever I'm doing, don't walk back out toward the storm once at the edge of where I want to be (not easy). */
+  private stormFence(me: PlayerState, view: BotView, dir: Vec3): Vec3 | null {
+    const st = view.storm;
+    if (!st || this.difficulty === 'easy') return dir;
+    const d = Math.hypot(me.pos.x - st.x, me.pos.z - st.z);
+    if (d < 0.5 || d < this.stormSafeR(st) - 1.5) return dir;
+    const out = v3((me.pos.x - st.x) / d, 0, (me.pos.z - st.z) / d);
+    const k = dir.x * out.x + dir.z * out.z;
+    if (k <= 0) return dir;
+    const t = v3(dir.x - out.x * k, 0, dir.z - out.z * k);
+    return Math.hypot(t.x, t.z) < 0.2 ? null : norm(t);
+  }
+
+  /**
+   * A telegraphed lightning strike about to land on me: step out of it (toward the safe side of the ring
+   * when that works too). Reaction time by difficulty; easy bots notice only some strikes.
+   */
+  private dodgeBolt(me: PlayerState, view: BotView): Vec3 | null {
+    const st = view.storm;
+    if (!st?.strikes.length) { if (this.bolts.size) this.bolts.clear(); return null; }
+    for (const b of st.strikes) {
+      const d = Math.hypot(me.pos.x - b.x, me.pos.z - b.z);
+      if (d > STORM.boltRadius + 0.8 || view.now >= b.at || view.now < b.at - STORM.telegraphSec + BOLT_REACT[this.difficulty]) continue;
+      const key = `${b.x},${b.z},${b.at}`;
+      let seen = this.bolts.get(key);
+      if (seen === undefined) { seen = this.difficulty !== 'easy' || this.rng() < EASY_DODGE; this.bolts.set(key, seen); }
+      if (!seen) continue;
+      const away = d > 0.3 ? norm(v3(me.pos.x - b.x, 0, me.pos.z - b.z)) : forward(me.yaw + Math.PI / 2);
+      const inside = (dir: Vec3) => Math.hypot(me.pos.x + dir.x * 3 - st.x, me.pos.z + dir.z * 3 - st.z) < st.r - 1;
+      for (const a of [0, 0.8, -0.8, 1.4, -1.4]) {
+        const dir = a ? norm(v3(away.x * Math.cos(a) - away.z * Math.sin(a), 0, away.x * Math.sin(a) + away.z * Math.cos(a))) : away;
+        if (inside(dir)) return dir;
+      }
+      return away;
+    }
+    return null;
   }
 
   private trackStuck(now: number, me: PlayerState, moving: boolean) {

@@ -117,6 +117,8 @@ type Backend = {
   input(i: PlayerInput, cmds: MoveCmd[]): void;
   preview(req: BuildRequest, key: number): void;
   chat(text: string): void;
+  /** Spectating: the player followed (null = none). Remote only: the host then sends their HUD state. */
+  follow?(id: number | null): void;
   /** Stop delivering to the sink (game torn down for a rematch / back to lobby). Remote: the link stays open. */
   close(): void;
   /** Vs bot only: stop / restart the simulation (pause card). */
@@ -125,7 +127,10 @@ type Backend = {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
+    /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
+    time(t: number): void; strike(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
+    plugDoor(door: number, owner: number): void; removePiece(id: number): void; genStored(stored: number): void;
   };
 };
 
@@ -171,7 +176,12 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
       potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
+      time: (t) => send({ type: 'debug', cmd: 'time', t }),
+      strike: (x, z) => send({ type: 'debug', cmd: 'strike', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
+      plugDoor: (door, owner) => send({ type: 'debug', cmd: 'plugDoor', door, owner }),
+      removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
+      genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
     },
@@ -217,6 +227,7 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
     input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds, ack: wire.ack || undefined }); },
     preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
     chat: (text) => link.send({ t: 'chat', text }),
+    follow: (id) => { if (!disposed) link.send({ t: 'follow', id }); },
     close: () => { disposed = true; },
   };
 }
@@ -601,6 +612,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   loading.progress('gpu', 0, 'Starting WebGPU');
   const renderer = await Renderer.create(canvas);
   loading.progress('gpu', 1, 'Starting the simulation');
+  loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
+  loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
   console.info(`[render] backend: ${renderer.backend}`);
   scope.begin(); // window/document listeners from here on are removed by destroy()
   let running = true;
@@ -625,12 +638,20 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     maybeWarm();
   });
   const revealTimer = setTimeout(() => { console.warn('[loading] warm-up took too long; showing the game anyway'); reveal(); }, REVEAL_TIMEOUT_MS);
+  /** Frame-loop hooks for the warm-up (warmup.ts): pause drawing, count drawn frames, run a hook before each. */
+  const warmLoop = { paused: false, left: 0, before: null as (() => void) | null, done: null as (() => void) | null };
   function maybeWarm() {
     if (warmStarted || !snap || !map.length || !charsReady) return;
     warmStarted = true;
     // One normal frame first so the camera already sits behind the player.
     requestAnimationFrame(() => {
-      mods.warmup.warmUp(renderer, () => snap?.pieces ?? [], input.yaw, (f, label) => loading.progress('shaders', f, label))
+      const loop = {
+        setPaused: (on: boolean) => { warmLoop.paused = on; },
+        frames: (n: number, before?: () => void) => new Promise<void>((done) => {
+          warmLoop.before = before ?? null; warmLoop.left = n; warmLoop.done = done;
+        }),
+      };
+      mods.warmup.warmUp(renderer, loop, fpv, (f, label) => loading.progress('shaders', f, label))
         .catch((err) => console.warn('[loading] shader warm-up failed; continuing', err))
         .finally(() => { warmed = true; });
     });
@@ -718,9 +739,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     }),
     select: (i) => input.select(i),
     moveSlot: (from, to) => input.queue({ moveSlot: { from, to } }),
+    // Same as the drop key: select that slot and drop from it in the same input (the sim selects first).
+    dropSlot: (slot, amount) => { input.select(slot); input.queue({ drop: amount }); },
   });
   const online = backend.buffered || !!onChat;
-  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item) }, { online, isHost: !!onChat });
+  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
   let rejoinTouchedAt = 0;
 
@@ -916,15 +939,16 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   }
 
   /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
-  const gunHud = (me: Snapshot['players'][number] | undefined) => {
+  const gunHud = (me: Snapshot['players'][number] | undefined, own = true) => {
     if (!me?.alive || me.equipped === 'fists') return { spreadPx: 4, reload: null, scoped: false };
     const now = simNow();
-    const deg = spreadDeg(me.equipped, { ads: fpv.adsK > 0.5, bloom: me.bloom, lastShotAt: me.lastShotAt }, now,
+    const ads = own ? fpv.adsK > 0.5 : me.ads;
+    const deg = spreadDeg(me.equipped, { ads, bloom: me.bloom, lastShotAt: me.lastShotAt }, now,
       { speed: Math.hypot(me.vel.x, me.vel.z), grounded: Math.abs(me.vel.y) < 0.5 });
     const cam = renderer.camera;
     const px = (Math.tan((deg * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (canvas.clientHeight / 2);
     const c = reloadClock(me, now);
-    return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && fpv.adsK > 0.9 };
+    return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && (own ? fpv.adsK > 0.9 : me.ads && spectator.firstPerson) };
   };
 
   // Client shot prediction (shotPredict.ts); predictShot is defined with the frame loop.
@@ -959,7 +983,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
     const wasEnded = hud.ended;
-    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory, ...gunHud(meNow) });
+    // Spectating someone: the HUD shows their view (hotbar, ammo, cash, hp/shield/stamina, crosshair).
+    const viewId = spectator.following;
+    const viewed = viewId !== null ? s.players.find((p) => p.id === viewId) : undefined;
+    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory,
+      stamina: predictor?.stamina ?? null, viewId, ...(viewed ? gunHud(viewed, false) : gunHud(meNow)) });
     if (hud.ended && !wasEnded) spectateChosen = false; // a (new) result popped the end screen up
     scoreboard.update(s, scoreOpts());
     qol.onSnapshot(s, input.selected);
@@ -1055,6 +1083,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
           !!(renderer.characters as unknown as { avatars: Map<number, { group: Object3D }> }).avatars.get(humanId)?.group.visible,
       }),
       scoreboard: () => scoreboard.visible,
+      /** Loot on the ground as drawn: label lines, label shown, model count. */
+      loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
@@ -1109,6 +1139,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   // ---- frame loop ----
   const feet = new THREE.Vector3();
   const aimDir = new THREE.Vector3();
+  const specMotion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  let lastFollow: number | null = null;
   const sendAcc = new InputAccumulator();
   let nextSendAt = 0;
   let last = performance.now();
@@ -1189,8 +1221,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderer.setGhost(null);
       aim = null;
       spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId, players: snap!.players,
-        posOf: (id, out) => renderer.playerPos(id, out) });
+        posOf: (id, out) => renderer.playerPos(id, out),
+        lookOf: (id) => renderer.playerMotion(id, specMotion), firstPerson: fpv.mode === 'first' });
+      // From their eyes: hide their avatar (as your own is hidden in first person).
+      renderer.characters.hiddenId = spectator.firstPerson && spectator.following !== null ? spectator.following : humanId;
     } else spectator.exit();
+    // Online: tell the host who we watch, so it can send that player's HUD state (only while we're dead).
+    const following = spectator.following;
+    if (following !== lastFollow) { lastFollow = following; backend.follow?.(following); }
     input.applyKick(dt);
     // Sights: right mouse with a gun, not while reloading (the sim agrees). Zoom slows mouse look to match.
     const adsWant = !!me?.alive && !spectating && input.ads && me.equipped !== 'fists' && me.reloadUntil === 0;
@@ -1266,8 +1304,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     fpv.applyShake(dt); // visual only: the aim ray above was taken without it
-    renderer.render(input.yaw);
-    fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+    if (!warmLoop.paused) {
+      warmLoop.before?.();
+      renderer.render(input.yaw);
+      fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+      if (warmLoop.left > 0 && --warmLoop.left === 0) { warmLoop.before = null; warmLoop.done?.(); }
+    }
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());
     if (warmed && !revealed) {
