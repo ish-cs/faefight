@@ -8,8 +8,9 @@ import type { Link } from '../net/transport';
 import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import type { Placement } from '../sim/building';
-import { BuildAim, type AimOutcome } from './buildAim';
-import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
+import { BuildAim, CLIENT_REACH, type AimOutcome } from './buildAim';
+import { trapAim, validateTrap } from '../sim/traps';
+import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, TRAP, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
@@ -1007,6 +1008,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const prevLost = renderer.gpu.onDeviceLost.bind(renderer.gpu);
   renderer.gpu.onDeviceLost = (info) => { errors?.report('gpu', `device lost: ${info.message} (${info.reason ?? 'unknown'})`); prevLost(info); };
   renderer.world.onCritterSound = (s) => audio.critter(s);
+  renderer.gunFx.casings.onClink = (x, y, z, speed, hull) => audio.casing(x, y, z, speed, hull);
   loading.progress('gpu', 1, 'Starting the simulation');
   loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
   loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
@@ -1098,6 +1100,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   // trip): the ghost colour is always current and a click sends exactly the spot the ghost shows.
   const buildAim = new BuildAim();
   let aim: AimOutcome | null = null;
+  /** Holding a spike trap: the spot under the crosshair and whether it can go there (with why not). */
+  let trapAimOk: { ok: boolean; reason: string | null } | null = null;
+  /** Last trap click (ms): the host's count lags a moment, so the ghost holds off briefly after placing. */
+  let trapSentAt = -Infinity;
   /** Newest snapshot as received (not delayed by the interpolation buffer): busy state, pieces. */
   let latest: Snapshot | null = null;
   /** Own placements shown at once and reconciled with the host's pieces (buildPredict.ts); also paces placing. */
@@ -1138,7 +1144,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const fxPos = new THREE.Vector3();
   const damageFx = new DamageFx(app);
   const sealAnnouncer = new SealAnnouncer(app, (k) => {
-    canvas.style.setProperty('--shake', `${Math.round(6 + 10 * k)}px`);
+    const intensity = settings.get().gameplay.screenShake; // Settings → Screen shake (0 = off)
+    if (intensity <= 0) return;
+    canvas.style.setProperty('--shake', `${Math.round((6 + 10 * k) * intensity)}px`);
     canvas.classList.remove('shake');
     void canvas.offsetWidth;
     canvas.classList.add('shake');
@@ -1212,6 +1220,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       hint.classList.toggle('inventory', open);
     },
   });
+  input.onTrapPlaced = () => { trapSentAt = performance.now(); renderer.traps.setGhost(null); };
 
   const chat = new ChatUi(app, {
     send: (text) => {
@@ -1556,8 +1565,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     hud.setViewed(viewer);
     audio.setViewed(viewer);
     qol.setViewed(viewer, s.players.find((p) => p.id === viewer)?.island ?? -1);
-    const meSnap = s.players.find((p) => p.id === humanId);
-    fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
+    // Camera feel (shake, recoil punch, hit-stop) follows the viewed player: us, or whoever we spectate.
+    const viewSnap = s.players.find((p) => p.id === viewer);
+    fpv.onEvents(s.events, viewer, viewSnap?.alive ? viewSnap.pos : null);
     // (Own 'shot'/'hit' events flagged echo were already shown when predicted; their effects skip them.)
     // My recoil: the sim reports each kick with the shot; it moves my real aim (I have to pull against it).
     for (const e of s.events) {
@@ -1584,7 +1594,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Spectating someone: the HUD shows their view (hotbar, ammo, cash, hp/shield/stamina, crosshair).
     const viewId = spectator.following;
     const viewed = viewId !== null ? s.players.find((p) => p.id === viewId) : undefined;
-    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory,
+    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : trapAimOk ? trapAimOk.ok : null, buildNote: input.buildMode ? buildNote() : null,
+      trapHint: trapAimOk ? `Spike trap (${meNow?.inv.traps ?? 0})  ·  floor or wall  ·  Z/X rotate${trapAimOk.reason ? `  ·  ✕ ${trapAimOk.reason}` : ''}` : null,
+      free: input.free, inventory: input.inventory,
       stamina: predictor?.stamina ?? null, viewId, ...(viewed ? gunHud(viewed, false) : gunHud(meNow)) });
     brainX.setFollow(viewed?.isBot ? viewId : null, s.players, selfId);
     if (hud.ended && !wasEnded && !replay) spectateChosen = false; // a (new) result popped the end screen up
@@ -1651,7 +1663,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       hud.genMult = def.settings?.genMult ?? 1;
       if (practice && map[island]) practice.setBunker(map[island].bunker);
       qol.setMap(map, humanId, island);
-      audio.setMap(map, humanId);
+      audio.setMap(map, humanId, def.docks ?? []);
     },
     snapshot: (s) => {
       // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
@@ -2029,6 +2041,27 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         renderer.setGhost(null);
         aim = null;
       }
+      // Spike trap ghost: floor or wall under the crosshair, validated locally with the sim's rules.
+      if (input.held === 'trap' && me.alive && predictor) {
+        const cam = renderer.camera;
+        cam.getWorldDirection(aimDir);
+        const req = trapAim(predictor.world, { x: cam.position.x, y: cam.position.y, z: cam.position.z }, { x: aimDir.x, y: aimDir.y, z: aimDir.z },
+          input.yaw + input.buildRot, CLIENT_REACH + 4);
+        const meLatest = latest?.players.find((p) => p.id === humanId) ?? me;
+        const traps = (latest ?? snap)?.traps ?? [];
+        const mine = traps.filter((t) => t.owner === humanId).length;
+        const v = req ? validateTrap(predictor.world, req, { x: feet.x, y: feet.y, z: feet.z }, traps) : null;
+        const why = !req ? 'nothing in reach' : meLatest.inv.traps <= 0 ? 'none left' : mine >= TRAP.maxPerPlayer ? `max ${TRAP.maxPerPlayer} out` : v && !v.ok ? v.reason : null;
+        const ok = !!v?.ok && why === null && now - trapSentAt > 400;
+        trapAimOk = { ok, reason: why };
+        const shown = v?.ok ? { pos: v.pos, rotY: v.rotY, wall: v.wall } : req;
+        renderer.setTrapGhost(shown, ok);
+        input.trapReq = ok && v?.ok ? { pos: v.pos, rotY: v.rotY, wall: v.wall } : null;
+      } else {
+        renderer.setTrapGhost(null);
+        input.trapReq = null;
+        trapAimOk = null;
+      }
     }
 
     // What I see beyond the snapshot (ghost, open panel), for anyone spectating me: on change, at most 4 Hz.
@@ -2087,7 +2120,15 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
       damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     }
-    fpv.applyShake(dt); // visual only: the aim ray above was taken without it
+    // First-person camera bob: our own (predicted) ground speed, or the spectated player's when watching from their eyes.
+    let bobSpeed = -1;
+    if (fpv.isActive && me && !spectating) {
+      const v = predicting ? predicted.vel : me.vel;
+      bobSpeed = Math.abs(v.y) < 0.8 ? Math.hypot(v.x, v.z) : 0;
+    } else if (spectating && spectator.firstPerson && vMotion) {
+      bobSpeed = Math.abs(vMotion.vel.y) < 0.8 ? Math.hypot(vMotion.vel.x, vMotion.vel.z) : 0;
+    }
+    fpv.applyShake(dt, bobSpeed); // visual only: the aim ray above was taken without it
     if (!warmLoop.paused) {
       warmLoop.before?.();
       renderer.render(input.yaw);

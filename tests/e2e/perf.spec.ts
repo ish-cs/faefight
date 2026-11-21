@@ -30,7 +30,7 @@ for (const quality of ['high', 'ultra'] as const) {
   test(`perf: 8 players, 100 pieces, ${quality}`, async ({ page }) => {
     test.setTimeout(120_000);
     await page.addInitScript(([q, d]) => {
-      localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q, showFps: true, resolutionScale: 1, frameCap: 0, dynamicResolution: d } }));
+      localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q, showFps: true, resolutionScale: 1, frameCap: 0, dynamicResolution: d } }));
     }, [quality, !!env.PERF_DYNRES] as const);
     await page.goto('/?debug=1&bots=7&gputime=1');
     await page.getByTestId('play-hard').click();

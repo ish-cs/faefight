@@ -42,7 +42,8 @@ const ARROW_SEC = 1.2;
 const HEAD_Y = 2.0;
 
 type Floater = { el: HTMLElement; target: number; born: number; jitter: number };
-type Arrow = { el: HTMLElement; attacker: number; born: number };
+/** `at`: a fixed source (a spike trap) instead of the attacker's live position. */
+type Arrow = { el: HTMLElement; attacker: number; born: number; at?: THREE.Vector3 };
 
 /** Floating damage numbers over players I hit, and red edge arcs pointing at whoever hit me. */
 export class DamageFx {
@@ -88,7 +89,10 @@ export class DamageFx {
       const el = document.createElement('div');
       el.className = 'hit-arrow';
       this.root.append(el);
-      this.arrows.push({ el, attacker: e.data.by, born: now });
+      // A spike trap's hit points at the trap, not at its owner (who may be anywhere).
+      const hp = e.data.pos as { x: number; z: number } | undefined;
+      const trap = e.data.weapon === 'trap' && hp ? nearestTrap(snap.traps, hp) : null;
+      this.arrows.push({ el, attacker: e.data.by, born: now, ...(trap ? { at: new THREE.Vector3(trap.x, trap.y, trap.z) } : {}) });
     }
   }
 
@@ -111,7 +115,7 @@ export class DamageFx {
     });
     this.arrows = this.arrows.filter((a) => {
       const age = now - a.born;
-      const p = posOf(a.attacker);
+      const p = a.at ?? posOf(a.attacker);
       if (age > ARROW_SEC || !p || !me) { a.el.remove(); return false; }
       const deg = (hitDirection(me, p, camYaw) * 180) / Math.PI;
       a.el.style.transform = `translate(-50%, -50%) rotate(${deg}deg)`;
@@ -119,4 +123,14 @@ export class DamageFx {
       return true;
     });
   }
+}
+
+/** The trap nearest a point (where a trap hit landed), or null when none are standing. */
+export function nearestTrap(traps: Snapshot['traps'], at: { x: number; z: number }): { x: number; y: number; z: number } | null {
+  let best: { x: number; y: number; z: number } | null = null, bd = Infinity;
+  for (const t of traps ?? []) {
+    const d = (t.pos.x - at.x) ** 2 + (t.pos.z - at.z) ** 2;
+    if (d < bd) { bd = d; best = t.pos; }
+  }
+  return best;
 }

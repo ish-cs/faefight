@@ -298,6 +298,9 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     section('Camera');
     segmented('Default camera', `Toggle in game with ${keyLabel(settings.get().controls.keys.camera[0] ?? '') || '—'}`, 'set-camera',
       ['third', 'first'] as const, (m) => (m === 'third' ? 'Third person' : 'First person'), () => g().cameraMode, (m) => set((d) => { d.gameplay.cameraMode = m; }));
+    slider('Screen shake', 'Explosions, damage, heavy weapons and the hit-stop on kills (0% = off)', 'set-shake', 0, 1, 0.05,
+      () => g().screenShake, (x) => set((d) => { d.gameplay.screenShake = x; }), (x) => (x <= 0 ? 'Off' : `${Math.round(x * 100)}%`));
+    toggle('Camera bob', 'First-person head bob while walking and sprinting', 'set-bob', () => g().cameraBob, (x) => set((d) => { d.gameplay.cameraBob = x; }));
     resetBtn('Reset gameplay to defaults', () => settings.reset('gameplay'));
   }
 

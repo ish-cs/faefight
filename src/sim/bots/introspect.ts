@@ -8,7 +8,7 @@
  *
  * Player references inside text are written `@<id>` and turned into names by the client.
  */
-import { AMMO_BOX, CHARGE, GRENADE, MEDKIT, PIECES, POTIONS, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, GRENADE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
 import type { Doorway, IslandLayout } from '../map';
 import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
 import { dist2D } from '../vec';
@@ -66,6 +66,8 @@ export type BrainDigest = {
     stress: number; winded: boolean;
     /** Current aim error (deg), reaction delay (s) and what's left of it on the current target. */
     aimErr: number; react: number; reactLeft: number;
+    /** Gun handling (params.ts gunSkill): recoil pulled back (0..1), shots this burst / burst cap, rest left (s), full-auto range (m). */
+    comp: number; burst: [number, number]; rest: number; spray: number | null;
   };
 };
 
@@ -88,12 +90,14 @@ type Ctx = {
 type Act = {
   dir: Vec3 | null; face?: Vec3; shootAt?: Vec3; build?: { kind: PieceKind; pos: Vec3; rotY: number };
   shop?: ShopItem; vault?: { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> }; placeCharge?: boolean;
+  trap?: { pos: Vec3; rotY: number; wall: boolean };
 };
 type Planned = { node: number; goal: Vec3; at: number; pts: Vec3[] } | null;
 type Internals = {
   id: number; difficulty: Difficulty; personality: { archetype: string; traits: Traits };
   t: Traits; style: ShopStyle; goal: Goal; targetId: number | null; hesitateUntil: number; nextScoreAt: number;
-  winded: boolean; centerMinded: boolean; view?: BotView; grid: unknown; lastScores: { goal: string; score: number }[];
+  winded: boolean; centerMinded: boolean; view?: BotView; burstN: number; burstRestUntil: number;
+  grid: unknown; lastScores: { goal: string; score: number }[];
   aim: { target: number; seenAt: number; lastSeen: number; err: Angles; p: AimProfile };
   nav: { cache: Map<string, unknown>; planned: Planned; bridges: Map<number, unknown>; centerNode: number; nodeAt(p: Vec3): number };
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
@@ -380,6 +384,20 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (!J.nextSlot(c)) return zero('fort finished');
       return { f: [['base', BT.fortifyScore], ['builder', 0.3 * t.builder]], why: 'Quiet at home: building up my bunker defences' };
     }
+    case 'trap': {
+      if (view.suddenDeath) return zero('sudden death');
+      if (c.on !== home.index) return zero('not home');
+      if (c.danger) return zero('danger nearby');
+      if (me.inv.traps <= 0) return zero('no spike traps carried');
+      const J = I as unknown as { myTraps(v: BotView): unknown[]; nextTrapSpot(c: Ctx): { req: { wall: boolean } } | null; P: { trap: { setScore: number } } };
+      if (J.myTraps(view).length >= TRAP.maxPerPlayer) return zero(`${TRAP.maxPerPlayer} traps already out`);
+      const spot = J.nextTrapSpot(c);
+      if (!spot) return zero('no free trap spot');
+      return {
+        f: [['base', J.P.trap.setScore], ['builder', 0.2 * t.builder], ['caution', 0.1 * t.caution]],
+        why: `Quiet at home: setting a spike trap ${spot.req.wall ? 'on the wall by my front door' : 'outside a doorway'}`,
+      };
+    }
     case 'raid': {
       if (view.suddenDeath) return zero('sudden death');
       if (!gun) return zero('no gun');
@@ -407,6 +425,7 @@ function needsWhy(n: Needs): string {
   if (n.charge) p.push('a charge for my plugged door');
   if (n.grenades) p.push(`${n.grenades} grenades`);
   if (n.medkits) p.push(`${n.medkits} medkits`);
+  if (n.traps) p.push(`${n.traps} spike trap${n.traps === 1 ? '' : 's'} for my doors`);
   return p.length ? `needs ${p.join(', ')}` : 'upgrades';
 }
 
@@ -510,7 +529,7 @@ function invValue(inv: Inventory): number {
   for (const [k, a] of Object.entries(inv.weapons)) if (k !== 'fists') v += (WEAPONS[k as WeaponKind]?.price ?? 0) + (a && a.spare > 0 ? AMMO_BOX.price * Math.min(1, a.spare / 30) : 0);
   for (const [k, n] of Object.entries(inv.pieces)) v += (PIECES[k as PieceKind]?.price ?? 0) * (n ?? 0);
   for (const [k, n] of Object.entries(inv.potions ?? {})) v += (POTIONS[k as keyof typeof POTIONS]?.price ?? 0) * (n ?? 0);
-  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price);
+  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price + inv.traps * TRAP.price);
 }
 
 /** Steps of the current goal, and which one it's on (from what it did this tick). */
@@ -531,6 +550,7 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
     case 'storm': return { steps: ['Get inside the ring', 'Hold position'], at: moving ? 0 : 1 };
     case 'cover': return { steps: ['Get to the cover spot', 'Place a wall', 'Fight from behind it'], at: a?.build ? 1 : moving ? 0 : 2 };
     case 'fortify': return { steps: ['Walk to the next fort slot', 'Build it', 'Next slot'], at: a?.build ? 1 : moving ? 0 : 1 };
+    case 'trap': return { steps: ['Walk to a doorway', 'Set a spike trap', 'Next spot'], at: a?.trap ? 1 : moving ? 0 : 1 };
     case 'fight': return { steps: ['Hold my preferred range', 'Strafe and shoot', 'Take cover if hurt'], at: p.fire ? 1 : 0 };
     case 'disengage': return { steps: ['Break away from the shooter', 'Get behind my bunker'], at: moving ? 0 : 1 };
     case 'defend': return { steps: ['Get to the plugged doorway', 'Clear the plug', 'Walk out'], at: a?.placeCharge || a?.shootAt ? 1 : moving ? 0 : 1 };
@@ -559,6 +579,15 @@ function pathOf(I: Internals, p: BrainProbe, me: PlayerState): [number, number, 
  * Build a digest of what the bot is thinking. Pure reads (call only for spectated bots). The first call on a
  * bot starts its probe; until its next re-score the utility table is empty.
  */
+type DockPlan = { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number };
+/** The pier tactic (Bot.dockShot) as a plan step: which section, how, and why. */
+export function dockStep(d: DockPlan): string {
+  const how = d.weapon === 'rocket' ? 'rocket' : 'grenade';
+  if (d.why === 'defend') return `Blowing out my pier under @${d.enemy} as they cross (${how}, section ${d.id})`;
+  if (d.why === 'cover') return `Blowing out the pier under @${d.enemy}'s cover (${how}, section ${d.id})`;
+  return `Blowing out the pier under @${d.enemy}: into the water (${how}, section ${d.id})`;
+}
+
 export function debugBrain(bot: Bot): BrainDigest {
   const I = inside(bot);
   const probe = (bot as unknown as { probe: BrainProbe | null }).probe;
@@ -606,7 +635,9 @@ export function debugBrain(bot: Bot): BrainDigest {
   const aim = I.aim, tracking = aim.lastSeen === now && aim.target >= 0;
   const cone = aim.p.coneRad * (1 - 0.3 * Math.min(1, (now - aim.seenAt) / 1));
   const thinking = now < I.hesitateUntil;
-  const step = !me?.alive ? 'Dead: waiting to respawn' : thinking ? 'Thinking it over…' : plan.steps[plan.at] ?? '—';
+  const dock = (bot as unknown as { dockPlan: DockPlan | null }).dockPlan;
+  const docking = !!dock && !!me?.alive && now < dock.until;
+  const step = !me?.alive ? 'Dead: waiting to respawn' : docking ? dockStep(dock!) : thinking ? 'Thinking it over…' : plan.steps[plan.at] ?? '—';
   const d: BrainDigest = {
     id: I.id, t: r1(now), arch: I.personality.archetype, diff: I.difficulty,
     traits: TRAIT_KEYS.map((k) => Math.round(I.t[k] * 100)),
@@ -620,13 +651,15 @@ export function debugBrain(bot: Bot): BrainDigest {
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     path: me ? pathOf(I, p, me) : [],
-    aim: aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
+    aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
     st: {
       hp: Math.round(me?.hp ?? 0), sh: Math.round(me?.shield ?? 0), sta: Math.round(me?.stamina ?? 0),
       cash: Math.round(me?.inv.cash ?? 0), vault: Math.round(me?.vault.cash ?? 0), inv: me ? invValue(me.inv) : 0,
       stress: r1(me?.mv?.stress ?? 0), winded: I.winded,
       aimErr: r2(tracking ? Math.hypot(aim.err.yaw, aim.err.pitch) * cone * 180 / Math.PI : aim.p.coneRad * 180 / Math.PI),
       react: r2(aim.p.reactSec), reactLeft: r2(tracking ? Math.max(0, aim.seenAt + aim.p.reactSec - now) : 0),
+      comp: r2(aim.p.recoilComp), burst: [I.burstN, I.P.gunSkill[I.difficulty].burstShots], rest: r2(Math.max(0, I.burstRestUntil - now)),
+      spray: Number.isFinite(I.P.gunSkill[I.difficulty].sprayRange) ? I.P.gunSkill[I.difficulty].sprayRange : null,
     },
   };
   return fitDigest(d);

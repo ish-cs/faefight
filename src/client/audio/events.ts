@@ -2,7 +2,8 @@
 
 import { insideBunker } from '../../sim/bots/nav';
 import { MAP, PIECES, PLAYER, WEAPONS } from '../../sim/constants';
-import type { IslandLayout } from '../../sim/map';
+import type { DockDef, IslandLayout } from '../../sim/map';
+import { overDock } from '../../sim/docks';
 import type { PieceKind, PieceState, PlayerState, Snapshot, Vec3, WeaponKind } from '../../sim/types';
 import { beatsBetween } from '../../sim/gunplay';
 import { reloadClock } from '../firstPerson';
@@ -65,7 +66,7 @@ export function landGain(prevVy: number, own: boolean): number {
 }
 
 /** Ground the player stands on: a piece top under their feet, else the island (bunker floor / shore sand / grass). */
-export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[]): Surface {
+export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[], docks: readonly DockDef[] = [], broken: readonly number[] = []): Surface {
   for (const pc of pieces) {
     const s = PIECES[pc.kind];
     const dx = p.x - pc.pos.x, dz = p.z - pc.pos.z;
@@ -76,6 +77,8 @@ export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[]): S
     if (p.y < pc.pos.y + 0.05 || p.y > pc.pos.y + s.h + 0.35) continue;
     return pieceSurface(pc.kind);
   }
+  // Pier planks (standing sections only: a broken one is water).
+  for (const d of docks) if (overDock(d, p, 0.2) && Math.abs(p.y - (d.center.y + d.half.y)) < 0.4 && !broken.includes(d.id)) return 'wood';
   for (const isl of map) {
     const d = Math.hypot(p.x - isl.center.x, p.z - isl.center.z);
     if (d > isl.radius + 2) continue;
@@ -106,8 +109,9 @@ export function inAnyBunker(p: Vec3, map: IslandLayout[]): boolean {
 }
 
 /** Where a bullet that hit no player or piece landed: water below the surface line, else the ground there. */
-export function impactSurface(p: Vec3, waterY: number, map: IslandLayout[]): Surface {
+export function impactSurface(p: Vec3, waterY: number, map: IslandLayout[], docks: readonly DockDef[] = [], broken: readonly number[] = []): Surface {
   if (p.y < waterY + 0.25) return 'water';
+  if (docks.some((d) => !broken.includes(d.id) && overDock(d, p))) return 'wood'; // pier planks
   for (const isl of map) {
     const d = Math.hypot(p.x - isl.center.x, p.z - isl.center.z);
     if (d > isl.radius + 2) continue;
@@ -160,6 +164,7 @@ const SAME_POINT = 0.8;
 
 export class SoundDirector {
   private map: IslandLayout[] = [];
+  private docks: readonly DockDef[] = [];
   private humanId = -1;
   private prev: Snapshot | null = null;
   private steps = new Map<number, StepTrack>();
@@ -169,8 +174,9 @@ export class SoundDirector {
   env: Env = { alive: false, hp: 100, inBunker: false, shoreDist: 50, inWater: false };
 
   /** A new match (also a rematch): forget the previous match's snapshot so nothing is diffed across them. */
-  setMap(map: IslandLayout[], humanId: number) {
+  setMap(map: IslandLayout[], humanId: number, docks: readonly DockDef[] = []) {
     this.map = map;
+    this.docks = docks;
     this.humanId = humanId;
     this.prev = null;
     this.steps.clear();
@@ -256,6 +262,15 @@ export class SoundDirector {
           else if (d.what === 'break') out.push({ sound: 'hazard', kind: 'crate', pos: at, gain: 1 });
           break;
         }
+        case 'trap': {
+          // Spike trap: snaps out with a steel clang; set down / broken sound like a metal piece.
+          const at = d.pos as Vec3 | undefined;
+          if (!at) break;
+          if (d.what === 'fired') out.push({ sound: 'spikeTrigger', pos: at, gain: 1 });
+          else if (d.what === 'placed') out.push({ sound: 'spikeArm', pos: at, gain: 0.8 });
+          else if (d.what === 'broken') out.push({ sound: 'destroyed', kind: 'metal', pos: at, gain: 0.6 });
+          break;
+        }
         case 'placed': {
           const pc = s.pieces.find((p) => p.id === d.piece);
           const at = pc?.pos ?? chest(d.by);
@@ -265,6 +280,12 @@ export class SoundDirector {
         case 'destroyed': {
           const pc = prev?.pieces.find((p) => p.id === d.piece) ?? s.pieces.find((p) => p.id === d.piece);
           if (pc) out.push({ sound: 'destroyed', kind: String(d.kind), pos: { x: pc.pos.x, y: pc.pos.y + 1, z: pc.pos.z }, gain: 1 });
+          break;
+        }
+        case 'dockBroken': {
+          // A pier section giving way: the wooden-piece break, a little heavier.
+          const at = d.pos as { x: number; y: number; z: number } | undefined;
+          if (at) out.push({ sound: 'dockBreak', pos: at, gain: 1.2 });
           break;
         }
         case 'sealed':
@@ -297,6 +318,12 @@ export class SoundDirector {
     this.countdown(me, s, out);
     this.footsteps(s, prev, out);
     this.landings(s, prev, out);
+    // Pier planks stressed by a blast (newly scorched sections): a creak where they stand.
+    for (const id of s.dockHurt ?? []) {
+      if (prev?.dockHurt?.includes(id)) continue;
+      const d = this.docks.find((x) => x.id === id);
+      if (d) out.push({ sound: 'dockCreak', pos: { ...d.center }, gain: 0.6 });
+    }
     this.equipsAndJumps(s, prev, out);
     this.reloadBeats(s, out);
 
@@ -386,7 +413,7 @@ export class SoundDirector {
       const len = Math.hypot(p.x - from.x, p.y - from.y, p.z - from.z);
       if (len < 0.3 || len >= range - 0.5) continue;
       if (struck.some((q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) < SAME_POINT)) continue;
-      out.push({ sound: 'impact', kind: impactSurface(p, s.waterY, this.map), pos: { x: p.x, y: p.y, z: p.z }, gain: 0.55 });
+      out.push({ sound: 'impact', kind: impactSurface(p, s.waterY, this.map, this.docks, s.docks ?? []), pos: { x: p.x, y: p.y, z: p.z }, gain: 0.55 });
       n++;
     }
   }
@@ -409,7 +436,7 @@ export class SoundDirector {
 
   /** Underfoot, with grass and sand turned wet in the storm's rain. */
   private stepSurface(p: Vec3, s: Snapshot): Surface {
-    const k = surfaceAt(p, s.pieces, this.map);
+    const k = surfaceAt(p, s.pieces, this.map, this.docks, s.docks);
     return s.suddenDeath && (k === 'grass' || k === 'sand') && !inAnyBunker(p, this.map) ? 'wet' : k;
   }
 

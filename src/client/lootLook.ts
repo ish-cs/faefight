@@ -7,13 +7,13 @@ import type { GunKind, Inventory, PieceKind, PotionKind } from '../sim/types';
 export type LootModel =
   | { model: 'gun'; kind: GunKind }
   | { model: 'piece'; kind: PieceKind }
-  | { model: 'icon'; kind: 'grenade' | 'charge' | 'medkit' | PotionKind | 'cash' };
+  | { model: 'icon'; kind: 'grenade' | 'charge' | 'medkit' | 'trap' | PotionKind | 'cash' };
 export type LootItem = LootModel & { text: string };
 
 const NAME: Record<string, string> = {
   pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
-  grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit',
+  grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit', trap: 'Spike trap',
   shieldSmall: 'Small shield', shieldBig: 'Big shield', healPotion: 'Heal potion', speedPotion: 'Speed potion',
 };
 const count = (name: string, n: number) => (n > 1 ? `${name} ×${n}` : name);
@@ -28,6 +28,7 @@ export function lootItems(inv: Inventory): LootItem[] {
   for (const [k, n] of Object.entries(inv.pieces) as [PieceKind, number | undefined][]) if (n && n > 0) out.push({ model: 'piece', kind: k, text: count(NAME[k], n) });
   if (inv.grenades > 0) out.push({ model: 'icon', kind: 'grenade', text: count(NAME.grenade, inv.grenades) });
   if (inv.charges > 0) out.push({ model: 'icon', kind: 'charge', text: count(NAME.charge, inv.charges) });
+  if (inv.traps > 0) out.push({ model: 'icon', kind: 'trap', text: count(NAME.trap, inv.traps) });
   if (inv.medkits > 0) out.push({ model: 'icon', kind: 'medkit', text: count(NAME.medkit, inv.medkits) });
   for (const [k, n] of Object.entries(inv.potions) as [PotionKind, number | undefined][]) if (n && n > 0) out.push({ model: 'icon', kind: k, text: count(NAME[k], n) });
   if (inv.cash > 0) out.push({ model: 'icon', kind: 'cash', text: `$${inv.cash}` });

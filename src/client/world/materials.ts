@@ -47,8 +47,8 @@ function make() {
     /** bunker walls, coping, cast concrete */
     concrete: mossyBase(pbrMaterial('concrete', 'concrete_wall', { lum: 0.237, tint: 0xb4b0a8, macro: 0.15, untile: 'shift' })),
     /** flat paving (quay slab) */
-    slab: pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1 }),
-    asphalt: pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1 }),
+    slab: pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1, puddles: true }),
+    asphalt: pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1, puddles: true }),
     seawall: quayWall(),
     dark: std('dark', { color: 0x222426, roughness: 0.55, metalness: 0.3 }),
     rubber: std('rubber', { color: 0x262624, roughness: 0.92 }),
