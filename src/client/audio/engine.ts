@@ -11,7 +11,7 @@ import { type Cue, type Env, SoundDirector } from './events';
 import { clank, critterCall, fireLoop, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
 import {
   audibility, DEFAULT_LIMITS, dist, distanceCutoff, echoSend, heartbeatInterval, MAX_DISTANCE, muffleCutoff,
-  REF_DISTANCE, ROLLOFF, VoiceLimiter, waveLevel,
+  REF_DISTANCE, ROLLOFF, VoiceLimiter, voicePriority, waveLevel, withinHearing,
 } from './voices';
 import { isAction } from '../keymap';
 import { settings, type Settings } from '../settings/store';
@@ -19,7 +19,7 @@ import { settings, type Settings } from '../settings/store';
 /** 2D cues that should not be muffled by low health or reverb (UI-ish). */
 /** uiBus level at full Effects volume. */
 const UI_LEVEL = 0.8;
-const UI_SOUNDS = new Set(['hitmarker', 'kill', 'death', 'eliminated', 'win', 'lose', 'draw', 'alarm', 'tick', 'escaped', 'horn', 'coin', 'loot', 'purchase', 'vault']);
+const UI_SOUNDS = new Set(['hitmarker', 'headshot', 'shieldCrack', 'kill', 'death', 'eliminated', 'win', 'lose', 'draw', 'alarm', 'tick', 'escaped', 'horn', 'coin', 'loot', 'purchase', 'vault']);
 
 type Chain = { input: GainNode; air: BiquadFilterNode; panner: PannerNode; echo: GainNode };
 type CameraLike = { matrixWorld: { elements: ArrayLike<number> } };
@@ -278,8 +278,8 @@ export class AudioSystem {
   }
 
   /** Predicted shot / hitmarker (shotPredict.ts): the host's echo of it plays nothing. */
-  predicted(sound: 'shot' | 'hitmarker', kind?: string) {
-    this.play(sound === 'shot' ? { sound, kind, pos: null, gain: 1, own: true } : { sound, pos: null, gain: 0.6 });
+  predicted(sound: 'shot' | 'hitmarker' | 'headshot', kind?: string) {
+    this.play(sound === 'shot' ? { sound, kind, pos: null, gain: 1, own: true } : { sound, pos: null, gain: sound === 'headshot' ? 0.7 : 0.6 });
   }
 
   /** Your own handling sounds that the sim doesn't report (raising the sights). */
@@ -408,8 +408,9 @@ export class AudioSystem {
       cue = { ...cue, pos: null, gain: cue.gain * Math.max(0.25, Math.min(1, 40 / (td + 10))), kind: td < 45 ? 'near' : 'far' };
     }
     const d = cue.pos ? dist(cue.pos, this.listener) : 0;
+    if (cue.pos && !withinHearing(cue.sound, d, cue.own)) return; // past its hearing cap: not a voice at all
     const key = cue.sound === 'shot' ? `shot_${cue.kind}` : cue.sound;
-    const level = audibility(cue.gain, cue.pos, this.listener);
+    const level = audibility(cue.gain, cue.pos, this.listener) * voicePriority(cue.sound, !!cue.pos, cue.own);
     // Generous expiry backstop; the voice is released by timer when its recipe actually ends.
     const adm = this.limiter.admit(key, level, ctx.currentTime, 10);
     if (!adm.ok) return;

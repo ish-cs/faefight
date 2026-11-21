@@ -48,6 +48,7 @@ import { MAX_CMDS_PER_MSG } from '../net/sanitize';
 import { SealAnnouncer } from './announce';
 import { BULK_PIECES, BuyQueue } from './qol/combatQol';
 import { netStatus, QolHud } from './qol/hudExtras';
+import { Killcam } from './qol/killcam';
 import { addInviteButton } from './qol/invite';
 import { botCountControl, prepareJoin, rememberDifficulty } from './qol/menu';
 import { loadPrefs, savePrefs, seatPrefsOf } from './qol/prefs';
@@ -139,7 +140,7 @@ type Backend = {
   replay?: ReplayLink;
   debug?: {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
-    eliminate(playerId: number): void; kill(playerId: number): void;
+    eliminate(playerId: number): void; kill(playerId: number, killer?: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
     /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
     time(t: number): void; strike(x: number, z: number): void;
@@ -222,7 +223,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
       genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
-      kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
+      kill: (playerId, killer) => send({ type: 'debug', cmd: 'kill', playerId, killer }),
     },
     close() {
       if (closed) return;
@@ -900,6 +901,16 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
   let rejoinTouchedAt = 0;
+  // Killcam: replays your death from the killer's view during the respawn wait (Space skips).
+  const killcam = new Killcam(hud.root);
+  let killcamCam: InstanceType<typeof ThirdPersonCamera> | null = null;
+  let killcamWas = false;
+  window.addEventListener('keydown', (e) => {
+    if (!killcam.active || e.code !== 'Space' || e.repeat || e.target instanceof HTMLInputElement) return;
+    e.preventDefault();
+    e.stopImmediatePropagation(); // not a spectator "fly up"
+    killcam.skip();
+  }, { capture: true });
 
   const input = new InputController(canvas, {
     interact: () => {
@@ -1176,7 +1187,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       stamina: predictor?.stamina ?? null, viewId, ...(viewed ? gunHud(viewed, false) : gunHud(meNow)) });
     if (hud.ended && !wasEnded && !replay) spectateChosen = false; // a (new) result popped the end screen up
     scoreboard.update(s, scoreOpts());
-    qol.onSnapshot(s, input.selected);
+    const recap = qol.onSnapshot(s, input.selected);
+    if (killcam.active && (meNow?.alive || s.winner !== null)) killcam.stop(meNow?.alive ? 'respawned' : 'match over');
+    const died = s.events.find((e) => e.type === 'kill' && e.data.victim === humanId);
+    if (died && meNow && s.winner === null && !watching) {
+      const killer = typeof died.data.killer === 'number' && died.data.killer !== humanId ? died.data.killer : null;
+      const respawnIn = meNow.respawnAt !== null && !meNow.eliminated ? meNow.respawnAt - s.time : null;
+      const k = recap?.killer;
+      if (killcam.start(died.t, killer, respawnIn, k ? { killerName: k.name, island: k.island, weapon: recap.weapon, distance: recap.distance, headshot: recap.headshot } : null)) {
+        hud.setEndVisible(false); // eliminated: the end screen waits for the killcam
+      }
+    }
     if (backend.buffered) {
       // Guest: keep the rejoin record fresh while the match runs; a finished match has nothing to rejoin.
       if (s.winner !== null) clearRejoin();
@@ -1219,6 +1240,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     snapshot: (s) => {
       // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
       predictor?.onSnapshot(s);
+      killcam.push(s);
       latest = s;
       if (buffer) qol.onNetSnapshot();
       shots.reconcile(s.events, humanId, performance.now());
@@ -1286,6 +1308,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Loot on the ground as drawn: label lines, label shown, model count. */
       loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
+      killcam: () => killcam.info(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
@@ -1338,6 +1361,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     shots.markHit();
     hud.hitmarker(head);
     audio.predicted('hitmarker');
+    if (head) audio.predicted('headshot');
     renderer.gunFx.onEvent({ t: ev.t, type: 'hit', data: { target: victim, by: humanId, pos: { x: to.x, y: to.y, z: to.z }, part: head ? 'head' : 'body', weapon: w, ...predictedHit(w, hit!.distance, head) } }, humanId);
   };
 
@@ -1433,7 +1457,23 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // No player of our own (spectating host / handed to a bot), dead (respawning or eliminated), or free
     // fly picked on the end screen: invisible spectator camera.
     const spectating = replay ? !!snap : !!snap && (watching || (!!me && (!me.alive || spectateChosen)));
-    if (spectating) {
+    const kc = killcam.active ? killcam.frame(now) : null;
+    if (!kc && killcamWas) {
+      // Killcam over: back to the live world; the normal death flow (free-fly, end screen) carries on.
+      renderer.setReplay(null);
+      if (!spectateChosen) hud.setEndVisible(true);
+    }
+    killcamWas = !!kc;
+    if (kc) {
+      spectator.exit();
+      renderer.setReplay({ snap: kc.snap, motion: kc.motion });
+      renderer.replayEvents(kc.events);
+      renderer.characters.hiddenId = -1;
+      renderer.setGhost(null);
+      aim = null;
+      killcamCam ??= new ThirdPersonCamera(renderer.camera, () => renderer.collidables);
+      killcamCam.update(feet.set(kc.feet.x, kc.feet.y, kc.feet.z), kc.yaw, kc.pitch, dt);
+    } else if (spectating) {
       spectator.enter(renderer.camera.position);
       renderer.characters.hiddenId = replay ? -1 : humanId; // a replay shows everyone
       renderer.setGhost(null);

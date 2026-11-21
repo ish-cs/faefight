@@ -29,7 +29,8 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'hp'; hp: number }
   | { type: 'debug'; cmd: 'time'; t: number }
   | { type: 'debug'; cmd: 'strike'; x: number; z: number }
-  | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }
+  | { type: 'debug'; cmd: 'eliminate'; playerId: number }
+  | { type: 'debug'; cmd: 'kill'; playerId: number; killer?: number }
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
   | { type: 'debug'; cmd: 'potionShop'; x: number; z: number }
   /** Alert testing: a steel plate on doorway `door` of the human's bunker (placed by `owner`), removing one, generator cash. */

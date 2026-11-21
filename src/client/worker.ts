@@ -187,8 +187,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         else if (msg.cmd === 'plugDoor') match.debugPlugDoor(humanIsland, msg.door, msg.owner);
         else if (msg.cmd === 'removePiece') match.debugRemovePiece(msg.id);
         else if (msg.cmd === 'genStored') match.debugSetGenerator(humanIsland, msg.stored);
-        else if (msg.cmd === 'eliminate') { match.debugEliminate(msg.playerId); recordOp({ k: 'eliminate', id: msg.playerId }); }
-        else if (msg.cmd === 'kill') { match.debugKill(msg.playerId); recordOp({ k: 'kill', id: msg.playerId }); }
+        else if (msg.cmd === 'kill') { match.debugKill(msg.playerId, msg.killer ?? null); recordOp({ k: 'kill', id: msg.playerId }); }
         else if (msg.cmd === 'give') { match.debugGive(msg.id ?? humanId, msg.inv); recordOp({ k: 'give', id: msg.id ?? humanId, inv: msg.inv }); }
         break;
     }
