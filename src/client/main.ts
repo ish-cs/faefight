@@ -858,6 +858,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     input.enabled = !hud.ended && !dead;
     chat.enabled = !hud.ended && !dead;
     canvas.focus();
+    // Same click / key press that closed the panel re-captures the mouse: no extra click needed.
+    if (input.enabled) input.requestLock();
   };
 
   /** Back to the menu (a page reload) once this match's recording is stored. */
@@ -925,7 +927,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead) showPause();
     },
     inventoryChange: (open) => {
-      hint.textContent = open ? `Drag hotbar items to reorder · ${bindingLabel(activeKeymap(), 'inventory')} to resume` : 'Click to capture the mouse';
+      hint.textContent = open ? `Drag hotbar items to reorder · ${bindingLabel(activeKeymap(), 'inventory')} to resume` : 'Click to resume';
       hint.classList.toggle('inventory', open);
     },
   });
@@ -1021,7 +1023,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   const hint = document.createElement('div');
   hint.className = 'click-hint glass';
-  hint.textContent = 'Click to capture the mouse';
+  hint.textContent = 'Click to resume';
   document.body.append(hint);
 
   /** Remove the pause card; vs bot, the simulation runs again. */
