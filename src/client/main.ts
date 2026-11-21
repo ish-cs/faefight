@@ -537,6 +537,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   loading.progress('gpu', 0, 'Starting WebGPU');
   const renderer = await Renderer.create(canvas);
   loading.progress('gpu', 1, 'Starting the simulation');
+  loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
+  loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
   console.info(`[render] backend: ${renderer.backend}`);
   scope.begin(); // window/document listeners from here on are removed by destroy()
   let running = true;

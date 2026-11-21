@@ -17,7 +17,10 @@ export async function warmUp(r: Renderer, pieces: () => PieceState[], yaw: numbe
   const t0 = performance.now();
   onStep(0, 'Compiling shaders');
   try {
-    await r.gpu.compileAsync(r.scene, r.camera);
+    // N/M from the renderer's own count of pipelines it queued for this compile.
+    await r.gpu.compileAsync(r.scene, r.camera, null, (e) => {
+      if (e.total > 0) onStep(0.6 * (e.loaded / e.total), `Compiling shaders ${e.loaded}/${e.total}`);
+    });
   } catch (err) {
     console.warn('[warmup] compileAsync failed; shaders will compile on first use', err);
   }
