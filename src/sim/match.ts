@@ -19,6 +19,8 @@ import { MatchStats } from './stats';
 import { isPlaceholderBotName, nickname } from './names';
 import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
+import { Banter } from './bots/banter';
+import { QUIP_SHOW_SEC, WheelLimiter, emoteEnd, isEmoteId, isQuipId, isWheelId, type WheelId } from './emotes';
 import type { BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { clone, dist, dist2D, forward, norm, sub, v3 } from './vec';
@@ -78,6 +80,10 @@ export class Match implements MatchApi {
   cloneSnapshots = true;
   /** Lag-compensated shots resolved so far, and the total rewind (tests/debug). */
   lagStats = { shots: 0, rewindSec: 0 };
+  /** Emote / quick-chat wheel: requests waiting for the next tick, the per-player cooldown, bots' flavour lines. */
+  private wheelQueue: { id: number; what: WheelId }[] = [];
+  private wheelLimit = new WheelLimiter();
+  private banter: Banter;
 
   private constructor(readonly def: MapDef, private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
     const map = def.islands;
@@ -90,6 +96,7 @@ export class Match implements MatchApi {
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
     this.makeBot = opts.makeBot;
+    this.banter = new Banter(mulberry32(((setup.seed ?? 1) * 40503) ^ 0x2c1b3c6d));
     // Bot seats with a placeholder name ("Bot (hard)") get a human-looking nickname; a separate stream so
     // names don't shift the bots' own random choices.
     const nameRng = mulberry32(((setup.seed ?? 1) * 2654435761) ^ 0x5bd1e995);
@@ -158,16 +165,21 @@ export class Match implements MatchApi {
     this.s.time = now;
     this.tickNo++;
     this.events = [];
+    this.applyWheel(now);
 
     for (const p of this.s.players.values()) {
       const cmds = this.bots.has(p.id) ? undefined : moves?.get(p.id);
       if (!p.alive) {
         // Dead: commands are consumed (acked) but do nothing.
         if (cmds?.length) (p.mv ??= newMoveState()).ack = cmds[cmds.length - 1].seq;
+        if (p.emote) delete p.emote;
         continue;
       }
       const bot = this.bots.get(p.id);
-      const input = bot ? bot.think(this.botView(p)) : inputs.get(p.id) ?? NO_INPUT;
+      let input = bot ? bot.think(this.botView(p)) : inputs.get(p.id) ?? NO_INPUT;
+      // A bot finishing its emote stands still unless it wants to shoot (which ends the emote, as for anyone).
+      if (bot && p.emote && !input.fire) input = { ...input, moveX: 0, moveZ: 0, jump: false, sprint: false, build: null, throwGrenade: false, placeCharge: false };
+      if (p.emote && emoteEnd(p, input, cmds, now)) delete p.emote;
       this.applyInput(p, input, now, cmds);
     }
 
@@ -183,8 +195,36 @@ export class Match implements MatchApi {
     this.updateSeals(now);
     this.remember(now);
     this.stats.onTick(this.events, this.s.players.values(), now);
+    for (const b of this.banter.onTick(this.events, this.s.players, now)) if (this.bots.has(b.id)) this.wheel(b.id, b.what);
+    for (const p of this.s.players.values()) {
+      if (p.emote && (!p.alive || p.lastDamagedAt >= p.emote.at)) delete p.emote; // hit or killed later this tick
+      if (p.quip && now - p.quip.at >= QUIP_SHOW_SEC) delete p.quip;
+    }
     this.history.record(now, this.s.players.values());
     return this.snapshot();
+  }
+
+  /**
+   * Emote / quick-chat wheel request (any player; bots via Banter). Applied at the start of the next tick,
+   * at most one per player per WHEEL_COOLDOWN_SEC; emotes need the player alive. Unknown ids throw (callers sanitize).
+   */
+  wheel(playerId: number, what: WheelId): void {
+    if (!isWheelId(what)) throw new Error(`Match.wheel: unknown wheel id ${String(what)}`);
+    this.mustPlayer(playerId);
+    this.wheelQueue.push({ id: playerId, what });
+  }
+
+  private applyWheel(now: number) {
+    if (!this.wheelQueue.length) return;
+    const q = this.wheelQueue;
+    this.wheelQueue = [];
+    for (const { id, what } of q) {
+      const p = this.s.players.get(id);
+      if (!p || (isEmoteId(what) && !p.alive) || !this.wheelLimit.allow(id, now)) continue;
+      if (isEmoteId(what)) p.emote = { id: what, at: now };
+      else if (isQuipId(what)) p.quip = { id: what, at: now };
+      this.events.push({ t: now, type: 'wheel', data: { by: id, id: what } });
+    }
   }
 
   previewBuild(playerId: number, req: BuildRequest): Placement {

@@ -3,6 +3,7 @@ import type { MapDef } from '../sim/map';
 import type { MoveCmd } from '../sim/movement';
 import type { MatchSetup } from '../sim/matchApi';
 import type { BuildRequest, Inventory, PlayerInput, Snapshot } from '../sim/types';
+import type { WheelId } from '../sim/emotes';
 
 /** main thread → worker */
 export type ToWorker =
@@ -19,6 +20,8 @@ export type ToWorker =
   /** Vs bot only: stop / restart ticking (pause card). */
   | { type: 'pause'; paused: boolean }
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
+  /** Emote / quick-chat wheel pick for a human player (already sanitized; the sim applies its own cooldown). */
+  | { type: 'wheel'; playerId: number; id: WheelId }
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
   | { type: 'debug'; cmd: 'hp'; hp: number }

@@ -48,6 +48,8 @@ import { loadPrefs, savePrefs, seatPrefsOf } from './qol/prefs';
 import { clearRejoin, loadRejoin, markAutoRejoin, saveRejoin, touchRejoin } from './qol/rejoin';
 import { isPieceItem } from '../sim/hotbar';
 import { aimDirection, ShotPredictor } from './shotPredict';
+import { EmoteWheel } from './emoteWheel';
+import { isWheelId, quipLines, type WheelId } from '../sim/emotes';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -88,7 +90,7 @@ function keyHelp(): string {
   const move = (['forward', 'left', 'back', 'right'] as Action[]).map(k).join('');
   const slots = ACTIONS.filter((a) => a.group === 'Hotbar').map((a) => k(a.id));
   const slotText = slots.join('') === '123456789' ? '1–9' : slots.join(' ');
-  return `${move} move · ${k('sprint')} sprint · ${k('jump')} jump · Click fire / place / throw · ${k('aim')} aim · ${k('reload')} reload · ${k('interact')} interact · ${k('chat')} chat · ${k('camera')} first person · ${k('mute')} mute<br>`
+  return `${move} move · ${k('sprint')} sprint · ${k('jump')} jump · Click fire / place / throw · ${k('aim')} aim · ${k('reload')} reload · ${k('interact')} interact · ${k('chat')} chat · hold ${k('emote')} emotes · ${k('camera')} first person · ${k('mute')} mute<br>`
     + `${slotText} or wheel pick hotbar slot · ${k('drop')} drop (Ctrl/Shift+${k('drop')} stack) · ${k('inventory')} drag to reorder · hold ${k('scoreboard')} scoreboard · ${k('rotateLeft')}/${k('rotateRight')} rotate piece · ${k('freePlace')} free-place`;
 }
 
@@ -117,6 +119,8 @@ type Backend = {
   input(i: PlayerInput, cmds: MoveCmd[]): void;
   preview(req: BuildRequest, key: number): void;
   chat(text: string): void;
+  /** Emote / quick-chat wheel pick (the host rate-limits it; the sim applies it). */
+  wheel(id: WheelId): void;
   /** Stop delivering to the sink (game torn down for a rematch / back to lobby). Remote: the link stays open. */
   close(): void;
   /** Vs bot only: stop / restart the simulation (pause card). */
@@ -147,6 +151,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
         } else if (m.type === 'snapshot') {
           sink.snapshot(m.snap);
           session?.onSnapshot(m.snap);
+          // Vs bot: quick chat (ours and the bots') shows as chat lines here; online the host session relays it.
+          if (!session) for (const l of quipLines(m.snap.events, m.snap.players)) sink.chat(l.from, l.text);
         } else if (m.type === 'preview') {
           if (m.playerId === humanId) sink.preview(m.result, m.key);
           else session?.onPreview(m.playerId, m.result, m.key);
@@ -162,6 +168,10 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     input: (input, cmds) => send({ type: 'input', input, cmds }),
     preview: (req, key) => send({ type: 'preview', playerId: humanId, req, key }),
     chat: (text) => session?.localChat(text),
+    wheel: (id) => {
+      if (session) session.localWheel(id);
+      else if (humanId !== 0) send({ type: 'wheel', playerId: humanId, id });
+    },
     pause: session ? undefined : (paused) => send({ type: 'pause', paused }),
     /** Vs bot /spectate: a bot takes over the local player. */
     handOff: () => send({ type: 'botify', playerId: humanId }),
@@ -217,6 +227,7 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
     input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds, ack: wire.ack || undefined }); },
     preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
     chat: (text) => link.send({ t: 'chat', text }),
+    wheel: (id) => { if (!disposed) link.send({ t: 'wheel', id }); },
     close: () => { disposed = true; },
   };
 }
@@ -732,6 +743,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     },
     place: () => { placeWantedAt = performance.now(); tryPlace(); },
     lockChange: (locked) => {
+      if (!locked) closeWheel(); // Esc while the wheel is open lands here (the browser takes Esc first)
       if (locked) {
         wasLocked = true; hidePause(); hint.style.display = 'none';
         if (input.inventory) input.setInventory(false);
@@ -765,6 +777,34 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     },
   });
   onChat?.(chat);
+
+  // ---- emote & quick-chat wheel: hold the key, point, release to send (Esc / losing the mouse cancels) ----
+  const wheel = new EmoteWheel(app);
+  const closeWheel = () => { wheel.cancel(); input.lookLocked = false; };
+  const sendWheel = (id: WheelId) => {
+    if (!isWheelId(id)) throw new Error(`[wheel] unknown id ${String(id)}`);
+    console.info(`[wheel] ${id}`);
+    backend.wheel(id);
+  };
+  window.addEventListener('keydown', (e) => {
+    if (wheel.open && e.code === 'Escape') { e.preventDefault(); closeWheel(); return; }
+    if (e.repeat || !isAction('emote', e.code) || e.target instanceof HTMLInputElement) return;
+    if (!input.enabled || chat.open || hud.panelOpen || watching || !humanId) return;
+    e.preventDefault();
+    wheel.show();
+    input.lookLocked = true;
+  });
+  window.addEventListener('keyup', (e) => {
+    if (!wheel.open || !isAction('emote', e.code)) return;
+    input.lookLocked = false;
+    const id = wheel.release();
+    if (id) sendWheel(id);
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!wheel.open) return;
+    if (input.locked) wheel.move(e.movementX, e.movementY); else wheel.pointAt(e.clientX, e.clientY);
+  });
+  window.addEventListener('blur', closeWheel);
 
   function runCommand(c: NonNullable<ReturnType<typeof parseCommand>>) {
     if (c.kind === 'help') { chat.add('', HELP_TEXT); return; }
@@ -1043,6 +1083,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderInfo: () => renderer.info(),
       renderer,
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
+      /** Emote wheel: open state and hovered slot; `wheel(id)` sends a pick directly. */
+      wheelState: () => ({ open: wheel.open, hovered: wheel.hovered }),
+      wheel: (id: WheelId) => sendWheel(id),
       input,
       cameraMode: () => fpv.mode,
       cameraFov: () => renderer.camera.fov,
@@ -1180,6 +1223,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead ? '' : 'none';
 
     const me = snap?.players.find((p) => p.id === humanId);
+    if (wheel.open && (!input.enabled || chat.open)) closeWheel();
     // No player of our own (spectating host / handed to a bot), dead (respawning or eliminated), or free
     // fly picked on the end screen: invisible spectator camera.
     const spectating = !!snap && (watching || (!!me && (!me.alive || spectateChosen)));

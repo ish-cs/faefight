@@ -4,6 +4,8 @@ import { PLAYER } from '../../sim/constants';
 import type { MatchEvent, PlayerState, WeaponKind } from '../../sim/types';
 import { reloadClock, reloadPose, type ReloadPose } from '../firstPerson';
 import { chooseClip } from './animState';
+import { EMOTE_BONES, emoteClip, emotePose, type BodyAxis, type EmoteBone } from './emotePose';
+import { QUICK_CHAT, QUIP_SHOW_SEC, type EmoteId, type QuipId } from '../../sim/emotes';
 import { HAND_BONE, loadCharacters, type CharacterAssets } from './loader';
 import { buildMuzzleFlash, buildWeapon } from './weapons';
 
@@ -23,6 +25,7 @@ const LOW_READY_RATE = 8; // 1/s easing in/out of low ready
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _right = new THREE.Vector3();
+const _axis = new THREE.Vector3();
 const _q3 = new THREE.Quaternion();
 const _sphere = new THREE.Sphere();
 const _proj = new THREE.Matrix4();
@@ -57,7 +60,41 @@ export type AvatarFrame = {
   ads?: boolean;
   /** Reload choreography for this frame (null when not reloading). */
   reload?: ReloadPose | null;
+  /** Emote playing, `t` s in (sim clock); null/absent = none. */
+  emote?: { id: EmoteId; t: number } | null;
+  /** Quick-chat line to show in a speech bubble (null/absent = none). */
+  quip?: QuipId | null;
 };
+
+/** Speech bubble sprite (dark text on a white rounded bubble with a tail), above the name tag. */
+function speechBubble(): { sprite: THREE.Sprite; draw(text: string): void } {
+  const c = document.createElement('canvas');
+  c.width = 320; c.height = 96;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('[characters] 2D canvas context unavailable');
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteNodeMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false, sizeAttenuation: false, fog: false });
+  mat.color.setScalar(1.6);
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.15, 0.045, 1);
+  sprite.center.set(0.5, -0.55); // above the name tag + shield bar
+  sprite.renderOrder = 7;
+  const draw = (text: string) => {
+    g.clearRect(0, 0, 320, 96);
+    g.font = '700 34px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    const w = Math.min(300, Math.max(90, g.measureText(text).width + 44));
+    const x = (320 - w) / 2;
+    g.fillStyle = 'rgba(255,255,255,0.96)';
+    g.beginPath(); g.roundRect(x, 6, w, 62, 22); g.fill();
+    g.beginPath(); g.moveTo(148, 66); g.lineTo(160, 88); g.lineTo(172, 66); g.closePath(); g.fill();
+    g.fillStyle = '#10151c';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(text, 160, 38, 280);
+    tex.needsUpdate = true;
+  };
+  return { sprite, draw };
+}
 
 /** Name tag sprite (white text on the island colour), drawn above remote players. */
 function nameTag(text: string, color: number): THREE.Sprite {
@@ -152,6 +189,11 @@ export class Avatar {
   private tag: THREE.Sprite | null = null;
   private shieldTag: ReturnType<typeof shieldBar> | null = null;
   private shownShield = 0;
+  private bubble: ReturnType<typeof speechBubble> | null = null;
+  private shownQuip: QuipId | null = null;
+  /** Bones the emote overlay turns, and their pose as the mixer left it (unkeyed bones would accumulate turns). */
+  private emoteBones = new Map<EmoteBone, THREE.Bone>();
+  private emoteBase = new Map<EmoteBone, THREE.Quaternion>();
   private aimUntil = 0;
   private flinchUntil = 0;
   private punchUntil = 0;
@@ -267,6 +309,11 @@ export class Avatar {
     this.upperArmL = model.getObjectByName(UPPER_ARM_L) as THREE.Bone | undefined;
     if (this.upperArmL) this.spine.push(this.upperArmL);
     this.spineBase = this.spine.map((b) => (b ? b.quaternion.clone() : new THREE.Quaternion()));
+    for (const n of EMOTE_BONES) {
+      const b = model.getObjectByName(n) as THREE.Bone | undefined;
+      if (b) { this.emoteBones.set(n, b); this.emoteBase.set(n, b.quaternion.clone()); }
+      else console.warn(`[characters] emote bone ${n} missing; that part of the emotes is skipped`);
+    }
     this.hand = model.getObjectByName(HAND_BONE)!;
     this.gripLocal = assets.gripLocal;
     this.current = this.actions.get('Idle')!;
@@ -359,6 +406,19 @@ export class Avatar {
       }
     }
     if (this.tag) this.tag.visible = f.alive;
+    const quip = f.alive ? f.quip ?? null : null;
+    if (quip && !this.bubble) {
+      this.bubble = speechBubble();
+      this.bubble.sprite.position.y = PLAYER.height + 0.42;
+      this.group.add(this.bubble.sprite);
+    }
+    if (this.bubble) {
+      this.bubble.sprite.visible = quip !== null;
+      if (quip && quip !== this.shownQuip) { this.shownQuip = quip; this.bubble.draw(QUICK_CHAT[quip]); }
+    }
+    const emote = f.alive ? f.emote ?? null : null;
+    // Hands are busy during an emote: the gun goes away.
+    if (this.weapon) this.weapon.visible = !emote;
     if (this.shieldTag) {
       this.shieldTag.sprite.visible = f.alive;
       const sh = Math.ceil(f.shield);
@@ -373,14 +433,23 @@ export class Avatar {
     dt += this.animSkipped;
     this.animSkipped = 0;
     this.smoothVel.lerp(f.vel, 1 - Math.exp(-VEL_SMOOTH_RATE * dt));
-    const { name, ts } = chooseClip({
+    const { name, ts } = emote ? { name: emoteClip(emote.id), ts: 1 } : chooseClip({
       alive: f.alive, vel: this.smoothVel, yaw: f.yaw, equipped: f.equipped,
       flinching: now < this.flinchUntil, punching: now < this.punchUntil, aiming: now < this.aimUntil && !r,
     });
     this.fadeTo(name, ts);
     this.spine.forEach((b, i) => b?.quaternion.copy(this.spineBase[i]));
+    for (const [n, b] of this.emoteBones) b.quaternion.copy(this.emoteBase.get(n)!);
     this.mixer.update(dt);
     this.spine.forEach((b, i) => b && this.spineBase[i].copy(b.quaternion));
+    for (const [n, b] of this.emoteBones) this.emoteBase.get(n)!.copy(b.quaternion);
+
+    if (emote && f.alive) {
+      // Emote overlay instead of the aim bend (the look pitch would fight the pose).
+      this.group.updateMatrixWorld(true);
+      for (const turn of emotePose(emote.id, emote.t)) this.turn(this.emoteBones.get(turn.bone), turn.axis, turn.angle, f.yaw);
+      return;
+    }
 
     // Aim: bend the spine with the look pitch (up/down), split across three bones, about the body's
     // right axis in world space so it works whatever the bones' local axes are.
@@ -413,12 +482,20 @@ export class Avatar {
   }
   private weaponDirty = false;
 
-  /** Rotate a bone by `angle` about the body's right axis (_right, world space), whatever its local axes. */
-  private bend(bone: THREE.Bone | undefined, angle: number) {
+  /** Rotate a bone by `angle` about one of the body's axes (world space, from the facing `yaw`). */
+  private turn(bone: THREE.Bone | undefined, axis: BodyAxis, angle: number, yaw: number) {
+    if (axis === 'right') _axis.set(Math.cos(yaw), 0, -Math.sin(yaw));
+    else if (axis === 'up') _axis.set(0, 1, 0);
+    else _axis.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+    this.bend(bone, angle, _axis);
+  }
+
+  /** Rotate a bone by `angle` about a world axis (default the body's right axis, _right), whatever its local axes. */
+  private bend(bone: THREE.Bone | undefined, angle: number, axis: THREE.Vector3 = _right) {
     if (!bone?.parent) return;
     // local' = parentWorld⁻¹ · R(world) · parentWorld · local
     bone.parent.getWorldQuaternion(_q);
-    _q2.setFromAxisAngle(_right, angle);
+    _q2.setFromAxisAngle(axis, angle);
     const inv = _q3.copy(_q).invert();
     bone.quaternion.premultiply(_q).premultiply(_q2).premultiply(inv);
     bone.updateMatrixWorld(true);
@@ -432,6 +509,7 @@ export class Avatar {
     this.hitbox.geometry.dispose();
     if (this.tag) { (this.tag.material as THREE.SpriteNodeMaterial).map?.dispose(); this.tag.material.dispose(); }
     if (this.shieldTag) { (this.shieldTag.sprite.material as THREE.SpriteNodeMaterial).map?.dispose(); this.shieldTag.sprite.material.dispose(); }
+    if (this.bubble) { (this.bubble.sprite.material as THREE.SpriteNodeMaterial).map?.dispose(); this.bubble.sprite.material.dispose(); }
   }
 }
 
@@ -503,6 +581,7 @@ export class CharacterSystem {
       cam.updateMatrixWorld();
       this.frustum.setFromProjectionMatrix(_proj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     }
+    const simNow = simTime + Math.min(0.1, (now - this.snapAt) / 1000);
     for (const p of players) {
       // Not perceivable (interest management): keep the avatar, just don't show it — rebuilding a skinned
       // model each time someone steps round a corner is a frame hitch.
@@ -522,6 +601,8 @@ export class CharacterSystem {
         pos: m.pos, vel: m.vel, yaw: p.id === humanId ? localYaw : m.yaw, pitch: m.pitch, alive: p.alive, equipped: p.equipped,
         blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0, shield: p.shield ?? 0,
         ads: p.ads,
+        emote: p.emote ? { id: p.emote.id, t: simNow - p.emote.at } : null,
+        quip: p.quip && simNow - p.quip.at < QUIP_SHOW_SEC ? p.quip.id : null,
         reload: (() => {
           const c = reloadClock(p, simTime + Math.min(0.1, (now - this.snapAt) / 1000));
           return c ? reloadPose(p.equipped, c.elapsed, c.duration, c.magStart, c.beats) : null;

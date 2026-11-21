@@ -46,6 +46,8 @@ export class InputController {
   enabled = false;
   /** Mouse look multiplier on top of the sensitivity setting (main sets it to the zoom while aiming). */
   lookScale = 1;
+  /** Emote wheel open: the mouse picks a slot instead of looking around or firing. */
+  lookLocked = false;
   private keys = new Set<string>();
   private fireHeld = false;
   /** Recoil still to be applied to the look angles (rad); fed in over a few frames. */
@@ -166,7 +168,7 @@ export class InputController {
   }
 
   private onMouseDown(e: MouseEvent) {
-    if (!this.enabled) return;
+    if (!this.enabled || this.lookLocked) return;
     if (this.inventory) { this.setInventory(false); return; }
     if (!this.locked) this.requestLock();
     // Other buttons act like keys ('Mouse2' = right button), so the keymap can bind them (aim by default).
@@ -182,7 +184,7 @@ export class InputController {
   }
 
   private onMouseMove(e: MouseEvent) {
-    if (!this.enabled || !this.locked) return;
+    if (!this.enabled || !this.locked || this.lookLocked) return;
     const c = settings.get().controls;
     const k = BASE_RAD_PER_PX * c.sensitivity * this.lookScale;
     this.yaw -= e.movementX * k;

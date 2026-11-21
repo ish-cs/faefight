@@ -107,6 +107,10 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         paused = msg.paused;
         console.info(`[worker] ${paused ? 'paused' : 'resumed'}`);
         break;
+      case 'wheel':
+        // Humans only (bots pick their own lines); unknown / botified ids are ignored like inputs.
+        if (match && inputs.has(msg.playerId)) match.wheel(msg.playerId, msg.id);
+        break;
       case 'preview':
         if (match) post({ type: 'preview', playerId: msg.playerId, result: match.previewBuild(msg.playerId, msg.req), key: msg.key });
         break;

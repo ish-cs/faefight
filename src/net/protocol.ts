@@ -2,6 +2,7 @@ import type { MoveCmd } from '../sim/movement';
 import type { Placement } from '../sim/building';
 import type { MapChoice, MapDef } from '../sim/map';
 import type { BuildRequest, Difficulty, PlayerInput } from '../sim/types';
+import type { WheelId } from '../sim/emotes';
 
 /**
  * A lobby seat. Seat index = island index = player id - 1 once the match starts, except that a spectating
@@ -24,7 +25,9 @@ export type ClientMsg =
   /** `ack`: newest snapshot seq decoded (wire.ts delta baseline). */
   | { t: 'input'; input: PlayerInput; cmds: MoveCmd[]; ack?: number }
   | { t: 'preview'; req: BuildRequest; key: number }
-  | { t: 'chat'; text: string };
+  | { t: 'chat'; text: string }
+  /** Emote / quick-chat wheel pick (sim/emotes.ts); the host rate-limits it to one per 2 s. */
+  | { t: 'wheel'; id: WheelId };
 
 /** Host → remote client. */
 export type HostMsg =
@@ -42,4 +45,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 7;
+export const NET_VERSION = 8;

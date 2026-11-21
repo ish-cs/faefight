@@ -1,4 +1,5 @@
 import type { MoveState } from './movement';
+import type { EmoteId, QuipId } from './emotes';
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -126,6 +127,10 @@ export type PlayerState = {
   busyUntil: number;
   /** Movement state (grounding, coyote/jump-buffer timers, last applied command seq): see movement.ts. */
   mv?: MoveState;
+  /** Cosmetic emote playing since sim time `at` (emotes.ts); absent when none. Moving, firing or damage ends it. */
+  emote?: { id: EmoteId; at: number };
+  /** Last quick-chat line (speech bubble for QUIP_SHOW_SEC from `at`); absent when none. */
+  quip?: { id: QuipId; at: number };
 };
 
 export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number };
@@ -134,7 +139,9 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect'
+  /** Emote / quick-chat wheel use: data { by, id } (emotes.ts). */
+  | 'wheel';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */

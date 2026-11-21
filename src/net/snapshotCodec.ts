@@ -84,6 +84,9 @@ export class SnapshotEncoder {
       ...p, pos: own ? { ...p.pos } : rv(p.pos), vel: own ? { ...p.vel } : rv(p.vel), yaw: r3(p.yaw), pitch: r3(p.pitch), hp: Math.ceil(p.hp), shield: Math.ceil(p.shield), healLeft: Math.ceil(p.healLeft),
       bloom: r2(p.bloom),
     };
+    // Emote / speech bubble start times on the ms grid (cheap on the wire; the animation doesn't need more).
+    if (p.emote) out.emote = { id: p.emote.id, at: r3(p.emote.at) };
+    if (p.quip) out.quip = { id: p.quip.id, at: r3(p.quip.at) };
     if (!own) {
       delete out.inv; delete out.vault; delete out.hotbar; delete out.locked;
       // Spread/recoil bookkeeping only drives your own crosshair.
