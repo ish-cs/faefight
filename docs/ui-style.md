@@ -3,8 +3,9 @@
 Dockside industrial signage under a tropical sun. Condensed stencil type, crane orange, sea teal and
 hazard yellow on solid navy-steel panels with hazard-stripe edges and chamfered buttons.
 
-Everything lives in `src/client/ui/theme.css`. It is imported **last** in `main.ts`, so its rules win
-over `style.css`, `qol.css` and `settings.css` at equal specificity. Fonts are self-hosted in
+Tokens and components live in `src/client/ui/theme.css`; the reskin of the existing screens lives in
+`src/client/ui/skin.css`. Both are imported **last** in `main.ts`, so their rules win over `style.css`,
+`qol.css` and `settings.css` at equal specificity. Fonts are self-hosted in
 `public/fonts/` (SIL OFL 1.1). Nothing is loaded from a CDN.
 
 ## Rules
@@ -16,6 +17,10 @@ over `style.css`, `qol.css` and `settings.css` at equal specificity. Fonts are s
 - Animate only `transform` and `opacity`. Per-frame HUD code must not read layout (`offsetWidth`, `getBoundingClientRect`) and must not rebuild DOM each frame; change text with a "did it change" check.
 - Keyboard: every control needs a visible `:focus-visible` state. The primitives already have one (yellow ring).
 - One primary (orange) action per card. Icons on all the buttons in a group, or on none of them.
+- Say each thing once. Cash lives top-left (it flashes on buys), mag/spare lives bottom-right, the
+  hotbar shows only the mag. Status words show only when they matter (a chip says SEALED, never OPEN).
+- Every widget needs a label or an icon (the HP and shield bars have heart/shield icons).
+- Something you can't use must look it: dimmed with the reason in a status strip, or hidden.
 
 ## Tokens
 

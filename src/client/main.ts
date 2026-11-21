@@ -50,6 +50,7 @@ import { isPieceItem } from '../sim/hotbar';
 import { aimDirection, ShotPredictor } from './shotPredict';
 // UI theme last: its tokens and skin win over style.css / qol.css / settings.css (docs/ui-style.md).
 import './ui/theme.css';
+import './ui/skin.css';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -81,6 +82,23 @@ function settingsButton(onClose?: () => void) {
   b.innerHTML = `${GEAR}<span>Settings</span>`;
   b.dataset.testid = 'open-settings';
   b.onclick = () => openSettings({ onClose });
+  return b;
+}
+
+const PAUSE_ICONS = {
+  help: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg>',
+  exit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h5v16h-5"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h10"/></svg>',
+};
+
+/** Pause-card button: icon + label, same shape as the Settings button. */
+function pauseButton(icon: string, label: string, cls: string) {
+  const b = document.createElement('button');
+  b.className = `${cls} pause-btn`;
+  b.innerHTML = icon;
+  const span = document.createElement('span');
+  span.textContent = label;
+  b.append(span);
   return b;
 }
 
@@ -830,29 +848,53 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     input.enabled = false;
     backend.pause?.(true); // vs bot: the world stops (online it can't)
     paused = document.createElement('div');
-    paused.className = 'overlay';
+    paused.className = 'overlay pause-overlay';
+    paused.dataset.testid = 'pause';
     const card = document.createElement('div');
-    card.className = 'card glass';
-    const title = document.createElement('div');
-    title.style.cssText = 'font-size:28px;font-weight:800';
-    title.textContent = 'Paused';
-    const resume = document.createElement('button');
-    resume.className = 'btn';
-    resume.textContent = 'Resume';
+    card.className = 'card glass pause-card';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', 'Paused');
+    const head = document.createElement('div');
+    head.className = 'pause-head';
+    // The kicker says whether the world stopped; no separate note repeating "paused".
+    head.innerHTML = `<div class="pause-kicker${backend.pause ? '' : ' live'}"></div><div class="pause-title">Paused</div>`;
+    head.firstElementChild!.textContent = backend.pause ? 'Match paused · vs bots' : 'Online · the match keeps running';
+    // Compact match info: time left, map, and your own numbers.
+    const me = snap?.players.find((p) => p.id === humanId);
+    const info = document.createElement('div');
+    info.className = 'pause-info';
+    info.dataset.testid = 'pause-info';
+    const stat = (k: string, v: string) => { const d = document.createElement('div'); d.className = 'pause-stat'; d.innerHTML = '<span class="k"></span><span class="v"></span>'; d.children[0].textContent = k; d.children[1].textContent = v; return d; };
+    info.append(
+      stat('Time', document.querySelector('.hud .timer')?.textContent || '–'),
+      stat('Map', mapDef?.name ?? '–'),
+      stat('K / D', me ? `${me.kills} / ${me.deaths}` : '–'),
+      stat('Cash', me ? `$${me.inv.cash}` : '–'),
+    );
+    const resume = pauseButton(PAUSE_ICONS.play, 'Resume', 'btn primary');
     resume.onclick = () => { input.enabled = true; input.requestLock(); hidePause(); };
     resume.dataset.testid = 'resume';
-    paused.dataset.testid = 'pause';
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size:12px;color:var(--muted)';
-    note.textContent = backend.pause ? 'Match paused.' : 'Online matches keep running while this menu is open.';
-    const quit = document.createElement('button');
-    quit.className = 'btn';
-    quit.textContent = online ? 'Leave match' : 'Quit to menu';
+    // Settings / How to play open in place of the card (same backdrop), and the card comes back on close.
+    const under = (open: (onClose: () => void) => void) => () => {
+      paused?.classList.add('under');
+      open(() => paused?.classList.remove('under'));
+    };
+    const set = settingsButton();
+    set.className = 'btn pause-btn';
+    set.onclick = under((onClose) => openSettings({ onClose }));
+    const how = pauseButton(PAUSE_ICONS.help, 'How to play', 'btn');
+    how.dataset.testid = 'pause-how-to';
+    how.onclick = under((onClose) => openHowTo(onClose));
+    const quit = pauseButton(PAUSE_ICONS.exit, online ? 'Leave match' : 'Quit to menu', 'btn danger');
     quit.dataset.testid = 'pause-quit';
     quit.onclick = leave;
-    card.append(title, resume, settingsButton(), quit, note);
+    const btns = document.createElement('div');
+    btns.className = 'pause-btns';
+    btns.append(resume, set, how, quit);
+    card.append(head, info, btns);
     paused.append(card);
     document.body.append(paused);
+    resume.focus({ preventScroll: true });
   }
 
   function showFatal(titleText: string, detail: string) {

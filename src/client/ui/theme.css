@@ -165,6 +165,7 @@ button, input { font-family: inherit; }
 .ui-btn:hover:not(:disabled), .btn:hover:not(:disabled) { background: var(--btn-bg-hover); transform: translateY(-1px); }
 .ui-btn:active:not(:disabled), .btn:active:not(:disabled) { transform: translateY(1px) scale(0.985); box-shadow: inset 0 0 0 1px var(--btn-ring), inset 0 2px 0 rgba(0, 0, 0, 0.3); }
 .ui-btn:focus-visible, .btn:focus-visible { outline: none; box-shadow: var(--focus-inset); }
+.ui-btn[hidden], .btn[hidden] { display: none; }
 .ui-btn:disabled, .btn:disabled { opacity: 0.4; cursor: not-allowed; filter: saturate(0.4); }
 .ui-btn--primary, .btn.primary {
   --btn-bg: var(--c-orange); --btn-bg-hover: var(--c-orange-hi); --btn-fg: var(--c-on-orange); --btn-ring: rgba(255, 255, 255, 0.18);

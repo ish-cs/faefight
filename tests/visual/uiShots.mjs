@@ -120,6 +120,8 @@ if (needGame) {
     await page.evaluate(() => document.body.classList.add('storm-off'));
   }
   if (want('hud-sky')) { await page.evaluate(() => { window.__faefight.input.pitch = 0.5; }); await page.waitForTimeout(400); await shot('hud-sky'); await page.evaluate(() => { window.__faefight.input.pitch = -0.35; }); }
+  // Staged samples only for the HUD shots: gone before panels/overlays are shot.
+  await page.evaluate(() => document.querySelectorAll('.dmg-number.staged').forEach((n) => n.remove()));
   if (want('scoreboard')) {
     await page.keyboard.down('Tab'); await page.waitForTimeout(400); await shot('scoreboard'); await page.keyboard.up('Tab');
   }
@@ -131,6 +133,13 @@ if (needGame) {
     await page.getByTestId('pause').locator('[data-testid="open-settings"]').hover().catch(() => {});
     await page.waitForTimeout(250);
     await shot('pause-hover');
+    if (prefix !== 'before') {
+      await page.getByTestId('pause').locator('[data-testid="open-settings"]').click();
+      await page.waitForTimeout(450);
+      await shot('pause-settings');
+      await page.getByTestId('settings-close').click();
+      await page.waitForTimeout(400);
+    }
     await page.getByTestId('resume').click().catch(() => {});
     await page.waitForTimeout(300);
   }
@@ -150,9 +159,11 @@ if (needGame) {
     await page.waitForTimeout(300);
   }
   if (want('recap')) {
-    await dbg('teleport', 0, 0);
-    await page.getByTestId('death-recap').waitFor({ timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(500);
+    // Drown halfway between two islands (open water) → "You drowned" recap.
+    const [a, b] = await dbg('map');
+    await dbg('teleport', (a.center.x + b.center.x) / 2, (a.center.z + b.center.z) / 2);
+    await page.getByTestId('death-recap').waitFor({ timeout: 15_000 }).catch((e) => console.error('no recap', String(e).slice(0, 80)));
+    await page.waitForTimeout(250);
     await shot('recap');
     await page.waitForFunction((id) => window.__faefight.snapshot().players.find((p) => p.id === id)?.alive, me, { timeout: 15_000 }).catch(() => {});
   }
@@ -167,6 +178,17 @@ if (needGame) {
       await shot('spectate');
     }
   }
+}
+// Side-by-side sheet of the four core screens, before vs this run.
+if (prefix !== 'before' && !only) {
+  const { existsSync, readFileSync } = await import('node:fs');
+  const img = (p) => existsSync(p) ? `data:image/png;base64,${readFileSync(p).toString('base64')}` : '';
+  const rows = ['menu', 'loading', 'settings', 'pause'].map((n) =>
+    `<div class="r"><b>${n}</b><img src="${img(`${out}/ui-before-${n}.png`)}"><img src="${img(`${out}/ui-${prefix}-${n}.png`)}"></div>`).join('');
+  const sheet = await browser.newPage({ viewport: { width: 1480, height: 1900 } });
+  await sheet.setContent(`<style>body{margin:0;background:#04121b;color:#f5efe4;font:700 16px sans-serif}.h,.r{display:grid;grid-template-columns:90px 1fr 1fr;gap:10px;padding:6px 10px}img{width:100%;display:block}b{writing-mode:vertical-rl;transform:rotate(180deg);text-transform:uppercase;letter-spacing:.2em}</style><div class="h"><span></span><span>BEFORE</span><span>AFTER</span></div>${rows}`);
+  await sheet.screenshot({ path: `${out}/ui-compare-core.png`, fullPage: true });
+  console.log('shot compare-core');
 }
 await browser.close();
 console.log('done');

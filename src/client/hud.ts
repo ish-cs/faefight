@@ -41,6 +41,39 @@ function priceOf(item: ShopItem, genLevel = 1, me?: PlayerState | null): number 
   return CHARGE.price;
 }
 
+/** Tiny name under each shop icon. */
+function shortOf(item: ShopItem): string {
+  if (item === 'genUpgrade') return 'Generator';
+  if (item === 'ammo') return 'Ammo';
+  const g = lockedGunOf(item);
+  return g ? `Lock ${SHORT[g]}` : SHORT[item as HotbarItem] ?? item;
+}
+
+/** Shop info-bar text: what the item is and does, beyond its name. */
+function detailsOf(item: ShopItem, price: number, genLevel: number, me: PlayerState): string {
+  const name = labelOf(item);
+  const gun = lockedGunOf(item);
+  if (gun) return `Lock ${LABEL[gun]}: you respawn with it after dying · ${Math.round(lockPrice(gun) / WEAPONS[gun].price)}× the gun's price · $${price}`;
+  if (item === 'genUpgrade') {
+    if (genLevel >= GENERATOR_MAX_LEVEL) return `Generator Lv${genLevel}: fully upgraded`;
+    const now = generatorSpec(genLevel), next = generatorSpec(genLevel + 1);
+    return `Generator Lv${genLevel} → Lv${genLevel + 1}: $${now.rate}/s → $${next.rate}/s, holds $${next.cap} · $${price}`;
+  }
+  if ((GUNS as readonly string[]).includes(item)) {
+    const w = WEAPONS[item as WeaponKind];
+    return `${name} · ${w.dmg}${w.pellets > 1 ? `×${w.pellets}` : ''} dmg · ${w.rps}/s · mag ${w.mag} · $${price}`;
+  }
+  if (item in PIECES) return `${name} · ${PIECES[item as PieceKind].hp} HP wall · $${price} (Shift+click buys 5)`;
+  if (item === 'ammo') {
+    const g = ammoTarget(me);
+    return g ? `Ammo box · +${ammoPerBox(g)} rounds for your ${LABEL[g]} · $${price}` : 'Ammo box · equip a gun first';
+  }
+  if (item === 'grenade') return `Grenade · ${GRENADE.dmg} dmg in a ${GRENADE.radius} m blast · $${price}`;
+  if (item === 'charge') return `Breach charge · cracks walls and sealed doors · $${price}`;
+  if (item === 'medkit') return `Medkit · heals ${MEDKIT.heal} HP over ${MEDKIT.useSec}s · $${price}`;
+  return `${name} · $${price}`;
+}
+
 function labelOf(item: ShopItem): string {
   if (item === 'genUpgrade') return 'Generator ↑';
   const g = lockedGunOf(item);
@@ -111,6 +144,9 @@ export class Hud {
   private shieldFill = el('div', 'shield-fill');
   private shieldText = el('div', 'shield-text');
   private lastShield = 0;
+  private lastCash = 0;
+  /** Shop card under the pointer/focus: its info-bar text refreshes live. */
+  private shopHover: HTMLElement | null = null;
   private buffs = el('div', 'buffs');
   private speedBuff = el('div', 'buff speed');
   private drinkBox = el('div', 'heal drink');
@@ -259,7 +295,8 @@ export class Hud {
       let count = '';
       if (k && isGunItem(k)) {
         const a = inv.weapons[k];
-        count = a ? `${a.mag}/${a.spare}` : '';
+        // Mag only: the full mag/spare readout is the big ammo box bottom-right.
+        count = a ? `${a.mag}` : '';
         s.classList.toggle('reloading', reloading && i === ctx.selected);
       } else if (k) count = String(countOf(inv, k));
       setText(s.querySelector('.hb-count') as HTMLElement, count);
@@ -329,6 +366,9 @@ export class Hud {
     setText(this.hpText, `${Math.ceil(me.hp)}`);
     this.updateShield(me, snap);
     setText(this.cash, `$${inv.cash}`);
+    // Spent at a shop: the top-left cash ticks down visibly (the shop itself no longer repeats it).
+    if (this.panelKind && inv.cash < this.lastCash) this.flash(this.cash, 'spent');
+    this.lastCash = inv.cash;
 
     // Generator stored: shown for whichever generator you're near (yours, or theirs to steal).
     const near = snap.generators
@@ -345,8 +385,8 @@ export class Hud {
     const station = this.nearStation();
     const promptText = isPieceItem(me.hotbar[ctx.selected]) ? '' :
       station === 'shop' ? 'E  Shop' : station === 'potions' ? 'E  Potion seller' : station === 'vault' ? 'E  Vault' :
-      station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` :
-      station === 'gold' ? `E  Collect $${Math.floor(snap.center?.gold ?? 0)}` :
+      // The amount is already on the generator readout top-left; the prompt is just the action.
+      station === 'generator' || station === 'gold' ? 'E  Collect' :
       station === 'supply' ? supplyPrompt(snap.center) : '';
     setText(this.prompt, promptText);
     this.prompt.style.display = promptText && !this.panelKind ? '' : 'none';
@@ -357,7 +397,12 @@ export class Hud {
     const ammo = isGunItem(held) ? inv.weapons[held] : undefined;
     const reloading = me.reloadUntil > 0;
     const heldText = ammo ? `${ammo.mag}/${ammo.spare}` : held && !isGunItem(held) ? `×${countOf(inv, held)}` : '';
-    this.weapon.replaceChildren(el('span', 'wname', held ? LABEL[held] : 'Fists'), el('span', 'ammo', heldText));
+    // Rebuild only when it changes (this runs every frame).
+    const weaponKey = `${held ? LABEL[held] : 'Fists'}|${heldText}`;
+    if (this.weapon.dataset.key !== weaponKey) {
+      this.weapon.dataset.key = weaponKey;
+      this.weapon.replaceChildren(el('span', 'wname', held ? LABEL[held] : 'Fists'), el('span', 'ammo', heldText));
+    }
     this.weapon.classList.toggle('reloading', reloading);
     setText(this.extras, reloading ? 'Reloading…' : '');
     this.extras.style.display = reloading ? '' : 'none';
@@ -565,11 +610,16 @@ export class Hud {
           icon.innerHTML = ICONS[kind];
           const lock = el('span', 'ilock');
           lock.innerHTML = LOCK_ICON;
-          b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
-          b.onclick = (e) => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item, e.shiftKey); };
+          b.append(icon, el('span', 'iname', shortOf(item)), el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
+          b.onclick = (e) => {
+            if (b.getAttribute('aria-disabled') !== 'true') { this.act.buy(item, e.shiftKey); return; }
+            // Can't buy: shake the card; can't afford: also flash the cash readout top-left.
+            this.flash(b, 'deny');
+            if (b.classList.contains('poor')) this.flash(this.cash, 'deny');
+          };
           // The name/details show in the panel's info bar (never clipped by the panel edge).
-          const show = () => { setText(info, b.dataset.name ?? ''); info.classList.add('on'); };
-          const hide = () => info.classList.remove('on');
+          const show = () => { this.shopHover = b; setText(info, b.dataset.name ?? ''); info.classList.add('on'); };
+          const hide = () => { if (this.shopHover === b) this.shopHover = null; info.classList.remove('on'); };
           b.onmouseenter = show; b.onfocus = show; b.onmouseleave = hide; b.onblur = hide;
           row.append(b);
         }
@@ -584,13 +634,14 @@ export class Hud {
         // Lock cards only show up once you own (or have locked) that gun.
         section('Upgrades', ['genUpgrade', ...GUNS.map(lockItem)]);
       }
-      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid, info);
+      // No "Carrying $X" line: the cash is always top-left (it flashes on a buy or a can't-afford click).
+      this.shopHover = null;
+      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), grid, info);
       // Focus the panel (not a card, so no tooltip pops up): Tab or an arrow key then walks the cards.
       this.panel.tabIndex = -1;
       this.panel.onkeydown = (e) => this.shopArrows(e);
       this.panel.focus({ preventScroll: true });
     }
-    setText(this.panel.querySelector('.panel-cash') as HTMLElement, `Carrying $${me.inv.cash}`);
     const genLevel = this.snap?.genLevels?.[me.island] ?? 1;
     // Any island's shop NPC sells to you, but upgrades and locks only at your own.
     const atHome = !!this.map[me.island] && dist2D(this.map[me.island].shop, me.pos) <= ECONOMY.interactRadius;
@@ -605,14 +656,12 @@ export class Hud {
       setText(b.querySelector('.iprice') as HTMLElement, `$${price}`);
       b.classList.toggle('show-lock', !!lockGun || ((GUNS as readonly string[]).includes(item) && me.locked.includes(item as GunKind)));
       if (item === 'genUpgrade') {
-        const next = Math.min(GENERATOR_MAX_LEVEL, genLevel + 1), spec = generatorSpec(next);
-        b.dataset.name = genLevel >= GENERATOR_MAX_LEVEL ? `Generator Lv${genLevel} (max)` : `Generator ↑ Lv${next}: $${spec.rate}/s, holds $${spec.cap}`;
+        const next = Math.min(GENERATOR_MAX_LEVEL, genLevel + 1);
         if (genLevel >= GENERATOR_MAX_LEVEL) status = 'Max';
         else badge = `Lv${next}`;
       } else if (lockGun) {
         const locked = me.locked.includes(lockGun);
         b.hidden = !locked && !me.inv.weapons[lockGun];
-        b.dataset.name = `Lock ${LABEL[lockGun]}: respawn with it`;
         if (locked) status = 'Locked';
       } else if ((GUNS as readonly string[]).includes(item) && me.inv.weapons[item as WeaponKind]) status = 'Owned';
       else if (isHotbarItem(item) && countOf(me.inv, item) === 0 && !canAdd(me.hotbar, item)) status = 'Hotbar full';
@@ -633,6 +682,12 @@ export class Hud {
       b.dataset.status = status === 'Hotbar full' ? 'full' : status ? 'other' : '';
       setText(b.querySelector('.istatus') as HTMLElement, status);
       setText(b.querySelector('.ibadge') as HTMLElement, badge);
+      b.dataset.st = status;
+      // Info-bar text: what it does + why it can't be bought right now.
+      const why = status === 'Home shop' ? ' · only at your home shop' : status && status !== 'Max' ? ` · ${status}` : poor ? ` · need $${price - me.inv.cash} more` : '';
+      const details = detailsOf(item, price, genLevel, me) + why;
+      if (b.dataset.name !== details) b.dataset.name = details;
+      if (this.shopHover === b) setText(this.panel.querySelector('.shop-info') as HTMLElement, details);
       const label = `${labelOf(item)}, $${price}${status ? `, ${status}` : poor ? ', not enough cash' : ''}${badge ? `, ${badge}` : ''}`;
       if (b.getAttribute('aria-label') !== label) b.setAttribute('aria-label', label);
     }
