@@ -13,7 +13,8 @@ import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
-import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { BuildPredictor } from './buildPredict';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { errors, installErrorReporting } from './telemetry/errors';
@@ -1020,8 +1021,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let aim: AimOutcome | null = null;
   /** Newest snapshot as received (not delayed by the interpolation buffer): busy state, pieces. */
   let latest: Snapshot | null = null;
-  /** A sent build not yet confirmed by a 'placed' event (one at a time, so drag-build can't double-place). */
-  let buildPending: { at: number } | null = null;
+  /** Own placements shown at once and reconciled with the host's pieces (buildPredict.ts); also paces placing. */
+  const builds = new BuildPredictor();
   /** A click that couldn't place yet (busy placing the last piece) still counts for a moment. */
   let placeWantedAt = -Infinity;
   let lastSnapKey = '';
@@ -1355,20 +1356,37 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const ghostState = () => (aim ? aim.ok : null);
   const buildNote = () => (!aim ? null : !aim.ok ? `✕ ${aim.reason}` : SNAP_LABEL[aim.tag] ?? null);
 
-  /** Place from the current ghost if it's valid, we have the piece and aren't still placing the last one. */
+  /** Pieces of this kind we can still place: the newest host count minus our predictions it doesn't show yet. */
+  const piecesLeft = (me: Snapshot['players'][number], kind: PieceKind) =>
+    (me.inv.pieces[kind] ?? 0) - builds.unconfirmed(latest?.pieces ?? [], kind);
+
+  /**
+   * Place from the current ghost if it's valid, we have the piece and the last placement's placeSec has passed
+   * (paced locally; the host enforces the same rate). The piece shows at once as a prediction.
+   */
   function tryPlace(): boolean {
     const now = performance.now();
-    if (buildPending && now - buildPending.at > 1500) buildPending = null; // lost / rejected
-    if (!aim?.ok || !aim.req || buildPending) return false;
-    const me = latest?.players.find((p) => p.id === humanId);
-    if (!me || !me.alive || (me.inv.pieces[aim.req.kind] ?? 0) <= 0) return false;
-    if (me.busyUntil > latest!.time) return false;
+    if (!aim?.ok || !aim.req || !builds.canPlace(now) || !latest) return false;
+    const me = latest.players.find((p) => p.id === humanId);
+    if (!me || !me.alive || piecesLeft(me, aim.req.kind) <= 0) return false;
+    if (me.healAt !== null || me.drinking) return false; // busy with a medkit/potion: the host would refuse it
     input.queue({ build: aim.req });
-    buildPending = { at: now };
+    const afterId = latest.pieces.reduce((m, p) => Math.max(m, p.id), 0);
+    const piece = builds.place(aim.req.kind, aim.ghost, aim.rotY, humanId, now, afterId);
+    predictor?.addLocalPiece(piece);
+    renderer.setPredictedPieces(builds.pieces);
     placeWantedAt = -Infinity;
     renderer.pulseGhost();
     return true;
   }
+
+  /** Host pieces about to be drawn: confirmed predictions give way to the real piece, refused ones fade. */
+  const reconcileBuilds = (pieces: readonly PieceState[]) => {
+    const r = builds.reconcile(pieces, performance.now());
+    if (!r.confirmed.length && !r.rejected.length) return;
+    for (const p of [...r.confirmed, ...r.rejected]) predictor?.removeLocalPiece(p.id);
+    renderer.setPredictedPieces(builds.pieces);
+  };
 
   /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
   const gunHud = (me: Snapshot['players'][number] | undefined, own = true) => {
@@ -1392,6 +1410,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (DEBUG) for (const e of s.events) if (e.type === 'shot' && e.data.by === humanId) shotTimes.applied.push(performance.now());
     snap = s;
     snapTime = s.time; snapAt = performance.now();
+    reconcileBuilds(s.pieces); // before pushSnapshot: a confirmed prediction hands over to the real piece in the same draw
     hud.pushEvents(renderer.pushSnapshot(s));
     const meSnap = s.players.find((p) => p.id === humanId);
     fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
@@ -1470,7 +1489,6 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       latest = s;
       if (buffer) qol.onNetSnapshot();
       shots.reconcile(s.events, humanId, performance.now());
-      if (buildPending && s.events.some((e) => e.type === 'placed' && (e.data as { by?: number }).by === humanId)) buildPending = null;
       renderer.ingest(s);
       if (buffer) buffer.push(s); else applySnapshot(s);
     },
@@ -1554,6 +1572,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       replayState: () => (replay ? replay.last : null),
       /** Current build ghost: snap tag, ghost/rest position, rotation, validity (+ reason) and the exact request a click sends. */
       buildAim: () => aim,
+      /** Build prediction: unconfirmed pieces and placed/confirmed/rejected counts. */
+      buildPredict: () => ({ pending: builds.pieces, ...builds.stats }),
       /** The sim's own verdict for a build request (round trip), to cross-check the local ghost. */
       serverPreview: (req: BuildRequest) => new Promise<Placement>((res) => { const k = ++debugPreviewSeq; debugPreviews.set(k, res); backend.preview(req, k); }),
     };
@@ -1676,6 +1696,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       fpsFrames = 0; fpsSince = now;
     }
     if (buffer) for (const r of buffer.advance(dt)) applySnapshot(r.snap);
+    if (snap) reconcileBuilds(snap.pieces); // refusals time out between snapshots too
+    renderer.setPieceFades(builds.fades(now));
     renderer.beginFrame();
 
     // Movement: the raw (camera-frame) move axes become numbered fixed-step commands. The sim and
@@ -1744,9 +1766,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
           physics: predictor.world, kind: buildKind,
           ray: { eye: { x: cam.position.x, y: cam.position.y, z: cam.position.z }, dir: { x: aimDir.x, y: aimDir.y, z: aimDir.z } },
           player: { x: feet.x, y: feet.y, z: feet.z }, yaw: input.yaw, buildRot: input.buildRot, free: input.free,
-          humanId, pieces: (latest ?? snap!).pieces, islands: map, myIsland: me.island,
+          // predicted pieces too: a held place keeps building along the aim instead of re-aiming at the same spot
+          humanId, pieces: (latest ?? snap!).pieces.concat(builds.pieces), islands: map, myIsland: me.island,
         });
-        if (!(me.inv.pieces[buildKind] ?? 0)) { aim.ok = false; aim.reason = 'none left'; aim.req = null; }
+        const meLatest = latest?.players.find((p) => p.id === humanId) ?? me;
+        if (piecesLeft(meLatest, buildKind) <= 0) { aim.ok = false; aim.reason = 'none left'; aim.req = null; }
         const snapKey = aim.tag === 'aim' ? '' : `${aim.tag}${aim.ghost.x.toFixed(1)}${aim.ghost.z.toFixed(1)}`;
         if (snapKey && snapKey !== lastSnapKey && aim.ok) audio.ui('tick', 0.15);
         lastSnapKey = snapKey;
