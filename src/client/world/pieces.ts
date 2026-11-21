@@ -679,8 +679,9 @@ export class PieceLayer {
         let runX = p.pos.x * c - p.pos.z * sn;
         if (kind === 'metal') runX = Math.round(runX / CORR_PITCH) * CORR_PITCH; // keep texture ribs on the geometry ribs
         L.conn.setXYZW(i, runX, p.pos.y, p.pos.x * sn + p.pos.z * c, this.graph.mask(p.id));
-        if (kind === 'container') _c.setHex(CONTAINER_COLORS[p.id % CONTAINER_COLORS.length]);
-        else { const j = 0.92 + ((p.id * 37) % 17) / 100; _c.setRGB(j, j, j); }
+        // abs: predicted pieces (buildPredict.ts) have negative ids until the host confirms them
+        if (kind === 'container') _c.setHex(CONTAINER_COLORS[Math.abs(p.id) % CONTAINER_COLORS.length]);
+        else { const j = 0.92 + ((Math.abs(p.id) * 37) % 17) / 100; _c.setRGB(j, j, j); }
         for (const im of L.meshes) im.setColorAt(i, _c);
         this.byId.set(p.id, { kind, index: i, x: p.pos.x, y: p.pos.y, z: p.pos.z, rotY: p.rotY, color: _c.getHex() });
       }
