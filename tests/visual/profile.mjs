@@ -16,7 +16,7 @@ const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, dev
 page.setDefaultTimeout(240_000);
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
-await page.addInitScript((q) => { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q, dynamicResolution: false } })); }, preset);
+await page.addInitScript((q) => { localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q, dynamicResolution: false } })); }, preset);
 await page.goto(`${url}/?debug=1&bots=7&gputime=1`);
 await page.getByTestId('play-easy').click();
 await page.waitForFunction(() => window.__faefight?.snapshot?.() && !window.__faefightLoading?.visible(), null, { timeout: 180_000 });

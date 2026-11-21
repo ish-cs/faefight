@@ -31,7 +31,7 @@ async function run(quality) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript((q) => {
-    try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q.q, dynamicResolution: false, competitive: q.c } })); } catch { /* fresh profile */ }
+    try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q.q, dynamicResolution: false, competitive: q.c } })); } catch { /* fresh profile */ }
   }, { q: quality, c: competitive });
   await page.goto(`${url}/?debug=1&bots=7&gputime=1${stress > 1 ? `&stress=${stress}` : ''}${arg('query', '') ? `&${arg('query', '')}` : ''}`);
   const t0 = Date.now();
