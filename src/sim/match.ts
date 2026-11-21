@@ -63,6 +63,8 @@ export class Match implements MatchApi {
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
   private feed: FeedLine[] = [];
+  /** Events from debug calls made between ticks, emitted with the next tick. */
+  private debugEvents: MatchEvent[] = [];
   readonly map: IslandLayout[];
   private center: CenterState = newCenterState();
   private cosmetics: Cosmetics;
@@ -157,7 +159,9 @@ export class Match implements MatchApi {
     const now = this.s.time + DT;
     this.s.time = now;
     this.tickNo++;
-    this.events = [];
+    // Debug kills between ticks land in this tick's events (so clients see them like real kills).
+    this.events = this.debugEvents;
+    this.debugEvents = [];
 
     for (const p of this.s.players.values()) {
       const cmds = this.bots.has(p.id) ? undefined : moves?.get(p.id);
@@ -277,8 +281,9 @@ export class Match implements MatchApi {
     this.potionShops = potionShopsAt(positions);
   }
 
-  debugKill(playerId: number): void {
-    this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
+  /** Debug: kill a player, optionally credited to `killer` (e2e: killcam / kill feed). */
+  debugKill(playerId: number, killer: number | null = null): void {
+    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false, killer));
   }
 
   /** Kill (if alive) and eliminate for good: no respawn. The win check runs on the next tick. */

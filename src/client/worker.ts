@@ -125,7 +125,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
           }
         }
         else if (msg.cmd === 'eliminate') match.debugEliminate(msg.playerId);
-        else if (msg.cmd === 'kill') match.debugKill(msg.playerId);
+        else if (msg.cmd === 'kill') match.debugKill(msg.playerId, msg.killer ?? null);
         else if (msg.cmd === 'give') match.debugGive(msg.id ?? humanId, msg.inv);
         break;
     }

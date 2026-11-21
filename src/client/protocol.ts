@@ -22,7 +22,8 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
   | { type: 'debug'; cmd: 'hp'; hp: number }
-  | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }
+  | { type: 'debug'; cmd: 'eliminate'; playerId: number }
+  | { type: 'debug'; cmd: 'kill'; playerId: number; killer?: number }
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
   | { type: 'debug'; cmd: 'potionShop'; x: number; z: number }
   /** Perf testing: n pieces on rings around (x, z), placement rules skipped. */

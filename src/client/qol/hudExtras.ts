@@ -265,8 +265,8 @@ export class QolHud {
     this.myIsland = island;
   }
 
-  /** Every applied snapshot (after the HUD's own update). */
-  onSnapshot(s: Snapshot, selected: number) {
+  /** Every applied snapshot (after the HUD's own update). Returns the death recap on the snapshot you died. */
+  onSnapshot(s: Snapshot, selected: number): Recap | null {
     const now = performance.now();
     const me = s.players.find((p) => p.id === this.humanId);
     for (const e of s.events) {
@@ -279,6 +279,7 @@ export class QolHud {
     if (me?.alive && this.recapNode) { this.recapNode.remove(); this.recapNode = null; }
     if (me) this.updateAmmo(me, selected);
     this.updateSummary(s);
+    return r;
   }
 
   /** Remote snapshot arrival (before buffering): drives the "bad connection" indicator. */

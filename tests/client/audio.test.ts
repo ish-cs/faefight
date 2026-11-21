@@ -136,7 +136,7 @@ describe('SoundDirector: events → cues', () => {
     expect(sounds(d.update(snap(1.1, ps, [['hit', { target: ME, by: BOT, amount: 30, shieldAmount: 10, broke: true }]])))).toEqual(['shieldHit', 'shieldBreak', 'hurt']);
     expect(sounds(d.update(snap(1.2, ps, [['hit', { target: BOT, by: ME, amount: 20, shieldAmount: 20, broke: false }]])))).toEqual(['shieldHit', 'hitmarker']);
     const cues = d.update(snap(1.3, ps, [['hit', { target: BOT, by: ME, amount: 20, shieldAmount: 5, broke: true }]]));
-    expect(sounds(cues)).toEqual(['shieldHit', 'shieldBreak', 'impact', 'hitmarker']);
+    expect(sounds(cues)).toEqual(['shieldHit', 'shieldBreak', 'impact', 'hitmarker', 'shieldCrack']); // + your crack
     expect(cues[1].pos).not.toBeNull();
   });
 

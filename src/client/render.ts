@@ -177,10 +177,48 @@ export class Renderer {
   /** Debug: current interpolation delay (s) behind the newest snapshot. */
   get interpDelay() { return this.clock.delay; }
 
+  /**
+   * Killcam replay: while set, the scene shows `snap` (a past snapshot: its players, pieces and
+   * projectiles) with players placed by `motion`, and live snapshots only update the HUD-side state
+   * (their pieces/projectiles/effects are applied again when the replay ends).
+   */
+  private replay: { snap: Snapshot; motion: (id: number, out: Motion) => Motion | null } | null = null;
+  private replaySnap: Snapshot | null = null;
+
+  setReplay(r: { snap: Snapshot; motion: (id: number, out: Motion) => Motion | null } | null) {
+    if (r) {
+      if (r.snap !== this.replaySnap) {
+        this.replaySnap = r.snap;
+        this.world.syncPieces(r.snap.pieces);
+        this.gunFx.syncProjectiles(r.snap.projectiles ?? []);
+        this.snapArrived = performance.now();
+      }
+      this.replay = r;
+      return;
+    }
+    if (!this.replay) return;
+    this.replay = null;
+    this.replaySnap = null;
+    const c = this.curr;
+    if (c) { this.world.syncPieces(c.pieces); this.gunFx.syncProjectiles(c.projectiles ?? []); }
+  }
+
+  get replaying() { return this.replay !== null; }
+
+  /** Effects of past events during a replay (tracers, muzzle flashes, hit sparks, explosions). */
+  replayEvents(events: readonly MatchEvent[]) {
+    for (const e of events) if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.onEvent(e);
+  }
+
   /** Feed a snapshot's discrete state (pieces, loot, events). Returns its events for the HUD. */
   pushSnapshot(snap: Snapshot): MatchEvent[] {
     this.curr = snap;
     this.waterY = snap.waterY;
+    if (this.replay) {
+      // The replay owns pieces, projectiles and effects until it ends.
+      this.syncLoot(snap);
+      return snap.events;
+    }
     this.world.syncPieces(snap.pieces);
     this.world.syncCosmetics(snap.broken ?? []);
     this.syncLoot(snap);
@@ -342,9 +380,11 @@ export class Renderer {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
-    const snap = this.curr;
+    const snap = this.replay?.snap ?? this.curr;
+    const motion = this.replay?.motion ?? this.motionOf;
     if (snap) {
-      this.characters.sync(snap.players, this.humanId, localYaw, snap.time, this.motionOf, snap.hidden);
+      // Replay: nobody is "local" (everyone's yaw comes from the recording).
+      this.characters.sync(snap.players, this.replay ? -1 : this.humanId, localYaw, snap.time, motion, snap.hidden);
       for (const m of this.loot.values()) m.rotation.y += 1.2 * dt;
     }
 
@@ -360,7 +400,8 @@ export class Renderer {
     let nf = 0;
     if (snap) for (const p of snap.players) {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
-      if (this.playerPos(p.id, this.feet[nf])) nf++;
+      const m = motion(p.id, this.motion);
+      if (m) { this.feet[nf].copy(m.pos); nf++; }
     }
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
