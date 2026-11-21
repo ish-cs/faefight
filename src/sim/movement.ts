@@ -20,6 +20,32 @@ export const MOVE = {
   jumpBufferSec: 0.1,
 };
 
+/**
+ * Stamina ("stress"): sprinting drains it, resting refills it, taking damage stresses you (an
+ * immediate drain plus slower recovery for a while). Part of the movement state so the client's
+ * prediction replays it exactly like the sim.
+ */
+export const STAMINA = {
+  max: 100,
+  /** Per second while sprinting (full → empty in ~5.5 s). */
+  drainPerSec: 18,
+  /** Per second once rested `regenDelaySec` without sprinting. */
+  regenPerSec: 12,
+  /** Regen multiplier when standing still (no move input). */
+  idleRegenMul: 1.6,
+  regenDelaySec: 0.8,
+  /** Can't START sprinting below this. */
+  startMin: 15,
+  /** Emptied: exhausted (no sprint at all) until back above this. */
+  recoverAt: 30,
+  jumpCost: 5,
+  /** Immediate drain per point of damage taken. */
+  damagePerHp: 0.6,
+  /** After damage, regen runs at `stressRegenMul` for this long. */
+  stressSec: 3,
+  stressRegenMul: 0.35,
+};
+
 /** Movement state carried between steps (and in snapshots, so a client can resume prediction). */
 export type MoveState = {
   grounded: boolean;
@@ -29,6 +55,16 @@ export type MoveState = {
   jumpBuf: number;
   /** Last movement-command sequence number applied (0 = none). */
   ack: number;
+  /** Stamina 0..STAMINA.max. */
+  stamina: number;
+  /** Ran dry: no sprinting until stamina is back over STAMINA.recoverAt. */
+  exhausted: boolean;
+  /** Sprinted on the last step (a sprint already going may continue below STAMINA.startMin). */
+  sprinting: boolean;
+  /** Seconds since stamina was last spent sprinting (regen starts at STAMINA.regenDelaySec; capped there). */
+  rest: number;
+  /** Seconds of damage stress left (slower regen). */
+  stress: number;
 };
 
 /** One fixed (1/30 s) movement step's worth of input, numbered by the client for reconciliation. */
@@ -38,7 +74,49 @@ export type Mover = { pos: Vec3; vel: Vec3; mv: MoveState };
 /** The collision side: move the capsule by `desired` (sliding), return the new feet position. */
 export type MoveBody = { movePlayer(desired: Vec3): { pos: Vec3; grounded: boolean } };
 
-export const newMoveState = (): MoveState => ({ grounded: false, airTime: 0, jumpBuf: 0, ack: 0 });
+export const newMoveState = (): MoveState => ({
+  grounded: false, airTime: 0, jumpBuf: 0, ack: 0, stamina: STAMINA.max, exhausted: false, sprinting: false, rest: STAMINA.regenDelaySec, stress: 0,
+});
+
+/** Full stamina, no stress (respawn). */
+export function refillStamina(mv: MoveState): void {
+  mv.stamina = STAMINA.max;
+  mv.exhausted = false;
+  mv.sprinting = false;
+  mv.rest = STAMINA.regenDelaySec;
+  mv.stress = 0;
+}
+
+/** Taking `damage` stresses you: an immediate drain proportional to it, and slow regen for a while. */
+export function stressFromDamage(mv: MoveState, damage: number): void {
+  if (!(damage > 0)) return;
+  mv.stamina = Math.max(0, mv.stamina - damage * STAMINA.damagePerHp);
+  mv.stress = STAMINA.stressSec;
+}
+
+/**
+ * One step of stamina: returns whether this step sprints. `want` = sprint held while moving.
+ * Sprint can't start below startMin, stops at 0 (exhausted until over recoverAt); not sprinting
+ * regenerates after a short pause (faster standing still, slower while stressed).
+ */
+export function stepStamina(mv: MoveState, want: boolean, moving: boolean, dt: number): boolean {
+  if (mv.exhausted && mv.stamina >= STAMINA.recoverAt) mv.exhausted = false;
+  const on = want && !mv.exhausted && (mv.sprinting || mv.stamina >= STAMINA.startMin);
+  if (on) {
+    mv.stamina -= STAMINA.drainPerSec * dt;
+    mv.rest = 0;
+    if (mv.stamina <= 0) { mv.stamina = 0; mv.exhausted = true; }
+  } else {
+    mv.rest = Math.min(STAMINA.regenDelaySec, mv.rest + dt);
+    if (mv.rest >= STAMINA.regenDelaySec - EPS) {
+      const rate = STAMINA.regenPerSec * (moving ? 1 : STAMINA.idleRegenMul) * (mv.stress > 0 ? STAMINA.stressRegenMul : 1);
+      mv.stamina = Math.min(STAMINA.max, mv.stamina + rate * dt);
+    }
+  }
+  mv.stress = Math.max(0, mv.stress - dt);
+  mv.sprinting = on && !mv.exhausted;
+  return on;
+}
 
 const EPS = 1e-6;
 const AIR_CAP = 1;
@@ -82,7 +160,9 @@ export function accelerate(vx: number, vz: number, wx: number, wz: number, groun
 /** `speedMult` scales the wished speed (speed potion). */
 export function stepMove(m: Mover, cmd: MoveCmd, dt: number, body: MoveBody, speedMult = 1): { landingSpeed: number } {
   const mv = m.mv;
-  const w0 = wishVelocity(cmd.moveX, cmd.moveZ, cmd.yaw, cmd.sprint);
+  const moving = Math.hypot(cmd.moveX, cmd.moveZ) > EPS;
+  const sprint = stepStamina(mv, cmd.sprint && moving, moving, dt);
+  const w0 = wishVelocity(cmd.moveX, cmd.moveZ, cmd.yaw, sprint);
   const wish = { x: w0.x * speedMult, z: w0.z * speedMult };
   const h = accelerate(m.vel.x, m.vel.z, wish.x, wish.z, mv.grounded, dt);
   m.vel.x = h.x;
@@ -95,6 +175,7 @@ export function stepMove(m: Mover, cmd: MoveCmd, dt: number, body: MoveBody, spe
     m.vel.y = PLAYER.jumpVelocity;
     mv.jumpBuf = 0;
     mv.airTime = AIR_CAP;
+    mv.stamina = Math.max(0, mv.stamina - STAMINA.jumpCost);
     jumped = true;
   } else {
     m.vel.y -= PLAYER.gravity * dt;

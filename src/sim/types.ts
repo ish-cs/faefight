@@ -124,6 +124,8 @@ export type PlayerState = {
   /** Shots in the current burst (recoil climbs with it). */
   burst: number;
   busyUntil: number;
+  /** Stamina 0..100 (sprint "stress"; mirrors mv.stamina, which prediction replays). Sent only to its owner and their spectators. */
+  stamina: number;
   /** Movement state (grounding, coyote/jump-buffer timers, last applied command seq): see movement.ts. */
   mv?: MoveState;
 };
@@ -161,6 +163,8 @@ export type Snapshot = {
   winner: number | null;
   /** Potion seller NPCs (anyone may buy there). Optional so hand-built snapshots (tests, tools) can omit it. */
   potionShops?: PotionShop[];
+  /** Host side only: every bot's current thinking. Remote spectators get just the followed bot's (net/interest.ts). */
+  brains?: BotBrainInfo[];
   events: MatchEvent[];
   /**
    * Remote clients only (net/interest.ts): players this client can't currently perceive. They stay
@@ -189,6 +193,19 @@ export type PlayerStats = {
   /** Longest time alive in one life (s). */
   longestLife: number;
   headshots: number;
+};
+
+/**
+ * What a bot is thinking (bots/bot.ts debug), for spectators: personality, goal + reason, its steps
+ * (`step` = index of the current one), fight odds (0..1, null when not fighting) and a one-line thought.
+ */
+export type BotBrainInfo = {
+  id: number; personality: string; difficulty: Difficulty; action: string;
+  goal: string | null; reason: string; steps: string[]; step: number; fightOdds: number | null; thought: string;
+  /** Rival it's going after (player id). */
+  target: number | null;
+  /** Top-scored options of its last decision, best first (why it chose this). */
+  options: { goal: string; score: number }[];
 };
 
 export const NO_INPUT: PlayerInput = {

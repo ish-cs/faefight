@@ -117,9 +117,12 @@ describe('interest management', () => {
     expect(net.players.find((p) => p.id === 1)!.inv!.cash).toBe(77);
   });
 
-  test('enemy generator cash is hidden unless you are near it; loot contents are never sent', () => {
+  test('enemy generator cash is hidden unless you are near it; loot contents only for bags nearby', () => {
     const { map, players } = setup();
-    const bag = { id: 9, pos: v3(0, 2, 0), inv: { ...emptyInventory(), cash: 500 } };
+    const bag = { id: 9, pos: { ...map[1].center }, inv: { ...emptyInventory(), cash: 500 } };
+    const nearBag = { id: 10, pos: v3(players[0].pos.x + 5, players[0].pos.y, players[0].pos.z), inv: { ...emptyInventory(), cash: 70 } };
+    const withNear = view(new InterestManager(map), snapOf(players, { loot: [bag, nearBag] }), 1);
+    expect(withNear.loot[1].inv.cash).toBe(70);
     const out = view(new InterestManager(map), snapOf(players, { loot: [bag] }), 1);
     expect(out.generators.find((g) => g.island === 0)!.stored).toBe(321);
     expect(out.generators.find((g) => g.island === 1)!.stored).toBe(0);

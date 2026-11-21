@@ -1,6 +1,6 @@
 import { validatePlacement, type Placement } from '../sim/building';
 import { BUILD, MAP, PIECES } from '../sim/constants';
-import type { IslandLayout } from '../sim/map';
+import { harborCraneBoxes, type IslandLayout } from '../sim/map';
 import type { Physics } from '../sim/physics';
 import type { BuildRequest, PieceKind, PieceState, Vec3 } from '../sim/types';
 import { add, dist2D, forward, rotateY, v3, yawOf } from '../sim/vec';
@@ -188,6 +188,54 @@ export function candidatesFor(
         push({ tag: 'ramp', pos: v3(c.x, p.pos.y + 0.05, c.z), rotY: yawOf(n), pts: [v3(c.x, p.pos.y + s.h / 2, c.z), v3(fc.x, top, fc.z)],
           anchor: v3(fc.x, top, fc.z), useful: 0.9, radius: 1.5 });
       }
+    }
+    // Ramp staircase: the next ramp starts flush at a ramp's top edge, same direction (the sim chains it).
+    if (kind === 'ramp' && p.kind === 'ramp' && top - player.y < BUILD.reach - 0.5) {
+      const c = at(p, v3(0, 0, ps.d));
+      const joint = at(p, v3(0, ps.h, ps.d / 2));
+      push({ tag: 'ramp', pos: v3(c.x, top + 0.05, c.z), rotY: p.rotY, pts: [v3(c.x, top + s.h / 2, c.z), joint, v3(c.x, top, c.z)],
+        anchor: joint, useful: 1.25, radius: 2.4 });
+    }
+    // A ramp climbing on from the top of a wall / scaffold end / container: low edge on its far top edge.
+    if (kind === 'ramp' && (WALLS.has(p.kind) || p.kind === 'scaffold' || p.kind === 'container') && top - player.y < BUILD.reach - 0.5) {
+      const faces = p.kind === 'container' ? [v3(1, 0, 0), v3(-1, 0, 0), v3(0, 0, 1), v3(0, 0, -1)] : [v3(0, 0, 1), v3(0, 0, -1)];
+      for (const nl of faces) {
+        const n = rotateY(nl, p.rotY);
+        if (n.x * (p.pos.x - player.x) + n.z * (p.pos.z - player.z) < 0) continue; // must climb away from the player
+        const half = nl.x !== 0 ? ps.w / 2 : ps.d / 2;
+        const edge = v3(p.pos.x + n.x * half, top, p.pos.z + n.z * half);
+        const c = add(edge, v3(n.x * (s.d / 2), 0, n.z * (s.d / 2)));
+        push({ tag: 'ramp', pos: v3(c.x, top + 0.05, c.z), rotY: yawOf(n) + Math.PI, pts: [v3(c.x, top + s.h / 2, c.z), edge],
+          anchor: edge, useful: 1.0, radius: 1.8 });
+      }
+    }
+  }
+
+  // Crane: flush against a leg face (at the height we stand), or on top of a beam.
+  for (const b of harborCraneBoxes(islands)) {
+    if (dist2D(b.center, player) > BUILD.reach + Math.max(b.half.x, b.half.z) + 2) continue;
+    if (b.half.y > 2) {
+      if (player.y < b.center.y - b.half.y || player.y > b.center.y + b.half.y) continue;
+      const y = player.y - (kind === 'scaffold' ? s.h : 0) + 0.02;
+      for (const nl of [v3(1, 0, 0), v3(-1, 0, 0), v3(0, 0, 1), v3(0, 0, -1)]) {
+        const n = rotateY(nl, b.rotY);
+        if (n.x * (player.x - b.center.x) + n.z * (player.z - b.center.z) <= 0) continue;
+        const half = nl.x !== 0 ? b.half.x : b.half.z;
+        const face = v3(b.center.x + n.x * half, player.y + 0.5, b.center.z + n.z * half);
+        const c = v3(face.x + n.x * (s.d / 2 + 0.02), y, face.z + n.z * (s.d / 2 + 0.02));
+        push({ tag: 'beside', pos: c, rotY: yawOf(n), pts: [v3(c.x, y + s.h / 2, c.z), face], anchor: face, useful: 0.9, radius: 1.6 });
+      }
+    } else {
+      const top = b.center.y + b.half.y;
+      if (top - player.y > BUILD.reach - 0.5 || kind === 'ramp') continue;
+      const ax = rotateY(v3(0, 0, 1), b.rotY);
+      const long = b.half.z >= b.half.x;
+      const dir = long ? ax : rotateY(v3(1, 0, 0), b.rotY);
+      const len = long ? b.half.z : b.half.x;
+      const t = Math.max(-len + 1, Math.min(len - 1, (player.x - b.center.x) * dir.x + (player.z - b.center.z) * dir.z));
+      const c = v3(b.center.x + dir.x * t, top + 0.05, b.center.z + dir.z * t);
+      push({ tag: 'stack', pos: c, rotY: long ? b.rotY : b.rotY + Math.PI / 2, pts: [v3(c.x, top + s.h / 2, c.z), v3(c.x, top, c.z)],
+        anchor: v3(c.x, top, c.z), useful: 0.7, radius: 1.4 });
     }
   }
 

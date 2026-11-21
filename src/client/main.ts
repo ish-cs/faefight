@@ -117,6 +117,8 @@ type Backend = {
   input(i: PlayerInput, cmds: MoveCmd[]): void;
   preview(req: BuildRequest, key: number): void;
   chat(text: string): void;
+  /** Spectating: the player followed (null = none). Remote only: the host then sends their HUD state. */
+  follow?(id: number | null): void;
   /** Stop delivering to the sink (game torn down for a rematch / back to lobby). Remote: the link stays open. */
   close(): void;
   /** Vs bot only: stop / restart the simulation (pause card). */
@@ -217,6 +219,7 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
     input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds, ack: wire.ack || undefined }); },
     preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
     chat: (text) => link.send({ t: 'chat', text }),
+    follow: (id) => { if (!disposed) link.send({ t: 'follow', id }); },
     close: () => { disposed = true; },
   };
 }
@@ -719,6 +722,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     }),
     select: (i) => input.select(i),
     moveSlot: (from, to) => input.queue({ moveSlot: { from, to } }),
+    // Same as the drop key: select that slot and drop from it in the same input (the sim selects first).
+    dropSlot: (slot, amount) => { input.select(slot); input.queue({ drop: amount }); },
   });
   const online = backend.buffered || !!onChat;
   const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item) }, { online, isHost: !!onChat });
@@ -917,15 +922,16 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   }
 
   /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
-  const gunHud = (me: Snapshot['players'][number] | undefined) => {
+  const gunHud = (me: Snapshot['players'][number] | undefined, own = true) => {
     if (!me?.alive || me.equipped === 'fists') return { spreadPx: 4, reload: null, scoped: false };
     const now = simNow();
-    const deg = spreadDeg(me.equipped, { ads: fpv.adsK > 0.5, bloom: me.bloom, lastShotAt: me.lastShotAt }, now,
+    const ads = own ? fpv.adsK > 0.5 : me.ads;
+    const deg = spreadDeg(me.equipped, { ads, bloom: me.bloom, lastShotAt: me.lastShotAt }, now,
       { speed: Math.hypot(me.vel.x, me.vel.z), grounded: Math.abs(me.vel.y) < 0.5 });
     const cam = renderer.camera;
     const px = (Math.tan((deg * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (canvas.clientHeight / 2);
     const c = reloadClock(me, now);
-    return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && fpv.adsK > 0.9 };
+    return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && (own ? fpv.adsK > 0.9 : me.ads && spectator.firstPerson) };
   };
 
   // Client shot prediction (shotPredict.ts); predictShot is defined with the frame loop.
@@ -960,7 +966,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
     const wasEnded = hud.ended;
-    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory, ...gunHud(meNow) });
+    // Spectating someone: the HUD shows their view (hotbar, ammo, cash, hp/shield/stamina, crosshair).
+    const viewId = spectator.following;
+    const viewed = viewId !== null ? s.players.find((p) => p.id === viewId) : undefined;
+    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory,
+      stamina: predictor?.stamina ?? null, viewId, ...(viewed ? gunHud(viewed, false) : gunHud(meNow)) });
     if (hud.ended && !wasEnded) spectateChosen = false; // a (new) result popped the end screen up
     scoreboard.update(s, scoreOpts());
     qol.onSnapshot(s, input.selected);
@@ -1056,6 +1066,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
           !!(renderer.characters as unknown as { avatars: Map<number, { group: Object3D }> }).avatars.get(humanId)?.group.visible,
       }),
       scoreboard: () => scoreboard.visible,
+      /** Loot on the ground as drawn: label lines, label shown, model count. */
+      loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
@@ -1110,6 +1122,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   // ---- frame loop ----
   const feet = new THREE.Vector3();
   const aimDir = new THREE.Vector3();
+  const specMotion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  let lastFollow: number | null = null;
   const sendAcc = new InputAccumulator();
   let nextSendAt = 0;
   let last = performance.now();
@@ -1190,8 +1204,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderer.setGhost(null);
       aim = null;
       spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId, players: snap!.players,
-        posOf: (id, out) => renderer.playerPos(id, out) });
+        posOf: (id, out) => renderer.playerPos(id, out),
+        lookOf: (id) => renderer.playerMotion(id, specMotion), firstPerson: fpv.mode === 'first' });
+      // From their eyes: hide their avatar (as your own is hidden in first person).
+      renderer.characters.hiddenId = spectator.firstPerson && spectator.following !== null ? spectator.following : humanId;
     } else spectator.exit();
+    // Online: tell the host who we watch, so it can send that player's HUD state (only while we're dead).
+    const following = spectator.following;
+    if (following !== lastFollow) { lastFollow = following; backend.follow?.(following); }
     input.applyKick(dt);
     // Sights: right mouse with a gun, not while reloading (the sim agrees). Zoom slows mouse look to match.
     const adsWant = !!me?.alive && !spectating && input.ads && me.equipped !== 'fists' && me.reloadUntil === 0;
