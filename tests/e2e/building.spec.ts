@@ -98,38 +98,29 @@ test('drag-build: holding click lays a straight, flush wall line of 5 exactly wh
   await aimAt(page, at(C, F, 0, R, 0, C.y + 0.3));
   await expect.poll(async () => (await aim(page))?.ok).toBe(true);
   await page.screenshot({ path: 'test-results/build-wall-ghost.png' });
-  // Held click: each placement shows at once (predicted) and the ghost moves on to the next in-line spot,
-  // so the line builds itself at the placeSec rate. Keep walking along it (teleport) to stay in reach.
-  const t0 = Date.now();
   await page.mouse.down();
   for (let i = 1; i < 5; i++) {
-    await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 10_000 }).toBeGreaterThanOrEqual(i);
-    const placed = await mine(page, humanId, 'wood');
-    if (placed.length >= 5) break;
-    const last = placed.sort((a, b) => b.id - a.id)[0];
+    await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 10_000 }).toBe(i);
+    // Walk along the line (teleport) and keep aiming at the ground where the next wall goes.
+    const last = (await mine(page, humanId, 'wood')).sort((a, b) => b.id - a.id)[0];
     const next = at(last.pos, F, 0, R, 2);
     await dbg(page, 'teleport', ...((p) => [p.x, p.z])(at(next, F, -3.5, R, 0)));
     await aimAt(page, { ...next, y: C.y + 0.3 });
     if (i === 2) await page.screenshot({ path: 'test-results/build-wall-drag.png' });
   }
   await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 10_000 }).toBe(5);
-  const heldMs = Date.now() - t0;
   await page.mouse.up();
-  expect(heldMs).toBeLessThan(8000); // was ~1 s per wall plus a round trip each; now 0.2 s each
-  const bp = await dbg<{ placed: number; confirmed: number; rejected: number }>(page, 'buildPredict');
-  expect(bp.rejected).toBe(0);
 
   const walls = (await mine(page, humanId, 'wood')).sort((a, b) => a.id - b.id);
-  // The line runs along the first wall (its rotation is the view yaw snapped to 15°); it may grow both ways.
+  // The line runs along the first wall (its rotation is the view yaw snapped to 15°).
   const L = rgt(walls[0].rotY), N = fwd(walls[0].rotY);
-  const along = (p: V) => (p.x - walls[0].pos.x) * L.x + (p.z - walls[0].pos.z) * L.z;
+  const along = (p: V) => Math.abs((p.x - walls[0].pos.x) * L.x + (p.z - walls[0].pos.z) * L.z);
   const across = (p: V) => (p.x - walls[0].pos.x) * N.x + (p.z - walls[0].pos.z) * N.z;
-  walls.forEach((w) => {
+  walls.forEach((w, i) => {
     expect(Math.abs(Math.sin(w.rotY - walls[0].rotY))).toBeLessThan(1e-6);
+    expect(along(w.pos)).toBeCloseTo(2 * i, 3); // flush: 2 m wide walls, centres 2 m apart
     expect(across(w.pos)).toBeCloseTo(0, 3);
   });
-  const xs = walls.map((w) => along(w.pos)).sort((a, b) => a - b);
-  xs.slice(1).forEach((x, i) => expect(x - xs[i]).toBeCloseTo(2, 3)); // flush: 2 m wide walls, centres 2 m apart
   await expectPlacedAsShown(page, walls);
   await page.screenshot({ path: 'test-results/build-wall-line.png' });
   expect(errors, errors.join('\n')).toEqual([]);

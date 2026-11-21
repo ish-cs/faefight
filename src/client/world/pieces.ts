@@ -656,10 +656,8 @@ export class PieceLayer {
   private char = new Map<number, number>();
 
   private tint(id: number, kind: PieceKind, out: THREE.Color) {
-    // abs: predicted pieces (buildPredict.ts) have negative ids until the host confirms them
-    const n = Math.abs(id);
-    if (kind === 'container') out.setHex(CONTAINER_COLORS[n % CONTAINER_COLORS.length]);
-    else { const j = 0.92 + ((n * 37) % 17) / 100; out.setRGB(j, j, j); }
+    if (kind === 'container') out.setHex(CONTAINER_COLORS[id % CONTAINER_COLORS.length]);
+    else { const j = 0.92 + ((id * 37) % 17) / 100; out.setRGB(j, j, j); }
     const k = this.char.get(id);
     if (k) out.multiplyScalar(1 - 0.84 * k);
   }

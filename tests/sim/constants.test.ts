@@ -17,11 +17,6 @@ describe('constants', () => {
     expect(PIECES.metal.hp).toBeGreaterThan(PIECES.wood.hp);
     expect(PIECES.wood.hp).toBeGreaterThan(PIECES.sandbags.hp);
   });
-  test('placing is snappy: short busy times, heavier pieces a little longer', () => {
-    expect(Object.fromEntries(pieceKinds.map((k) => [k, PIECES[k].placeSec]))).toEqual({
-      sandbags: 0.15, wood: 0.2, metal: 0.25, steel: 0.4, scaffold: 0.15, ramp: 0.2, container: 1.0,
-    });
-  });
   test('every gun costs money', () => {
     for (const g of guns) expect(WEAPONS[g].price).toBeGreaterThan(0);
   });

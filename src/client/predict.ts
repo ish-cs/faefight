@@ -4,7 +4,7 @@ import { DT } from '../sim/constants';
 import type { MapDef } from '../sim/map';
 import { newMoveState, stepMove, type MoveCmd, type MoveState, type Mover } from '../sim/movement';
 import { Physics } from '../sim/physics';
-import type { PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
+import type { PlayerState, Snapshot, Vec3 } from '../sim/types';
 
 /** Prediction errors bigger than this (teleport, respawn, a wall that wasn't there) snap instead of blending. */
 export const SNAP_DIST = 1.5;
@@ -121,17 +121,6 @@ export class Predictor {
     // Keep showing where we were drawing; the offset then decays to the corrected path.
     this.offset = { x: ex, y: ey, z: ez };
   }
-
-  /**
-   * A predicted piece (buildPredict.ts, negative id) joins the local world at once, so the next ghost and the
-   * local move already see it. Snapshot syncs leave it alone; removeLocalPiece takes it out again.
-   */
-  addLocalPiece(p: PieceState) {
-    if (p.id >= 0) throw new Error(`Predictor.addLocalPiece: predicted ids are negative, got ${p.id}`);
-    this.physics.addPiece(p);
-  }
-
-  removeLocalPiece(id: number) { this.physics.removePiece(id); }
 
   /** Pieces and other players' capsules from the snapshot (they're what the local move collides with). */
   private syncWorld(snap: Snapshot) {
