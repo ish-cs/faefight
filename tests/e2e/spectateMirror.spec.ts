@@ -69,6 +69,34 @@ test('vs bot: low-HP vignette and sealed banner of the watched player, "your isl
   expect(errors, errors.join('\n')).toEqual([]);
 });
 
+test('vs bot: the watched bot is killed, and after its killcam the spectator locks onto the killer', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/?debug=1');
+  await page.getByTestId('play-easy').click();
+  await expect(page.getByTestId('cash')).toHaveText(/\$\d+/, { timeout: 60_000 });
+  await page.locator('canvas.game').focus();
+  const me = await dbg<number>(page, 'humanId');
+  const bot = (await players(page)).find((p) => p.isBot)!;
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/spectate');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => dbg<number>(page, 'humanId'), { timeout: 15_000 }).toBe(0);
+  await follow(page, bot.id, 0);
+
+  // Our old seat (a bot now) kills it: killcam first, then the camera follows the killer, with a toast.
+  await dbg(page, 'kill', bot.id, me);
+  await expect.poll(async () => (await spec(page)).followId, { timeout: 15_000 }).toBe(me);
+  await expect(page.locator('.toast', { hasText: 'Now spectating' })).toBeVisible();
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/spectate-killer-lock.png` });
+  // And it sticks (the killer is alive): no switching back when the victim respawns.
+  await page.waitForTimeout(4_000);
+  expect((await spec(page)).followId).toBe(me);
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
 test('online: a dead guest watching the host sees their camera mode, build ghost and open shop', async ({ context }) => {
   test.setTimeout(150_000);
   const errors: string[] = [];
