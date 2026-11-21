@@ -39,6 +39,10 @@ export const BUILD_TUNING = {
   doorKeepOut: 2.6,
   /** Cash (carried + banked) kept back before buying fortification pieces: 200 × (1 − builder). */
   fortReserve: 200,
+  /** Builders at least this keen fortify before carrying a seal kit and even when a rival is in reach. */
+  fortEarlyBuilder: 0.7,
+  /** Everyone else fortifies only with at least this many rivals left, carrying a kit, and no rival in walking reach. */
+  fortMinRivals: 2,
   /** Combat cover walls carried (× (0.4 + builder), rounded) by skill. */
   coverCarry: { easy: 1, medium: 1, hard: 2, pro: 2 } as Record<Difficulty, number>,
   /** Rich enough (carried + banked) for metal instead of wood cover. */

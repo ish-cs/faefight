@@ -490,7 +490,7 @@ export class Bot {
       if (!b[k] && !me.hotbar.includes(k)) { if (free <= BT.freeSlots) return; free--; }
       b[k] = (b[k] ?? 0) + n;
     };
-    if (total >= BT.fortReserve * (1 - t.builder))
+    if (total >= BT.fortReserve * (1 - t.builder) && this.fortWorthIt(c))
       for (const [i, s] of this.fortSlots().entries())
         if (!slotBuilt(view.pieces, s) && (this.slotBackoff.get(i) ?? -Infinity) <= view.now) add1(s.kind);
     const walls = Math.round(BT.coverCarry[this.difficulty] * (0.4 + t.builder));
@@ -503,6 +503,16 @@ export class Bot {
       add1(wall, Math.floor(scaffolds / BT.scaffoldsPerBridgeWall));
     if (sk.highGround && total >= BT.rampAt && t.builder >= 0.3) add1('ramp');
     return b;
+  }
+
+  /**
+   * Tempo first: walls at home pay off when several rivals may come over and I'm already geared; a duel is won by
+   * getting there first. Real builders fortify anyway.
+   */
+  private fortWorthIt(c: Ctx): boolean {
+    if (this.t.builder >= BT.fortEarlyBuilder) return true;
+    const rivals = c.view.others.filter((o) => !o.eliminated).length;
+    return rivals >= BT.fortMinRivals && !c.reach && sealKit(c.me.inv) >= c.openDoors.length;
   }
 
   /** My share of the home fortification plan (easy players misplace some of it for good). */
@@ -759,6 +769,7 @@ export class Bot {
       }
       case 'fortify': {
         if (view.suddenDeath || c.on !== home.index || c.danger || !gun || this.intruder(c)) return 0;
+        if (!this.fortWorthIt(c)) return 0;
         const next = this.nextSlot(c);
         return next ? BT.fortifyScore + 0.3 * t.builder : 0;
       }

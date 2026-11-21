@@ -105,7 +105,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
   const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
-  // Extras only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
+  // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
   const room = (k: HotbarItem) => countOf(inv, k) > 0 || canAdd(p.hotbar, k);
   if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
@@ -122,9 +122,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
   if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
-  if (inv.grenades < (needs.grenades ?? 0) && room('grenade')) return cash >= GRENADE.price ? 'grenade' : null;
-  if (inv.medkits < (needs.medkits ?? 0) && room('medkit')) return cash >= MEDKIT.price ? 'medkit' : null;
-  if (style.closeGun && !inv.weapons.shotgun && room('shotgun') && cash >= WEAPONS.shotgun.price) return 'shotgun';
+  if (inv.grenades < (needs.grenades ?? 0)) return cash >= GRENADE.price ? 'grenade' : null;
+  if (inv.medkits < (needs.medkits ?? 0)) return cash >= MEDKIT.price ? 'medkit' : null;
+  if (style.closeGun && !inv.weapons.shotgun && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
   if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
   // Rich: invest in the generator, then lock the favourite gun so a death doesn't leave me unarmed.
