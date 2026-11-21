@@ -189,6 +189,26 @@ export function candidatesFor(
           anchor: v3(fc.x, top, fc.z), useful: 0.9, radius: 1.5 });
       }
     }
+    // Ramp staircase: the next ramp starts flush at a ramp's top edge, same direction (the sim chains it).
+    if (kind === 'ramp' && p.kind === 'ramp' && top - player.y < BUILD.reach - 0.5) {
+      const c = at(p, v3(0, 0, ps.d));
+      const joint = at(p, v3(0, ps.h, ps.d / 2));
+      push({ tag: 'ramp', pos: v3(c.x, top + 0.05, c.z), rotY: p.rotY, pts: [v3(c.x, top + s.h / 2, c.z), joint, v3(c.x, top, c.z)],
+        anchor: joint, useful: 1.25, radius: 2.4 });
+    }
+    // A ramp climbing on from the top of a wall / scaffold end / container: low edge on its far top edge.
+    if (kind === 'ramp' && (WALLS.has(p.kind) || p.kind === 'scaffold' || p.kind === 'container') && top - player.y < BUILD.reach - 0.5) {
+      const faces = p.kind === 'container' ? [v3(1, 0, 0), v3(-1, 0, 0), v3(0, 0, 1), v3(0, 0, -1)] : [v3(0, 0, 1), v3(0, 0, -1)];
+      for (const nl of faces) {
+        const n = rotateY(nl, p.rotY);
+        if (n.x * (p.pos.x - player.x) + n.z * (p.pos.z - player.z) < 0) continue; // must climb away from the player
+        const half = nl.x !== 0 ? ps.w / 2 : ps.d / 2;
+        const edge = v3(p.pos.x + n.x * half, top, p.pos.z + n.z * half);
+        const c = add(edge, v3(n.x * (s.d / 2), 0, n.z * (s.d / 2)));
+        push({ tag: 'ramp', pos: v3(c.x, top + 0.05, c.z), rotY: yawOf(n) + Math.PI, pts: [v3(c.x, top + s.h / 2, c.z), edge],
+          anchor: edge, useful: 1.0, radius: 1.8 });
+      }
+    }
   }
 
   // Plug an enemy bunker doorway with a wall, flush against the outside of the doorway.

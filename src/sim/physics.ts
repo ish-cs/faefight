@@ -37,6 +37,7 @@ export class Physics {
   private entities = new Map<number, HitTarget>();
   private pieces = new Map<number, RAPIER.Collider>();
   private pieceKinds = new Map<number, PieceState['kind']>();
+  private pieceBaseY = new Map<number, number>();
   private players = new Map<number, RAPIER.Collider>();
   private dirty = true;
   /** No-build zones by group ('islands', 'potion'), see building.ts. */
@@ -115,6 +116,7 @@ export class Physics {
     desc.setRotation(quatY(p.rotY));
     this.pieces.set(p.id, this.track(this.world.createCollider(desc), { type: 'piece', id: p.id }));
     this.pieceKinds.set(p.id, p.kind);
+    this.pieceBaseY.set(p.id, p.pos.y);
   }
 
   removePiece(id: number): void {
@@ -124,11 +126,18 @@ export class Physics {
     this.world.removeCollider(c, false);
     this.pieces.delete(id);
     this.pieceKinds.delete(id);
+    this.pieceBaseY.delete(id);
     this.dirty = true;
   }
 
   pieceKind(id: number): PieceState['kind'] | undefined {
     return this.pieceKinds.get(id);
+  }
+
+  /** Height of a piece's top (its base + kind height), or undefined if it's gone. */
+  pieceTop(id: number): number | undefined {
+    const y = this.pieceBaseY.get(id), k = this.pieceKinds.get(id);
+    return y === undefined || !k ? undefined : y + PIECES[k].h;
   }
 
   addPlayer(id: number, pos: Vec3): void {

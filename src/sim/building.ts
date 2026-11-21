@@ -70,17 +70,24 @@ function placeAt(physics: Physics, kind: PieceKind, pos: Vec3, rotY: number, pla
     const onDeck = sup.hit.type === 'piece' && physics.pieceKind(sup.hit.id) === 'scaffold';
     restY = onDeck ? sup.y - s.h : sup.y;
   } else {
+    const chained = kind === 'ramp' ? rampChainY(physics, pos, rotY) : null;
+    if (chained !== null) return finish(physics, kind, pos, rotY, chained); // low edge on a piece top; may hang
     const hx = s.w / 2 - 0.1, hz = s.d / 2 - 0.1;
     const samples = [v3(0, 0, 0), v3(-hx, 0, -hz), v3(hx, 0, -hz), v3(-hx, 0, hz), v3(hx, 0, hz)];
     const ys = samples.map(below);
     if (ys[0] === null) return { ok: false, reason: 'nothing to build on' };
     restY = Math.max(...ys.filter((y): y is number => y !== null));
   }
+  return finish(physics, kind, pos, rotY, restY);
+}
 
+/** Zone and overlap checks for a piece resting at restY. */
+function finish(physics: Physics, kind: PieceKind, pos: Vec3, rotY: number, restY: number): Placement {
+  const s = PIECES[kind];
   const center = v3(pos.x, restY + s.h / 2 + 0.01, pos.z);
-  const zone = physics.noBuildZones().find((z) => boxesOverlap(center, v3(s.w / 2 - 0.02, s.h / 2 - 0.02, s.d / 2 - 0.02), rotY, z));
-  if (zone) return { ok: false, reason: zone.reason };
   const strict = v3(s.w / 2 - 0.02, s.h / 2 - 0.02, s.d / 2 - 0.02);
+  const zone = physics.noBuildZones().find((z) => boxesOverlap(center, strict, rotY, z));
+  if (zone) return { ok: false, reason: zone.reason };
   if (physics.overlapsBox(center, strict, rotY).some((h) => h.type === 'player')) return { ok: false, reason: 'blocked' };
   const slack = (n: number) => Math.max(0.02, n / 2 - OVERLAP_SLACK);
   const loose = v3(slack(s.w), s.h / 2 - 0.02, slack(s.d));
@@ -131,6 +138,38 @@ export function boxesOverlap(center: Vec3, half: Vec3, rotY: number, z: NoBuildZ
     if (Math.abs(n.x * dx + n.z * dz) >= ra + rb) return false;
   }
   return true;
+}
+
+/** Where behind a ramp's low edge (local z offsets from that edge) we look for a piece to chain onto. */
+const CHAIN_PROBES = [-0.2, -0.05, 0.1];
+/** A chain snap only applies when the requested height is near the support top (aimed up there). */
+const CHAIN_AIM_TOL = 0.75;
+/** How close to the top edge of a ramp a probe must land to chain onto that ramp. */
+const RAMP_TOP_TOL = 0.35;
+
+/**
+ * Ramp staircases: if the ramp's low edge (local -Z, the end toward the player) is over the top of a
+ * piece and the request was aimed up there, the ramp rests its low edge on that top and the rest may
+ * hang. On another ramp it continues from that ramp's top edge, flush. Null = normal ground placement.
+ */
+function rampChainY(physics: Physics, pos: Vec3, rotY: number): number | null {
+  const s = PIECES.ramp;
+  let best: number | null = null;
+  for (const dz of CHAIN_PROBES) {
+    const w = add(pos, rotateY(v3(0, 0, -s.d / 2 + dz), rotY));
+    const sup = physics.probeDown(w.x, pos.y + PROBE_UP, w.z, PROBE_UP + PROBE_DOWN);
+    if (!sup || sup.hit.type !== 'piece') continue;
+    const top = physics.pieceTop(sup.hit.id);
+    if (top === undefined) continue;
+    let y = sup.y;
+    if (physics.pieceKind(sup.hit.id) === 'ramp') {
+      if (sup.y < top - RAMP_TOP_TOL) continue; // mid-slope: not a chain
+      y = top;
+    }
+    if (Math.abs(y - pos.y) > CHAIN_AIM_TOL) continue;
+    if (best === null || y > best) best = y;
+  }
+  return best;
 }
 
 /** Applies damage with material multipliers. Returns true if the piece is destroyed. */
