@@ -118,7 +118,27 @@ that fails falls back to its JPEG. `?ktx2=0` forces JPEG for A/B. To re-encode a
 ## Frame-time governor (src/client/governor.ts)
 
 Settings → Video "Dynamic resolution" turns it on. When the smoothed frame time exceeds the budget, it steps down
-one rung at a time: GTAO off → shadow maps ½ → grass ½ → LOD distances ×0.7 → render resolution 0.9 … 0.6.
+one knob at a time, chosen by what the frame is bound by (main-thread time vs frame interval). **GPU-bound**
+(e.g. a Retina Mac on high): render scale first in 5 % steps (faster cooldown), GTAO cheaper (60 % → 30 %
+resolution, never off) in between, then shadows, grass and LOD. **CPU-bound**: LOD distance, grass, shadows, AO
+first, then scale. It climbs back last-in, first-out. Shift+` shows the rung and `gpu`/`cpu`. **No rung may recompile a shader.** A post-chain rebuild mid-match recompiles every world material
+(measured: one rebuild = 21.7 s freeze on main e01c3d1). Every knob is a live uniform, size or count.
+
+Settings → Video "Competitive mode" applies on top of any preset: 1× render scale, no GTAO, bloom or flare, and
+MSAA ×2. Measured GPU time at 2× DPR on high: 22.5 ms → 2.4 ms.
+
+## What the profiles say (8 players, prod build)
+
+- High is **GPU-bound on Retina**: 32 ms GPU at 2× DPR on main. Render scale and GTAO dominate, then MSAA ×4
+  with MRT. High now renders at 1.25× with 8 GTAO samples, giving 22.5 ms.
+- Main thread is ~3.5–5 ms/frame. The top items are three's per-draw work (`_renderObjectDirect`, `project`,
+  uniform `writeBuffer`, bind groups), which scale with draw calls; ~1 ms of third-person aim raycasts against
+  skinned character meshes (`getVertexPosition`/`intersectTriangle`); and `updateMatrixWorld`, now skipped for
+  static subtrees.
+- Input latency (vsync 60 Hz): look event → draw submit 16 ms, → GPU done 20.5 ms. That's one rAF wait plus the
+  frame. Without vsync the GPU queue added ~26 ms on high (GPU-bound), which is why the GPU cuts also cut latency.
+- Load time depends on the Metal pipeline cache: a cold new build takes 13–20 s and a warm one ~5 s. Compare
+  cold with cold.
 With headroom it climbs back last-in, first-out. Content gets LOD bias and grass density for free if it uses
 the APIs above.
 

@@ -61,8 +61,9 @@ export class LoopbackTransport implements Transport {
   static rooms = new Map<string, LoopbackRoom>();
   private static nextClient = 1;
 
-  async host(): Promise<HostRoom> {
-    let code = newInviteCode();
+  async host(want?: string): Promise<HostRoom> {
+    if (want !== undefined && (normalizeCode(want) !== want || LoopbackTransport.rooms.get(want)?.closed === false)) throw new Error(`Room ${want} is taken`);
+    let code = want ?? newInviteCode();
     while (LoopbackTransport.rooms.has(code)) code = newInviteCode();
     const room = new LoopbackRoom(code);
     LoopbackTransport.rooms.set(code, room);

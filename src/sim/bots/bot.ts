@@ -509,6 +509,8 @@ export class Bot {
    */
   private mayDodge(act: Act, c: Ctx): boolean {
     if (act.raw || act.hold || this.retreat || this.goal === 'storm' || this.trapped(c) || insideBunker(c.home.bunker, c.me.pos)) return false;
+    // A fist fight is won by closing in: jukes only keep two punchers circling out of reach.
+    if (this.goal === 'fight' && c.me.equipped === 'fists') return false;
     const busy = !!(act.build || act.placeCharge || act.shop || act.vault) || this.goal === 'seal' || this.goal === 'bridge' || this.goal === 'defend';
     return !busy || c.me.hp < 100 * this.params.breakLosHp * 0.6;
   }
@@ -1026,6 +1028,9 @@ export class Bot {
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
         // Outside the safe ring, getting in comes first (running from a gun into the storm kills just as well).
         if (view.storm && Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm)) return 0;
+        // Final circle: nowhere left to run (backing off only buys regen, and the fight never ends); fists vs fists
+        // in sudden death likewise.
+        if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
         const low = P.lowHp;
         // Hurt: get out of the fight, but once home with nobody close the heal goal takes over (medkit, then back out).
         if (hp < low) return c.on === home.index && (!c.enemy || c.enemyDist > 30) ? 0 : 1.15 + (low - hp);
@@ -1111,7 +1116,10 @@ export class Bot {
         const need = this.scaffoldsNeeded(c);
         const toRival = c.bridgeTo !== this.nav.centerNode;
         if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
-        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed + (this.stormPrep(view) ? 0.45 : 0)) +
+        // Already out over the water laying it: lay what I carry before turning back (a walk home and out again
+        // costs more than the decks; with fast placing a trip often ends a deck or two short).
+        const outOnIt = this.goal === 'bridge' && c.on !== home.index;
+        return 0.45 + 0.15 * t.aggression + (have >= need || outOnIt ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed + (this.stormPrep(view) ? 0.45 : 0)) +
           (toRival && this.endgame(c) && sealKit(me.inv) > 0 ? 0.2 : 0);
       }
       case 'contest': {
@@ -1165,6 +1173,9 @@ export class Bot {
       case 'loot': {
         const bag = this.nearestLoot(c);
         if (!bag) return 0;
+        // Final circle with someone in sight: the fight is the only thing left to do (a bag out of reach kept the
+        // last two circling forever).
+        if (c.enemy && view.storm && view.storm.r <= view.storm.rf + 0.5) return 0;
         return 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70;
       }
       case 'cover': {
@@ -1405,6 +1416,12 @@ export class Bot {
       if (this.P.buildSkill[this.difficulty].altRoute) { this.alt.add(to); this.nextScoreAt = now; return IDLE; }
     }
     if (!mirror) this.laneBest.set(key, Math.max(best, f.s));
+    // The alternate lane is laid under pressure: stock up on enough decks (vault cash too) before walking out,
+    // rather than running dry a deck short and walking all the way back.
+    if (mirror && c.on === c.home.index && c.homeReach && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c)) {
+      const buy = this.buyDecks(c);
+      if (buy) return buy;
+    }
     const stand = at(-1.1);
     const walk = this.goTo(stand, ARRIVE);
     if (walk.dir) return walk;
@@ -1782,7 +1799,8 @@ export class Bot {
     }
 
     const gapM = c.enemyDist - want;
-    const radial = Math.abs(gapM) < 2 ? 0 : Math.sign(gapM);
+    // Fists reach 1.2 m: a 2 m dead band leaves two punchers strafing just out of reach while they regenerate.
+    const radial = Math.abs(gapM) < (gun === 'fists' ? 0.3 : 2) ? 0 : Math.sign(gapM);
     const dir = add(scale(to, radial), side);
     // Well out of my range: sprint in to close (sprinting spoils aim, so not while in range).
     const rush = this.difficulty !== 'easy' && gapM > this.P.drive.sprintGap;
@@ -2029,7 +2047,11 @@ export class Bot {
     if ((bestD > want || this.needCenterBridge(c)) && c.bridgeTo !== null && c.bridgeTo === this.nav.centerNode) {
       const have = me.inv.pieces.scaffold ?? 0, need = this.scaffoldsNeeded(c);
       // Stock up in one shop visit (not one deck per trip) while still on my island.
-      const buy = have < need && c.homeReach && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
+      // Only while the shop (and the vault, if I need cash from it) is still inside the ring: a trip out into the
+      // storm to shop kills just as surely.
+      const shopSafe = [c.home.shop, ...(me.inv.cash < PIECES.scaffold.price ? [c.home.vault] : [])]
+        .every((p) => dist2D(p, ctr) < st.r - 2);
+      const buy = have < need && c.homeReach && shopSafe && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
       if (buy) return buy;
       if (have > 0) {
         const b = this.doBridge(c);
@@ -2112,8 +2134,8 @@ export class Bot {
    */
   private watchdog(now: number, me: PlayerState) {
     const limit = !STALLABLE.has(this.goal) ? undefined : this.P.drive.stallSec * (this.goal === 'attack' ? 1.5 : 1);
-    // Getting set for the storm (decks to the center, buying them) is never given up.
-    if (limit === undefined || this.stormPrep(this.view)) { this.prog = null; return; }
+    // Getting set for the storm (decks to the center, buying them) is never given up; anything else still is.
+    if (limit === undefined || (this.stormPrep(this.view) && (this.goal === 'bridge' || this.goal === 'shop'))) { this.prog = null; return; }
     const p = this.prog;
     if (!p || p.goal !== this.goal || dist2D(p.pos, me.pos) > this.P.drive.stallDist || this.lastDidAt > p.at) {
       this.prog = { goal: this.goal, at: now, pos: clone(me.pos) };
@@ -2122,6 +2144,8 @@ export class Bot {
     if (now - p.at < limit) return;
     this.goalBan.set(this.goal, now + this.P.drive.stallBanSec);
     if (this.targetId !== null && TARGETED.has(this.goal)) this.targetBan.set(this.targetId, now + this.P.drive.stallBanSec);
+    // The brain's own step going nowhere (e.g. a rival across water with no route): drop that plan too.
+    if (this.goal === this.brain.stepAct) this.brain.giveUp(now, this.P.drive.stallBanSec);
     this.prog = null;
     this.nextScoreAt = now;
   }

@@ -11,6 +11,11 @@ export type MatchSetup = {
   map?: MapTemplate;
   /** Host's game settings (clamped by the sim; missing = today's defaults). Stored with the setup so replays match. */
   settings?: GameSettings;
+  /**
+   * Practice range (offline sandbox, see practice.ts): exactly one human player; the map is the practice layout,
+   * targets and dummies are added by the range; no timer, sudden death or elimination; cash and pieces never run out.
+   */
+  practice?: boolean;
 };
 
 /**
@@ -24,7 +29,8 @@ export type MatchSetup = {
  * - shop: processed only within 2.5 m of your OWN island's shop. vault: same for your own vault (1 s busy).
  * - slot: switch to that weapon if owned ('fists' always). Cancels reload.
  * - build: snapped (unless free) and validated against the player's position; consumes one piece;
- *   player is busy for the piece's placeSec (no firing/building) after placing.
+ *   player is busy for the piece's placeSec (0.15-1 s; no firing/building, moving/looking/switching still work).
+ *   A build sent while busy is held up to BUILD.queueSec and placed when the busy time ends.
  * - Edge-triggered actions (fire is held; reload/throwGrenade/placeCharge/interact act on each tick they are true).
  */
 export interface MatchApi {

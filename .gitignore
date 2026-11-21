@@ -11,3 +11,5 @@ playwright-report/
 .train/
 .train-run.log
 .train-run.err
+.measure/
+.train-ci/

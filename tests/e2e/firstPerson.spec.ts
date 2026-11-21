@@ -52,6 +52,10 @@ test('V toggles first person (persisted) with a viewmodel', async ({ page }) => 
   await page.locator('canvas.game').click();
   await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null)).toBe('CANVAS');
   // Shoot: the sim registers the shot and the viewmodel kicks / flashes.
+  // A click while the pointer is free only captures it (never fires); capture first.
+  await page.locator('canvas.game').click();
+  await expect.poll(() => page.evaluate(() => !!document.pointerLockElement)).toBe(true);
+  await page.waitForTimeout(200);
   await page.mouse.move(640, 360);
   await page.mouse.down();
   await page.waitForTimeout(40);
