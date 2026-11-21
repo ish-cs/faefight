@@ -316,6 +316,25 @@ describe('game sense', () => {
     expect(firedAtPlug).toBe(true);
   });
 
+  test('a plug in my doorway still gets shot with an enemy in sight far across the water', () => {
+    // Bots used to swing their gun onto the far enemy (and hold fire past its damage floor) for minutes.
+    const self = armed(0, 0, onIsland(0, 0));
+    self.inv.pieces = { scaffold: 12, wood: 3 };
+    const plug = plugs(0, 'wood', 1);
+    const far = armed(2, 2, onIsland(2, 0));
+    expect(dist2D(far.pos, self.pos)).toBeGreaterThan(30);
+    const view = makeView(self, { pieces: plug, enemies: [far] });
+    const bot = new Bot(0, 'hard', mulberry32(6), preset('Turtle'));
+    const center = v3(plug[0].pos.x, plug[0].pos.y + 1, plug[0].pos.z);
+    let firedAtPlug = false;
+    for (let i = 0; i < 10 * TICK_HZ && !firedAtPlug; i++) {
+      const inp = bot.think(view);
+      if (inp.fire && angleBetween(inp, lookAt(eyePos(self), center)) < 0.08) firedAtPlug = true;
+      step(view, inp);
+    }
+    expect(firedAtPlug).toBe(true);
+  });
+
   test('does not idle inside its own bunker: with nothing to do there, walks out', () => {
     for (const difficulty of ['medium', 'hard', 'pro'] as const) {
       const self = armed(0, 0, v3(map[0].bunker.center.x, map[0].groundY, map[0].bunker.center.z));

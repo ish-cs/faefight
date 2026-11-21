@@ -60,6 +60,8 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
+/** An enemy farther than this doesn't pull my gun off what my goal is shooting at (a plug, a wall). */
+const SHOOT_AT_OVER_FOE_M = 25;
 /**
  * Explosive props. PRO bots sometimes shoot a barrel standing next to an enemy instead of the enemy (a
  * roll every BARREL_ROLL_SEC while such a shot is on, so it's a choice, not a reflex); everyone keeps out of
@@ -359,7 +361,8 @@ export class Bot {
     } else if (act.shootAt && act.shootFirst) {
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
-    } else if (foe) {
+    } else if (foe && !(act.shootAt && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
+      // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
       const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, CHEST, 0)), foe.id, cur);
       look = r;
       const foeDist = dist2D(foe.pos, me.pos);
