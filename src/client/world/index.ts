@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
 import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { CosmeticLayer } from './cosmetics';
+import { Debris } from './debris';
 import { Boats, gullPerches, Gulls } from './dressing';
 import { defineDetailKinds } from './detail';
 import { Grass } from './grass';
@@ -33,6 +34,9 @@ export class World {
   readonly grass = new Grass();
   /** instanced small detail (litter, rubble, shells, seaweed…) */
   readonly scatter = new Scatter();
+  /** client-only physics debris (bottles, cans, cones, boxes…): tumbles, never touches gameplay */
+  readonly debris = new Debris();
+  private lastT = performance.now();
   private boats: Boats | null = null;
   private gulls: Gulls | null = null;
 
@@ -77,6 +81,8 @@ export class World {
     setBuiltInPotionStalls([def.center.potionShop]); // center.ts draws this seller; PotionSellers must not double it
     this.cosmetics = new CosmeticLayer(def.cosmetics);
     this.scene.add(this.cosmetics.root);
+    this.scene.add(this.debris.root);
+    void this.debris.build(def, this.sky.quality);
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
 
@@ -99,6 +105,7 @@ export class World {
     this.gulls = null;
     this.cosmetics?.dispose();
     this.cosmetics = null;
+    this.debris.clear();
   }
 
   /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
@@ -110,7 +117,7 @@ export class World {
     this.cosmetics?.onBroken(e.data, this.pieceFx.particles);
   }
 
-  syncPieces(pieces: PieceState[]) { this.pieces.sync(pieces); this.pieceFx.sync(pieces); }
+  syncPieces(pieces: PieceState[]) { this.pieces.sync(pieces); this.pieceFx.sync(pieces); this.debris.syncPieces(pieces); }
 
   /** `pieceHit` / `destroyed` events → decals, particles, shake, debris. */
   pieceEvent(e: MatchEvent, players: PlayerState[]) { this.pieceFx.onEvent(e, players); }
@@ -118,7 +125,10 @@ export class World {
   /** `feet`: live player feet positions (grass bends away from them). */
   render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
     if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
-    const t = performance.now() / 1000;
+    const now = performance.now(), t = now / 1000;
+    const dt = Math.min(0.1, (now - this.lastT) / 1000);
+    this.lastT = now;
+    this.debris.update(dt, focus ?? this.sky.camera.position, feet, waterY);
     this.boats?.update(t, waterY);
     this.gulls?.update(t);
     this.grass.setQuality(this.sky.quality);

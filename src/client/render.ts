@@ -203,6 +203,7 @@ export class Renderer {
   private onEvent(e: MatchEvent) {
     if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
+    if (e.type === 'shot' || e.type === 'explosion') this.world.debris.onEvent(e, this.camera.position);
     if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {
