@@ -3,9 +3,10 @@ import * as THREE from 'three/webgpu';
 import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
-import type { MatchEvent, PieceKind, Snapshot, Vec3, WeaponKind } from '../sim/types';
+import type { MatchEvent, PieceKind, PieceState, Snapshot, Vec3, WeaponKind } from '../sim/types';
 import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import { CharacterSystem, type Motion } from './characters/avatar';
+import { NpcSystem } from './characters/npcs';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
@@ -57,6 +58,8 @@ export class Renderer {
   /** Loot on the ground drawn as its items, with labels nearby (lootView.ts). */
   readonly lootView = new LootView(this.scene);
   private potionSellers = new PotionSellers(this.scene);
+  /** Animated shop keepers (characters/npcs.ts). */
+  readonly npcs = new NpcSystem(this.scene);
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
   private fx: Fx[] = [];
   private ghost: THREE.Mesh | null = null;
@@ -69,6 +72,9 @@ export class Renderer {
   private ghostTmp = new THREE.Vector3();
   private ghostTmp2 = new THREE.Vector3();
   private ghostWhite = new THREE.Color(0xffffff);
+  /** Own unconfirmed placements (drawn with the real pieces) and refused ones fading out. */
+  private predicted: PieceState[] = [];
+  private fadeMeshes: THREE.Mesh[] = [];
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
   /** Level pips above each island's generator (lit = reached), by island. */
   private genPips: THREE.Mesh[][] = [];
@@ -140,6 +146,7 @@ export class Renderer {
     this.humanId = humanId;
     setIslandPalette(def.colors);
     this.world.setMap(def, def.islands.map((isl) => islandColor(isl.index)));
+    this.npcs.sync(); // keepers registered by the map art (before the loading warm-up compiles the scene)
     const map = def.islands;
     this.storm.setMap(map, def.center);
     this.gunFx.warmUp([this.boomMat]);
@@ -221,7 +228,7 @@ export class Renderer {
     this.replay = null;
     this.replaySnap = null;
     const c = this.curr;
-    if (c) { this.world.syncPieces(c.pieces, c.fires); this.gunFx.syncProjectiles(c.projectiles ?? []); }
+    if (c) { this.world.syncPieces(this.predicted.length ? c.pieces.concat(this.predicted) : c.pieces, c.fires); this.gunFx.syncProjectiles(c.projectiles ?? []); }
   }
 
   get replaying() { return this.replay !== null; }
@@ -240,7 +247,7 @@ export class Renderer {
       this.syncLoot(snap);
       return snap.events;
     }
-    this.world.syncPieces(snap.pieces, snap.fires);
+    this.world.syncPieces(this.predicted.length ? snap.pieces.concat(this.predicted) : snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
@@ -403,6 +410,35 @@ export class Renderer {
     this.ghostPulse = 1;
   }
 
+  /**
+   * Own placements the host hasn't confirmed yet (buildPredict.ts): drawn as real pieces, merged with the
+   * current snapshot's pieces. Call before pushSnapshot when a confirmation and its snapshot arrive together.
+   */
+  setPredictedPieces(pieces: PieceState[]) {
+    if (pieces.length === 0 && this.predicted.length === 0) return;
+    this.predicted = pieces;
+    if (this.curr) this.world.syncPieces(this.curr.pieces.concat(pieces));
+  }
+
+  /** Refused predicted pieces fading out (opacity 1 → 0); pass the full current list every frame. */
+  setPieceFades(fades: { piece: PieceState; opacity: number }[]) {
+    while (this.fadeMeshes.length < fades.length) {
+      const m = new THREE.Mesh(undefined, new THREE.MeshBasicNodeMaterial({ color: boosted(0xff4d4d), transparent: true, depthWrite: false }));
+      m.renderOrder = 10;
+      this.scene.add(m);
+      this.fadeMeshes.push(m);
+    }
+    this.fadeMeshes.forEach((m, i) => {
+      const f = fades[i];
+      m.visible = !!f;
+      if (!f) return;
+      m.geometry = this.geometryFor(f.piece.kind);
+      m.position.set(f.piece.pos.x, f.piece.pos.y, f.piece.pos.z);
+      m.rotation.set(0, f.piece.rotY, 0);
+      (m.material as THREE.MeshBasicNodeMaterial).opacity = 0.7 * f.opacity;
+    });
+  }
+
   /** Meshes the aim ray may hit: world + pieces + other players. Reused array: valid until the next call. */
   aimTargets(): THREE.Object3D[] {
     const out = this.aimList;
@@ -449,7 +485,9 @@ export class Renderer {
     if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
     this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
     this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
-    this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
+    const feet = this.feet.slice(0, nf);
+    this.npcs.frame(dt, this.camera, feet);
+    this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }
 

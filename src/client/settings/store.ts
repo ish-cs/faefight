@@ -40,7 +40,7 @@ export type GenAlertPct = typeof GEN_ALERT_PCTS[number];
 export type Settings = {
   v: typeof SETTINGS_VERSION;
   controls: { sensitivity: number; invertY: boolean; keys: Keymap };
-  video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; perfDetail: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean };
+  video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; perfDetail: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean; competitive: boolean };
   audio: { master: number; effects: number; ambience: number; muted: boolean };
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct };
   /** One-time things: the How to play card shows by itself until it has been seen once. */
@@ -58,7 +58,7 @@ export function defaultSettings(): Settings {
   return {
     v: SETTINGS_VERSION,
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
-    video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true },
+    video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true, competitive: false },
     audio: { master: 0.8, effects: 1, ambience: 1, muted: false },
     gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100 },
     onboarding: { howToSeen: false },
@@ -99,6 +99,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       resolutionScale: num(v.resolutionScale, LIMITS.resolutionScale[0], LIMITS.resolutionScale[1], d.video.resolutionScale),
       frameCap: oneOf(v.frameCap, FRAME_CAPS, d.video.frameCap),
       dynamicResolution: bool(v.dynamicResolution, d.video.dynamicResolution),
+      competitive: bool(v.competitive, d.video.competitive),
     },
     audio: {
       master: num(a.master, 0, 1, d.audio.master),

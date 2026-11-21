@@ -4,6 +4,7 @@ import type { MapChoice, MapDef } from '../sim/map';
 import type { GameSettings } from '../sim/settings';
 import type { BuildRequest, Difficulty, PieceKind, PlayerInput, ShopItem } from '../sim/types';
 import type { BrainDigest } from '../sim/bots/introspect';
+import type { WheelId } from '../sim/emotes';
 
 /**
  * A lobby seat. Seat index = island index = player id - 1 once the match starts, except that a spectating
@@ -46,7 +47,9 @@ export type ClientMsg =
   /** Lobby: the palette colour the guest wants (host refuses one another player picked). */
   | { t: 'color'; color: number }
   /** My ghost / open panel (ViewExtras), for friends spectating me. */
-  | { t: 'view'; v: ViewExtras };
+  | { t: 'view'; v: ViewExtras }
+  /** Emote / quick-chat wheel pick (sim/emotes.ts); the host rate-limits it to one per 2 s. */
+  | { t: 'wheel'; id: WheelId };
 
 /** Host → remote client. */
 export type HostMsg =
@@ -76,4 +79,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 13;
+export const NET_VERSION = 16;

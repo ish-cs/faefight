@@ -139,7 +139,8 @@ class Compass {
     labelled.sort((p, q) => rank(p.m) - rank(q.m) || p.d - q.d);
     const taken: number[] = [];
     for (const { m } of labelled) {
-      const clash = taken.some((x) => Math.abs(x - m.x!) < 74);
+      // Labels run right of their dot and are capped at 84px (CSS), so 100px apart never overlaps.
+      const clash = taken.some((x) => Math.abs(x - m.x!) < 100);
       if (!clash) taken.push(m.x!);
       if (m.node.classList.contains('nolabel') !== clash) m.node.classList.toggle('nolabel', clash);
     }
@@ -366,7 +367,14 @@ export class QolHud {
       b.onclick = () => { if (this.lastBuy) this.act.quickBuy(this.lastBuy); };
       head.insertBefore(b, head.lastElementChild);
     }
-    setText(b, `↻ ${ITEM_NAME[item!] ?? item}  (B)`);
+    // Only offer what can be bought again: hidden when owned/locked/hotbar full, disabled when unaffordable.
+    const card = head.closest('.panel')?.querySelector<HTMLElement>(`.shop-item[data-item="${item}"]`);
+    const blocked = !card || card.hidden || card.classList.contains('blocked');
+    if (b.hidden !== blocked) b.hidden = blocked;
+    const poor = !!card?.classList.contains('poor');
+    if (b.disabled !== poor) b.disabled = poor;
+    const price = card?.querySelector('.iprice')?.textContent ?? '';
+    setText(b, `↻ ${ITEM_NAME[item!] ?? item} ${price}  (B)`);
   }
 
   private updateSummary(s: Snapshot) {

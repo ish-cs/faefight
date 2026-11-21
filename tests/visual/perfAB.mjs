@@ -17,7 +17,8 @@ const log = (s) => appendFileSync(out, s + '\n');
 
 // two machine-wide heavy slots (scratchpad heavy.sh): take whichever is free; 15-min-old slots are stale
 const SLOTS = ['/tmp/faefight-heavy.lock', '/tmp/faefight-heavy2.lock'];
-let LOCK = '';
+// PERF_NOLOCK=1: run without a slot (only when the coordinator grants an extra heavy job, e.g. a hotfix check)
+let LOCK = process.env.PERF_NOLOCK === '1' ? '-' : '';
 while (!LOCK) {
   for (const s of SLOTS) {
     try { mkdirSync(s); LOCK = s; break; } catch {
@@ -30,7 +31,7 @@ log(`lock ${new Date().toISOString()}`);
 const servers = new Map();
 const release = () => {
   for (const [port, p] of servers) { try { process.kill(-p.pid); } catch { /* exited */ } spawnSync('sh', ['-c', `lsof -ti tcp:${port} -sTCP:LISTEN | xargs kill 2>/dev/null`]); }
-  try { rmdirSync(LOCK); } catch { /* already gone */ }
+  if (LOCK !== '-') try { rmdirSync(LOCK); } catch { /* already gone */ }
   log(`done ${new Date().toISOString()}`);
 };
 process.on('SIGINT', () => { release(); process.exit(130); });

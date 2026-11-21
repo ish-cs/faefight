@@ -2,6 +2,8 @@ import * as THREE from 'three/webgpu';
 import { pass, renderOutput } from 'three/tsl';
 import { PLAYER, WEAPONS } from '../sim/constants';
 import type { MatchEvent, PlayerState, Vec3, WeaponKind } from '../sim/types';
+import { bodyMaterial } from './characters/charMaterials';
+import { handGeometry } from './characters/hands';
 import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import {
   adsFov, angleDelta, approach, bobOffset, bobRate, idleSway, PUNCH_SCALE, recoilKick, reloadClock, reloadPose, toggleMode, type CameraMode,
@@ -42,33 +44,31 @@ const VM_KICK: Record<WeaponKind, { back: number; climb: number }> = {
   shotgun: { back: 0.09, climb: 0.22 }, rifle: { back: 0.04, climb: 0.08 }, rocket: { back: 0.12, climb: 0.12 },
 };
 
-const gloveMat = new THREE.MeshStandardNodeMaterial({ color: 0x45484d, roughness: 0.85, metalness: 0 });
 const v3 = (a: [number, number, number]) => new THREE.Vector3(...a);
-const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _qi = new THREE.Quaternion();
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _qi = new THREE.Quaternion();
 
-/** A capsule-ish limb from a to b (local coords of the parent). */
-function limb(a: THREE.Vector3, b: THREE.Vector3, r0: number, r1: number, mat: THREE.Material): THREE.Mesh {
-  const len = a.distanceTo(b);
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, len, 10), mat);
-  m.position.copy(a).add(b).multiplyScalar(0.5);
-  m.quaternion.setFromUnitVectors(_up, _a.copy(b).sub(a).normalize());
-  return m;
-}
-
-function glove(size: [number, number, number], pos: THREE.Vector3, rx = 0): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(...size), gloveMat);
-  m.position.copy(pos);
-  m.rotation.x = rx;
-  return m;
-}
+/** Gripped cylinder per gun, in the grip frame: the pistol grip (right hand) and where the support hand holds. */
+const GRIPS: Record<Exclude<WeaponKind, 'fists'>, { tilt: number; left: { center: V; axis: V; radius: number; palm: V; wrist: V; thumbWrap?: boolean } }> = {
+  pistol: { tilt: -0.25, left: { center: [-0.004, -0.02, 0.006], axis: [0, -0.97, 0.25], radius: 0.036, palm: [-1, 0, -0.35], wrist: [-0.06, -0.07, 0.05] } },
+  smg: { tilt: -0.3, left: { center: [0, 0.062, -0.19], axis: [0, 0, 1], radius: 0.034, palm: [-0.6, -1, 0], wrist: [-0.05, 0.0, -0.13] } },
+  shotgun: { tilt: -0.35, left: { center: [0, 0.064, -0.33], axis: [0, 0, 1], radius: 0.031, palm: [-0.6, -1, 0], wrist: [-0.05, 0.0, -0.27] } },
+  rifle: { tilt: -0.3, left: { center: [0, 0.074, -0.32], axis: [0, 0, 1], radius: 0.031, palm: [-0.6, -1, 0], wrist: [-0.05, 0.005, -0.26] } },
+  rocket: { tilt: -0.3, left: { center: [0, 0.01, -0.27], axis: [0, -0.98, 0.2], radius: 0.019, palm: [-0.8, 0, 0.6], wrist: [-0.035, -0.07, -0.2], thumbWrap: true } },
+};
 
 type Rig = {
   root: THREE.Group; flash: THREE.Mesh | null; fistR?: THREE.Group; fistL?: THREE.Group;
   grip?: THREE.Group; gun?: THREE.Group; mag?: THREE.Mesh; magHome?: THREE.Vector3; left?: THREE.Group; leftHome?: THREE.Vector3;
 };
 
-function buildGunRig(kind: Exclude<WeaponKind, 'fists'>, sleeve: THREE.Material): Rig {
-  const h = HOLD[kind];
+const handMesh = (g: Parameters<typeof handGeometry>[0], mat: THREE.Material) => {
+  const m = new THREE.Mesh(handGeometry(g), mat);
+  m.name = 'viewmodel:hand';
+  return m;
+};
+
+function buildGunRig(kind: Exclude<WeaponKind, 'fists'>, mat: THREE.Material): Rig {
+  const h = HOLD[kind], gp = GRIPS[kind];
   const root = new THREE.Group();
   root.name = `viewmodel:${kind}`;
   const grip = new THREE.Group();
@@ -77,15 +77,20 @@ function buildGunRig(kind: Exclude<WeaponKind, 'fists'>, sleeve: THREE.Material)
   root.add(grip);
   const gun = buildWeapon(kind)!;
   grip.add(gun);
-  // Right hand around the grip, forearm running back and down out of frame.
-  grip.add(glove([0.055, 0.085, 0.075], new THREE.Vector3(0.004, -0.005, 0.012), -0.25));
-  grip.add(limb(new THREE.Vector3(0.01, -0.035, 0.05), new THREE.Vector3(0.09, -0.2, 0.42), 0.034, 0.042, sleeve));
-  // Support hand: its own group (glove + forearm) so a reload can take it to the magazine.
+  // Right hand closed round the grip, forearm running back and down out of frame.
+  grip.add(handMesh({
+    center: new THREE.Vector3(0, -0.005, 0.008), axis: new THREE.Vector3(0, Math.cos(gp.tilt), Math.sin(gp.tilt)), radius: 0.02,
+    palm: new THREE.Vector3(0.8, 0, 0.6), wrist: new THREE.Vector3(0.026, -0.055, 0.07), elbow: new THREE.Vector3(0.09, -0.2, 0.42), thumbWrap: true,
+  }, mat));
+  // Support hand: its own group so a reload can take it to the magazine (hand geometry relative to the group).
   const l = v3(h.left);
   const left = new THREE.Group();
   left.position.copy(l);
-  left.add(glove(kind === 'pistol' ? [0.05, 0.07, 0.07] : [0.075, 0.05, 0.09], new THREE.Vector3(), kind === 'pistol' ? -0.25 : 0));
-  left.add(limb(new THREE.Vector3(-0.012, -0.03, 0.04), v3(h.elbowL).sub(l), 0.032, 0.042, sleeve));
+  const L = gp.left;
+  const rel = (v: V) => v3(v).sub(l);
+  left.add(handMesh({
+    center: rel(L.center), axis: v3(L.axis), radius: L.radius, palm: v3(L.palm), wrist: rel(L.wrist), elbow: v3(h.elbowL).sub(l), left: true, thumbWrap: L.thumbWrap,
+  }, mat));
   grip.add(left);
   const flash = buildMuzzleFlash();
   flash.position.copy(gun.userData.muzzle as THREE.Vector3);
@@ -93,15 +98,17 @@ function buildGunRig(kind: Exclude<WeaponKind, 'fists'>, sleeve: THREE.Material)
   return { root, flash, grip, gun, mag: gun.userData.mag, magHome: gun.userData.magHome, left, leftHome: l.clone() };
 }
 
-function buildFistsRig(sleeve: THREE.Material): Rig {
+function buildFistsRig(mat: THREE.Material): Rig {
   const root = new THREE.Group();
   root.name = 'viewmodel:fists';
   const fist = (side: 1 | -1) => {
     const g = new THREE.Group();
     g.position.set(0.16 * side, -0.14, -0.42);
     g.rotation.set(0.25, -0.15 * side, 0.2 * side);
-    g.add(glove([0.06, 0.055, 0.075], new THREE.Vector3(0, 0, 0)));
-    g.add(limb(new THREE.Vector3(0, -0.01, 0.04), new THREE.Vector3(0.05 * side, -0.1, 0.42), 0.036, 0.044, sleeve));
+    g.add(handMesh({
+      center: new THREE.Vector3(0, 0, -0.012), axis: new THREE.Vector3(-1, 0, 0), radius: 0.007, palm: new THREE.Vector3(0, 0.15, 1),
+      wrist: new THREE.Vector3(0.004 * side, -0.012, 0.07), elbow: new THREE.Vector3(0.05 * side, -0.1, 0.42), wrap: 3.6, thumbWrap: true, left: side < 0,
+    }, mat));
     root.add(g);
     return g;
   };
@@ -118,7 +125,6 @@ export class FirstPersonView {
   private rigs = new Map<WeaponKind, Rig>();
   private rig: Rig | null = null;
   private kind: WeaponKind | null = null;
-  private sleeve = new THREE.MeshStandardNodeMaterial({ color: 0x3a4048, roughness: 0.9, metalness: 0 });
   private sleeveIsland = -1;
   private active = false;
   private quad: THREE.QuadMesh | null = null;
@@ -190,7 +196,8 @@ export class FirstPersonView {
    */
   updateCamera(feet: THREE.Vector3, yaw: number, pitch: number, me: PlayerState, humanId: number): boolean {
     const cam = this.renderer.camera;
-    this.active = this.mode === 'first' && me.alive;
+    // An emote is meant to be seen: third person while it plays, whatever the camera setting.
+    this.active = this.mode === 'first' && me.alive && !me.emote;
     const v = settings.get().video;
     // Aiming zooms both views (rifle 2x, others less).
     const fov = adsFov(this.active ? v.fovFirst : v.fovThird, me.equipped, me.alive ? this.adsK : 0);
@@ -271,14 +278,17 @@ export class FirstPersonView {
 
   private setWeapon(kind: WeaponKind, island: number) {
     if (island !== this.sleeveIsland) {
+      // Team camo sleeves: the bodies' material (no ground grime) in this team's colours, on every cached rig.
       this.sleeveIsland = island;
-      this.sleeve.color.set(islandColor(island)).multiplyScalar(0.45).lerp(new THREE.Color(0x3a4048), 0.35);
+      const mat = bodyMaterial(islandColor(island), 'full', 0);
+      for (const r of this.rigs.values()) r.root.traverse((o) => { if (o.name === 'viewmodel:hand') (o as THREE.Mesh).material = mat; });
     }
     if (kind === this.kind) return;
     if (this.rig) this.motion.remove(this.rig.root);
     let rig = this.rigs.get(kind);
     if (!rig) {
-      rig = kind === 'fists' ? buildFistsRig(this.sleeve) : buildGunRig(kind, this.sleeve);
+      const mat = bodyMaterial(islandColor(island), 'full', 0);
+      rig = kind === 'fists' ? buildFistsRig(mat) : buildGunRig(kind, mat);
       rig.root.traverse((o) => { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; });
       this.rigs.set(kind, rig);
     }
@@ -390,10 +400,13 @@ export class FirstPersonView {
    * compiles nothing. The rigs stay cached for the match.
    */
   warmUp(frames: number) {
+    // Body materials share one shader whatever the team colour (uniforms), so any island warms the right pipelines.
+    const island = Math.max(0, this.sleeveIsland);
     for (const kind of Object.keys(WEAPONS) as WeaponKind[]) {
       let rig = this.rigs.get(kind);
       if (!rig) {
-        rig = kind === 'fists' ? buildFistsRig(this.sleeve) : buildGunRig(kind, this.sleeve);
+        const mat = bodyMaterial(islandColor(island), 'full', 0);
+        rig = kind === 'fists' ? buildFistsRig(mat) : buildGunRig(kind, mat);
         rig.root.traverse((o) => { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; });
         this.rigs.set(kind, rig);
       }

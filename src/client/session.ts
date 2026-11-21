@@ -12,13 +12,14 @@ import type { Placement } from '../sim/building';
 import { resolveMapChoice, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { Snapshot } from '../sim/types';
-import { clampSettings, DEFAULT_SETTINGS, type GameSettings } from '../sim/settings';
 import type { BrainDigest } from '../sim/bots/introspect';
 import type { ViewExtras } from '../net/protocol';
+import { clampSettings, DEFAULT_SETTINGS, type GameSettings } from '../sim/settings';
 import type { ToWorker } from './protocol';
 import { MONEY_MAX, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven } from './commands';
 import { PING_EVERY_MS, PingTracker, TickMonitor, type HostTick } from './qol/netQuality';
 import { newRejoinToken, REJOIN_GRACE_MS } from './qol/rejoin';
+import { quipLines, WheelLimiter, type WheelId } from '../sim/emotes';
 import { HostMigrator } from './migration';
 import type { SessionMeta } from '../net/checkpoint';
 
@@ -55,6 +56,8 @@ export class HostSession {
   private encoder = new SnapshotEncoder();
   private tickNo = 0;
   private limiter = new ChatLimiter();
+  /** Emote / quick-chat wheel: one per peer per 2 s, checked before anything reaches the worker. */
+  private wheelLimiter = new WheelLimiter();
   /** Per-peer budgets: build previews (the ghost only re-asks when it moves) and malformed-message warnings. */
   private previewBudget = new Map<string, { windowStart: number; n: number }>();
   private warned = new Map<string, number>();
@@ -351,6 +354,9 @@ export class HostSession {
         case 'chat':
           this.relayChat(link.peerId, this.nameOf(seat), msg.text);
           break;
+        case 'wheel':
+          this.relayWheel(link.peerId, playerId, msg.id);
+          break;
         case 'pong':
           this.pings.pong(link.peerId, msg.n, performance.now());
           break;
@@ -480,6 +486,16 @@ export class HostSession {
   /** Chat typed by the host player. */
   localChat(text: string) { this.relayChat(HOST_PEER, this.hostName, text); }
 
+  // ---- emote / quick-chat wheel ----
+  /** A player's wheel pick → the sim (rate-limited here first; the sim keeps its own cooldown too). */
+  private relayWheel(sender: string, playerId: number | null, id: WheelId) {
+    if (!this.started || playerId === null || !this.worker) return;
+    if (!this.wheelLimiter.allow(sender, Date.now() / 1000)) { console.info(`[host] wheel from ${sender} rate-limited`); return; }
+    this.worker.postMessage({ type: 'wheel', playerId, id });
+  }
+  /** The host player's own wheel pick. */
+  localWheel(id: WheelId) { this.relayWheel(HOST_PEER, this.hostPlayerId, id); }
+
   // ---- match ----
   /**
    * Lock the lobby and produce the setup for the worker. A playing host is seat 0 → player id 1;
@@ -580,6 +596,8 @@ export class HostSession {
     this.lastSnap = snap;
     if (this.tickNo % 8 === 0) this.sendViews(snap);
     this.ticks.onTick(performance.now());
+    // Quick chat (anyone's, bots' too) becomes an ordinary chat line from that player, for every client.
+    for (const l of quipLines(snap.events, snap.players)) this.broadcastChat(l.from, l.text);
     this.encoder.push(snap);
     const tick = this.tickNo++;
     let updated = false;

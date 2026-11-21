@@ -1,7 +1,7 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
+import { BUILD, DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, type IslandLayout, type MapDef } from './map';
@@ -23,6 +23,8 @@ import { PracticeRange, practiceMapDef, type PracticeCmd } from './practice';
 import { isPlaceholderBotName, nickname } from './names';
 import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
+import { Banter } from './bots/banter';
+import { QUIP_SHOW_SEC, WheelLimiter, emoteEnd, isEmoteId, isQuipId, isWheelId, type WheelId } from './emotes';
 import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { clampSettings, resolveColors, type GameSettings } from './settings';
@@ -73,6 +75,8 @@ export class Match implements MatchApi {
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
   private history = new HitboxHistory();
   private rewindT: number | null = null;
+  /** Per player: a build request waiting for the busy time from the last placement to end (see applyInput). */
+  private queuedBuild = new Map<number, { req: BuildRequest; until: number }>();
   /**
    * Snapshots are deep copies by default (callers may keep or mutate them). The worker turns this off:
    * postMessage copies the snapshot anyway, synchronously, so the extra copy is pure cost.
@@ -80,6 +84,10 @@ export class Match implements MatchApi {
   cloneSnapshots = true;
   /** Lag-compensated shots resolved so far, and the total rewind (tests/debug). */
   lagStats = { shots: 0, rewindSec: 0 };
+  /** Emote / quick-chat wheel: requests waiting for the next tick, the per-player cooldown, bots' flavour lines. */
+  private wheelQueue: { id: number; what: WheelId }[] = [];
+  private wheelLimit = new WheelLimiter();
+  private banter: Banter;
   /** Practice range (MatchSetup.practice); null in every real match. */
   private practice: PracticeRange | null = null;
 
@@ -103,6 +111,7 @@ export class Match implements MatchApi {
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
     this.makeBot = opts.makeBot;
+    this.banter = new Banter(mulberry32(((setup.seed ?? 1) * 40503) ^ 0x2c1b3c6d));
     // Bot seats with a placeholder name ("Bot (hard)") get a human-looking nickname; a separate stream so
     // names don't shift the bots' own random choices.
     const nameRng = mulberry32(((setup.seed ?? 1) * 2654435761) ^ 0x5bd1e995);
@@ -217,9 +226,10 @@ export class Match implements MatchApi {
     const now = this.s.time + DT;
     this.s.time = now;
     this.tickNo++;
-    // Debug kills between ticks land in this tick's events (so clients see them like real kills).
+    // Debug kills between ticks land in this tick's events (kill feed, killcam), not lost.
     this.events = this.debugEvents;
     this.debugEvents = [];
+    this.applyWheel(now);
     this.practice?.before();
 
     for (const p of this.s.players.values()) {
@@ -227,10 +237,15 @@ export class Match implements MatchApi {
       if (!p.alive) {
         // Dead: commands are consumed (acked) but do nothing.
         if (cmds?.length) (p.mv ??= newMoveState()).ack = cmds[cmds.length - 1].seq;
+        if (p.emote) delete p.emote;
         continue;
       }
       const bot = this.bots.get(p.id);
-      const input = bot ? bot.think(this.botView(p)) : this.practice?.isDummy(p.id) ? this.practice.inputFor(p, now) : inputs.get(p.id) ?? NO_INPUT;
+      let input = bot ? bot.think(this.botView(p)) : this.practice?.isDummy(p.id) ? this.practice.inputFor(p, now) : inputs.get(p.id) ?? NO_INPUT;
+      // Bots only emote once the match is decided (Banter): then one stands still for it unless it wants to
+      // shoot (which ends the emote, as for anyone). Mid-match bot play is never changed by emotes.
+      if (bot && p.emote && this.s.winner !== null && !input.fire) input = { ...input, moveX: 0, moveZ: 0, jump: false, sprint: false, build: null, throwGrenade: false, placeCharge: false };
+      if (p.emote && emoteEnd(p, input, cmds, now)) delete p.emote;
       this.applyInput(p, input, now, cmds);
     }
 
@@ -250,8 +265,36 @@ export class Match implements MatchApi {
     this.updateSeals(now);
     this.remember(now);
     this.stats.onTick(this.events, this.s.players.values(), now);
+    for (const b of this.banter.onTick(this.events, this.s.players, now)) if (this.bots.has(b.id)) this.wheel(b.id, b.what);
+    for (const p of this.s.players.values()) {
+      if (p.emote && (!p.alive || p.lastDamagedAt >= p.emote.at)) delete p.emote; // hit or killed later this tick
+      if (p.quip && now - p.quip.at >= QUIP_SHOW_SEC) delete p.quip;
+    }
     this.history.record(now, this.s.players.values());
     return this.snapshot();
+  }
+
+  /**
+   * Emote / quick-chat wheel request (any player; bots via Banter). Applied at the start of the next tick,
+   * at most one per player per WHEEL_COOLDOWN_SEC; emotes need the player alive. Unknown ids throw (callers sanitize).
+   */
+  wheel(playerId: number, what: WheelId): void {
+    if (!isWheelId(what)) throw new Error(`Match.wheel: unknown wheel id ${String(what)}`);
+    this.mustPlayer(playerId);
+    this.wheelQueue.push({ id: playerId, what });
+  }
+
+  private applyWheel(now: number) {
+    if (!this.wheelQueue.length) return;
+    const q = this.wheelQueue;
+    this.wheelQueue = [];
+    for (const { id, what } of q) {
+      const p = this.s.players.get(id);
+      if (!p || (isEmoteId(what) && !p.alive) || !this.wheelLimit.allow(id, now)) continue;
+      if (isEmoteId(what)) p.emote = { id: what, at: now };
+      else if (isQuipId(what)) p.quip = { id: what, at: now };
+      this.events.push({ t: now, type: 'wheel', data: { by: id, id: what } });
+    }
   }
 
   previewBuild(playerId: number, req: BuildRequest): Placement {
@@ -260,13 +303,13 @@ export class Match implements MatchApi {
     return validatePlacement(this.physics, req.kind, snapped.pos, snapped.rotY, p.pos);
   }
 
+  /** A seat's bot brain (null for humans), for read-only spectator introspection (bots/introspect.ts). */
+  botBrain(id: number): BotBrain | null { return this.bots.get(id) ?? null; }
   /** Practice panel commands (reset, clear pieces, dummy toggles). Throws outside practice. */
   practiceCommand(cmd: PracticeCmd): void {
     if (!this.practice) throw new Error('Match.practiceCommand: not a practice match');
     this.practice.command(cmd);
   }
-  /** A seat's bot brain (null for humans), for read-only spectator introspection (bots/introspect.ts). */
-  botBrain(id: number): BotBrain | null { return this.bots.get(id) ?? null; }
 
   /** Hand a seat to a bot (e.g. a friend disconnected). */
   setBot(playerId: number, difficulty: Difficulty): void {
@@ -442,6 +485,9 @@ export class Match implements MatchApi {
     if (input.drop) this.drop(p, input.drop, now);
 
     tickReload(p, now);
+    // A build sent while still busy (a held-place stream arriving a little bunched) waits for the busy time
+    // to end instead of being dropped; it expires after BUILD.queueSec. The newest request wins.
+    if (input.build) this.queuedBuild.set(p.id, { req: input.build, until: now + BUILD.queueSec });
     if (now < p.busyUntil) return;
     const isl = this.map[p.island];
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
@@ -488,7 +534,11 @@ export class Match implements MatchApi {
     if (input.placeCharge) placeCharge(this.ctx, p, now);
     if (input.useMedkit) startMedkit(p, now);
     if (input.drink) startDrink(p, now);
-    if (input.build) this.build(p, input.build, now);
+    const queued = this.queuedBuild.get(p.id);
+    if (queued) {
+      this.queuedBuild.delete(p.id);
+      if (now <= queued.until) this.build(p, queued.req, now);
+    }
     this.syncHand(p);
   }
 

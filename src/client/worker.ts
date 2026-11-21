@@ -9,8 +9,8 @@ import { MoveQueue } from './moveQueue';
 import { Recorder } from '../sim/replay/recorder';
 import { metaOf, type ReplayKind, type ReplayOp } from '../sim/replay/format';
 import type { FromWorker, ToWorker } from './protocol';
-import { packMatch, unpackMatch } from '../net/matchCheckpoint';
 import { BRAIN_HZ, type BrainDigest } from '../sim/bots/introspect';
+import { packMatch, unpackMatch } from '../net/matchCheckpoint';
 
 const post = (m: FromWorker, transfer: Transferable[] = []) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m, transfer);
 
@@ -209,6 +209,10 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       case 'pause':
         paused = msg.paused;
         console.info(`[worker] ${paused ? 'paused' : 'resumed'}`);
+        break;
+      case 'wheel':
+        // Humans only (bots pick their own lines); unknown / botified ids are ignored like inputs.
+        if (match && inputs.has(msg.playerId)) { match.wheel(msg.playerId, msg.id); recordOp({ k: 'wheel', id: msg.playerId, what: msg.id }); }
         break;
       case 'practice':
         if (!match) throw new Error('practice before start');

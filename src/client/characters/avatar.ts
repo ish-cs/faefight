@@ -4,11 +4,20 @@ import { PLAYER } from '../../sim/constants';
 import type { MatchEvent, PlayerState, WeaponKind } from '../../sim/types';
 import { reloadClock, reloadPose, type ReloadPose } from '../firstPerson';
 import { chooseClip } from './animState';
-import { HAND_BONE, loadCharacters, type CharacterAssets } from './loader';
+import { EMOTE_BONES, emoteClip, emotePose, type BodyAxis, type EmoteBone } from './emotePose';
+import { QUICK_CHAT, QUIP_SHOW_SEC, type EmoteId, type QuipId } from '../../sim/emotes';
+import { lods } from '../world/lod';
+import { soldierLook } from './body';
+import { breath, flinchEnvelope, LOCOMOTION_CLIPS, StrideIK, strideFor } from './locomotion';
+import { BODY_LOD, HAND_BONE, loadCharacters, makeBody, type Body, type CharacterAssets } from './loader';
 import { buildMuzzleFlash, buildWeapon } from './weapons';
 
 const AIM_HOLD_S = 0.6; // keep the aim pose this long after a shot
 const FLINCH_S = 0.32;
+const FLINCH_ADD_S = 0.38; // additive flinch (light hits): over whatever the legs are doing
+const HEAVY_HIT = 35; // damage from which a hit plays the full-body hit reaction
+const LOCO_FADE = 0.24;
+const DEATH_TURN_S = 0.22; // turn to face the killer while starting to fall (the clip falls backward)
 const PUNCH_S = 0.45;
 const DEATH_SHOW_S = 1.9; // play the death animation, then hide (as the capsule did)
 const FADE = 0.16;
@@ -23,19 +32,34 @@ const LOW_READY_RATE = 8; // 1/s easing in/out of low ready
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _right = new THREE.Vector3();
+const _axis = new THREE.Vector3();
 const _q3 = new THREE.Quaternion();
 const _sphere = new THREE.Sphere();
 const _proj = new THREE.Matrix4();
+const _up = new THREE.Vector3(0, 1, 0);
+const _dir = new THREE.Vector3();
 
 /**
- * Level of detail (draw calls are the client's main cost: each skinned part is a draw in the main pass and in
- * every shadow cascade it overlaps).
+ * Level of detail. Each body is ONE skinned draw (all parts merged, see body.ts) in three detail levels (BODY_LOD).
  * - Culling: a sphere around the avatar that also covers its death pose (and its shadow, which at this sun
  *   elevation falls within ~2.5 m) — so the main pass and each shadow cascade cull avatars properly.
- * - Shadows: every part casts up close; the few big parts (torso, legs, head) further out; none far away.
+ * - Shadows: the body casts out to shadowBodyM; the gun only up close (shadowAllM); nothing far away.
  * - Animation: off-screen avatars skip the mixer (time is kept, so they resume in step); far ones update at half rate.
  */
-export const CHAR_LOD = { cullRadius: 2.2, shadowRadius: 2.6, shadowAllM: 30, shadowMajorM: 90, majorParts: 3, animHalfRateM: 45 };
+export const CHAR_LOD = { cullRadius: 2.2, shadowRadius: 2.6, shadowAllM: 30, shadowBodyM: 90, animHalfRateM: 45 };
+
+/** Body detail level for a camera distance, sticky within `hysteresis` of each threshold. */
+export function bodyLod(dist: number, current: number, scale = lods.scale): 0 | 1 | 2 {
+  // the shared LOD manager's preset × frame-time governor scale (world/lod.ts) stretches/shrinks every distance
+  dist /= Math.max(0.1, scale);
+  const h = BODY_LOD.hysteresis;
+  const lo1 = current >= 1 ? BODY_LOD.lod1 - h : BODY_LOD.lod1 + h;
+  const lo2 = current >= 2 ? BODY_LOD.lod2 - h : BODY_LOD.lod2 + h;
+  return dist >= lo2 ? 2 : dist >= lo1 ? 1 : 0;
+}
+
+/** Stable per-player look seed (skin tone, beard, eyes). */
+const lookSeed = (p: PlayerState) => [...p.name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, p.id * 977 + p.island * 131);
 
 /** Display-rate motion of one player (render.ts fills it: predicted locally, interpolated for others). */
 export type Motion = { pos: THREE.Vector3; vel: THREE.Vector3; yaw: number; pitch: number };
@@ -57,7 +81,41 @@ export type AvatarFrame = {
   ads?: boolean;
   /** Reload choreography for this frame (null when not reloading). */
   reload?: ReloadPose | null;
+  /** Emote playing, `t` s in (sim clock); null/absent = none. */
+  emote?: { id: EmoteId; t: number } | null;
+  /** Quick-chat line to show in a speech bubble (null/absent = none). */
+  quip?: QuipId | null;
 };
+
+/** Speech bubble sprite (dark text on a white rounded bubble with a tail), above the name tag. */
+function speechBubble(): { sprite: THREE.Sprite; draw(text: string): void } {
+  const c = document.createElement('canvas');
+  c.width = 320; c.height = 96;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('[characters] 2D canvas context unavailable');
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteNodeMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false, sizeAttenuation: false, fog: false });
+  mat.color.setScalar(1.6);
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.15, 0.045, 1);
+  sprite.center.set(0.5, -0.55); // above the name tag + shield bar
+  sprite.renderOrder = 7;
+  const draw = (text: string) => {
+    g.clearRect(0, 0, 320, 96);
+    g.font = '700 34px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    const w = Math.min(300, Math.max(90, g.measureText(text).width + 44));
+    const x = (320 - w) / 2;
+    g.fillStyle = 'rgba(255,255,255,0.96)';
+    g.beginPath(); g.roundRect(x, 6, w, 62, 22); g.fill();
+    g.beginPath(); g.moveTo(148, 66); g.lineTo(160, 88); g.lineTo(172, 66); g.closePath(); g.fill();
+    g.fillStyle = '#10151c';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(text, 160, 38, 280);
+    tex.needsUpdate = true;
+  };
+  return { sprite, draw };
+}
 
 /** Name tag sprite (white text on the island colour), drawn above remote players. */
 function nameTag(text: string, color: number): THREE.Sprite {
@@ -152,8 +210,22 @@ export class Avatar {
   private tag: THREE.Sprite | null = null;
   private shieldTag: ReturnType<typeof shieldBar> | null = null;
   private shownShield = 0;
+  private bubble: ReturnType<typeof speechBubble> | null = null;
+  private shownQuip: QuipId | null = null;
+  /** Bones the emote overlay turns, and their pose as the mixer left it (unkeyed bones would accumulate turns). */
+  private emoteBones = new Map<EmoteBone, THREE.Bone>();
+  private emoteBase = new Map<EmoteBone, THREE.Quaternion>();
   private aimUntil = 0;
   private flinchUntil = 0;
+  /** Additive flinch: start time (ms), twist side, and where the last hit came from (death facing). */
+  private flinchAt = -1e9;
+  private flinchSide = 1;
+  private hitFrom: THREE.Vector3 | null = null;
+  private deathYaw: number | null = null;
+  private deathYaw0 = 0;
+  private effort = 0;
+  private stride: StrideIK | null = null;
+  private speeds: Map<string, number> | null = null;
   private punchUntil = 0;
   private wasAlive = true;
   alive = true;
@@ -161,8 +233,8 @@ export class Avatar {
   private lastPos = new THREE.Vector3();
   private smoothVel = new THREE.Vector3();
   private materials: THREE.Material[] = [];
-  /** Skinned parts with whether they keep casting a shadow at mid range (the biggest few). */
-  private parts: { mesh: THREE.SkinnedMesh; major: boolean }[] = [];
+  private body: Body | null = null;
+  private lod = -1;
   private shadowTier = -1;
   /** LOD inputs for the next update(): set by CharacterSystem from the camera each frame. */
   lodOnScreen = true;
@@ -209,45 +281,24 @@ export class Avatar {
 
   private buildModel(assets: CharacterAssets, p: PlayerState, color: number) {
     this.hitbox.visible = false; // still raycastable: Raycaster ignores .visible
-    const variant = assets.variants[(p.isBot ? 1 : 0) % assets.variants.length];
-    const model = cloneSkinned(variant.scene);
+    const body = makeBody(assets, soldierLook(lookSeed(p)), color);
+    const model = body.model;
     model.scale.setScalar(assets.scale);
     model.position.y = -assets.footY * assets.scale;
     model.rotation.y = Math.PI; // Quaternius rigs face +Z; yaw 0 faces -Z
-    // Team colour: tint this avatar's uniform (one cloned material; everything else stays shared).
-    const team = new THREE.Color(color);
-    let uniform: THREE.MeshStandardMaterial | null = null;
-    model.traverse((o) => {
-      const m = o as THREE.SkinnedMesh;
-      if (!m.isSkinnedMesh) return;
-      // Bind-pose bounds don't follow the animation (death, lean): cull against a fixed sphere round the avatar.
-      this.parts.push({ mesh: m, major: false });
-      const swap = (mat: THREE.Material) => {
-        if (mat.name !== variant.uniformMaterial) return mat;
-        if (!uniform) {
-          uniform = (mat as THREE.MeshStandardMaterial).clone();
-          uniform.color.copy(team).multiplyScalar(0.55).lerp((mat as THREE.MeshStandardMaterial).color, 0.25);
-          this.materials.push(uniform);
-        }
-        return uniform;
-      };
-      m.material = Array.isArray(m.material) ? m.material.map(swap) : swap(m.material);
-    });
-    if (!uniform) console.warn(`[characters] uniform material "${variant.uniformMaterial}" not found; team colour only on name tag`);
     this.group.add(model);
     this.model = model;
+    this.body = body;
     this.group.updateMatrixWorld(true);
-    const inv = new THREE.Matrix4(), size = new THREE.Vector3();
-    for (const part of this.parts) {
-      const m = part.mesh;
-      // The avatar-space sphere (centre 0.9 m up, CHAR_LOD.cullRadius) in this mesh's local frame.
+    const inv = new THREE.Matrix4();
+    for (const m of body.lods) {
+      // Bind-pose bounds don't follow the animation (death, lean): cull against a fixed sphere round the avatar,
+      // the avatar-space sphere (centre 0.9 m up, CHAR_LOD.cullRadius) in this mesh's local frame.
       inv.copy(m.matrixWorld).invert();
       const scale = m.matrixWorld.getMaxScaleOnAxis() || 1;
-      m.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0).applyMatrix4(inv), (CHAR_LOD.cullRadius + CHAR_LOD.shadowRadius) / scale);
+      m.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0).applyMatrix4(this.group.matrixWorld).applyMatrix4(inv), (CHAR_LOD.cullRadius + CHAR_LOD.shadowRadius) / scale);
       m.frustumCulled = true;
     }
-    const vol = (m: THREE.SkinnedMesh) => { m.geometry.computeBoundingBox(); m.geometry.boundingBox!.getSize(size); return size.x * size.y * size.z; };
-    [...this.parts].sort((a, b) => vol(b.mesh) - vol(a.mesh)).slice(0, CHAR_LOD.majorParts).forEach((p) => { p.major = true; });
 
     this.mixer = new THREE.AnimationMixer(model);
     for (const [name, clip] of assets.clips) this.actions.set(name, this.mixer.clipAction(clip));
@@ -267,8 +318,16 @@ export class Avatar {
     this.upperArmL = model.getObjectByName(UPPER_ARM_L) as THREE.Bone | undefined;
     if (this.upperArmL) this.spine.push(this.upperArmL);
     this.spineBase = this.spine.map((b) => (b ? b.quaternion.clone() : new THREE.Quaternion()));
+    for (const n of EMOTE_BONES) {
+      const b = model.getObjectByName(n) as THREE.Bone | undefined;
+      if (b) { this.emoteBones.set(n, b); this.emoteBase.set(n, b.quaternion.clone()); }
+      else console.warn(`[characters] emote bone ${n} missing; that part of the emotes is skipped`);
+    }
     this.hand = model.getObjectByName(HAND_BONE)!;
     this.gripLocal = assets.gripLocal;
+    this.stride = new StrideIK(model);
+    this.speeds = assets.speeds;
+    this.chest = model.getObjectByName('Chest') as THREE.Bone | undefined;
     this.current = this.actions.get('Idle')!;
     this.current.play();
   }
@@ -281,7 +340,13 @@ export class Avatar {
     this.flash.scale.setScalar(0.8 + Math.random() * 0.5);
   }
 
-  onHit(now: number) { this.flinchUntil = now + FLINCH_S * 1000; }
+  /** Took a hit: heavy hits play the full hit reaction, light ones an additive flinch; `from` = shooter's position. */
+  onHit(now: number, amount = 0, from: THREE.Vector3 | null = null) {
+    if (amount >= HEAVY_HIT) this.flinchUntil = now + FLINCH_S * 1000;
+    this.flinchAt = now;
+    this.flinchSide = Math.random() < 0.5 ? -1 : 1;
+    if (from) (this.hitFrom ??= new THREE.Vector3()).copy(from);
+  }
 
   /** World position of this avatar's muzzle or ejection port (null with fists / hidden). */
   gunPoint(which: 'muzzle' | 'eject', out: THREE.Vector3): THREE.Vector3 | null {
@@ -322,15 +387,23 @@ export class Avatar {
     const once = next.loop === THREE.LoopOnce;
     if (once || !next.isRunning()) next.reset();
     if (name === 'Air') { next.time = 0.18; next.timeScale = 0; }
+    // walk ↔ run ↔ strafe: start the new cycle at the same phase so the feet don't jump mid-blend
+    const loco = this.current && LOCOMOTION_CLIPS[name] && LOCOMOTION_CLIPS[this.current.getClip().name];
+    if (loco && this.current) next.time = (this.current.time / this.current.getClip().duration) * next.getClip().duration;
     if (this.blob) this.blob.visible = name !== 'Air' && name !== 'Death';
     next.setEffectiveWeight(1).play();
-    if (this.current) this.current.crossFadeTo(next, name === 'Death' ? 0.1 : FADE, false);
+    if (this.current) this.current.crossFadeTo(next, name === 'Death' ? 0.1 : loco ? LOCO_FADE : FADE, false);
     this.current = next;
   }
 
   update(f: AvatarFrame, dt: number, now: number) {
-    if (f.alive && !this.wasAlive) { this.diedAt = -1; this.smoothVel.set(0, 0, 0); } // respawned
-    if (!f.alive && this.wasAlive) this.diedAt = now;
+    if (f.alive && !this.wasAlive) { this.diedAt = -1; this.smoothVel.set(0, 0, 0); this.deathYaw = null; this.hitFrom = null; } // respawned
+    if (!f.alive && this.wasAlive) {
+      this.diedAt = now;
+      // fall away from whoever landed the last hit: face them (the death clip falls backward)
+      this.deathYaw0 = this.group.rotation.y;
+      this.deathYaw = this.hitFrom ? Math.atan2(-(this.hitFrom.x - this.lastPos.x), -(this.hitFrom.z - this.lastPos.z)) : null;
+    }
     this.wasAlive = f.alive;
     this.alive = f.alive;
 
@@ -340,6 +413,11 @@ export class Avatar {
 
     // Dead: stay where we fell (the sim may move the body to the respawn point).
     if (f.alive) { this.lastPos.copy(f.pos); this.group.rotation.y = f.yaw; }
+    else if (this.deathYaw !== null) {
+      const k = Math.min(1, (now - this.diedAt) / (DEATH_TURN_S * 1000));
+      const d = Math.atan2(Math.sin(this.deathYaw - this.deathYaw0), Math.cos(this.deathYaw - this.deathYaw0));
+      this.group.rotation.y = this.deathYaw0 + d * k * k * (3 - 2 * k);
+    }
     this.group.position.copy(this.lastPos);
     if (this.model) this.model.visible = !f.blinkHidden;
     else this.hitbox.visible = !f.blinkHidden;
@@ -359,13 +437,26 @@ export class Avatar {
       }
     }
     if (this.tag) this.tag.visible = f.alive;
+    const quip = f.alive ? f.quip ?? null : null;
+    if (quip && !this.bubble) {
+      this.bubble = speechBubble();
+      this.bubble.sprite.position.y = PLAYER.height + 0.42;
+      this.group.add(this.bubble.sprite);
+    }
+    if (this.bubble) {
+      this.bubble.sprite.visible = quip !== null;
+      if (quip && quip !== this.shownQuip) { this.shownQuip = quip; this.bubble.draw(QUICK_CHAT[quip]); }
+    }
+    const emote = f.alive ? f.emote ?? null : null;
+    // Hands are busy during an emote: the gun goes away.
+    if (this.weapon) this.weapon.visible = !emote;
     if (this.shieldTag) {
       this.shieldTag.sprite.visible = f.alive;
       const sh = Math.ceil(f.shield);
       if (sh !== this.shownShield) { this.shownShield = sh; this.shieldTag.draw(sh); }
     }
 
-    this.applyShadowLod();
+    this.applyLod();
     if (!this.mixer) return;
     // Animation LOD: nothing to see off screen; far away, half rate. Skipped time is caught up on the next update.
     this.animFrame++;
@@ -373,14 +464,31 @@ export class Avatar {
     dt += this.animSkipped;
     this.animSkipped = 0;
     this.smoothVel.lerp(f.vel, 1 - Math.exp(-VEL_SMOOTH_RATE * dt));
-    const { name, ts } = chooseClip({
+    const chosen = emote ? { name: emoteClip(emote.id), ts: 1 } : chooseClip({
       alive: f.alive, vel: this.smoothVel, yaw: f.yaw, equipped: f.equipped,
       flinching: now < this.flinchUntil, punching: now < this.punchUntil, aiming: now < this.aimUntil && !r,
     });
-    this.fadeTo(name, ts);
+    const name = chosen.name;
+    // Locomotion: playback rate + stride length from the clip's own ground speed, so planted feet don't skate.
+    const speed = Math.hypot(this.smoothVel.x, this.smoothVel.z);
+    const gait = LOCOMOTION_CLIPS[name] ? strideFor(speed, this.speeds?.get(name)) : { ts: chosen.ts, stride: 1 };
+    this.fadeTo(name, gait.ts);
     this.spine.forEach((b, i) => b?.quaternion.copy(this.spineBase[i]));
+    for (const [n, b] of this.emoteBones) b.quaternion.copy(this.emoteBase.get(n)!);
     this.mixer.update(dt);
     this.spine.forEach((b, i) => b && this.spineBase[i].copy(b.quaternion));
+    for (const [n, b] of this.emoteBones) this.emoteBase.get(n)!.copy(b.quaternion);
+
+    if (emote && f.alive) {
+      // Emote overlay instead of the aim bend (the look pitch would fight the pose).
+      this.group.updateMatrixWorld(true);
+      for (const turn of emotePose(emote.id, emote.t)) this.turn(this.emoteBones.get(turn.bone), turn.axis, turn.angle, f.yaw);
+      return;
+    }
+    if (gait.stride > 1 && this.stride && this.lodDist < CHAR_LOD.animHalfRateM && this.current === this.actions.get(name)) {
+      this.group.updateMatrixWorld(true);
+      this.stride.apply(gait.stride, _dir.set(this.smoothVel.x, 0, this.smoothVel.z).normalize());
+    }
 
     // Aim: bend the spine with the look pitch (up/down), split across three bones, about the body's
     // right axis in world space so it works whatever the bones' local axes are.
@@ -394,17 +502,32 @@ export class Avatar {
       if (this.lowReady > 0.01) this.bend(this.upperArm, -LOW_READY_RAD * this.lowReady);
       // Off hand drops to the magazine during the swap.
       if (r && r.hand > 0) this.bend(this.upperArmL, -0.45 * r.hand);
+      // Breathing (deeper after running) and the additive flinch: lean back + twist, springing out.
+      this.effort += ((speed > 4 ? 1 : 0) - this.effort) * Math.min(1, dt * (speed > 4 ? 0.5 : 0.15));
+      this.bend(this.chest, breath(now / 1000, this.effort));
+      const fl = flinchEnvelope((now - this.flinchAt) / 1000, FLINCH_ADD_S);
+      if (fl > 0) {
+        this.bend(this.chest, -0.22 * fl);
+        this.bend(this.spine[1], -0.1 * fl);
+        this.rotWorld(this.chest, _up, 0.16 * fl * this.flinchSide);
+      }
     }
   }
+  private chest: THREE.Bone | undefined;
 
-  /** Shadow casting by distance tier (only touches the meshes when the tier changes). */
-  private applyShadowLod() {
+  /** Body detail + shadow casting by distance (only touches the meshes when something changes). */
+  private applyLod() {
     const d = this.lodDist;
-    const tier = d < CHAR_LOD.shadowAllM ? 0 : d < CHAR_LOD.shadowMajorM ? 1 : 2;
+    if (this.body) {
+      const lod = bodyLod(d, this.lod);
+      if (lod !== this.lod) { this.lod = lod; this.body.lods.forEach((m, i) => { m.visible = i === lod; }); }
+    }
+    const ls = lods.scale;
+    const tier = d < CHAR_LOD.shadowAllM * ls ? 0 : d < CHAR_LOD.shadowBodyM * ls ? 1 : 2;
     if (tier === this.shadowTier && !this.weaponDirty) return;
     this.shadowTier = tier;
     this.weaponDirty = false;
-    for (const p of this.parts) p.mesh.castShadow = tier === 0 || (tier === 1 && p.major);
+    if (this.body) for (const m of this.body.lods) m.castShadow = tier < 2;
     this.weapon?.traverse((o) => {
       if (!(o as THREE.Mesh).isMesh) return;
       o.userData.castsShadow ??= o.castShadow; // as built (weapons.ts)
@@ -413,12 +536,23 @@ export class Avatar {
   }
   private weaponDirty = false;
 
+  /** Rotate a bone by `angle` about one of the body's axes (world space, from the facing `yaw`). */
+  private turn(bone: THREE.Bone | undefined, axis: BodyAxis, angle: number, yaw: number) {
+    if (axis === 'right') _axis.set(Math.cos(yaw), 0, -Math.sin(yaw));
+    else if (axis === 'up') _axis.set(0, 1, 0);
+    else _axis.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+    this.rotWorld(bone, _axis, angle);
+  }
+
   /** Rotate a bone by `angle` about the body's right axis (_right, world space), whatever its local axes. */
-  private bend(bone: THREE.Bone | undefined, angle: number) {
+  private bend(bone: THREE.Bone | undefined, angle: number) { this.rotWorld(bone, _right, angle); }
+
+  /** Rotate a bone by `angle` about a world-space axis. */
+  private rotWorld(bone: THREE.Bone | undefined, axis: THREE.Vector3, angle: number) {
     if (!bone?.parent) return;
     // local' = parentWorld⁻¹ · R(world) · parentWorld · local
     bone.parent.getWorldQuaternion(_q);
-    _q2.setFromAxisAngle(_right, angle);
+    _q2.setFromAxisAngle(axis, angle);
     const inv = _q3.copy(_q).invert();
     bone.quaternion.premultiply(_q).premultiply(_q2).premultiply(inv);
     bone.updateMatrixWorld(true);
@@ -432,6 +566,7 @@ export class Avatar {
     this.hitbox.geometry.dispose();
     if (this.tag) { (this.tag.material as THREE.SpriteNodeMaterial).map?.dispose(); this.tag.material.dispose(); }
     if (this.shieldTag) { (this.shieldTag.sprite.material as THREE.SpriteNodeMaterial).map?.dispose(); this.shieldTag.sprite.material.dispose(); }
+    if (this.bubble) { (this.bubble.sprite.material as THREE.SpriteNodeMaterial).map?.dispose(); this.bubble.sprite.material.dispose(); }
   }
 }
 
@@ -483,7 +618,10 @@ export class CharacterSystem {
     const now = performance.now();
     // echo = the host confirming a shot we already showed (client shot prediction): animated once.
     if (e.type === 'shot') { if (!e.data.echo) this.avatars.get(e.data.by as number)?.onShot((e.data.weapon as WeaponKind) ?? 'pistol', now); }
-    else if (e.type === 'hit') this.avatars.get(e.data.target as number)?.onHit(now);
+    else if (e.type === 'hit') {
+      const shooter = this.avatars.get(e.data.by as number);
+      this.avatars.get(e.data.target as number)?.onHit(now, Number(e.data.amount) || 0, shooter ? shooter.group.position : null);
+    }
   }
 
   /**
@@ -503,6 +641,7 @@ export class CharacterSystem {
       cam.updateMatrixWorld();
       this.frustum.setFromProjectionMatrix(_proj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     }
+    const simNow = simTime + Math.min(0.1, (now - this.snapAt) / 1000);
     for (const p of players) {
       // Not perceivable (interest management): keep the avatar, just don't show it — rebuilding a skinned
       // model each time someone steps round a corner is a frame hitch.
@@ -522,6 +661,8 @@ export class CharacterSystem {
         pos: m.pos, vel: m.vel, yaw: p.id === humanId ? localYaw : m.yaw, pitch: m.pitch, alive: p.alive, equipped: p.equipped,
         blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0, shield: p.shield ?? 0,
         ads: p.ads,
+        emote: p.emote ? { id: p.emote.id, t: simNow - p.emote.at } : null,
+        quip: p.quip && simNow - p.quip.at < QUIP_SHOW_SEC ? p.quip.id : null,
         reload: (() => {
           const c = reloadClock(p, simTime + Math.min(0.1, (now - this.snapAt) / 1000));
           return c ? reloadPose(p.equipped, c.elapsed, c.duration, c.magStart, c.beats) : null;

@@ -606,3 +606,23 @@ canvas.shake { animation: screen-shake 0.55s ease-out; }
   .lobby-side .game-settings { width: 100%; box-sizing: border-box; }
   .lobby-side .gs-row { grid-template-columns: 104px 1fr 52px; }
 }
+
+/* ---- emote & quick-chat wheel (emoteWheel.ts) ----
+   Uses the shared UI tokens (src/client/ui/theme.css, docs/ui-style.md) with fallbacks to the legacy palette. */
+.emote-wheel { position: fixed; left: 50%; top: 50%; width: 300px; height: 300px; margin: -150px 0 0 -150px; z-index: 30; pointer-events: none; }
+.emote-wheel[hidden] { display: none; }
+.ew-ring { position: absolute; left: 0; top: 0; width: 300px; height: 300px; border-radius: 50%;
+  border: 1px solid var(--c-line, var(--line)); box-shadow: var(--hud-shadow, 0 8px 30px rgba(0, 0, 0, 0.25));
+  background: radial-gradient(circle, transparent 0 52px, var(--plate-strong, var(--glass-strong)) 53px 100%); }
+.ew-slot { position: absolute; left: 150px; top: 150px; width: 78px; height: 62px; margin: -31px 0 0 -39px;
+  transform: translate(var(--x), var(--y)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  border-radius: var(--r-sm, 6px); border: 1px solid transparent; color: var(--c-text-dim, var(--muted)); transition: transform 0.08s, opacity 0.08s; }
+.ew-slot .ew-icon svg { width: 26px; height: 26px; display: block; }
+.ew-slot .ew-label { font-family: var(--ff-display, inherit); font-size: 12px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; white-space: nowrap; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
+.ew-slot.quip .ew-icon { color: var(--c-teal, #9fe8c0); }
+.ew-slot.emote .ew-icon { color: var(--c-yellow, var(--gold)); }
+.ew-slot.active { background: var(--plate, rgba(255, 255, 255, 0.14)); border-color: var(--c-orange, var(--accent)); color: var(--c-text, var(--text)); transform: translate(var(--x), var(--y)) scale(1.1); }
+.ew-hub { position: absolute; left: 100px; top: 132px; width: 100px; height: 36px; display: flex; align-items: center; justify-content: center;
+  text-align: center; font-family: var(--ff-body, inherit); font-size: 11px; font-weight: 700; line-height: 1.15; color: var(--c-text, var(--text)); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
+.emote-wheel.cooling .ew-slot { opacity: 0.45; }
+.emote-wheel.cooling .ew-hub { color: var(--c-yellow, var(--gold)); }
