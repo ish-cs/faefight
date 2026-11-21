@@ -4,6 +4,7 @@ import { POTION_KINDS, validSlot } from '../sim/hotbar';
 import type { BuildRequest, GunKind, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
 import { clampSettings, isColor, type GameSettings } from '../sim/settings';
 import { CHAT_MAX_LEN, type ClientMsg, type ViewExtras } from './protocol';
+import { isWheelId } from '../sim/emotes';
 
 // Everything from a remote peer is untrusted: rebuild each message field by field from known shapes.
 
@@ -217,6 +218,9 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
     case 'chat':
       // Generous bound here; cleanChat trims to CHAT_MAX_LEN after stripping junk.
       return typeof x.text === 'string' && x.text.length <= CHAT_MAX_LEN * 4 ? { t: 'chat', text: x.text } : null;
+    case 'wheel':
+      // Only catalog ids (sim/emotes.ts): anything else is malformed.
+      return isWheelId(x.id) ? { t: 'wheel', id: x.id } : null;
     default:
       return null;
   }

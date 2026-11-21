@@ -1,6 +1,7 @@
 import type { IslandLayout } from '../map';
 import type { MatchSetup } from '../matchApi';
 import type { MoveCmd } from '../movement';
+import type { WheelId } from '../emotes';
 import type { BuildRequest, Difficulty, Inventory, PieceKind, PlayerInput, Vec3 } from '../types';
 
 /**
@@ -62,7 +63,9 @@ export type ReplayOp =
   | { k: 'eliminate'; id: number }
   | { k: 'kill'; id: number }
   | { k: 'give'; id: number; inv: Partial<Inventory> }
-  | { k: 'piece'; kind: PieceKind; pos: Vec3; rotY: number };
+  | { k: 'piece'; kind: PieceKind; pos: Vec3; rotY: number }
+  /** A human's emote / quick-chat wheel pick (bots' come from the sim itself). */
+  | { k: 'wheel'; id: number; what: WheelId };
 
 /**
  * Event log entry: [tick, type, data]. Types: kill, hit, sealed, unsealed, eliminated, win, suddenDeath, trapped,

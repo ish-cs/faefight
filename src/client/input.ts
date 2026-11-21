@@ -47,6 +47,8 @@ export class InputController {
   enabled = false;
   /** Mouse look multiplier on top of the sensitivity setting (main sets it to the zoom while aiming). */
   lookScale = 1;
+  /** Emote wheel open: the mouse picks a slot instead of looking around or firing. */
+  lookLocked = false;
   private keys = new Set<string>();
   private fireHeld = false;
   /** Recoil still to be applied to the look angles (rad); fed in over a few frames. */
@@ -223,7 +225,7 @@ export class InputController {
   }
 
   private onMouseDown(e: MouseEvent) {
-    if (!this.enabled) return;
+    if (!this.enabled || this.lookLocked) return;
     if (this.inventory) { this.gate.press(e.button, false, performance.now()); this.setInventory(false); return; }
     // The gate: a press while unlocked only re-captures; it and the grace right after never act.
     if (!this.gate.press(e.button, this.locked, performance.now())) { if (!this.locked) this.requestLock(); return; }
@@ -239,7 +241,7 @@ export class InputController {
   }
 
   private onMouseMove(e: MouseEvent) {
-    if (!this.enabled || !this.locked) return;
+    if (!this.enabled || !this.locked || this.lookLocked) return;
     const c = settings.get().controls;
     const k = BASE_RAD_PER_PX * c.sensitivity * this.lookScale;
     if (this.lookEventT === null && (e.movementX || e.movementY)) this.lookEventT = e.timeStamp;

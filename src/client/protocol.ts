@@ -6,6 +6,7 @@ import type { PracticeCmd } from '../sim/practice';
 import type { BuildRequest, Inventory, PieceKind, PlayerInput, Snapshot } from '../sim/types';
 import type { BrainDigest } from '../sim/bots/introspect';
 import type { ReplayKind, ReplayMeta } from '../sim/replay/format';
+import type { WheelId } from '../sim/emotes';
 
 /** main thread → worker */
 export type ToWorker =
@@ -37,6 +38,8 @@ export type ToWorker =
   /** Practice range panel (reset, clear pieces, dummy toggles). */
   | { type: 'practice'; cmd: PracticeCmd }
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
+  /** Emote / quick-chat wheel pick for a human player (already sanitized; the sim applies its own cooldown). */
+  | { type: 'wheel'; playerId: number; id: WheelId }
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
   | { type: 'debug'; cmd: 'hp'; hp: number }
