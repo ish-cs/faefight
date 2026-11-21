@@ -1,3 +1,4 @@
+import { buildMapDef } from '../../src/sim/map';
 import { beforeAll, describe, expect, test, vi } from 'vitest';
 import type { HostSession as HostSessionT } from '../../src/client/session';
 import { LoopbackTransport } from '../../src/net/loopback';
@@ -66,7 +67,7 @@ describe('HostSession', () => {
     expect(setup.players.map((p) => p.name)).toEqual(['Bob', (host.lobby.slots()[2] as any).name]);
     expect(host.hostPlayer).toBeNull();
     // Bob (seat 1) is player 1 now: his start message and his inputs use that id.
-    host.onMap([] as any, [4, 6]);
+    host.onMap(buildMapDef(2), [4, 6]);
     await flush();
     expect(got.find((m) => m.t === 'start')).toMatchObject({ playerId: 1, island: 4 });
     link.send({ t: 'input', input: NO_INPUT });
