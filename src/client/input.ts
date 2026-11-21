@@ -81,8 +81,12 @@ export class InputController {
   }
 
   get locked() {
-    return document.pointerLockElement === this.canvas;
+    return this.debugLocked || document.pointerLockElement === this.canvas;
   }
+  /** Test hook (?debug=1 latency probe): treat the pointer as locked without a real pointer lock. */
+  debugLocked = false;
+  /** event.timeStamp of the oldest look (mouse) event not yet drawn; main's latency probe consumes it */
+  lookEventT: number | null = null;
 
   /** Holding a piece = build mode: the ghost shows and a click places it. */
   get buildMode(): boolean {
@@ -196,6 +200,7 @@ export class InputController {
     if (!this.enabled || !this.locked) return;
     const c = settings.get().controls;
     const k = BASE_RAD_PER_PX * c.sensitivity * this.lookScale;
+    if (this.lookEventT === null && (e.movementX || e.movementY)) this.lookEventT = e.timeStamp;
     this.yaw -= e.movementX * k;
     this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - e.movementY * k * (c.invertY ? -1 : 1)));
   }

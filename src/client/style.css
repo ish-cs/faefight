@@ -206,8 +206,8 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
   color: var(--text); background: rgba(14, 18, 24, 0.45); border: 1px solid var(--line); font-variant-numeric: tabular-nums; min-width: 44px; text-align: center;
 }
 .hud .fps-detail {
-  position: absolute; top: 40px; right: 18px; padding: 4px 8px; border-radius: 7px; font-size: 10.5px; font-weight: 600; line-height: 1.45;
-  color: var(--text); background: rgba(14, 18, 24, 0.55); border: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: pre; text-align: right;
+  padding: 3px 8px; border-radius: 7px; font-size: 10.5px; font-weight: 600; line-height: 1.4;
+  color: var(--text); background: rgba(14, 18, 24, 0.5); border: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: pre;
 }
 /* Spectating host (no player): only the match info, chat and the spectator banner stay. */
 .hud.no-player .tl, .hud.no-player .bl, .hud.no-player .br, .hud.no-player .hotbar, .hud.no-player .crosshair, .hud.no-player .prompt { display: none; }

@@ -412,8 +412,19 @@ export class Renderer {
     if (GPU_TIMING) this.resolveGpuTime();
   }
 
-  info() {
+  /** This frame's totals (world + post + viewmodel); call after the frame's last render. */
+  captureInfo() {
     const r = this.gpu.info.render as unknown as { drawCalls?: number; calls?: number; triangles: number };
-    return { backend: this.backend, drawCalls: r.drawCalls ?? r.calls ?? 0, triangles: r.triangles };
+    this.lastInfo.drawCalls = r.drawCalls ?? r.calls ?? 0;
+    this.lastInfo.triangles = r.triangles;
+  }
+  private lastInfo = { drawCalls: 0, triangles: 0 };
+
+  /**
+   * Draw calls / triangles of the last complete frame. three resets renderer.info at the start of its own
+   * animation frame (before the game's), so reading it live mid-frame gives 0: main captures it after rendering.
+   */
+  info() {
+    return { backend: this.backend, drawCalls: this.lastInfo.drawCalls, triangles: this.lastInfo.triangles };
   }
 }

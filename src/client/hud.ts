@@ -156,6 +156,8 @@ export class Hud {
   private damage = el('div', 'damage-flash');
   private endScreen = el('div', 'end-screen');
   private fps = el('div', 'fps');
+  /** Shift+F3 perf detail under the counter (frame/GPU ms, draw calls, triangles, governor rung). */
+  private fpsDetail = el('div', 'fps-detail');
   private stamina = el('div', 'stamina');
   private staminaFill = el('div', 'stamina-fill');
   private staminaText = el('div', 'stamina-text');
@@ -164,8 +166,6 @@ export class Hud {
   private watchTag = el('div', 'watch-tag');
   private brain = el('div', 'brain-panel glass');
   private brainSig = '';
-  /** Shift+F3 perf detail under the counter (frame/GPU ms, draw calls, triangles, governor rung). */
-  private fpsDetail = el('div', 'fps-detail');
   private panel = el('div', 'panel');
   private panelKind: 'shop' | 'potions' | 'vault' | null = null;
   private vaultCash!: HTMLInputElement;
@@ -186,7 +186,8 @@ export class Hud {
     this.watchTag.dataset.testid = 'watch-tag';
     this.brain.dataset.testid = 'brain-panel';
     this.brain.style.display = 'none';
-    bl.append(this.watchTag, this.buffs, this.shield, this.hp, this.stamina);
+    // perf detail sits in the bottom-left column above the bars: never under the kill feed / notifications
+    bl.append(this.fpsDetail, this.watchTag, this.buffs, this.shield, this.hp, this.stamina);
     const br = el('div', 'br');
     br.append(this.weapon, this.extras);
     const tc = el('div', 'tc');
@@ -214,7 +215,7 @@ export class Hud {
     this.stormWarn.append(el('div', 'storm-warn-sub', 'Sudden death · get inside the ring'));
     this.stormVignette.dataset.testid = 'storm-vignette';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
-      this.sealedBanner, this.stormVignette, this.stormWarn, this.damage, this.endScreen, this.fps, this.fpsDetail, this.panel, this.brain);
+      this.sealedBanner, this.stormVignette, this.stormWarn, this.damage, this.endScreen, this.fps, this.panel, this.brain);
     parent.append(this.root);
   }
 

@@ -101,6 +101,7 @@ export class World {
     const cos = STRESS > 1 ? stressOffsets().flatMap(([ox, oz], k) => def.cosmetics.map((c) => k === 0 ? c : { ...c, id: 1e6 * k + c.id, pos: { ...c.pos, x: c.pos.x + ox, z: c.pos.z + oz } })) : def.cosmetics;
     this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
+    impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
 
