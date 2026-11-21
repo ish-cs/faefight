@@ -1,3 +1,4 @@
+import { displayRefresh, FrameQueue, frameBudgetMs } from './refresh';
 import './style.css';
 import type { Object3D } from 'three/webgpu';
 import type { HostMsg, Slot, ViewExtras } from '../net/protocol';
@@ -1752,7 +1753,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
       predicted: () => ({ active: !!predictor?.active, pos: lastRendered, seq: moveSeq, stats: predictor?.stats ?? null, pending: predictor?.pending ?? 0 }),
       frames: () => frameStats(),
-      resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; },
+      resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; gpuDoneT.length = 0; },
+      /** frames the GPU actually finished per second (true throughput; rAF fps overstates it when frames queue) */
+      gpuFps: () => (gpuDoneT.length > 1 ? ((gpuDoneT.length - 1) * 1000) / (gpuDoneT[gpuDoneT.length - 1] - gpuDoneT[0]) : 0),
       gpuMs: () => renderer.gpuStats(),
       renderScale: () => ({ dyn: governor.knobs.res, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: governor.smoothedMs }),
       pbr: () => pbrStats,
@@ -1866,18 +1869,25 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   };
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
+  // ?gpuqueue=ms: GPU queue latency cap (0 = unbounded, A/B only)
+  const gpuQueue = new FrameQueue(Number(new URLSearchParams(location.search).get('gpuqueue') ?? 40) || Infinity, Infinity);
+  const gpuDoneT: number[] = [];
   const frame = () => {
     const now = performance.now();
     // Settings → Video frame cap (rAF itself is vsync-locked; this only skips frames below it).
     const cap = settings.get().video.frameCap;
     if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
+    // GPU queue too deep: wait (look→GPU-done latency stays ≈ 40 ms however GPU-bound; refresh.ts FrameQueue)
+    if (gpuQueue.busy(now)) { requestAnimationFrame(frame); return; }
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
       // main-thread work of the previous frame tells the governor whether frames are GPU- or CPU-bound
-      if (governor.frame(now - last, 1000 / (cap || 60), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
+      // budget: the frame cap, else the display's refresh (120 Hz ProMotion → 8.3 ms, not 60 fps)
+      if (governor.frame(now - last, frameBudgetMs(cap, displayRefresh.hz), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
     }
     frameMs.push(now - last);
+    displayRefresh.frame(now - last);
     errors?.frame(now - last);
     if (frameMs.length > 600) frameMs.shift();
     last = now;
@@ -2124,6 +2134,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderer.render(input.yaw);
       fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
       renderer.captureInfo();
+      const queued = gpuQueue.submitted(performance.now());
+      const gpuDone = () => { queued(); gpuDoneT.push(performance.now()); if (gpuDoneT.length > 600) gpuDoneT.shift(); };
+      (renderer.gpu.backend as { device?: { queue: { onSubmittedWorkDone(): Promise<void> } } }).device?.queue.onSubmittedWorkDone().then(gpuDone, gpuDone);
       if (input.lookEventT !== null) { latency.drawn(input.lookEventT); input.lookEventT = null; }
       if (warmLoop.left > 0 && --warmLoop.left === 0) { warmLoop.before = null; warmLoop.done?.(); }
     }
