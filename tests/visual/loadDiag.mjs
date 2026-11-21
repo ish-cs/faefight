@@ -14,7 +14,7 @@ for (const v of variants) {
   page.setDefaultTimeout(240_000);
   const t0 = Date.now();
   const lines = [];
-  page.on('console', (m) => { const t = m.text(); if (/\[(warmup|world|debris|props|scatter)/.test(t)) lines.push(`${((Date.now() - t0) / 1000).toFixed(1)}s ${t.slice(0, 160)}`); });
+  page.on('console', (m) => { const t = m.text(); if (/\[(warmup|world|debris|props|loading|render)/.test(t) || m.type() === "error" || m.type() === "warning") lines.push(`${((Date.now() - t0) / 1000).toFixed(1)}s ${t.slice(0, 160)}`); });
   await page.addInitScript(() => { try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: 'high', dynamicResolution: false } })); } catch { /* fresh */ } });
   await page.goto(`${url}/?debug=1&bots=7${v ? `&${v}` : ''}`);
   const tClick = Date.now();
