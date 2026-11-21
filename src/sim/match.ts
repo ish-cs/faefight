@@ -7,6 +7,7 @@ import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchState
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
+import { Docks, overDock } from './docks';
 import { Hazards, isExplosive, type HazardHost } from './hazards';
 import { HAZARD } from './constants';
 import { Fire, fireZones, type FireCtx } from './fire';
@@ -73,6 +74,8 @@ export class Match implements MatchApi {
   private cosmetics: Cosmetics;
   /** Explosive barrels / propane tanks and lootable crates (hazards.ts). */
   private hazards: Hazards;
+  /** Wooden pier sections explosions break (docks.ts). */
+  private docks: Docks;
   /** Bound to ctx: rebuilt by rebind(), never saved. */
   private hazardHost!: HazardHost;
   private hazardSeed: number;
@@ -111,6 +114,7 @@ export class Match implements MatchApi {
     def.colors = resolveColors(setup.players.map((p) => p.color));
     this.cosmetics = new Cosmetics(def.cosmetics);
     this.hazards = new Hazards(def.hazards);
+    this.docks = new Docks(def.docks ?? []);
     this.hazardSeed = setup.seed ?? 1;
     this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
     this.potionShops = potionShopsAt([def.center.potionShop]);
@@ -275,6 +279,7 @@ export class Match implements MatchApi {
     this.events.push(...tickExplosives(this.ctx, now));
     this.events.push(...this.hazards.onExplosions(this.hazardHost, this.events, now));
     this.events.push(...this.hazards.tick(this.hazardHost, now));
+    this.breakDocks(now);
     this.fire.onEvents(this.events, now, this.fireCtx);
     this.events.push(...this.fire.tick(now, this.s.waterY, this.fireCtx, !!this.s.storm));
     this.collapseUnsupported(now);
@@ -353,6 +358,18 @@ export class Match implements MatchApi {
   }
 
   /** Pieces left with nothing holding them up fall apart (no floating bridges or walls). */
+  /** Pier sections this tick's explosions broke: open water there, anything built on them falls, loot sinks. */
+  private breakDocks(now: number) {
+    const out = this.docks.onEvents(this.events, now);
+    for (const e of out) {
+      const d = this.docks.defs.find((x) => x.id === e.data.id)!;
+      this.physics.removeDock(d.id);
+      this.supportDirty = true;
+      for (const [id, b] of this.s.loot) if (overDock(d, b.pos, 0.3) && Math.abs(b.pos.y - (d.center.y + d.half.y)) < 0.6) this.s.loot.delete(id);
+    }
+    this.events.push(...out);
+  }
+
   private collapseUnsupported(now: number) {
     if (!this.supportDirty) return;
     this.supportDirty = false;
@@ -368,6 +385,11 @@ export class Match implements MatchApi {
 
   debugDamagePlayer(playerId: number, amount: number): void {
     this.events.push(...applyPlayerDamage(this.ctx, this.mustPlayer(playerId), amount, null, this.s.time));
+  }
+
+  /** Top surface under (x, z), or null over open water (tests/debug). */
+  debugGroundAt(x: number, z: number): number | null {
+    return this.physics.isGroundAt(x, z);
   }
 
   /** Hazard state (tests/debug/e2e). */
@@ -780,6 +802,8 @@ export class Match implements MatchApi {
       generators: this.s.generators,
       center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       broken: this.cosmetics.broken,
+      ...(this.docks.broken.length ? { docks: this.docks.broken } : {}),
+      ...(this.docks.hurt.length ? { dockHurt: this.docks.hurt } : {}),
       ...(hz ? { hz } : {}),
       genLevels: this.s.genLevels,
       sealed: this.sealed,

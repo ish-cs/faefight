@@ -161,7 +161,9 @@ export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped' | 'spawn'
   | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning'
   /** Emote / quick-chat wheel use: data { by, id } (emotes.ts). */
-  | 'wheel' | 'hazard';
+  | 'wheel' | 'hazard'
+  /** A wooden pier section broke (docks.ts): data { id, island, row, pos, rotY, by, kind }. */
+  | 'dockBroken';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -184,6 +186,10 @@ export type Snapshot = {
   broken?: number[];
   /** Hazards (barrels, tanks, crates) that are damaged, fusing or gone; absent when every one is intact. */
   hz?: HazardNet[];
+  /** Ids of broken pier sections (MapDef.docks), in the order they broke; absent while every one stands. */
+  docks?: number[];
+  /** Ids of damaged (scorched) pier sections still standing; absent when none. */
+  dockHurt?: number[];
   /** Generator level (1-4) of each island, by island index. */
   genLevels: number[];
   sealed: boolean[];
