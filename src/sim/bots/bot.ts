@@ -8,7 +8,8 @@ import type {
   BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, VaultAction, Vec3, WeaponKind,
 } from '../types';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
-import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
+import { isRng, mulberry32 } from '../rng';
+import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
 import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { DEFAULT_BOT_PARAMS, type BotParams } from './params';
@@ -217,6 +218,11 @@ export class Bot {
   private winded = false;
   private lastScores: { goal: string; score: number }[] = [];
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
+  /** The enemy my gun is on (target hysteresis, see aimTarget) and since when; where I last saw them. */
+  private aimId: number | null = null;
+  private aimSince = 0;
+  private aimAt: Vec3 | null = null;
+  private aimLost: { at: Vec3; until: number } | null = null;
   private barrelPlan: { id: number; until: number } | null = null;
   private nextBarrelRollAt = 0;
   private view!: BotView;
@@ -245,7 +251,12 @@ export class Bot {
       invest: t.patience > 0.75,
       buildFirst: t.builder > 0.7,
     };
-    this.aim = new Aim(AIM[difficulty], rng);
+    // Aim noise draws every tick while tracking: its own stream (seeded from the match rng's state without
+    // drawing from it), so how a bot's hand wobbles never shifts the match's other random rolls. A plain function
+    // (hand-made test rng) has no state to read: one draw seeds it.
+    const base = isRng(rng) ? rng.state.a : Math.floor(rng() * 4294967296);
+    const aimSeed = (base ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
+    this.aim = new Aim(AIM[difficulty], mulberry32(aimSeed), P.aim.feel[difficulty]);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
@@ -268,11 +279,17 @@ export class Bot {
     if (view.generators.length !== view.map.length || view.sealed.length !== view.map.length)
       throw new Error(`Bot ${this.id}: view has ${view.map.length} islands but ${view.generators.length} generators / ${view.sealed.length} seal flags`);
     const now = view.now;
-    const dt = Number.isNaN(this.lastNow) ? DT : Math.min(0.25, Math.max(0, now - this.lastNow));
+    // Match doesn't call dead bots: a gap of more than a couple of ticks means I just respawned (new body, new
+    // facing). Start the aim hand fresh instead of whipping it over the whole gap or "compensating" toward my old aim.
+    const skipped = !Number.isNaN(this.lastNow) && now - this.lastNow > 2.5 * DT;
+    if (skipped) { this.aim.reset(); this.aimId = null; this.aimLost = null; }
+    const dt = Number.isNaN(this.lastNow) || skipped ? DT : Math.max(0, now - this.lastNow);
     this.lastNow = now;
     this.mem.update(view);
     if (!me.alive) {
       this.aim.reset();
+      this.aimId = null;
+      this.aimLost = null;
       this.stuckRef = null;
       this.retreat = null;
       this.pendingBuy = null;
@@ -318,9 +335,12 @@ export class Bot {
     // Aim: enemies first, then whatever the goal wants to look or shoot at, else along the walk.
     const eye = eyePos(me);
     const cur: Angles = { yaw: me.yaw, pitch: me.pitch };
-    let look: Angles = cur;
+    // Every look goes through the aim hand (Aim.look: eased, speed- and acceleration-capped); `want` is where to.
+    const hand = (want: Angles, rate: number) => this.aim.look(cur, want, dt, rate);
+    let look: Angles;
     let fire = false;
     const enemy = ctx.enemy;
+    const foe = this.aimTarget(view, enemy, now);
     // Medium+ tactic: a rocket into a rival's wooden base sets it burning (fire.ts).
     const torch = enemy || this.goal === 'disengage' ? null : this.torchTarget(ctx);
     const best = torch ? 'rocket' : bestGun(me.inv, enemy ? ctx.enemyDist : 30);
@@ -334,22 +354,23 @@ export class Bot {
     const barrel = enemy ? this.barrelShot(ctx) : null;
     if (barrel) {
       // Set the barrel next to them off: aim at its middle like any other shot.
-      look = turnToward(cur, lookAt(eye, barrel), TURN_RATE * 1.2, dt);
+      look = hand(lookAt(eye, barrel), TURN_RATE * 1.2);
       fire = angleBetween(look, lookAt(eye, barrel)) < 0.04 && gunReady(dist2D(me.pos, barrel));
     } else if (act.shootAt && act.shootFirst) {
-      look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
+      look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
-    } else if (enemy) {
-      const r = this.aim.track(now, dt, eye, add(enemy.pos, v3(0, CHEST, 0)), enemy.id, cur);
+    } else if (foe) {
+      const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, CHEST, 0)), foe.id, cur);
       look = r;
+      const foeDist = dist2D(foe.pos, me.pos);
       // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
       // unless they're the one shooting at me.
       const w = WEAPONS[me.equipped];
-      const scratch = this.difficulty !== 'easy' && ctx.enemyDist > w.falloff.end * this.P.drive.fireRangeMult &&
-        !(this.mem.lastHurtBy === enemy.id && now - this.mem.lastHurtAt < 3);
-      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist) && !scratch;
+      const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult &&
+        !(this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3);
+      fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch;
     } else if (nade) {
-      look = turnToward(cur, nade, TURN_RATE, dt);
+      look = hand(nade, TURN_RATE);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
         throwGrenade = true;
         this.lastNadeAt = now;
@@ -357,16 +378,22 @@ export class Bot {
       }
     } else if (torch) {
       const want = lookAt(eye, torch);
-      look = turnToward(cur, want, TURN_RATE, dt);
+      look = hand(want, TURN_RATE);
       fire = me.equipped === 'rocket' && angleBetween(look, want) < 0.03 && gunReady(dist2D(me.pos, torch));
       if (fire) this.lastTorchAt = now;
     } else if (act.shootAt) {
-      look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
+      look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
     } else if (act.face) {
-      look = turnToward(cur, lookAt(eye, act.face), TURN_RATE, dt);
+      look = hand(lookAt(eye, act.face), TURN_RATE);
+    } else if (this.aimLost && !act.build) {
+      // Just lost sight of who I was shooting at: keep my eyes on where they were a moment (walking still works:
+      // movement is relative to the view), instead of whipping round to the walk direction and back.
+      look = hand(lookAt(eye, this.aimLost.at), this.aim.maxTurn);
     } else if (act.dir) {
-      look = turnToward(cur, { yaw: yawOf(act.dir), pitch: 0 }, TURN_RATE, dt);
+      look = hand({ yaw: yawOf(act.dir), pitch: 0 }, TURN_RATE);
+    } else {
+      look = hand(cur, TURN_RATE); // nothing to look at: the hand comes to rest
     }
 
     // Weapons: hold the best gun, reload when nobody is in sight.
@@ -444,6 +471,27 @@ export class Bot {
       else if (pot) Object.assign(out, { select: pot.drink, slot: null, drink: true });
     }
     return out;
+  }
+
+  /**
+   * The visible enemy my gun is on. The nearest, but once on someone I stay on them at least `aim.commitSec`, then
+   * switch only to one clearly closer (`aim.switchRatio` × their distance) or when they drop out of sight. Losing
+   * sight of a living target holds my eyes on where they were for `holdSec` (the look chain in think uses it).
+   */
+  private aimTarget(view: BotView, nearest: PlayerState | null, now: number): PlayerState | null {
+    const me = view.self, A = this.P.aim;
+    let cur = this.aimId === null ? null : view.enemies.find((e) => e.id === this.aimId && e.alive) ?? null;
+    if (!cur && this.aimId !== null) {
+      const alive = view.others.find((o) => o.id === this.aimId)?.alive ?? false;
+      this.aimLost = alive && this.aimAt ? { at: this.aimAt, until: now + A.feel[this.difficulty].holdSec } : null;
+      this.aimId = null;
+    }
+    if (cur && nearest && nearest.id !== cur.id && now - this.aimSince >= A.commitSec &&
+        dist2D(nearest.pos, me.pos) < A.switchRatio * dist2D(cur.pos, me.pos)) cur = null;
+    if (!cur && nearest) { cur = nearest; this.aimId = nearest.id; this.aimSince = now; }
+    if (cur) { this.aimAt = add(cur.pos, v3(0, CHEST, 0)); this.aimLost = null; }
+    else if (this.aimLost && now >= this.aimLost.until) this.aimLost = null;
+    return cur;
   }
 
   /** Did the last purchase go through? A buy that keeps failing (e.g. nowhere to carry it) is left alone a while. */

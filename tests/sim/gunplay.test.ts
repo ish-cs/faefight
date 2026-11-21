@@ -134,8 +134,9 @@ describe('reload', () => {
 describe('bot recoil compensation', () => {
   test('hard bots pull most of a kick back, easy bots ride it', async () => {
     const { Aim, AIM } = await import('../../src/sim/bots/aim');
+    const { AIM_PARAMS } = await import('../../src/sim/bots/params');
     const residual = (d: 'easy' | 'hard') => {
-      const aim = new Aim(AIM[d], () => 0.5);
+      const aim = new Aim(AIM[d], () => 0.5, AIM_PARAMS.feel[d]);
       const eye = { x: 0, y: 1.6, z: 0 }, target = { x: 0, y: 1.6, z: -20 };
       let cur = { yaw: 0, pitch: 0 };
       for (let i = 0; i < 30; i++) cur = aim.track(i / 30, 1 / 30, eye, target, 2, cur);
