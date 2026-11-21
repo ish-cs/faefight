@@ -243,13 +243,16 @@ export class SkyLighting {
     }
 
     this.pipeline?.dispose();
-    const built = buildPipeline(this.gpu, this.scene, this.camera, PRESETS[this.quality].post, this.interiorAO);
+    const built = buildPipeline(this.gpu, this.scene, this.camera, { ...PRESETS[this.quality].post, ...this.postOverride }, this.interiorAO);
     this.pipeline = built.pipe;
     this.scenePass = built.scenePass;
     this.aoPass = built.aoPass;
     this.applyAoBudget();
   }
   private aoPass: { resolutionScale: number } | null = null;
+  /** Debug/profiling only (GPU cost bisect): post options over the preset's; rebuilds the chain (a full recompile). */
+  private postOverride: Partial<PostOptions> = {};
+  debugPost(o: Partial<PostOptions>) { this.postOverride = o; this.apply(); }
   /** GTAO budget: the governor's cheap mode renders AO at 60 % of the preset's resolution (live, no recompile). */
   private applyAoBudget() {
     const ao = PRESETS[this.quality].post.ao;
