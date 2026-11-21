@@ -1,7 +1,7 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
+import { BUILD, DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, type IslandLayout, type MapDef } from './map';
@@ -70,6 +70,8 @@ export class Match implements MatchApi {
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
   private history = new HitboxHistory();
   private rewindT: number | null = null;
+  /** Per player: a build request waiting for the busy time from the last placement to end (see applyInput). */
+  private queuedBuild = new Map<number, { req: BuildRequest; until: number }>();
   /**
    * Snapshots are deep copies by default (callers may keep or mutate them). The worker turns this off:
    * postMessage copies the snapshot anyway, synchronously, so the extra copy is pure cost.
@@ -405,6 +407,9 @@ export class Match implements MatchApi {
     if (input.drop) this.drop(p, input.drop, now);
 
     tickReload(p, now);
+    // A build sent while still busy (a held-place stream arriving a little bunched) waits for the busy time
+    // to end instead of being dropped; it expires after BUILD.queueSec. The newest request wins.
+    if (input.build) this.queuedBuild.set(p.id, { req: input.build, until: now + BUILD.queueSec });
     if (now < p.busyUntil) return;
     const isl = this.map[p.island];
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
@@ -450,7 +455,11 @@ export class Match implements MatchApi {
     if (input.placeCharge) placeCharge(this.ctx, p, now);
     if (input.useMedkit) startMedkit(p, now);
     if (input.drink) startDrink(p, now);
-    if (input.build) this.build(p, input.build, now);
+    const queued = this.queuedBuild.get(p.id);
+    if (queued) {
+      this.queuedBuild.delete(p.id);
+      if (now <= queued.until) this.build(p, queued.req, now);
+    }
     this.syncHand(p);
   }
 
