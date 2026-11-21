@@ -81,10 +81,15 @@ test('shoot a barrel: it fuses, blows, and the bot next to it takes damage; shoo
   await expect.poll(() => hz(barrel.id), { timeout: 5000, intervals: [16] }).toBeGreaterThanOrEqual(1);
   await page.mouse.up();
   await page.mouse.up({ button: 'right' });
-  await dbg(page, 'teleport', park.x, park.z, botId);
-  await page.waitForTimeout(450);
-  await shot(page, 'fuse');
-  await expect.poll(() => hz(barrel.id), { timeout: 3000, intervals: [16] }).toBe(2);
+  // The bot is the target dummy: it would run from a hissing barrel (bots do), so hold it in place until it blows.
+  const t0 = Date.now();
+  let shotFuse = false;
+  while ((await hz(barrel.id)) !== 2 && Date.now() - t0 < 3000) {
+    await dbg(page, 'teleport', park.x, park.z, botId);
+    if (!shotFuse && Date.now() - t0 > 400) { await shot(page, 'fuse'); shotFuse = true; }
+    await page.waitForTimeout(50);
+  }
+  expect(await hz(barrel.id)).toBe(2);
   await page.waitForTimeout(90);
   await shot(page, 'explosion');
   await expect.poll(async () => { const b = await bot(); return !b.alive || b.hp < hp0; }, { timeout: 3000 }).toBe(true);
