@@ -1,7 +1,10 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { registerDistanceCull, shrinkMaterial, SMALL_CASTER_LAYER } from './lod';
+import { chunkCoord } from './lodMath';
+import { stressMatrices } from './stress';
 
-const ATTRS = ['position', 'normal', 'uv', 'color'] as const;
+const ATTRS = ['position', 'normal', 'uv', 'color', 'pc'] as const;
 
 /**
  * Normalise a geometry for merging: non-indexed, exactly position/normal/uv/color, transformed by `m`.
@@ -22,6 +25,11 @@ export function part(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: TH
   g.morphAttributes = {};
   g.clearGroups();
   if (m) g.applyMatrix4(m);
+  // part centre per vertex: lets a chunk's material shrink each part to its centre with distance (lod.ts)
+  g.computeBoundingSphere();
+  const c = g.boundingSphere!.center, pc = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { pc[i * 3] = c.x; pc[i * 3 + 1] = c.y; pc[i * 3 + 2] = c.z; }
+  g.setAttribute('pc', new THREE.Float32BufferAttribute(pc, 3));
   return g;
 }
 
@@ -64,28 +72,99 @@ export function strut(a: THREE.Vector3, b: THREE.Vector3, r: number, seg = 8): T
 }
 
 /**
- * Collects static parts per material and emits one merged mesh per material. All world props
- * (backdrop, island dressing, palms) go through this so the static world costs ~1 draw call per material.
+ * Chunked static batches. Draw calls are what costs on WebGPU here (~10 µs of CPU each, camera + every cascade),
+ * not triangles, so a material is only split when it is heavy: under `minTris` it stays one mesh. Heavy bins are
+ * split by part size: small/medium parts into a grid (frustum + distance culled), large parts stay whole.
+ */
+export const STATIC_CHUNKS = {
+  /** a bin (material × shadow flags) lighter than this stays one mesh */
+  minTris: 40_000,
+  /** small parts: shrink away between 70 % and 100 % of `cull` (no pop), chunk hidden past it */
+  small: { maxR: 0.6, grid: 48, cull: 90, splitTris: 25_000 },
+  /** medium parts: chunked for frustum culling only (no impostors yet, so never distance-culled) */
+  medium: { maxR: 4, grid: 160, cull: Infinity, splitTris: 60_000 },
+  /** a grid cell lighter than this isn't worth its own draw: it joins the bin's leftover mesh */
+  minChunkTris: 8_000,
+};
+
+const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + g.getAttribute('position').count / 3, 0);
+
+type Bin = { material: THREE.Material; cast: boolean; receive: boolean; parts: THREE.BufferGeometry[] };
+
+/**
+ * Collects static parts per material (+ shadow flags) and emits merged meshes. With `{ chunked: true }` (static
+ * world dressing) the parts are also split by size class and spatial chunk: one merged mesh per (material, size,
+ * chunk), so the camera and every shadow cascade frustum-cull whole chunks, small parts are distance-culled
+ * (lod.ts) and cast into the near shadow cascades only. Without it: one mesh per material (moving groups, boats).
  */
 export class StaticBatch {
-  private bins = new Map<THREE.Material, THREE.BufferGeometry[]>();
-  private flags = new Map<THREE.Material, { cast: boolean; receive: boolean }>();
+  private bins = new Map<string, Bin>();
+  /** Debug stress scene: extra shifted copies of every part (decorative batches only, see stress.ts). */
+  private copies: THREE.Matrix4[] = [];
 
-  add(material: THREE.Material, geo: THREE.BufferGeometry, m: THREE.Matrix4 | null = null, col: THREE.ColorRepresentation = 0xffffff, cast = true, receive = true) {
-    let bin = this.bins.get(material);
-    if (!bin) { bin = []; this.bins.set(material, bin); this.flags.set(material, { cast, receive }); }
-    bin.push(part(geo, m, col));
+  constructor(opts: { stress?: boolean } = {}) {
+    if (opts.stress) this.copies = stressMatrices();
   }
 
-  build(parent: THREE.Object3D, name: string): THREE.Mesh[] {
+  add(material: THREE.Material, geo: THREE.BufferGeometry, m: THREE.Matrix4 | null = null, col: THREE.ColorRepresentation = 0xffffff, cast = true, receive = true) {
+    const key = `${material.uuid}:${+cast}${+receive}`;
+    let bin = this.bins.get(key);
+    if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
+    bin.parts.push(part(geo, m, col));
+    for (const T of this.copies) bin.parts.push(part(geo, m ? T.clone().multiply(m) : T, col));
+  }
+
+  build(parent: THREE.Object3D, name: string, opts: { chunked?: boolean } = {}): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
-    for (const [material, parts] of this.bins) {
-      const mesh = new THREE.Mesh(merge(parts), material);
-      const f = this.flags.get(material)!;
-      mesh.castShadow = f.cast; mesh.receiveShadow = f.receive;
-      mesh.name = `${name}:${material.name || 'mat'}`;
+    const emit = (bin: Bin, parts: THREE.BufferGeometry[], suffix: string) => {
+      const mesh = new THREE.Mesh(merge(parts), bin.material);
+      mesh.castShadow = bin.cast; mesh.receiveShadow = bin.receive;
+      mesh.name = `${name}:${bin.material.name || 'mat'}${suffix}`;
       parent.add(mesh);
       out.push(mesh);
+      return mesh;
+    };
+    for (const bin of this.bins.values()) {
+      if (!opts.chunked || trisOf(bin.parts) < STATIC_CHUNKS.minTris) { emit(bin, bin.parts, ''); continue; }
+      const byClass = { small: [] as THREE.BufferGeometry[], medium: [] as THREE.BufferGeometry[], large: [] as THREE.BufferGeometry[] };
+      for (const g of bin.parts) {
+        g.computeBoundingSphere();
+        const r = g.boundingSphere!.radius;
+        byClass[r < STATIC_CHUNKS.small.maxR ? 'small' : r < STATIC_CHUNKS.medium.maxR ? 'medium' : 'large'].push(g);
+      }
+      // only heavy classes get split; everything else of this bin stays one mesh
+      const rest = byClass.large;
+      for (const cls of ['small', 'medium'] as const) {
+        const parts = byClass[cls];
+        const C = STATIC_CHUNKS[cls];
+        if (trisOf(parts) < C.splitTris) { rest.push(...parts); continue; }
+        const groups = new Map<string, THREE.BufferGeometry[]>();
+        for (const g of parts) {
+          const c = g.boundingSphere!.center;
+          const k = `${chunkCoord(c.x, C.grid)},${chunkCoord(c.z, C.grid)}`;
+          let e = groups.get(k);
+          if (!e) groups.set(k, (e = []));
+          e.push(g);
+        }
+        const leftover: THREE.BufferGeometry[] = [];
+        for (const [k, e] of groups) {
+          if (trisOf(e) < STATIC_CHUNKS.minChunkTris) { leftover.push(...e); continue; }
+          const mesh = emit(bin, e, `@${cls}:${k}`);
+          if (cls === 'medium') continue;
+          mesh.geometry.computeBoundingSphere();
+          const sp = mesh.geometry.boundingSphere!;
+          mesh.layers.set(SMALL_CASTER_LAYER);
+          mesh.material = shrinkMaterial(bin.material, C.cull);
+          mesh.userData.lod = registerDistanceCull(mesh, C.cull, { center: sp.center, radius: sp.radius });
+        }
+        if (!leftover.length) continue;
+        if (cls === 'medium') { rest.push(...leftover); continue; }
+        // sparse small parts: one map-wide mesh, still shrinking away with distance in the shader
+        const mesh = emit(bin, leftover, '@small:sparse');
+        mesh.layers.set(SMALL_CASTER_LAYER);
+        mesh.material = shrinkMaterial(bin.material, C.cull);
+      }
+      if (rest.length) emit(bin, rest, '@rest');
     }
     this.bins.clear();
     return out;
@@ -93,7 +172,7 @@ export class StaticBatch {
 
   /** Merged geometry per material without creating meshes (instanced props build their own). */
   take(): { material: THREE.Material; geometry: THREE.BufferGeometry; cast: boolean; receive: boolean }[] {
-    const out = [...this.bins].map(([material, parts]) => ({ material, geometry: merge(parts), ...this.flags.get(material)! }));
+    const out = [...this.bins.values()].map((b) => ({ material: b.material, geometry: merge(b.parts), cast: b.cast, receive: b.receive }));
     this.bins.clear();
     return out;
   }

@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { COSMETIC, type CosmeticDef, type CosmeticKind } from '../../sim/map';
+import { ChunkedInstances } from './chunked';
 import { brokenDiff } from './cosmeticDiff';
 import { StaticBatch } from './geo';
 import { barrelModel, bollardModel, crateModel, fenceModel, lampModel, palmModel } from './mapProps';
@@ -21,17 +22,25 @@ const tint = (d: CosmeticDef, c: THREE.Color) => {
   return c.setScalar(1);
 };
 
-const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+/**
+ * Full model up to this distance (m, high preset; LOD-scaled), billboard impostor beyond, cross-faded per
+ * instance in the shaders. Chunks: 128 m (sparse, light props: big chunks keep the draw count down).
+ */
+const IMPOSTOR_FROM = 70;
+const CHUNK = 128;
+
 const R = Math.random;
 const rr = (a: number, b: number) => a + (b - a) * R();
 
 /**
- * Breakable decoration: one InstancedMesh per (kind, material) — ~10 draw calls for every cosmetic on the
- * map. A broken one is hidden by zero-scaling its instance. Never a camera/aim collidable.
+ * Breakable decoration: per kind, a ChunkedInstances (chunked.ts): full model near the camera, a baked billboard
+ * impostor far away, culled per 128 m chunk. A broken one is hidden by zero-scaling its instance. Never a camera/aim
+ * collidable.
  */
 export class CosmeticLayer {
   readonly root = new THREE.Group();
-  private byId = new Map<number, { def: CosmeticDef; meshes: THREE.InstancedMesh[]; index: number; matrix: THREE.Matrix4 }>();
+  private byId = new Map<number, { def: CosmeticDef; layer: ChunkedInstances; index: number }>();
+  private layers: ChunkedInstances[] = [];
   private hidden = new Set<number>();
 
   constructor(defs: CosmeticDef[]) {
@@ -47,24 +56,20 @@ export class CosmeticLayer {
     for (const [kind, list] of kinds) {
       const b = new StaticBatch();
       MODELS[kind].build(b);
-      const meshes = b.take().map(({ material, geometry, receive }) => {
-        const m = new THREE.InstancedMesh(geometry, material, list.length);
-        m.name = `cosmetic:${kind}:${material.name}`;
-        m.castShadow = MODELS[kind].cast; m.receiveShadow = receive;
-        return m;
+      const parts = b.take().map(({ material, geometry, receive }) => ({ material, geometry, receive, cast: MODELS[kind].cast }));
+      const tall = kind === 'palm' || kind === 'lamp';
+      const layer = new ChunkedInstances({
+        name: `cosmetic:${kind}`,
+        levels: [{ parts, maxDist: IMPOSTOR_FROM }, { parts: null, impostor: { views: 8, cell: tall ? 128 : 64 }, maxDist: 4000 }],
+        small: !tall,
+        chunk: CHUNK,
       });
-      list.forEach((d, i) => {
+      for (const d of list) {
         const matrix = new THREE.Matrix4().compose(p.set(d.pos.x, d.pos.y, d.pos.z), q.setFromAxisAngle(up, d.rotY), one);
-        tint(d, c);
-        for (const m of meshes) { m.setMatrixAt(i, matrix); m.setColorAt(i, c); }
-        this.byId.set(d.id, { def: d, meshes, index: i, matrix });
-      });
-      for (const m of meshes) {
-        m.instanceMatrix.needsUpdate = true;
-        if (m.instanceColor) m.instanceColor.needsUpdate = true;
-        m.computeBoundingSphere();
-        this.root.add(m);
+        this.byId.set(d.id, { def: d, layer, index: layer.add(matrix, tint(d, c)) });
       }
+      this.root.add(layer.build());
+      this.layers.push(layer);
     }
   }
 
@@ -82,7 +87,7 @@ export class CosmeticLayer {
     const s = this.byId.get(id);
     if (!s) return; // unknown id (e.g. a stale snapshot from another map): nothing to hide
     if (visible) this.hidden.delete(id); else this.hidden.add(id);
-    for (const m of s.meshes) { m.setMatrixAt(s.index, visible ? s.matrix : ZERO); m.instanceMatrix.needsUpdate = true; }
+    s.layer.setVisible(s.index, visible);
   }
 
   /** `cosmeticBroken` event: hide it now (don't wait for the snapshot) and throw debris. */
@@ -99,7 +104,7 @@ export class CosmeticLayer {
   }
 
   dispose() {
-    for (const s of new Set([...this.byId.values()].flatMap((v) => v.meshes))) { s.geometry.dispose(); s.dispose(); }
+    for (const l of this.layers) l.dispose();
     this.root.removeFromParent();
   }
 }

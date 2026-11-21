@@ -10,7 +10,10 @@ import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
 import { setBuiltInPotionStalls } from './potionSeller';
-import { installQualityToggle, SkyLighting } from './sky';
+import { installQualityToggle, SkyLighting, SUN_DIR } from './sky';
+import { impostors, SUN_FOR_BAKE } from './impostor';
+import { lods, releaseLods } from './lod';
+import { STRESS, stressOffsets } from './stress';
 import { buildWater, type Ocean } from './water';
 
 export { pieceGeometry } from './pieces';
@@ -37,8 +40,9 @@ export class World {
   private gulls: Gulls | null = null;
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
-  constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
+  constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
     this.sky = new SkyLighting(gpu, scene, camera);
+    SUN_FOR_BAKE.dir.copy(SUN_DIR);
     installQualityToggle(this.sky);
     scene.add(this.pieces.root, this.pieceFx.root);
     collidables.push(...this.pieces.proxies);
@@ -75,7 +79,9 @@ export class World {
     this.gulls = new Gulls(map, gullPerches(map, (isl) => backdropFrame(isl, map.length)));
     this.scene.add(this.boats.root, this.gulls.mesh);
     setBuiltInPotionStalls([def.center.potionShop]); // center.ts draws this seller; PotionSellers must not double it
-    this.cosmetics = new CosmeticLayer(def.cosmetics);
+    // debug stress scene: visual-only shifted copies with ids the sim never uses
+    const cos = STRESS > 1 ? stressOffsets().flatMap(([ox, oz], k) => def.cosmetics.map((c) => k === 0 ? c : { ...c, id: 1e6 * k + c.id, pos: { ...c.pos, x: c.pos.x + ox, z: c.pos.z + oz } })) : def.cosmetics;
+    this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
@@ -85,6 +91,7 @@ export class World {
     if (this.islands) {
       const hulls = new Set(this.islandHulls);
       for (let i = this.collidables.length - 1; i >= 0; i--) if (hulls.has(this.collidables[i])) this.collidables.splice(i, 1);
+      releaseLods(this.islands);
       this.islands.traverse((o) => { if (o instanceof THREE.Mesh) o.geometry.dispose(); });
       this.islands.removeFromParent();
       this.islands = null;
@@ -124,6 +131,9 @@ export class World {
     this.grass.setQuality(this.sky.quality);
     this.scatter.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
+    impostors.step(this.gpu, this.scene.environment); // one queued impostor bake per frame (load/reveal frames)
+    lods.setQuality(this.sky.quality);
+    lods.update(this.sky.camera.position);
     this.pieceFx.update(performance.now());
     this.sky.render(); // cascaded shadows follow the camera themselves
   }
