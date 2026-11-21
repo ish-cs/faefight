@@ -627,12 +627,20 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     maybeWarm();
   });
   const revealTimer = setTimeout(() => { console.warn('[loading] warm-up took too long; showing the game anyway'); reveal(); }, REVEAL_TIMEOUT_MS);
+  /** Frame-loop hooks for the warm-up (warmup.ts): pause drawing, count drawn frames, run a hook before each. */
+  const warmLoop = { paused: false, left: 0, before: null as (() => void) | null, done: null as (() => void) | null };
   function maybeWarm() {
     if (warmStarted || !snap || !map.length || !charsReady) return;
     warmStarted = true;
     // One normal frame first so the camera already sits behind the player.
     requestAnimationFrame(() => {
-      mods.warmup.warmUp(renderer, () => snap?.pieces ?? [], input.yaw, (f, label) => loading.progress('shaders', f, label))
+      const loop = {
+        setPaused: (on: boolean) => { warmLoop.paused = on; },
+        frames: (n: number, before?: () => void) => new Promise<void>((done) => {
+          warmLoop.before = before ?? null; warmLoop.left = n; warmLoop.done = done;
+        }),
+      };
+      mods.warmup.warmUp(renderer, loop, fpv, (f, label) => loading.progress('shaders', f, label))
         .catch((err) => console.warn('[loading] shader warm-up failed; continuing', err))
         .finally(() => { warmed = true; });
     });
@@ -1268,8 +1276,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     fpv.applyShake(dt); // visual only: the aim ray above was taken without it
-    renderer.render(input.yaw);
-    fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+    if (!warmLoop.paused) {
+      warmLoop.before?.();
+      renderer.render(input.yaw);
+      fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+      if (warmLoop.left > 0 && --warmLoop.left === 0) { warmLoop.before = null; warmLoop.done?.(); }
+    }
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());
     if (warmed && !revealed) {
