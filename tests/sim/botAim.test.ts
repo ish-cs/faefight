@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { AIM, Aim, wrapAngle, type Angles } from '../../src/sim/bots/aim';
 import { aimStats, type AimSample } from '../../src/sim/bots/aimStats';
-import { AIM_PARAMS } from '../../src/sim/bots/params';
+import { AIM_PARAMS, GUN_SKILL } from '../../src/sim/bots/params';
 import { DT } from '../../src/sim/constants';
 import { Match } from '../../src/sim/match';
 import { mulberry32 } from '../../src/sim/rng';
@@ -12,7 +12,7 @@ const DEG = Math.PI / 180;
 
 describe('bot aim hand (Aim.look)', () => {
   test.each(TIERS)('%s: a 90° flick eases in, stays under the speed/acceleration caps and settles', (d) => {
-    const aim = new Aim(AIM[d], mulberry32(1), AIM_PARAMS.feel[d]);
+    const aim = new Aim({ ...AIM[d], recoilComp: GUN_SKILL[d].recoilComp }, mulberry32(1), AIM_PARAMS.feel[d]);
     const want: Angles = { yaw: Math.PI / 2, pitch: 0 };
     let cur: Angles = { yaw: 0, pitch: 0 }, prevV = 0, peak = 0;
     const settleBy = d === 'pro' || d === 'hard' ? 0.5 : 1.2;
@@ -31,7 +31,7 @@ describe('bot aim hand (Aim.look)', () => {
   });
 
   test('aim error drifts smoothly (low-frequency), not tick-to-tick noise', () => {
-    const aim = new Aim(AIM.hard, mulberry32(7), AIM_PARAMS.feel.hard);
+    const aim = new Aim({ ...AIM.hard, recoilComp: GUN_SKILL.hard.recoilComp }, mulberry32(7), AIM_PARAMS.feel.hard);
     const eye = { x: 0, y: 1.6, z: 0 }, target = { x: 0, y: 1.6, z: -20 };
     let cur: Angles = { yaw: 0, pitch: 0 };
     const offs: number[] = [];

@@ -14,7 +14,7 @@ import type { DockDef, IslandLayout } from '../../sim/map';
 import type { Snapshot, Vec3 } from '../../sim/types';
 import { type Cue, type Env, occlusion, type SoundId, SoundDirector } from './events';
 import { type Mood, MUSIC_TRIM, MusicDirector, MusicPlayer } from './music';
-import { clank, critterCall, fireLoop, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
+import { casingClink, clank, critterCall, fireLoop, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
 import { registerAudio, type SfxOpts } from './api';
 import {
   audibility, DEFAULT_LIMITS, dist, distanceCutoff, echoSend, heartbeatInterval, MAX_DISTANCE, muffleCutoff,
@@ -146,6 +146,27 @@ export class AudioSystem {
     this.spatial(s, 0.6, `critter_${s.kind}`, (out, t) => {
       const len = critterCall(this.kit!, out, t, s.kind);
       setTimeout(() => { this.critterVoices--; }, (len + 0.1) * 1000);
+      return len;
+    });
+  }
+
+  private casingVoices = 0;
+  private casingAt: Vec3 = { x: 0, y: 0, z: 0 };
+  /**
+   * A shell casing bouncing (world/casings.ts): positional, on the effects bus, only within 14 m and at most
+   * 6 at once (a long spray doesn't turn into a wall of clinks). `speed` = impact speed (m/s).
+   */
+  casing(x: number, y: number, z: number, speed: number, hull: boolean) {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.kit || this.muted || this.effects <= 0) return;
+    const at = this.casingAt;
+    at.x = x; at.y = y; at.z = z;
+    if (dist(at, this.listener) > 14 || this.casingVoices >= 6) return;
+    this.casingVoices++;
+    const v = Math.min(1, speed / 6);
+    this.spatial(at, 0.7, hull ? 'casing_hull' : 'casing', (out, t) => {
+      const len = casingClink(this.kit!, out, t, hull, v);
+      setTimeout(() => { this.casingVoices--; }, (len + 0.05) * 1000);
       return len;
     });
   }

@@ -52,6 +52,9 @@ test('loading screens, settings (sensitivity + rebind jump) apply in a vs-bot ma
   await page.getByTestId('settings-tab-gameplay').click();
   await page.getByTestId('set-crosshair').getByRole('button', { name: 'Dot', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-crosshair', 'dot');
+  // Accessibility: screen shake intensity (0 = off, also turns the hit-stop off) and camera bob.
+  await page.getByTestId('set-shake').fill('0.4');
+  await page.getByTestId('set-bob').uncheck({ force: true });
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('settings')).toHaveCount(0);
 
@@ -60,6 +63,8 @@ test('loading screens, settings (sensitivity + rebind jump) apply in a vs-bot ma
   expect(s.controls.keys.jump).toEqual(['KeyJ']);
   expect(s.controls.keys.camera).toEqual(['KeyV']);
   expect(s.video.fovThird).toBe(80);
+  expect(s.gameplay.screenShake).toBeCloseTo(0.4);
+  expect(s.gameplay.cameraBob).toBe(false);
   // The menu's key help follows the rebinding.
   await expect(page.locator('.menu .keys')).toContainText('J jump');
 

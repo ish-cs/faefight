@@ -1007,6 +1007,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const prevLost = renderer.gpu.onDeviceLost.bind(renderer.gpu);
   renderer.gpu.onDeviceLost = (info) => { errors?.report('gpu', `device lost: ${info.message} (${info.reason ?? 'unknown'})`); prevLost(info); };
   renderer.world.onCritterSound = (s) => audio.critter(s);
+  renderer.gunFx.casings.onClink = (x, y, z, speed, hull) => audio.casing(x, y, z, speed, hull);
   loading.progress('gpu', 1, 'Starting the simulation');
   loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
   loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
@@ -1142,7 +1143,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const fxPos = new THREE.Vector3();
   const damageFx = new DamageFx(app);
   const sealAnnouncer = new SealAnnouncer(app, (k) => {
-    canvas.style.setProperty('--shake', `${Math.round(6 + 10 * k)}px`);
+    const intensity = settings.get().gameplay.screenShake; // Settings → Screen shake (0 = off)
+    if (intensity <= 0) return;
+    canvas.style.setProperty('--shake', `${Math.round((6 + 10 * k) * intensity)}px`);
     canvas.classList.remove('shake');
     void canvas.offsetWidth;
     canvas.classList.add('shake');
@@ -1561,8 +1564,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     hud.setViewed(viewer);
     audio.setViewed(viewer);
     qol.setViewed(viewer, s.players.find((p) => p.id === viewer)?.island ?? -1);
-    const meSnap = s.players.find((p) => p.id === humanId);
-    fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
+    // Camera feel (shake, recoil punch, hit-stop) follows the viewed player: us, or whoever we spectate.
+    const viewSnap = s.players.find((p) => p.id === viewer);
+    fpv.onEvents(s.events, viewer, viewSnap?.alive ? viewSnap.pos : null);
     // (Own 'shot'/'hit' events flagged echo were already shown when predicted; their effects skip them.)
     // My recoil: the sim reports each kick with the shot; it moves my real aim (I have to pull against it).
     for (const e of s.events) {
@@ -2106,7 +2110,15 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
       damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     }
-    fpv.applyShake(dt); // visual only: the aim ray above was taken without it
+    // First-person camera bob: our own (predicted) ground speed, or the spectated player's when watching from their eyes.
+    let bobSpeed = -1;
+    if (fpv.isActive && me && !spectating) {
+      const v = predicting ? predicted.vel : me.vel;
+      bobSpeed = Math.abs(v.y) < 0.8 ? Math.hypot(v.x, v.z) : 0;
+    } else if (spectating && spectator.firstPerson && vMotion) {
+      bobSpeed = Math.abs(vMotion.vel.y) < 0.8 ? Math.hypot(vMotion.vel.x, vMotion.vel.z) : 0;
+    }
+    fpv.applyShake(dt, bobSpeed); // visual only: the aim ray above was taken without it
     if (!warmLoop.paused) {
       warmLoop.before?.();
       renderer.render(input.yaw);
