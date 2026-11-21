@@ -513,7 +513,7 @@ export class Bot {
       enemy: c.enemy ? { id: c.enemy.id, dist: c.enemyDist, hp: c.enemy.hp + (c.enemy.shield ?? 0), weapon: c.enemy.equipped } : null,
       armedNear: c.armedNear, underFire: !!c.fire,
       kit: sealKit(inv), carried: inv.cash, banked: me.vault.cash, insuranceDue: this.insuranceDue(me),
-      nearVault: dist2D(me.pos, home.vault) < 6, canClearHome: this.blockers(c).every((p) => this.canClear(c, p)),
+      focus: this.targetId, nearVault: dist2D(me.pos, home.vault) < 6, canClearHome: this.blockers(c).every((p) => this.canClear(c, p)),
       bankable: Math.max(0, Math.floor(inv.cash - this.keepFor(c) - 25)),
       intruder: !!this.intruder(c), homeSealed: view.sealed[home.index], homePlugged: this.blockers(c).length > 0,
       incomingBridge: !!this.incomingDeck(c),

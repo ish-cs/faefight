@@ -71,6 +71,8 @@ export type BrainInput = {
   insuranceDue: number;
   /** Carried cash beyond what my shopping plan needs (what a trip to the vault would deposit). */
   bankable: number;
+  /** The rival I'm currently focused on (commitment), if any. */
+  focus: number | null;
   /** Within a few steps of my vault. */
   nearVault: boolean;
   /** I carry what it takes to clear every plug in my doorways (gun for soft, charge/rocket for hard). */
@@ -204,7 +206,8 @@ export class Brain {
     const visible = !!inp.enemy;
 
     // ---- retreat: the fight in front of me is lost (or I'm out of gas): break sight, fall back, heal, come back.
-    const losing = visible && odds < p.fleeOdds && !(inp.enemy!.dist < 3 && inp.myWeapon !== 'fists');
+    // Running from a gun at close range just gets me shot in the back: only flee from distance, or when hurt.
+    const losing = visible && odds < p.fleeOdds && (inp.enemy!.dist > 12 || inp.hp < 0.5) && !(inp.enemy!.dist < 3 && inp.myWeapon !== 'fists');
     const spent = (visible || inp.underFire) && inp.hp < p.lowHp;
     if (losing || spent) {
       const why = !inp.gun ? `no gun vs ${inp.enemy?.weapon ?? 'a gun'}` : spent ? `${pct(inp.hp)} HP` : `I'd lose this (${pct(odds)} odds${inp.armedNear > 1 ? `, ${inp.armedNear} on me` : ''})`;
@@ -232,7 +235,7 @@ export class Brain {
       ]);
     } else if (!inp.upgraded && !inp.suddenDeath) {
       const price = WEAPONS.smg.price;
-      add('upgrade', p.planUpgrade * (total >= price ? 1 : 0.5), total >= price ? `I can afford better than a pistol ($${total})` : 'a pistol loses duels', [
+      add('upgrade', p.planUpgrade * (total >= price ? 1 : 0.15 + 0.35 * (total / price)), total >= price ? `I can afford better than a pistol ($${total})` : 'a pistol loses duels', [
         { label: `collect $${price}`, act: 'collect', done: total >= price },
         { label: 'buy an SMG/rifle', act: 'shop', done: inp.upgraded },
       ]);
@@ -262,6 +265,7 @@ export class Brain {
     const threat = (inp.intruder ? 1 : 0) + (inp.homeSealed ? 1.2 : inp.homePlugged ? 0.9 : 0) + (inp.incomingBridge ? 0.3 : 0);
     if (threat > 0 && !inp.suddenDeath)
       add('defend', p.planDefend * threat, inp.homeSealed ? 'my bunker is sealed: clear it while alive' : inp.intruder ? 'someone is on my island' : inp.homePlugged ? 'a plug in my doorway' : 'a bridge leads into my island', [
+        { label: 'bank my cash first (the vault is right here)', act: 'bank', done: !(inp.nearVault && inp.bankable >= 100) },
         { label: 'get a charge (a hard plug blocks my door)', act: 'shop', done: inp.canClearHome },
         { label: 'clear my doorways', act: 'defend', done: !inp.homePlugged && !inp.homeSealed },
         { label: 'hunt the intruder', act: 'guard', done: !inp.intruder },
@@ -270,7 +274,7 @@ export class Brain {
 
     // ---- per rival: box in / finish / raid / hunt.
     for (const r of inp.rivals) {
-      const base = rivalScore(r, p);
+      const base = rivalScore(r, p) + (r.id === inp.focus ? p.rsCommit : 0);
       const window = r.respawning || r.protectedNow || r.away;
       // Leaving home with a plugged doorway is half a seal on myself: clear it first.
       const homeClear = { label: 'clear my own doorway first', act: 'defend' as Goal, done: !inp.homePlugged };

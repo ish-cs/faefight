@@ -95,7 +95,7 @@ describe('brain: goals for a reason, steps, re-planning', () => {
   });
   const input = (now: number, rivals: BrainInput['rivals'], over: Partial<BrainInput> = {}): BrainInput => ({
     now, suddenDeath: false, hp: 1, shield: 0, home: 0, on: 0, rivals, gun: true, upgraded: true, myWeapon: 'rifle',
-    kit: 3, scaffolds: 0, medkits: 0, carried: 0, banked: 100, insuranceDue: 0, bankable: 0, nearVault: false, canClearHome: true, intruder: false, homeSealed: false,
+    kit: 3, scaffolds: 0, medkits: 0, carried: 0, banked: 100, insuranceDue: 0, bankable: 0, focus: null, nearVault: false, canClearHome: true, intruder: false, homeSealed: false,
     homePlugged: false, incomingBridge: false, killedBy: null, seller: false, wantShields: false, endgame: false,
     enemy: null, armedNear: 0, underFire: false, ...over,
   });
