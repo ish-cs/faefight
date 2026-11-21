@@ -1,5 +1,29 @@
 # FAEFight
 
+<p align="center">
+  <img src="docs/media/hero-firefight.jpg" width="100%" alt="Over-the-shoulder firefight at the Palmera Freight pier">
+</p>
+
+**2–8 players, one island each.** Build bridges and walls, push across the water, and seal every enemy bunker before they seal yours. Fights play out on a realistic tropical harbor of cranes, containers, and piers, against friends or bots with their own personalities. Runs in Chrome, no install: **[faefight.vercel.app](https://faefight.vercel.app)**
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/rocket-steel-wall.jpg" alt="Rocket hitting a steel wall"><br><sub>A rocket slams into a steel wall.</sub></td>
+    <td width="50%"><img src="docs/media/scaffold-bridge.jpg" alt="Fight on a scaffold bridge"><br><sub>Brawling over a scaffold bridge.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/container-rifleman.jpg" alt="Rifleman on a shipping container"><br><sub>High ground on a shipping container.</sub></td>
+    <td width="50%"><img src="docs/media/storm.jpg" alt="Sudden death storm"><br><sub>Sudden death: the storm closes in.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/center-island.jpg" alt="Center island shop"><br><sub>The center island and its shops.</sub></td>
+    <td width="50%"><img src="docs/media/container-yard.jpg" alt="Container yard island"><br><sub>A container-yard island across the water.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/media/harbor-detail.jpg" alt="Four harbor views"><br><sub>Around the harbor.</sub></td>
+  </tr>
+</table>
+
 Third-person island shooter in the browser. Each player starts on their own harbor island. Earn cash, buy guns and walls, bridge over to the enemy, and seal their spawn bunker. A sealed player who dies doesn't respawn. Last one standing wins.
 
 ## Run
