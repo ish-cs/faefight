@@ -485,23 +485,61 @@ export class Nav {
    * under every point of it: anyone looking at a deck edge knows not to hop sideways off it.
    */
   safeJump(dir: Vec3 | null, sprint: boolean): boolean {
+    return this.landsOnGround(dir, sprint, PLAYER.jumpVelocity);
+  }
+
+  /**
+   * Airborne (or about to jump with vertical speed vy0): does steering toward `dir` bring me down on something
+   * solid rather than in the water?
+   */
+  landsOnGround(dir: Vec3 | null, sprint: boolean, vy0 = this.view.self.vel.y): boolean {
     const me = this.view.self;
-    let x = me.pos.x, z = me.pos.z, y = 0, vx = me.vel.x, vz = me.vel.z, vy = PLAYER.jumpVelocity;
+    let x = me.pos.x, z = me.pos.z, y = me.pos.y, vx = me.vel.x, vz = me.vel.z, vy = vy0;
     const speed = sprint ? PLAYER.sprint : PLAYER.walk;
     const wx = dir ? dir.x * speed : vx, wz = dir ? dir.z * speed : vz;
-    for (let t = 0; t < 1.2; t += JUMP_STEP) {
+    for (let t = 0; t < 2; t += JUMP_STEP) {
       const dx = wx - vx, dz = wz - vz, d = Math.hypot(dx, dz), step = MOVE.airAccel * JUMP_STEP;
       if (d <= step) { vx = wx; vz = wz; } else { vx += dx / d * step; vz += dz / d * step; }
       vy -= PLAYER.gravity * JUMP_STEP;
       x += vx * JUMP_STEP; z += vz * JUMP_STEP; y += vy * JUMP_STEP;
-      // Body edge, not just the centre: the capsule hangs over the drop before it falls.
-      for (const [ox, oz] of [[0, 0], [PLAYER.radius, 0], [-PLAYER.radius, 0], [0, PLAYER.radius], [0, -PLAYER.radius]]) {
-        const g = this.view.groundAt(x + ox, z + oz);
-        if (g === null || me.pos.y - g > MAX_DROP) return false;
+      if (vy > 0) continue;
+      const g = this.view.groundAt(x, z);
+      if (g !== null && y <= g + 0.05) {
+        // Landed: with the body's edge on it too (the capsule slides off a corner it only grazes).
+        return me.pos.y - g <= MAX_DROP && [[PLAYER.radius, 0], [-PLAYER.radius, 0], [0, PLAYER.radius], [0, -PLAYER.radius]]
+          .filter(([ox, oz]) => this.view.groundAt(x + ox, z + oz) !== null).length >= 3;
       }
-      if (y < 0 && t > 0.3) return true;
+      if (y < this.view.waterY + 0.2) return false;
     }
-    return true;
+    return false;
+  }
+
+  /**
+   * Hanging over an edge (nothing under my centre, held up by the rim) or falling: the way back onto something
+   * solid, or null when I'm fine.
+   */
+  rescue(sprint: boolean): Vec3 | null {
+    const me = this.view.self;
+    const under = this.view.groundAt(me.pos.x, me.pos.z);
+    const airborne = Math.abs(me.vel.y) > 0.05;
+    if (under !== null && !airborne) return null;
+    let best: Vec3 | null = null, bestD = Infinity;
+    for (let a = 0; a < 16; a++) {
+      const d = v3(Math.sin(a * Math.PI / 8), 0, Math.cos(a * Math.PI / 8));
+      if (airborne) {
+        if (this.landsOnGround(d, sprint)) {
+          const k = -(d.x * me.vel.x + d.z * me.vel.z);
+          if (k < bestD) { bestD = k; best = d; }
+        }
+        continue;
+      }
+      for (const r of [0.3, 0.6, 0.9, 1.2]) {
+        if (this.view.groundAt(me.pos.x + d.x * r, me.pos.z + d.z * r) === null) continue;
+        if (r < bestD) { bestD = r; best = d; }
+        break;
+      }
+    }
+    return best;
   }
 
   /**

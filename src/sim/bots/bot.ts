@@ -358,6 +358,12 @@ export class Bot {
     }
     if (dir && !dodge) dir = this.stormFence(me, view, dir);
     if (dir) dir = this.nav.safeDir(dir);
+    // In the air, steer to come down on something solid; standing on the rim over water, step back onto it.
+    const airborne = Math.abs(me.vel.y) > 0.05;
+    if (airborne ? !this.nav.landsOnGround(dir, !!act.sprint) : view.groundAt(me.pos.x, me.pos.z) === null) {
+      const back = this.nav.rescue(!!act.sprint);
+      if (back) { dir = back; jump = false; }
+    }
     // Stuck means pushing and not moving; held back at an edge by safeDir isn't stuck (a hop there goes in the water).
     this.trackStuck(now, me, dir);
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
