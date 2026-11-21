@@ -273,6 +273,8 @@
 .hud .cash, .hud .gen, .hud .timer, .hud .seal-chip, .hud .hp, .hud .shield, .hud .weapon, .hud .feed-item, .hud .hotbar, .hud .buff,
 .hud .prompt, .hud .center-msg, .hud .heal, .hud .fps, .hud .qol-ammo, .hud .qol-net, .hud .qol-recap, .qol-compass, .spectate-banner, .chat-line { backdrop-filter: none; -webkit-backdrop-filter: none; }
 
+.hud.out .tl, .hud.out .bl, .hud.out .br, .hud.out .hotbar, .hud.out .crosshair, .hud.out .prompt { display: none; }
+
 /* cash + generator */
 .hud .tl { top: 16px; left: 16px; gap: 6px; }
 .hud .cash {
@@ -363,7 +365,8 @@
 .hud .hb-slot:not(.empty) { background: radial-gradient(120% 80% at 50% 0%, rgba(var(--cat), 0.16), transparent 70%), rgba(8, 22, 32, 0.86); }
 .hud .hb-slot.empty { background: rgba(8, 22, 32, 0.42); box-shadow: none; outline: 1px dashed rgba(150, 210, 228, 0.16); outline-offset: -1px; }
 .hud .hb-key { font-family: var(--ff-display); font-weight: 900; font-size: 12px; border-radius: var(--r-xs); color: var(--c-text-dim); }
-.hud .hb-name { font-family: var(--ff-display); font-weight: 800; font-size: 12.5px; letter-spacing: 0.05em; text-transform: uppercase; }
+.hud .hb-name { font-family: var(--ff-display); font-weight: 800; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; line-height: 1.05; }
+.hud .hb-icon { top: 7px; width: 30px; height: 30px; }
 .hud .hb-count { font-family: var(--ff-display); font-weight: 900; font-size: 15px; }
 .hud .hb-slot[data-ammo] .hb-count { font-size: 14px; }
 .hud .hb-slot.stack .hb-count { font-size: 13px; border-radius: var(--r-xs); text-shadow: none; }

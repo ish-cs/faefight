@@ -517,6 +517,8 @@ export class Hud {
     // No player of our own and nobody followed (spectating host in free fly): player widgets hidden,
     // match info and the end screen still live.
     this.root.classList.toggle('no-player', !me);
+    // Eliminated and free-flying: your own $0 / HP 0 / empty hotbar say nothing; hide them like no-player.
+    this.root.classList.toggle('out', !watching && !!own?.eliminated);
     if (!me) {
       this.center.style.display = 'none';
       this.heal.style.display = 'none';
