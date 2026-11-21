@@ -311,6 +311,43 @@ export class PropSim {
 
   get count() { return this.live.length; }
 
+  /**
+   * An independent copy (Match.fork: replay checkpoints) bound to `physics`, the forked query world: the dynamics
+   * world is snapshotted and every body/collider handle re-resolved in the copy.
+   */
+  clone(physics: Physics): PropSim {
+    const world = RAPIER.World.restoreSnapshot(this.world.takeSnapshot());
+    if (!world) throw new Error('PropSim.clone: Rapier could not restore the prop world snapshot');
+    const body = (b: RAPIER.RigidBody) => {
+      const c = world.getRigidBody(b.handle);
+      if (!c) throw new Error(`PropSim.clone: body ${b.handle} missing from the snapshot`);
+      return c;
+    };
+    const col = (c: RAPIER.Collider) => {
+      const x = world.getCollider(c.handle);
+      if (!x) throw new Error(`PropSim.clone: collider ${c.handle} missing from the snapshot`);
+      return x;
+    };
+    const p = Object.create(PropSim.prototype) as PropSim;
+    const q = p as unknown as Record<string, unknown>, self = this as unknown as Record<string, unknown>;
+    q.physics = physics;
+    q.islands = this.islands;
+    q.zones = this.zones;
+    q.world = world;
+    const remap = new Map<Live, Live>();
+    q.live = this.live.map((l) => {
+      const n: Live = { spawn: l.spawn, body: body(l.body), rest: { pos: { ...l.rest.pos }, rot: [...l.rest.rot] as Quat }, lastActive: l.lastActive, wetSince: l.wetSince };
+      remap.set(l, n);
+      return n;
+    });
+    q.byHandle = new Map([...this.byHandle].map(([h, l]) => [h, remap.get(l)!]));
+    q.pieceCols = new Map([...this.pieceCols].map(([id, c]) => [id, col(c)]));
+    q.playerBodies = new Map([...this.playerBodies].map(([id, b]) => [id, body(b)]));
+    // any other (plain) fields added later: copied by value
+    for (const k of Object.keys(self)) if (!(k in q)) q[k] = structuredClone(self[k]);
+    return p;
+  }
+
   private poseOf(b: RAPIER.RigidBody): { pos: Vec3; rot: Quat } {
     const t = b.translation(), r = b.rotation();
     return { pos: v3(t.x, t.y, t.z), rot: [r.x, r.y, r.z, r.w] };

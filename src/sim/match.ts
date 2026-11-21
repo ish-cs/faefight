@@ -165,6 +165,7 @@ export class Match implements MatchApi {
     const physics = this.physics.clone();
     const m = Object.create(Match.prototype) as Match;
     const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
+    if (this.props) memo.set(this.props, this.props.clone(physics));
     const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
     for (const k of Object.keys(self)) if (k !== 'ctx') copy[k] = deepClone(self[k], memo);
     m.ctx = m.makeCtx();

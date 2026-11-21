@@ -87,6 +87,10 @@ export class Physics {
     for (const [id, k] of this.pieceKinds) ph.pieceKinds.set(id, k);
     for (const [id, c] of this.players) ph.players.set(id, same(c));
     for (const h of this.slits) ph.slits.add(h);
+    for (const [id, x] of this.props) ph.props.set(id, { c: same(x.c), spawn: x.spawn });
+    ph.recordPushes = this.recordPushes;
+    ph.pushes = this.pushes.map((p) => ({ ...p, dir: { ...p.dir } }));
+    for (const [k, z] of this.zones) ph.zones.set(k, z);
     ph.dirty = this.dirty;
     return ph;
   }
