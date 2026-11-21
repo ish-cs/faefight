@@ -98,8 +98,8 @@ function mulberry32(seed: number): () => number {
 type Cluster = { kinds: PropKind[]; spots: [number, number][] };
 const ISLAND_CLUSTERS: Cluster[] = [
   // a crate with another stacked on it (the second kind sits on top of the first)
-  { kinds: ['crate', 'crate'], spots: [[0, 10], [-1, 12.5], [3.5, 11]] },
-  { kinds: ['drum'], spots: [[-0.5, -10.5], [1.5, -12], [-7, -6]] },
+  { kinds: ['crate', 'crate'], spots: [[-1, 13.5], [1.5, 12.5], [0, 10]] },
+  { kinds: ['drum'], spots: [[3, -10.5], [1.5, -12.5], [-7, -6]] },
   { kinds: ['ibc'], spots: [[-2, 5], [-2, -5], [11, 3]] },
 ];
 /** One extra per island, by island index. */
