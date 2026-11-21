@@ -5,7 +5,8 @@ import type { Difficulty } from '../types';
  * Tunable bot strategy (drive to win, building, the elimination pipeline), in one record so self-play training can
  * search over it. A Bot takes a BotParams (default DEFAULT_BOT_PARAMS); `flattenParams` / `withParams` give the
  * trainer flat numeric keys like `drive.push.pro`, `buildSkill.hard.coverChance` or `buildTuning.coverScore`.
- * Execution skill (reaction, aim, decision speed) is not here: it stays in aim.ts / bot.ts.
+ * Execution skill (reaction, aim error, decision speed) is not here: it stays in aim.ts / bot.ts. How the view hand
+ * moves (AimFeel) and how long a bot commits to the enemy it aims at are here (`aim.*`).
  */
 
 const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ easy, medium, hard, pro });
@@ -25,10 +26,15 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  * - sealAway: seal bonus for a rival seen away from home, or not seen on their island for emptyHomeSec while I'm
  *   on it (their bunker is empty); sealAwayTarget: rival-choice
  *   bonus for such a rival while I carry a full kit and can walk to their island.
- * - sealRaceM: a rival who just died with their open bunker within this many metres is worth dropping all for.
+ * - Respawn window (5 s): a dead rival whose bunker is within sealRaceM m and that I can sprint to before they're
+ *   back (+ windowSlackSec) gets pushed: seal it with a kit (windowPush added to seal), else hold their door
+ *   (half of it added to attack). respawnCautionSec: right after my own respawn no pushes or offense (re-gear).
  * - siegeDist: camping a sealed bunker this far out from its weakest doorway; siegeAfterDeath: how long after the
  *   owner's death the camp holds without seeing them; siegeScore: attack score while camping.
  * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
+ * - sealBonus: added to the seal goal (seals win games); sealedHunt: added to attack/fight against a rival whose
+ *   bunker is sealed (each death of theirs eliminates them); sealedFocus: among visible enemies, one with a sealed
+ *   bunker counts as this many times closer when choosing whom to shoot.
  * - stallSec / stallDist / stallBanSec: goal watchdog (a goal with no progress for stallSec is dropped for
  *   stallBanSec; moving stallDist counts as progress).
  */
@@ -49,6 +55,9 @@ export type DriveParams = {
   sealAwayTarget: number;
   emptyHomeSec: number;
   sealRaceM: number;
+  windowSlackSec: number;
+  windowPush: number;
+  respawnCautionSec: number;
   siegeDist: number;
   siegeAfterDeath: number;
   siegeScore: number;
@@ -56,6 +65,9 @@ export type DriveParams = {
   stallDist: number;
   stallBanSec: number;
   fireRangeMult: number;
+  sealBonus: number;
+  sealedHunt: number;
+  sealedFocus: number;
 };
 
 /**
@@ -136,7 +148,24 @@ export type TeamParams = {
   defendMin: number; defendBias: number;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; team: TeamParams };
+/**
+ * How a bot's view moves (aim.ts Aim.look): a damped spring on yaw/pitch, capped by the skill's turn speed.
+ * - spring: natural frequency (rad/s): how fast a flick closes. Tracking lag behind a moving target ≈ 2·damping/spring s.
+ * - damping: < 1 overshoots a flick slightly and settles (PRO ≈ 5%), 1 eases in with no overshoot.
+ * - maxAccel: angular acceleration cap (rad/s²): no instant starts/stops.
+ * - driftHz: how fast the aim error wanders (OU mean reversion, 1/s): low = slow hand drift, never tick-to-tick noise.
+ * - holdSec: after losing sight of the enemy, keep looking at where they were this long before turning back to the walk.
+ */
+export type AimFeel = { spring: number; damping: number; maxAccel: number; driftHz: number; holdSec: number };
+
+/**
+ * Aim at one enemy at a time: feel per skill, plus target hysteresis.
+ * - commitSec: stay on the enemy I'm aiming at at least this long while I can still see them.
+ * - switchRatio: after that, switch only to an enemy closer than this × the current one's distance.
+ */
+export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; switchRatio: number };
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; aim: AimParams; team: TeamParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -154,7 +183,10 @@ export const DRIVE: DriveParams = {
   sealAway: 0.25,
   sealAwayTarget: 0.6,
   emptyHomeSec: 8,
-  sealRaceM: 30,
+  sealRaceM: 60,
+  windowSlackSec: 2,
+  windowPush: 0.6,
+  respawnCautionSec: 8,
   siegeDist: 6.5,
   siegeAfterDeath: 16,
   siegeScore: 0.75,
@@ -162,6 +194,9 @@ export const DRIVE: DriveParams = {
   stallDist: 2.5,
   stallBanSec: 20,
   fireRangeMult: 2,
+  sealBonus: 0.35,
+  sealedHunt: 0.6,
+  sealedFocus: 1.6,
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
@@ -201,7 +236,18 @@ export const TEAM: TeamParams = {
   defendMin: 3, defendBias: 0.45,
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, team: TEAM });
+export const AIM_PARAMS: AimParams = {
+  feel: {
+    easy: { spring: 8, damping: 0.95, maxAccel: 70, driftHz: 2, holdSec: 0.5 },
+    medium: { spring: 12, damping: 0.85, maxAccel: 120, driftHz: 2.5, holdSec: 0.6 },
+    hard: { spring: 22, damping: 0.75, maxAccel: 220, driftHz: 3, holdSec: 0.7 },
+    pro: { spring: 32, damping: 0.7, maxAccel: 320, driftHz: 3, holdSec: 0.8 },
+  },
+  commitSec: 0.6,
+  switchRatio: 0.6,
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, aim: AIM_PARAMS, team: TEAM });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -242,8 +288,10 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sprintGap', [3, 15]], ['drive.reengageSec', [5, 40]], ['drive.reengageHp', [0.1, 0.6]],
   ['drive.guardFreshSec', [1, 10]], ['drive.collectCarried', [50, 500]], ['drive.steelRich', [450, 1500]],
   ['drive.sealAway', [0, 0.8]], ['drive.sealAwayTarget', [0, 1.5]], ['drive.emptyHomeSec', [3, 20]],
-  ['drive.sealRaceM', [10, 60]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
+  ['drive.sealRaceM', [10, 120]], ['drive.windowSlackSec', [0, 6]], ['drive.windowPush', [0, 1.5]],
+  ['drive.respawnCautionSec', [0, 30]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]],
+  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedFocus', [1, 3]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
   ['buildSkill.*.peekOut', [0.3, 3]],
@@ -256,6 +304,8 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['buildTuning.slotBackoffSec', [10, 90]], ['buildTuning.pushLead', [0, 80]], ['buildTuning.bridgeRetrySec', [0.2, 2]],
   ['buildTuning.bridgeStuckSec', [1, 10]], ['buildTuning.bridgeHoldSec', [5, 60]], ['buildTuning.freeSlots', [1, 4]],
   ['buildTuning.coverScore', [0.5, 1.5]], ['buildTuning.fortifyScore', [0.1, 1]],
+  ['aim.feel.*.spring', [6, 45]], ['aim.feel.*.damping', [0.55, 1.2]], ['aim.feel.*.maxAccel', [40, 600]],
+  ['aim.feel.*.driftHz', [0.5, 8]], ['aim.feel.*.holdSec', [0, 2]], ['aim.commitSec', [0, 2]], ['aim.switchRatio', [0.3, 1]],
   ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
 ];

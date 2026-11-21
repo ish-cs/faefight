@@ -8,7 +8,7 @@ import { buy, vaultTransfer } from '../../src/sim/economy';
 import { syncFromInventory } from '../../src/sim/hotbar';
 import { ARCHETYPES, preset, rollPersonality, type Archetype } from '../../src/sim/bots/personality';
 import type { BotView, OtherStatus } from '../../src/sim/bots/view';
-import { ECONOMY, GRENADE, PIECES, SEAL, TICK_HZ, WEAPONS } from '../../src/sim/constants';
+import { ECONOMY, GRENADE, LIFECYCLE, PIECES, SEAL, TICK_HZ, WEAPONS } from '../../src/sim/constants';
 import { buildMap } from '../../src/sim/map';
 import { newPlayer } from '../../src/sim/player';
 import type { PieceKind, PieceState, PlayerInput, PlayerState, Vec3 } from '../../src/sim/types';
@@ -126,6 +126,44 @@ describe('target choice (FFA)', () => {
     b.think(down);
     expect(dist2D(map[2].center, self.pos)).toBeGreaterThan(dist2D(map[1].center, self.pos));
     expect(b.currentTarget).toBe(2);
+  });
+
+  test('respawn window: a rival dies near me → I push their bunker before they are back (seal with a kit), not right after my own respawn', () => {
+    // Standing on rival 1's island (bridged), 20 m from their bunker, a full metal kit in hand; another rival is the current target.
+    const pieces = [...bridge(0, 1, 0)];
+    const near = add(map[1].bunker.center, scale(forward(map[1].bunker.facingYaw), 20));
+    const kit = () => { const p = armed(0, 0, v3(near.x, map[1].groundY, near.z)); p.inv.pieces.metal = 3; syncFromInventory(p.hotbar, p.inv); return p; };
+    const alive = (now: number) => makeView(kit(), { now, pieces, others: [status(1, 1), status(2, 2), status(3, 3, { eliminated: true })] });
+    const died = (now: number, self = kit()) => makeView(self, {
+      now, pieces, others: [status(1, 1, { alive: false, respawnAt: now + LIFECYCLE.respawnSec }), status(2, 2), status(3, 3, { eliminated: true })],
+      feed: [{ t: now - 0.1, killer: 0, victim: 1 }],
+    });
+    const bot = new Bot(0, 'pro', mulberry32(4), preset('Rusher'));
+    bot.think(alive(100));
+    const v = died(100.2);
+    bot.think(v);
+    expect(bot.respawnWindow?.id).toBe(1);
+    expect(bot.respawnWindow!.left).toBeGreaterThan(LIFECYCLE.respawnSec - 0.5);
+    expect(bot.currentTarget).toBe(1);
+    const goals = new Set<string>();
+    for (let i = 0; i < TICK_HZ; i++) { v.now += DT; bot.think(v); goals.add(bot.currentGoal); }
+    expect(goals.has('seal')).toBe(true);
+    expect(bot.debugBrain().window?.[0]).toBe(1);
+
+    // Same kill, but I only just respawned myself (deaths ticked up a moment ago): no push yet.
+    const fresh = new Bot(0, 'pro', mulberry32(4), preset('Rusher'));
+    const me = kit(); me.deaths = 1;
+    fresh.think(makeView(me, { now: 100, pieces, others: [status(1, 1), status(2, 2), status(3, 3, { eliminated: true })] }));
+    fresh.think(died(100.2, me));
+    expect(fresh.respawnWindow).toBeNull();
+
+    // Too far to make it before they're back: no window.
+    const far = new Bot(0, 'pro', mulberry32(4), preset('Rusher'));
+    const home = armed(0, 0, onIsland(0, 0)); home.inv.pieces.metal = 3; syncFromInventory(home.hotbar, home.inv);
+    far.think(makeView(home, { now: 100, pieces, others: [status(1, 1), status(2, 2), status(3, 3, { eliminated: true })] }));
+    far.think(died(100.2, home));
+    expect(dist2D(home.pos, map[1].bunker.center) / 7.5).toBeGreaterThan(LIFECYCLE.respawnSec + 2);
+    expect(far.respawnWindow).toBeNull();
   });
 
   test('a bot just shot by X goes after X, even over the kill leader', () => {
@@ -275,6 +313,25 @@ describe('game sense', () => {
       step(view, inp);
     }
     expect(goals.has('bridge')).toBe(false);
+    expect(firedAtPlug).toBe(true);
+  });
+
+  test('a plug in my doorway still gets shot with an enemy in sight far across the water', () => {
+    // Bots used to swing their gun onto the far enemy (and hold fire past its damage floor) for minutes.
+    const self = armed(0, 0, onIsland(0, 0));
+    self.inv.pieces = { scaffold: 12, wood: 3 };
+    const plug = plugs(0, 'wood', 1);
+    const far = armed(2, 2, onIsland(2, 0));
+    expect(dist2D(far.pos, self.pos)).toBeGreaterThan(30);
+    const view = makeView(self, { pieces: plug, enemies: [far] });
+    const bot = new Bot(0, 'hard', mulberry32(6), preset('Turtle'));
+    const center = v3(plug[0].pos.x, plug[0].pos.y + 1, plug[0].pos.z);
+    let firedAtPlug = false;
+    for (let i = 0; i < 10 * TICK_HZ && !firedAtPlug; i++) {
+      const inp = bot.think(view);
+      if (inp.fire && angleBetween(inp, lookAt(eyePos(self), center)) < 0.08) firedAtPlug = true;
+      step(view, inp);
+    }
     expect(firedAtPlug).toBe(true);
   });
 

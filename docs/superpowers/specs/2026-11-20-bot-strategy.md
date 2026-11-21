@@ -9,7 +9,7 @@ difficulty = human skill (reaction, aim, decision speed, sloppiness), never arti
 You win by being the last player not eliminated. Elimination needs two things: your bunker sealed **and** you dead.
 Kills alone never end anything before sudden death, so a kill is only worth as much as what it sets up:
 
-- **Kill + seal inside the 3 s respawn window** → the victim respawns trapped, with fists only. Fists do 7 dmg/hit to
+- **Kill + seal inside the 5 s respawn window (3 s before 2026-11-21)** → the victim respawns trapped, with fists only. Fists do 7 dmg/hit to
   wood and 5 to sandbags (2 hits/s): clearing even one plug takes 15–18 s, longer than the 10 s breakout window.
   So a seal on a respawning player is in practice an elimination.
 - **Seal while the owner is away** (out bridging, fighting someone else) → their next death is final. In an 8-player

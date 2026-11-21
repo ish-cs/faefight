@@ -1,6 +1,6 @@
 import { CASING_CAP } from './world/casings';
 import * as THREE from 'three/webgpu';
-import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
+import { GENERATOR_MAX_LEVEL, LIFECYCLE, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
 import type { MatchEvent, PieceKind, PieceState, Snapshot, Vec3, WeaponKind } from '../sim/types';
@@ -13,6 +13,7 @@ import { pieceGeometry, World } from './world';
 import { preloadPbr } from './world/pbr';
 import { PotionSellers, stall } from './world/potionSeller';
 import { loadQuality } from './world/sky';
+import { DayNight } from './world/dayNight';
 import { StormFx } from './world/storm';
 import { LootView, lootWarmObjects } from './lootView';
 export { lods } from './world/lod';
@@ -84,6 +85,8 @@ export class Renderer {
 
   /** Sudden-death weather: storm wall, rain, telegraph markers, lightning (world/storm.ts). */
   storm!: StormFx;
+  /** Day → night over the match, night at sudden death (world/dayNight.ts). */
+  dayNight!: DayNight;
   /** Tracers, muzzle light/smoke, shell casings, hit sparks, projectiles, explosion flashes. */
   gunFx!: GunFx;
   private snapArrived = performance.now();
@@ -118,7 +121,8 @@ export class Renderer {
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
-    r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
+    r.dayNight = new DayNight(r.world.sky, r.gpu, r.scene);
+    r.storm = new StormFx(r.world.sky, r.gpu, r.scene, r.dayNight.base);
     r.resize();
     return r;
   }
@@ -149,6 +153,7 @@ export class Renderer {
     this.npcs.sync(); // keepers registered by the map art (before the loading warm-up compiles the scene)
     const map = def.islands;
     this.storm.setMap(map, def.center);
+    this.dayNight.setCycle(def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt);
     this.gunFx.warmUp([this.boomMat]);
     for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);
     const h = PROP_HALF.generator;
@@ -489,7 +494,9 @@ export class Renderer {
     }
     if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
     this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
-    this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
+    const simT = this.playT ?? snap?.time ?? 0;
+    this.dayNight.frame(simT, !!snap?.suddenDeath);
+    this.storm.frame(dt, this.camera, this.world.sky.quality, simT);
     const feet = this.feet.slice(0, nf);
     this.npcs.frame(dt, this.camera, feet);
     this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw

@@ -63,6 +63,10 @@ describe('settings load / save', () => {
     expect(s.controls.invertY).toBe(false);
     expect(s.video).toMatchObject({ quality: 'high', fovThird: 55, fovFirst: 110, resolutionScale: 0.5, frameCap: 0, showFps: false });
     expect(s.audio).toMatchObject({ master: 0, effects: 0.5, ambience: 0.25 });
+    // Older saves without the music/interface buses get the modest defaults; bad values clamp.
+    expect(s.audio).toMatchObject({ music: 0.4, musicOn: true, ui: 0.8 });
+    expect(sanitizeSettings({ audio: { music: 3, musicOn: 'no', ui: -2 } }).audio).toMatchObject({ music: 1, musicOn: true, ui: 0 });
+    expect(sanitizeSettings({ audio: { musicOn: false } }).audio.musicOn).toBe(false);
     expect(s.gameplay).toMatchObject({ crosshair: 'dot', crosshairColor: '#ffffff', damageNumbers: false });
   });
 });

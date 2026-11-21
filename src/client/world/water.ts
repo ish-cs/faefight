@@ -6,7 +6,7 @@ import {
 import type { MapDef } from '../../sim/map';
 import type { PieceState } from '../../sim/types';
 import { noiseTex } from './pbr';
-import { SUN_DIR } from './sky';
+import { lightU } from './lightUniforms';
 import { seaState, setWaveField, stepWaves, TRAINS, waveSum, type WaveOps, waveTime } from './waves';
 
 const NORMALS_URL = `${import.meta.env.BASE_URL}assets/textures/waternormals.jpg`;
@@ -172,8 +172,7 @@ export function buildWater(def: MapDef): Ocean {
 
   // subsurface glow through thin crests, strongest looking toward the sun
   const view = normalize(positionWorld.sub(cameraPosition));
-  const sunFlat = new THREE.Vector2(SUN_DIR.x, SUN_DIR.z).normalize();
-  const toSun = max(dot(normalize(view.xz), vec2(sunFlat.x, sunFlat.y)), 0);
+  const toSun = max(dot(normalize(view.xz), normalize(lightU.keyDir.xz)), 0);
   const sss = smoothstep(amp.mul(0.1), amp.mul(0.8), h).mul(toSun.pow(2).mul(0.8).add(0.2)).mul(vExposure.mul(0.4).add(0.6));
   base = mix(base, color(0x22c0aa), sss.mul(0.55));
 
@@ -202,8 +201,8 @@ export function buildWater(def: MapDef): Ocean {
   // the fine normal texture so they twinkle instead of merging into one disc.
   const r = reflect(view, nWorld);
   const sparkle = smoothstep(0.62, 0.8, fine);
-  const glint = pow(max(dot(r, uniform(SUN_DIR.clone())), 0), 2200).mul(sparkle).mul(float(1).sub(foam));
-  mat.emissiveNode = color(0xfff0d8).mul(min(glint.mul(14), 3));
+  const glint = pow(max(dot(r, lightU.keyDir), 0), 2200).mul(sparkle).mul(float(1).sub(foam));
+  mat.emissiveNode = lightU.glint.mul(vec3(1, 0.871, 0.687)).mul(min(glint.mul(14), 3)); // 0xfff0d8 (linear) × day/night
 
   const mesh = new THREE.Mesh(oceanGeometry(), mat);
   mesh.name = 'ocean';

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { hermite, MAX_EXTRAPOLATE, PlayerTrack, RenderClock, VerticalSmoother } from '../../src/client/interp';
+import { angleDiff, angleLerp, hermite, LookSmoother, MAX_EXTRAPOLATE, PlayerTrack, RenderClock, VerticalSmoother } from '../../src/client/interp';
 
 const out = () => ({ pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 });
 const at = (t: number, x: number, yaw = 0) => ({ t, pos: { x, y: 0, z: 0 }, yaw, pitch: 0 });
@@ -139,5 +139,52 @@ describe('VerticalSmoother', () => {
     v.update(2, 0, 1 / 60);
     expect(v.update(20, 0, 1 / 60)).toBe(20);
     expect(v.update(20.3, null, 1 / 60)).toBe(20.3);
+  });
+});
+
+const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
+describe('watched-player view angles (spectator / mirror camera)', () => {
+  test('a yaw crossing ±π interpolates the short way at display rate', () => {
+    const tr = new PlayerTrack();
+    // 30 Hz snapshots turning steadily left through +π (wrapped to -π by the sender): 0.2 rad per tick.
+    [2.7, 2.9, 3.1, 3.3, 3.5, 3.7].forEach((y, i) => tr.push(at(i / 30, 0, wrap(y))));
+    const o = out();
+    let prev: number | null = null;
+    for (let t = 0; t <= 5 / 30; t += 1 / 240) {
+      tr.sample(t, o);
+      if (prev !== null) {
+        const step = angleDiff(prev, o.yaw);
+        expect(step).toBeGreaterThanOrEqual(-1e-9); // never turns back
+        expect(step).toBeLessThan(0.2 / 8 + 1e-6); // ≤ one tick's turn / 8 frames: no spin round the circle
+      }
+      prev = o.yaw;
+    }
+  });
+
+  test('angleDiff / angleLerp wrap', () => {
+    expect(angleDiff(3.1, -3.1)).toBeCloseTo(2 * Math.PI - 6.2, 9);
+    expect(angleDiff(-3.1, 3.1)).toBeCloseTo(-(2 * Math.PI - 6.2), 9);
+    expect(Math.abs(wrap(angleLerp(3.1, -3.1, 0.5)))).toBeCloseTo(Math.PI, 9);
+  });
+
+  test('LookSmoother: continuous through ±π and a fast flick at any frame rate, snaps on a cut', () => {
+    for (const fps of [60, 144, 240]) {
+      const s = new LookSmoother();
+      const ys: number[] = [];
+      // 0.5 s of a 690°/s (12 rad/s) flick from 2.5 rad leftward through +π, sampled at `fps`.
+      for (let i = 0; i <= fps / 2; i++) ys.push(s.update(7, wrap(2.5 + 12 * Math.min(i / fps, 0.15)), 0, 1 / fps).yaw);
+      for (let i = 1; i < ys.length; i++) {
+        const step = angleDiff(ys[i - 1], ys[i]);
+        expect(step).toBeGreaterThanOrEqual(-1e-9);
+        expect(step).toBeLessThanOrEqual(12 / fps + 1e-9); // never faster than the flick itself
+      }
+      expect(angleDiff(ys[ys.length - 1], wrap(2.5 + 12 * 0.15))).toBeCloseTo(0, 3); // settles on the target
+    }
+    const s = new LookSmoother();
+    s.update(1, 0, 0, 1 / 60);
+    expect(s.update(1, 0.3, 0, 1 / 60).yaw).toBeLessThan(0.3); // smoothed
+    expect(s.update(1, 2.5, 0, 1 / 60).yaw).toBe(2.5); // respawn cut: snap
+    expect(s.update(2, -1, 0.2, 1 / 60)).toEqual({ yaw: -1, pitch: 0.2 }); // new target: snap
   });
 });
