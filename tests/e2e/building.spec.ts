@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 // Building: the ghost follows the crosshair (or snaps to a smart spot nearby), its colour is computed
 // locally every frame, and whatever is placed lands exactly where the ghost showed.

@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
   page.evaluate(([f, a]) => {

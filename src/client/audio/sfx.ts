@@ -355,14 +355,17 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       note(k, out, t + 0.45, 392, 1.0, 0.2);
       return 0.45 + note(k, out, t + 0.45, 587, 1.0, 0.2);
     case 'alarm': {
+      // Bunker threat escalates: kind '1' = one whoop, '2' = two, higher; no kind (sealed) = the full three.
+      const n = cue.kind === '1' ? 1 : cue.kind === '2' ? 2 : 3;
+      const f0 = cue.kind === '1' ? 420 : 470;
       let len = 0;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < n; i++) {
         const at = t + i * 0.6;
         for (const det of [1, 1.007]) {
           const o = k.ctx.createOscillator();
           o.type = 'sawtooth';
-          o.frequency.setValueAtTime(470 * det, at);
-          o.frequency.linearRampToValueAtTime(400 * det, at + 0.45);
+          o.frequency.setValueAtTime(f0 * det, at);
+          o.frequency.linearRampToValueAtTime((f0 - 70) * det, at + 0.45);
           const f = k.ctx.createBiquadFilter();
           f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 1;
           const g = k.ctx.createGain();
@@ -377,6 +380,9 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       }
       return len;
     }
+    case 'ping': // soft two-note chime (generator ready)
+      partials(k, out, t, 880, 0.35, [[1, 1, 0.18], [2, 0.25, 0.12]]);
+      return 0.12 + partials(k, out, t + 0.12, 1320, 0.5, [[1, 1, 0.16], [2, 0.2, 0.1]]);
     case 'tick':
       if (cue.kind === 'urgent') {
         tone(k, out, t, { f0: 1500, dur: 0.06, peak: 0.45, attack: 0.002 });
@@ -388,6 +394,14 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       [784, 988, 1175, 1568].forEach((f, i) => { len = i * 0.09 + partials(k, out, t + i * 0.09, f, 0.22, [[1, 1, 0.6], [2, 0.2, 0.3]]); });
       return len;
     }
+    case 'thunder':
+      if (cue.kind === 'near') {
+        // Close strike: a ripping crack, then the boom.
+        noise(k, out, t, { type: 'highpass', freq: 1800, dur: 0.12, peak: 1.0, attack: 0.001 });
+        noise(k, out, t + 0.02, { type: 'bandpass', freq: 700 * p, q: 0.6, dur: 0.5, peak: 0.9 });
+      }
+      noise(k, out, t, { type: 'lowpass', freq: 380 * p, freqEnd: 60, dur: 2.8 + k.rnd() * 1.5, peak: 1.2, attack: cue.kind === 'near' ? 0.01 : 0.25, rate: 0.5 });
+      return 0.3 + noise(k, out, t + 0.3 + k.rnd() * 0.4, { type: 'lowpass', freq: 160, freqEnd: 45, dur: 3, peak: 0.8, attack: 0.3, rate: 0.4 });
     case 'horn':
       note(k, out, t, 233, 2.2, 0.22, 'sawtooth', 1400);
       note(k, out, t, 235.5, 2.2, 0.22, 'sawtooth', 1400);
@@ -493,4 +507,78 @@ export function rocketLoop(k: Kit, out: AudioNode): { stop(): void } {
       s.stop(now + 0.3);
     },
   };
+}
+
+/** One pitched chirp: oscillator sweep f0 → f1 over `dur`, peak gain `g`. */
+function chirp(k: Kit, out: AudioNode, at: number, type: OscillatorType, f0: number, f1: number, dur: number, g: number) {
+  const o = k.ctx.createOscillator();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, at);
+  o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), at + dur);
+  const e = k.ctx.createGain();
+  e.gain.setValueAtTime(0, at);
+  e.gain.linearRampToValueAtTime(g, at + Math.min(0.02, dur * 0.3));
+  e.gain.exponentialRampToValueAtTime(EPS, at + dur);
+  o.connect(e).connect(out);
+  o.start(at); o.stop(at + dur + 0.02);
+}
+
+/** Wildlife calls (world/critters.ts): quiet, short, positional. Returns the length (s); 0 = unknown kind. */
+export function critterCall(k: Kit, out: AudioNode, t: number, kind: string): number {
+  const p = jitter(k.rnd(), 0.12);
+  switch (kind) {
+    case 'squeak': {
+      const n = 1 + Math.floor(k.rnd() * 3);
+      for (let i = 0; i < n; i++) chirp(k, out, t + i * 0.09, 'sine', 3800 * p, 5200 * p, 0.06, 0.12);
+      return n * 0.09 + 0.06;
+    }
+    case 'bark':
+      chirp(k, out, t, 'sawtooth', 420 * p, 260 * p, 0.14, 0.18);
+      noise(k, out, t, { dur: 0.12, peak: 0.12, type: 'bandpass', freq: 900 * p, q: 2 });
+      return 0.2;
+    case 'coo':
+      chirp(k, out, t, 'sine', 420 * p, 360 * p, 0.25, 0.08);
+      chirp(k, out, t + 0.3, 'sine', 460 * p, 330 * p, 0.35, 0.07);
+      return 0.7;
+    case 'caw':
+      for (let i = 0; i < 2; i++) {
+        chirp(k, out, t + i * 0.32, 'sawtooth', 900 * p, 620 * p, 0.22, 0.09);
+        noise(k, out, t + i * 0.32, { dur: 0.2, peak: 0.05, type: 'bandpass', freq: 1400, q: 1.5 });
+      }
+      return 0.6;
+    case 'squawk':
+      chirp(k, out, t, 'square', 1800 * p, 2600 * p, 0.12, 0.06);
+      chirp(k, out, t + 0.13, 'square', 2600 * p, 1500 * p, 0.18, 0.06);
+      return 0.35;
+    case 'croak':
+      chirp(k, out, t, 'sawtooth', 160 * p, 120 * p, 0.35, 0.1);
+      return 0.4;
+    case 'flap':
+      for (let i = 0; i < 4; i++) noise(k, out, t + i * 0.11, { dur: 0.07, peak: 0.1, type: 'bandpass', freq: 700 * p, q: 0.8 });
+      return 0.5;
+    case 'gull':
+      return gull(k, out, t);
+    case 'splash':
+      noise(k, out, t, { dur: 0.25, peak: 0.12, type: 'highpass', freq: 1500 });
+      return 0.3;
+    case 'buzz': {
+      // fly / bee: a buzzing saw with a wobbling pitch, swelling past the ear
+      const o = k.ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(190 * p, t);
+      o.frequency.linearRampToValueAtTime(240 * p, t + 0.4);
+      o.frequency.linearRampToValueAtTime(175 * p, t + 0.9);
+      const f = k.ctx.createBiquadFilter();
+      f.type = 'bandpass'; f.frequency.value = 600; f.Q.value = 1.2;
+      const e = k.ctx.createGain();
+      e.gain.setValueAtTime(0, t);
+      e.gain.linearRampToValueAtTime(0.05, t + 0.3);
+      e.gain.linearRampToValueAtTime(EPS, t + 1.0);
+      o.connect(f).connect(e).connect(out);
+      o.start(t); o.stop(t + 1.05);
+      return 1.05;
+    }
+    default:
+      return 0;
+  }
 }

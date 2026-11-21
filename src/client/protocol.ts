@@ -3,11 +3,16 @@ import type { MapDef } from '../sim/map';
 import type { MoveCmd } from '../sim/movement';
 import type { MatchSetup } from '../sim/matchApi';
 import type { BuildRequest, Inventory, PlayerInput, Snapshot } from '../sim/types';
+import type { ReplayKind, ReplayMeta } from '../sim/replay/format';
 
 /** main thread → worker */
 export type ToWorker =
   /** humanId = the local (this browser's) player, 0 = none (spectating host); setup.players[i] becomes player id i + 1. */
-  | { type: 'start'; setup: MatchSetup; humanId: number }
+  | { type: 'start'; setup: MatchSetup; humanId: number; record?: { kind: ReplayKind; build: string } | null }
+  /** Stop recording now (game torn down early) and send what there is; answered by 'replay' (if any) then 'recordingDone'. */
+  | { type: 'finishRecording' }
+  /** Encode the recording so far WITHOUT stopping it (tab hidden mid-match: upload what there is); answered by 'replay' with partial. */
+  | { type: 'peekRecording' }
   /** Local player's input. */
   | { type: 'input'; input: PlayerInput; cmds?: MoveCmd[] }
   /** A remote player's (already sanitized) input, forwarded by the host session. */
@@ -23,9 +28,15 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
   | { type: 'debug'; cmd: 'clearLoadout'; id?: number }
   | { type: 'debug'; cmd: 'hp'; hp: number }
+  | { type: 'debug'; cmd: 'time'; t: number }
+  | { type: 'debug'; cmd: 'strike'; x: number; z: number }
   | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
   | { type: 'debug'; cmd: 'potionShop'; x: number; z: number }
+  /** Alert testing: a steel plate on doorway `door` of the human's bunker (placed by `owner`), removing one, generator cash. */
+  | { type: 'debug'; cmd: 'plugDoor'; door: number; owner: number }
+  | { type: 'debug'; cmd: 'removePiece'; id: number }
+  | { type: 'debug'; cmd: 'genStored'; stored: number }
   /** Perf testing: n pieces on rings around (x, z), placement rules skipped. */
   | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number };
 
@@ -35,4 +46,7 @@ export type FromWorker =
   | { type: 'map'; map: MapDef; humanId: number; humanIsland: number; islands: number[] }
   | { type: 'snapshot'; snap: Snapshot }
   | { type: 'preview'; playerId: number; result: Placement; key: number }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  /** A finished recording (match over, or finishRecording). */
+  | { type: 'replay'; bytes: Uint8Array; meta: ReplayMeta; partial?: boolean }
+  | { type: 'recordingDone' };

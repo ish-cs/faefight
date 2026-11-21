@@ -15,20 +15,72 @@ type F = THREE.Node<'float'>;
 const BASE = `${import.meta.env.BASE_URL}assets/textures/`;
 const loader = new THREE.TextureLoader();
 const texCache = new Map<string, THREE.Texture>();
+const PBR_SETS: PbrName[] = ['concrete', 'concrete_wall', 'sand', 'grass', 'rock', 'corrugated', 'painted_metal', 'planks', 'linen', 'asphalt', 'steel_plate', 'gravel'];
+const PBR_MAPS = ['albedo', 'normal', 'arm'] as const;
 
-function load(path: string, srgb: boolean): THREE.Texture {
-  let t = texCache.get(path);
-  if (t) return t;
-  t = loader.load(BASE + path, undefined, undefined, (err) => console.error(`[world/pbr] failed to load ${BASE + path}`, err));
+/** Anisotropic filtering per preset (set at load; a preset change applies on the next page load). */
+const ANISOTROPY: Record<'low' | 'high' | 'ultra', number> = { low: 2, high: 8, ultra: 16 };
+let anisotropy = 8;
+
+function setup(t: THREE.Texture, srgb: boolean) {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
+  t.anisotropy = anisotropy;
   if (srgb) t.colorSpace = THREE.SRGBColorSpace;
-  texCache.set(path, t);
+  return t;
+}
+
+function load(name: string, srgb: boolean): THREE.Texture {
+  let t = texCache.get(name);
+  if (t) return t;
+  const url = `${BASE}${name}.jpg`;
+  t = setup(loader.load(url, undefined, undefined, (err) => console.error(`[world/pbr] failed to load ${url}`, err)), srgb);
+  texCache.set(name, t);
   return t;
 }
 
 export function pbrTex(name: PbrName) {
-  return { map: load(`${name}/albedo.jpg`, true), normal: load(`${name}/normal.jpg`, false), arm: load(`${name}/arm.jpg`, false) };
+  return { map: load(`${name}/albedo`, true), normal: load(`${name}/normal`, false), arm: load(`${name}/arm`, false) };
+}
+
+/** Load-time + memory report of the PBR set (debug / perf harness). */
+export const pbrStats = { format: 'jpg' as 'jpg' | 'ktx2', ms: 0, gpuBytes: 0, files: 0 };
+
+/**
+ * Before the world builds: fetch every PBR map as GPU-compressed KTX2 (Basis → BC7/BC1/ASTC/ETC2, whatever the
+ * GPU has; full mip chain baked in, transcoded in a worker), ~4–8× less VRAM than RGBA8 and no main-thread JPEG
+ * decode or mip generation. Any map that fails (no .ktx2, no compressed format) falls back to its JPEG.
+ * `?ktx2=0` forces JPEG (A/B).
+ */
+export async function preloadPbr(gpu: THREE.WebGPURenderer, quality: 'low' | 'high' | 'ultra') {
+  anisotropy = ANISOTROPY[quality];
+  const t0 = performance.now();
+  const off = typeof location !== 'undefined' && new URLSearchParams(location.search).get('ktx2') === '0';
+  if (off) { pbrStats.ms = 0; return; }
+  const { KTX2Loader } = await import('three/addons/loaders/KTX2Loader.js');
+  const ktx = new KTX2Loader().setTranscoderPath(`${import.meta.env.BASE_URL}assets/basis/`);
+  try {
+    ktx.detectSupport(gpu);
+  } catch (err) {
+    console.warn('[world/pbr] KTX2 unsupported here, using JPEG textures', err);
+    return;
+  }
+  let bytes = 0, files = 0, failed = 0;
+  await Promise.all(PBR_SETS.flatMap((set) => PBR_MAPS.map(async (m) => {
+    const name = `${set}/${m}`;
+    try {
+      const t = await ktx.loadAsync(`${BASE}${name}.ktx2`) as THREE.CompressedTexture;
+      setup(t, m === 'albedo');
+      texCache.set(name, t);
+      files++;
+      for (const mip of t.mipmaps ?? []) bytes += (mip as { data: ArrayBufferView }).data.byteLength;
+    } catch (err) {
+      failed++;
+      console.warn(`[world/pbr] ${name}.ktx2 unavailable, JPEG fallback`, err);
+    }
+  })));
+  ktx.dispose();
+  Object.assign(pbrStats, { format: files ? 'ktx2' : 'jpg', ms: Math.round(performance.now() - t0), gpuBytes: bytes, files });
+  console.info(`[world/pbr] ${files} KTX2 maps (${(bytes / 1048576).toFixed(1)} MB GPU) in ${pbrStats.ms} ms${failed ? `, ${failed} JPEG fallbacks` : ''}`);
 }
 
 let noise: THREE.DataTexture | null = null;

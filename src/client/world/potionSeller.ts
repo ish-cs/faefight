@@ -50,7 +50,7 @@ export class PotionSellers {
   }
 }
 
-function stall(): THREE.Group {
+export function stall(): THREE.Group {
   const g = new THREE.Group();
   const std = (color: number) => new THREE.MeshStandardNodeMaterial({ color, roughness: 0.8 });
   const counter = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.9, 0.6), std(0x6b4a2e));

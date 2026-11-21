@@ -5,6 +5,7 @@ import { spawnYaw, type IslandLayout } from './map';
 import type { Physics } from './physics';
 import { refillStamina, STAMINA } from './movement';
 import { isSealed } from './seal';
+import { newStorm, type StormCenter, type StormState } from './storm';
 import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState, Vec3 } from './types';
 import { clone, dist, dist2D, rotateY, v3 } from './vec';
 
@@ -19,12 +20,18 @@ export type MatchStateCore = {
   waterY: number;
   suddenDeath: boolean;
   forcedSeal: boolean;
+  /** Sudden-death storm (null until sudden death). */
+  storm: StormState | null;
+  /** Match seed (the storm's lightning stream is derived from it). */
+  seed: number;
+  /** Where the storm closes in (the centre island; Match sets it from the MapDef). */
+  stormCenter: StormCenter;
   /** Winning player id, -1 for a draw, null while the match is running. */
   winner: number | null;
   nextId: number;
 };
 
-export function newMatchState(map: IslandLayout[]): MatchStateCore {
+export function newMatchState(map: IslandLayout[], seed = 1): MatchStateCore {
   return {
     time: 0,
     players: new Map(),
@@ -35,6 +42,9 @@ export function newMatchState(map: IslandLayout[]): MatchStateCore {
     waterY: MAP.waterY,
     suddenDeath: false,
     forcedSeal: false,
+    storm: null,
+    seed,
+    stormCenter: { x: 0, z: 0, r: 0 },
     winner: null,
     nextId: 1,
   };
@@ -66,6 +76,8 @@ export function pickUp(p: PlayerState, bag: Inventory): boolean {
 
 export function killPlayer(
   s: MatchStateCore, physics: Physics, victimId: number, now: number, inWater: boolean, killer: number | null = null,
+  /** What killed them when it wasn't a player ('storm', 'lightning'); recorded on the kill event. */
+  cause?: string,
 ): MatchEvent[] {
   const p = s.players.get(victimId);
   if (!p) throw new Error(`killPlayer: no player ${victimId}`);
@@ -97,11 +109,12 @@ export function killPlayer(
     p.respawnAt = null;
     p.eliminated = true;
     physics.setPlayerPos(victimId, PARKED);
-    return [ev(now, 'kill', { victim: victimId, killer, inWater }), ev(now, 'eliminated', { player: victimId })];
+    const kill = cause ? { victim: victimId, killer, inWater, cause } : { victim: victimId, killer, inWater };
+    return [ev(now, 'kill', kill), ev(now, 'eliminated', { player: victimId })];
   }
   p.respawnAt = now + LIFECYCLE.respawnSec;
   physics.setPlayerPos(victimId, PARKED);
-  return [ev(now, 'kill', { victim: victimId, killer, inWater })];
+  return [ev(now, 'kill', cause ? { victim: victimId, killer, inWater, cause } : { victim: victimId, killer, inWater })];
 }
 
 /**
@@ -148,16 +161,16 @@ export function freeSpawnSpot(physics: Physics, isl: IslandLayout): Vec3 {
 }
 
 export function tickLifecycle(
-  s: MatchStateCore, physics: Physics, map: IslandLayout[], now: number, dt: number, tideRate: number = LIFECYCLE.tideRate,
+  s: MatchStateCore, physics: Physics, map: IslandLayout[], now: number, dt: number,
 ): MatchEvent[] {
   const out: MatchEvent[] = [];
 
   if (!s.suddenDeath && now >= LIFECYCLE.suddenDeathAt) {
     s.suddenDeath = true;
     s.forcedSeal = true;
+    s.storm = newStorm(map, s.stormCenter, LIFECYCLE.suddenDeathAt, s.seed);
     out.push(ev(now, 'suddenDeath', {}));
   }
-  if (s.suddenDeath) s.waterY += tideRate * dt;
 
   for (const p of s.players.values())
     if (p.alive && p.pos.y < s.waterY) out.push(...killPlayer(s, physics, p.id, now, true));

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
 
 type Snap = { players: { id: number; name: string; isBot: boolean }[] };
 
@@ -72,6 +73,7 @@ test('seat slider: click, drag and keys set open / bot difficulty', async ({ pag
 });
 
 test('/spectate in the lobby: the host runs a 2-bot match without playing', async ({ page }) => {
+  test.skip(ON_CI, NEEDS_GPU);
   const errors = watchErrors(page);
   await host(page);
   const chatIn = page.getByTestId('lobby-chat-input');

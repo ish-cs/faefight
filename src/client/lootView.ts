@@ -125,6 +125,13 @@ function labelSprite(lines: string[]): THREE.Sprite {
   return s;
 }
 
+/** Shader warm-up (render.ts warmProps): one loot icon billboard and one loot label, so neither compiles mid-match. */
+export function lootWarmObjects(): THREE.Object3D[] {
+  const icon = new THREE.Sprite(iconMat('medkit'));
+  icon.scale.setScalar(0.5);
+  return [icon, labelSprite(['Loot', 'Medkit x1'])];
+}
+
 type BagView = { group: THREE.Group; spin: THREE.Group; key: string; lines: string[]; label: THREE.Sprite | null; phase: number; pos: Vec3 };
 
 export class LootView {

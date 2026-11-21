@@ -80,7 +80,13 @@ test('menu remembers difficulty + bot count; compass; Esc pauses vs bots; death 
   await expect.poll(async () => (await snapOf(page)).time).toBeGreaterThan(t0 + 0.5);
 
   // Death recap: walk off into the sea → "You drowned", gone again after respawn.
-  await dbg(page, 'teleport', 0, 0);
+  // Open water just past the outer rim of our island (the map origin is the center island now).
+  await page.evaluate(() => {
+    const f = (window as any).__faefight; const id = f.humanId();
+    const isl = f.map()[f.snapshot().players.find((p: any) => p.id === id).island];
+    const d = Math.hypot(isl.center.x, isl.center.z), k = (d + isl.radius + 6) / d;
+    f.teleport(isl.center.x * k, isl.center.z * k);
+  });
   const recap = page.getByTestId('death-recap');
   await expect(recap).toBeVisible({ timeout: 15_000 });
   await expect(recap).toContainText('You drowned');

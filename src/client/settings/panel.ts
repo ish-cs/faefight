@@ -1,12 +1,16 @@
 import './settings.css';
+
 import {
   ACTIONS, type Action, type ActionGroup, actionLabel, bindingLabel, conflictsFor, defaultKeymap, findConflicts, isBindable, keyLabel,
   rebind, setKeymapSuspended, unbind,
 } from '../keymap';
 import {
-  CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, LIMITS, QUALITIES, type Settings, settings,
+  CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, GEN_ALERT_PCTS, LIMITS, QUALITIES, type Settings, settings,
 } from './store';
 import type { Quality } from '../world/sky';
+
+const PERF_STATS = ['off', 'fps', 'detailed'] as const;
+const PERF_STATS_LABEL: Record<(typeof PERF_STATS)[number], string> = { off: 'Off', fps: 'FPS', detailed: 'Detailed' };
 
 /**
  * Settings modal (main menu + in-game pause card). Every control writes straight to the settings
@@ -230,7 +234,12 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
       'set-framecap', FRAME_CAPS, (f) => (f === 0 ? 'Vsync' : `${f}`), () => v().frameCap, (f) => set((d) => { d.video.frameCap = f; }));
     toggle('Dynamic resolution', 'Lower the render resolution briefly when the frame rate drops below target', 'set-dynres',
       () => v().dynamicResolution, (x) => set((d) => { d.video.dynamicResolution = x; }));
-    toggle('Show FPS counter', `Also on ${keyLabel(settings.get().controls.keys.fps[0] ?? '') || '—'} in game`, 'set-fps', () => v().showFps, (x) => set((d) => { d.video.showFps = x; }));
+    {
+      const keys = settings.get().controls.keys.fps.map(keyLabel).filter(Boolean).join(' / ') || '—';
+      segmented('Performance stats', `Also ${keys} in game (Shift: detail): frame time, draw calls, triangles`, 'set-fps', PERF_STATS, (x) => PERF_STATS_LABEL[x],
+        () => (!v().showFps ? 'off' : v().perfDetail ? 'detailed' : 'fps'),
+        (x) => set((d) => { d.video.showFps = x !== 'off'; d.video.perfDetail = x === 'detailed'; }));
+    }
     section('Field of view');
     slider('Third person', '', 'set-fov3', LIMITS.fovThird[0], LIMITS.fovThird[1], 1,
       () => v().fovThird, (x) => set((d) => { d.video.fovThird = x; }), (x) => `${Math.round(x)}°`);
@@ -277,6 +286,9 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     paint();
     section('Feedback');
     toggle('Damage numbers', 'Floating numbers over players you hit', 'set-dmgnums', () => g().damageNumbers, (x) => set((d) => { d.gameplay.damageNumbers = x; }));
+    section('Alerts');
+    segmented('Generator alert', 'Soft ping + toast when your home generator reaches this', 'set-gen-alert', GEN_ALERT_PCTS,
+      (x) => (x === 100 ? 'Full' : x === 0 ? 'Off' : `${x}%`), () => g().genAlertPct, (x) => set((d) => { d.gameplay.genAlertPct = x; }));
     section('Camera');
     segmented('Default camera', `Toggle in game with ${keyLabel(settings.get().controls.keys.camera[0] ?? '') || '—'}`, 'set-camera',
       ['third', 'first'] as const, (m) => (m === 'third' ? 'Third person' : 'First person'), () => g().cameraMode, (m) => set((d) => { d.gameplay.cameraMode = m; }));
