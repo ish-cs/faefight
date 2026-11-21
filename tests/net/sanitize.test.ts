@@ -111,6 +111,9 @@ describe('sanitizeClientMsg', () => {
   });
   test('unknown types are dropped', () => {
     expect(sanitizeClientMsg({ t: 'admin', cmd: 'win' })).toBeNull();
+    // Host-only /money never has a wire message: a guest forging one is dropped.
+    expect(sanitizeClientMsg({ t: 'money', amount: 500 })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'debug', cmd: 'give', inv: { cash: 500 } })).toBeNull();
   });
 });
 

@@ -98,3 +98,14 @@ describe('sanitize', () => {
     expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'nuke' } })!.shop).toBeNull();
   });
 });
+
+describe('match: host /money path', () => {
+  test('debugGive({ cash }) adds to cash on hand and nothing else', async () => {
+    const { m, s } = await match();
+    const before = me(s);
+    m.debugGive(1, { cash: 500 });
+    const after = me(m.tick(new Map()));
+    expect(after.inv.cash).toBe(before.inv.cash + 500);
+    expect(after.inv.weapons).toEqual(before.inv.weapons);
+  });
+});
