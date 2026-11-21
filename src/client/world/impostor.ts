@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { atan, attribute, cameraPosition, float, floor, max, mod, normalize, positionLocal, PI2, smoothstep, texture, uniform, vec2, vec3 } from 'three/tsl';
+import { lightU } from './lightUniforms';
 import { lodScale } from './lod';
 import type { LodPart } from './chunked';
 
@@ -57,7 +58,8 @@ function impostorMaterial(atlas: ImpostorAtlas): THREE.MeshBasicNodeMaterial {
   const tex = texture(atlas.texture ?? new THREE.Texture(), vec2(cell.add(u).div(N), v));
   // the atlas is cleared to transparent black, so mip levels / filtering blend black into silhouette edges:
   // un-premultiply, or far impostors get dark halos
-  m.colorNode = tex.rgb.div(max(tex.a, 0.02)).mul(T.rgb);
+  // baked under the day sun: lightU.impostor dims / tints it with the day/night cycle
+  m.colorNode = tex.rgb.div(max(tex.a, 0.02)).mul(T.rgb).mul(lightU.impostor);
   m.opacityNode = tex.a;
   return m;
 }

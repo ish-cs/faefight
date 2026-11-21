@@ -9,21 +9,22 @@ const DEG = Math.PI / 180;
 /**
  * reactSec: time from first sighting to the first shot. coneRad: aim error radius (tightens while tracking).
  * maxTurn: fastest flick a hand manages (rad/s); how the hand eases into and out of turns is AimFeel (params.ts).
- * recoilComp: share of each recoil kick pulled straight back down (0 = rides the climb, 1 = perfect).
+ * recoilComp: share of each recoil kick pulled straight back down (0 = rides the climb, 1 = perfect); per skill in
+ * params.ts GUN_SKILL (trainer-tunable), joined onto AIM when a Bot is made.
  * farGrow: extra error per 40 m beyond FAR_FROM (a small far-away head is harder to place a crosshair on).
  * lagSec: perception lag behind a moving target: error grows with the target's angular speed × this
  * (strafing, juking and jumping targets are harder to track).
  */
 export type AimProfile = { reactSec: number; coneRad: number; maxTurn: number; recoilComp: number; farGrow: number; lagSec: number };
 
-export const AIM: Record<Difficulty, AimProfile> = {
-  easy: { reactSec: 0.8, coneRad: 14 * DEG, maxTurn: 6, recoilComp: 0.25, farGrow: 1.1, lagSec: 0.24 },
-  medium: { reactSec: 0.5, coneRad: 8 * DEG, maxTurn: 8, recoilComp: 0.6, farGrow: 1, lagSec: 0.18 },
-  hard: { reactSec: 0.24, coneRad: 3 * DEG, maxTurn: 11, recoilComp: 0.85, farGrow: 0.9, lagSec: 0.14 },
+export const AIM: Record<Difficulty, Omit<AimProfile, 'recoilComp'>> = {
+  easy: { reactSec: 0.8, coneRad: 14 * DEG, maxTurn: 6, farGrow: 1.1, lagSec: 0.24 },
+  medium: { reactSec: 0.5, coneRad: 8 * DEG, maxTurn: 8, farGrow: 1, lagSec: 0.18 },
+  hard: { reactSec: 0.24, coneRad: 3 * DEG, maxTurn: 11, farGrow: 0.9, lagSec: 0.14 },
   // Human pro: ~0.2 s reaction, ~2° error that tightens to ~1.4° while tracking (still misses at range),
-  // fast smooth tracking, flicks capped at ~690°/s, near-perfect spray control.
+  // fast smooth tracking, flicks capped at ~690°/s (spray control: params.ts GUN_SKILL).
   // Still human at range: error grows past 20 m and against a strafing target.
-  pro: { reactSec: 0.18, coneRad: 1.5 * DEG, maxTurn: 12, recoilComp: 0.95, farGrow: 0.7, lagSec: 0.09 },
+  pro: { reactSec: 0.18, coneRad: 1.5 * DEG, maxTurn: 12, farGrow: 0.7, lagSec: 0.09 },
 };
 
 /** Losing sight longer than this makes the next sighting a fresh reaction. */

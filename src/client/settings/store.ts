@@ -41,8 +41,11 @@ export type Settings = {
   v: typeof SETTINGS_VERSION;
   controls: { sensitivity: number; invertY: boolean; keys: Keymap };
   video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; perfDetail: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean; competitive: boolean };
-  audio: { master: number; effects: number; ambience: number; muted: boolean };
-  gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct };
+  /** Mixer buses: effects (world SFX), ui (interface + stingers), ambience, music (+ an on/off switch). */
+  audio: { master: number; effects: number; ui: number; ambience: number; music: number; musicOn: boolean; muted: boolean };
+  gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct;
+    /** Screen shake + hit-stop strength, 0 (off) .. 1 (full). Accessibility. */ screenShake: number;
+    /** First-person camera bob while walking / sprinting. */ cameraBob: boolean };
   /** One-time things: the How to play card shows by itself until it has been seen once. */
   onboarding: { howToSeen: boolean };
 };
@@ -59,8 +62,8 @@ export function defaultSettings(): Settings {
     v: SETTINGS_VERSION,
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true, competitive: false },
-    audio: { master: 0.8, effects: 1, ambience: 1, muted: false },
-    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100 },
+    audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false },
+    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true },
     onboarding: { howToSeen: false },
   };
 }
@@ -104,7 +107,10 @@ export function sanitizeSettings(raw: unknown): Settings {
     audio: {
       master: num(a.master, 0, 1, d.audio.master),
       effects: num(a.effects, 0, 1, d.audio.effects),
+      ui: num(a.ui, 0, 1, d.audio.ui),
       ambience: num(a.ambience, 0, 1, d.audio.ambience),
+      music: num(a.music, 0, 1, d.audio.music),
+      musicOn: bool(a.musicOn, d.audio.musicOn),
       muted: bool(a.muted, d.audio.muted),
     },
     gameplay: {
@@ -113,6 +119,8 @@ export function sanitizeSettings(raw: unknown): Settings {
       damageNumbers: bool(g.damageNumbers, d.gameplay.damageNumbers),
       cameraMode: oneOf(g.cameraMode, ['third', 'first'] as const, d.gameplay.cameraMode),
       genAlertPct: oneOf(g.genAlertPct, GEN_ALERT_PCTS, d.gameplay.genAlertPct),
+      screenShake: num(g.screenShake, 0, 1, d.gameplay.screenShake),
+      cameraBob: bool(g.cameraBob, d.gameplay.cameraBob),
     },
     onboarding: { howToSeen: bool(o.howToSeen, d.onboarding.howToSeen) },
   };

@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { color, cos, float, mix, positionLocal, positionWorld, sin, smoothstep, step, texture, time, uv, vec2, vec3, vertexColor } from 'three/tsl';
 import { MAP } from '../../sim/constants';
+import { lightU } from './lightUniforms';
 import { applyPbr, pbrMaterial, pbrSample, worldNoise } from './pbr';
 import { awningTex, barkTex, chainTex, frondTex, leafBlobTex, seawallTex } from './textures';
 
@@ -46,8 +47,8 @@ function make() {
     /** bunker walls, coping, cast concrete */
     concrete: mossyBase(pbrMaterial('concrete', 'concrete_wall', { lum: 0.237, tint: 0xb4b0a8, macro: 0.15, untile: 'shift' })),
     /** flat paving (quay slab) */
-    slab: pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1 }),
-    asphalt: pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1 }),
+    slab: pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1, puddles: true }),
+    asphalt: pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1, puddles: true }),
     seawall: quayWall(),
     dark: std('dark', { color: 0x222426, roughness: 0.55, metalness: 0.3 }),
     rubber: std('rubber', { color: 0x262624, roughness: 0.92 }),
@@ -74,6 +75,15 @@ function make() {
     lit: (() => {
       const m = std('lit', { roughness: 0.35 });
       m.emissiveNode = vertexColor().mul(1.6);
+      return m;
+    })(),
+    /**
+     * Lamp lenses (street lamps, floodlights): the vertex colour reads as a pale lens by day and glows (bloom) as the
+     * lamps switch on at dusk (lightU.lamps, the day/night cycle).
+     */
+    lamp: (() => {
+      const m = std('lamp', { roughness: 0.3 });
+      m.emissiveNode = vertexColor().mul(lightU.lamps.mul(lightU.lamps).mul(5));
       return m;
     })(),
     /** Shield well ring: cyan, slowly pulsing. */

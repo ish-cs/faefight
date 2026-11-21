@@ -1,13 +1,15 @@
 // Snapshot → sound cues. Pure (no Web Audio) so the decisions can be unit-tested.
 
 import { insideBunker } from '../../sim/bots/nav';
-import { MAP, PIECES } from '../../sim/constants';
-import type { IslandLayout } from '../../sim/map';
+import { MAP, PIECES, PLAYER, WEAPONS } from '../../sim/constants';
+import type { DockDef, IslandLayout } from '../../sim/map';
+import { overDock } from '../../sim/docks';
 import type { PieceKind, PieceState, PlayerState, Snapshot, Vec3, WeaponKind } from '../../sim/types';
 import { beatsBetween } from '../../sim/gunplay';
 import { reloadClock } from '../firstPerson';
 
-export type Surface = 'grass' | 'sand' | 'concrete' | 'wood' | 'hollow' | 'metal';
+/** 'wet': grass/sand in the rain; 'gravel' and 'water' are for callers (docks, shallows) and bullet impacts. */
+export type Surface = 'grass' | 'sand' | 'concrete' | 'wood' | 'hollow' | 'metal' | 'wet' | 'gravel' | 'water';
 
 export type SoundId =
   | 'shot' | 'impact' | 'hurt' | 'hitmarker' | 'splash'
@@ -19,7 +21,14 @@ export type SoundId =
   | 'reload' | 'dry' | 'ads' | 'thunder'
   | 'headshot' | 'shieldCrack' | 'land'
   /** Barrels / tanks / crates: kind 'hiss' (fuse), 'clang' (bullet on a drum), 'crateHit', 'crate' (breaks). */
-  | 'hazard';
+  | 'hazard'
+  /** Drawing a weapon (kind = WeaponKind); pushing off the ground (kind = Surface); a UI button click. */
+  | 'equip' | 'jump' | 'click'
+  // Hooks for round-11 features (playSfx in api.ts). kind = Surface where it says so.
+  | 'grappleFire' | 'grappleAttach' | 'grappleReel' | 'grappleRelease'
+  | 'spikeArm' | 'spikeTrigger'
+  | 'shellCasing' | 'ragdollThud'
+  | 'dockCreak' | 'dockBreak';
 
 export type Cue = {
   sound: SoundId;
@@ -57,7 +66,7 @@ export function landGain(prevVy: number, own: boolean): number {
 }
 
 /** Ground the player stands on: a piece top under their feet, else the island (bunker floor / shore sand / grass). */
-export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[]): Surface {
+export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[], docks: readonly DockDef[] = [], broken: readonly number[] = []): Surface {
   for (const pc of pieces) {
     const s = PIECES[pc.kind];
     const dx = p.x - pc.pos.x, dz = p.z - pc.pos.z;
@@ -68,6 +77,8 @@ export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[]): S
     if (p.y < pc.pos.y + 0.05 || p.y > pc.pos.y + s.h + 0.35) continue;
     return pieceSurface(pc.kind);
   }
+  // Pier planks (standing sections only: a broken one is water).
+  for (const d of docks) if (overDock(d, p, 0.2) && Math.abs(p.y - (d.center.y + d.half.y)) < 0.4 && !broken.includes(d.id)) return 'wood';
   for (const isl of map) {
     const d = Math.hypot(p.x - isl.center.x, p.z - isl.center.z);
     if (d > isl.radius + 2) continue;
@@ -97,10 +108,63 @@ export function inAnyBunker(p: Vec3, map: IslandLayout[]): boolean {
   return map.some((isl) => p.y < isl.groundY + MAP.bunker.height && insideBunker(isl.bunker, p));
 }
 
+/** Where a bullet that hit no player or piece landed: water below the surface line, else the ground there. */
+export function impactSurface(p: Vec3, waterY: number, map: IslandLayout[], docks: readonly DockDef[] = [], broken: readonly number[] = []): Surface {
+  if (p.y < waterY + 0.25) return 'water';
+  if (docks.some((d) => !broken.includes(d.id) && overDock(d, p))) return 'wood'; // pier planks
+  for (const isl of map) {
+    const d = Math.hypot(p.x - isl.center.x, p.z - isl.center.z);
+    if (d > isl.radius + 2) continue;
+    if (insideBunker(isl.bunker, p)) return 'concrete';
+    return d > isl.radius - 5 ? 'sand' : 'grass';
+  }
+  return 'concrete'; // harbor quays and seawalls around the islands
+}
+
+/**
+ * How many solid walls stand between `a` (listener) and `b` (source): built pieces the straight line
+ * crosses (scaffold floors are open), plus one when exactly one end is inside a bunker. 0 = clear.
+ * Per cue, not per frame: a 2D slab test per piece, then the line's height where it crosses.
+ */
+export function occlusion(a: Vec3, b: Vec3, pieces: PieceState[], map: IslandLayout[]): number {
+  let n = 0;
+  const dx = b.x - a.x, dz = b.z - a.z;
+  for (const pc of pieces) {
+    if (pc.kind === 'scaffold') continue;
+    const s = PIECES[pc.kind];
+    const c = Math.cos(pc.rotY), sn = Math.sin(pc.rotY);
+    const ax = a.x - pc.pos.x, az = a.z - pc.pos.z;
+    // World → piece-local (as surfaceAt).
+    const lx0 = ax * c - az * sn, lz0 = ax * sn + az * c;
+    const ldx = dx * c - dz * sn, ldz = dx * sn + dz * c;
+    let t0 = 0, t1 = 1;
+    const clip = (p0: number, d: number, h: number) => {
+      if (Math.abs(d) < 1e-9) return Math.abs(p0) <= h;
+      let ta = (-h - p0) / d, tb = (h - p0) / d;
+      if (ta > tb) { const x = ta; ta = tb; tb = x; }
+      t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+      return t0 <= t1;
+    };
+    if (!clip(lx0, ldx, s.w / 2) || !clip(lz0, ldz, s.d / 2)) continue;
+    // An end inside the piece's footprint (standing on/against it) doesn't count as through it.
+    if (t0 <= 0.001 || t1 >= 0.999) continue;
+    const y = a.y + (b.y - a.y) * (t0 + t1) / 2;
+    if (y >= pc.pos.y && y <= pc.pos.y + s.h) n++;
+  }
+  if (inAnyBunker(a, map) !== inAnyBunker(b, map)) n++;
+  return n;
+}
+
 type StepTrack = { x: number; z: number; acc: number };
+
+/** Bullet impact cues per shot at most (a shotgun blast would otherwise be 10 identical ticks). */
+const MAX_IMPACTS_PER_SHOT = 3;
+/** An endpoint this close to a player/piece/hazard hit point is that hit, voiced by its own event. */
+const SAME_POINT = 0.8;
 
 export class SoundDirector {
   private map: IslandLayout[] = [];
+  private docks: readonly DockDef[] = [];
   private humanId = -1;
   private prev: Snapshot | null = null;
   private steps = new Map<number, StepTrack>();
@@ -110,8 +174,9 @@ export class SoundDirector {
   env: Env = { alive: false, hp: 100, inBunker: false, shoreDist: 50, inWater: false };
 
   /** A new match (also a rematch): forget the previous match's snapshot so nothing is diffed across them. */
-  setMap(map: IslandLayout[], humanId: number) {
+  setMap(map: IslandLayout[], humanId: number, docks: readonly DockDef[] = []) {
     this.map = map;
+    this.docks = docks;
     this.humanId = humanId;
     this.prev = null;
     this.steps.clear();
@@ -132,16 +197,25 @@ export class SoundDirector {
       const p = byId.get(id as number);
       return p ? { x: p.pos.x, y: p.pos.y + 1.2, z: p.pos.z } : null;
     };
+    // Points where a bullet hit a player, piece or hazard: those events voice them (flesh, material, clang).
+    const struck: Vec3[] = [];
+    for (const e of s.events) {
+      if ((e.type === 'hit' || e.type === 'pieceHit' || e.type === 'hazard') && e.data.pos) struck.push(e.data.pos as Vec3);
+    }
 
     for (const e of s.events) {
       const d = e.data;
       switch (e.type) {
         case 'shot': {
-          if (d.echo) break; // played when predicted (shotPredict.ts)
+          // The echo of your predicted shot (shotPredict.ts) already played its bang; its impacts still sound.
           const own = d.by === this.humanId;
-          out.push({ sound: 'shot', kind: d.weapon as WeaponKind, pos: own ? null : (d.from as Vec3), gain: own ? 1 : 0.9, own });
+          if (!d.echo) out.push({ sound: 'shot', kind: d.weapon as WeaponKind, pos: own ? null : (d.from as Vec3), gain: own ? 1 : 0.9, own });
+          this.impacts(d, struck, s, out);
           break;
         }
+        case 'pieceHit':
+          if (d.pos && d.source !== 'explosive') out.push({ sound: 'impact', kind: pieceSurface(d.kind as PieceKind), pos: d.pos as Vec3, gain: d.source === 'fist' ? 0.5 : 0.6 });
+          break;
         case 'hit': {
           const amount = Number(d.amount) || 0;
           const shield = Number(d.shieldAmount) || 0;
@@ -188,6 +262,15 @@ export class SoundDirector {
           else if (d.what === 'break') out.push({ sound: 'hazard', kind: 'crate', pos: at, gain: 1 });
           break;
         }
+        case 'trap': {
+          // Spike trap: snaps out with a steel clang; set down / broken sound like a metal piece.
+          const at = d.pos as Vec3 | undefined;
+          if (!at) break;
+          if (d.what === 'fired') out.push({ sound: 'spikeTrigger', pos: at, gain: 1 });
+          else if (d.what === 'placed') out.push({ sound: 'spikeArm', pos: at, gain: 0.8 });
+          else if (d.what === 'broken') out.push({ sound: 'destroyed', kind: 'metal', pos: at, gain: 0.6 });
+          break;
+        }
         case 'placed': {
           const pc = s.pieces.find((p) => p.id === d.piece);
           const at = pc?.pos ?? chest(d.by);
@@ -197,6 +280,12 @@ export class SoundDirector {
         case 'destroyed': {
           const pc = prev?.pieces.find((p) => p.id === d.piece) ?? s.pieces.find((p) => p.id === d.piece);
           if (pc) out.push({ sound: 'destroyed', kind: String(d.kind), pos: { x: pc.pos.x, y: pc.pos.y + 1, z: pc.pos.z }, gain: 1 });
+          break;
+        }
+        case 'dockBroken': {
+          // A pier section giving way: the wooden-piece break, a little heavier.
+          const at = d.pos as { x: number; y: number; z: number } | undefined;
+          if (at) out.push({ sound: 'dockBreak', pos: at, gain: 1.2 });
           break;
         }
         case 'sealed':
@@ -229,6 +318,13 @@ export class SoundDirector {
     this.countdown(me, s, out);
     this.footsteps(s, prev, out);
     this.landings(s, prev, out);
+    // Pier planks stressed by a blast (newly scorched sections): a creak where they stand.
+    for (const id of s.dockHurt ?? []) {
+      if (prev?.dockHurt?.includes(id)) continue;
+      const d = this.docks.find((x) => x.id === id);
+      if (d) out.push({ sound: 'dockCreak', pos: { ...d.center }, gain: 0.6 });
+    }
+    this.equipsAndJumps(s, prev, out);
     this.reloadBeats(s, out);
 
     if (me) {
@@ -299,6 +395,51 @@ export class SoundDirector {
     }
   }
 
+  /** Pieces in the latest snapshot (occlusion tests by the engine). */
+  get pieces(): PieceState[] { return this.prev?.pieces ?? []; }
+
+  /**
+   * Where each bullet of a shot landed when it hit nothing else: the ground's surface or water. Skips
+   * misses that flew to max range, rockets (from = to) and points another hit event already voices.
+   */
+  private impacts(d: Record<string, unknown>, struck: Vec3[], s: Snapshot, out: Cue[]) {
+    const from = d.from as Vec3 | undefined;
+    if (!from || !d.to) return;
+    const range = WEAPONS[d.weapon as WeaponKind]?.range ?? 0;
+    const ends = [d.to as Vec3, ...((d.tos as Vec3[] | undefined) ?? [])];
+    let n = 0;
+    for (const p of ends) {
+      if (n >= MAX_IMPACTS_PER_SHOT) break;
+      const len = Math.hypot(p.x - from.x, p.y - from.y, p.z - from.z);
+      if (len < 0.3 || len >= range - 0.5) continue;
+      if (struck.some((q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) < SAME_POINT)) continue;
+      out.push({ sound: 'impact', kind: impactSurface(p, s.waterY, this.map, this.docks, s.docks ?? []), pos: { x: p.x, y: p.y, z: p.z }, gain: 0.55 });
+      n++;
+    }
+  }
+
+  /** Drawing another weapon (a cue per change while alive); leaving the ground upward (a jump push-off). */
+  private equipsAndJumps(s: Snapshot, prev: Snapshot | null, out: Cue[]) {
+    if (!prev) return;
+    for (const p of s.players) {
+      const was = prev.players.find((q) => q.id === p.id);
+      if (!was || !p.alive || !was.alive || s.hidden?.includes(p.id)) continue;
+      const own = p.id === this.humanId;
+      if (p.equipped !== was.equipped) {
+        out.push({ sound: 'equip', kind: p.equipped, pos: own ? null : { x: p.pos.x, y: p.pos.y + 1.2, z: p.pos.z }, gain: own ? 0.6 : 0.5, own });
+      }
+      if (Math.abs(was.vel.y) < 0.5 && p.vel.y > 2.5 && was.pos.y > s.waterY + 0.2) {
+        out.push({ sound: 'jump', kind: this.stepSurface(was.pos, s), pos: own ? null : { ...was.pos }, gain: own ? 0.45 : 0.7, own });
+      }
+    }
+  }
+
+  /** Underfoot, with grass and sand turned wet in the storm's rain. */
+  private stepSurface(p: Vec3, s: Snapshot): Surface {
+    const k = surfaceAt(p, s.pieces, this.map, this.docks, s.docks);
+    return s.suddenDeath && (k === 'grass' || k === 'sand') && !inAnyBunker(p, this.map) ? 'wet' : k;
+  }
+
   /** Touching down after a fall: a thud on the surface landed on, heavier the faster the fall. */
   private landings(s: Snapshot, prev: Snapshot | null, out: Cue[]) {
     if (!prev) return;
@@ -307,7 +448,7 @@ export class SoundDirector {
       if (!was || !p.alive || !was.alive || s.hidden?.includes(p.id)) continue;
       if (!isLanding(was.vel.y, p.vel.y, Math.hypot(p.pos.x - was.pos.x, p.pos.z - was.pos.z), p.pos.y > s.waterY + 0.2)) continue;
       const own = p.id === this.humanId;
-      out.push({ sound: 'land', kind: surfaceAt(p.pos, s.pieces, this.map), pos: own ? null : { ...p.pos }, gain: landGain(was.vel.y, own), own });
+      out.push({ sound: 'land', kind: this.stepSurface(p.pos, s), pos: own ? null : { ...p.pos }, gain: landGain(was.vel.y, own), own });
     }
   }
 
@@ -326,7 +467,9 @@ export class SoundDirector {
         t.acc -= STRIDE;
         const own = p.id === this.humanId;
         // Enemy steps are louder than your own: they're information (capped by HEARING.footstep).
-        out.push({ sound: 'footstep', kind: surfaceAt(p.pos, s.pieces, this.map), pos: { ...p.pos }, gain: own ? 0.4 : ENEMY_STEP_GAIN, own });
+        // Speed: a sprint lands harder than a walk, a creep softer.
+        const pace = Math.min(1.3, Math.max(0.6, d / dt / PLAYER.walk));
+        out.push({ sound: 'footstep', kind: this.stepSurface(p.pos, s), pos: { ...p.pos }, gain: (own ? 0.4 : ENEMY_STEP_GAIN) * pace, own });
       }
     }
   }

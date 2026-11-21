@@ -31,6 +31,8 @@ export class Predictor {
   private history: MoveCmd[] = [];
   private offset = { x: 0, y: 0, z: 0 };
   private pieceIds = new Set<number>();
+  /** How many broken pier sections the local world has taken out (snapshot `docks` only grows). */
+  private docksGone = 0;
   private others = new Set<number>();
   private alive = false;
   /** Stats for debugging/tests. */
@@ -141,6 +143,8 @@ export class Predictor {
       if (!this.pieceIds.has(p.id)) { this.physics.addPiece(p); this.pieceIds.add(p.id); }
     }
     for (const id of this.pieceIds) if (!seen.has(id)) { this.physics.removePiece(id); this.pieceIds.delete(id); }
+    // Broken pier sections: open water (removeDock ignores ones already gone).
+    if (snap.docks && snap.docks.length !== this.docksGone) { for (const id of snap.docks) this.physics.removeDock(id); this.docksGone = snap.docks.length; }
 
     const live = new Set<number>();
     for (const p of snap.players) {

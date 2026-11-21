@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { AIM, Aim } from '../../src/sim/bots/aim';
-import { AIM_PARAMS } from '../../src/sim/bots/params';
+import { AIM_PARAMS, GUN_SKILL } from '../../src/sim/bots/params';
 import { Bot } from '../../src/sim/bots/bot';
 import { BRAIN_KEYS, BRAIN_SPEC, HAND_BRAIN, HAND_PARAMS, PARAM_KEYS, PARAM_RANGES, decode, encode, withTraits } from '../../src/sim/bots/params';
 import { fits, junkSlot, nextPurchase, plugSpot, shoppingPlan } from '../../src/sim/bots/plans';
@@ -292,7 +292,7 @@ describe('no cheating: bots only see BotView', () => {
 describe('human aim (perception, all skills)', () => {
   /** Share of ticks the crosshair is within a body (0.4 m) of the target's chest. */
   function hitRate(diff: 'pro' | 'hard', range: number, strafe: boolean): number {
-    const aim = new Aim(AIM[diff], mulberry32(11), AIM_PARAMS.feel[diff]);
+    const aim = new Aim({ ...AIM[diff], recoilComp: GUN_SKILL[diff].recoilComp }, mulberry32(11), AIM_PARAMS.feel[diff]);
     const eye = v3(0, 1.6, 0);
     let cur = { yaw: 0, pitch: 0 };
     let hits = 0, n = 0, side = 1, flipAt = 0, x = 0;

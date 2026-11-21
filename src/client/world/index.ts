@@ -2,14 +2,17 @@ import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
 import type { FirePatch, HazardNet, MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { FireFx } from './fireFx';
+import { Footprints } from './footprints';
 import { ImpactMarks } from './impacts';
 import { clearNpcSpots } from '../characters/npcSpots';
 import { CosmeticLayer } from './cosmetics';
 import { HazardLayer } from './hazards';
+import { DockLayer } from './docks';
 import { Critters } from './critters';
 import type { CritterSound, V3 } from './critterSim';
 import { Boats, gullPerches, Gulls } from './dressing';
-import { defineDetailKinds } from './detail';
+import { LampPools } from './dayNight';
+import { defineDetailKinds, lampSpots } from './detail';
 import { Grass } from './grass';
 import { Scatter } from './scatter';
 import { backdropFrame, buildIslands, islandMask } from './islands';
@@ -38,12 +41,18 @@ export class World {
   readonly impacts = new ImpactMarks(this.pieceFx.particles);
   /** Flames, smoke, embers, charring and the fire light for burning pieces and ground fires. */
   readonly fire = new FireFx(this.pieceFx.particles, this.pieces);
+  /** Boot prints on sand / gravel / wet docks (render.ts feeds each walker's feet). */
+  readonly footprints = new Footprints();
   private water: Ocean | null = null;
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
   private cosmetics: CosmeticLayer | null = null;
+  /** Night light pools under the lamps (day/night cycle). */
+  private lampPools: LampPools | null = null;
   /** Explosive barrels / propane tanks / supply crates. */
   private hazards: HazardLayer | null = null;
+  /** Wooden piers: whole / scorched / broken sections (docks.ts). */
+  private docks: DockLayer | null = null;
   /** instanced grass beds (high/ultra) */
   readonly grass = new Grass();
   /** instanced small detail (litter, rubble, shells, seaweed…) */
@@ -61,7 +70,7 @@ export class World {
     this.sky = new SkyLighting(gpu, scene, camera);
     SUN_FOR_BAKE.dir.copy(SUN_DIR);
     installQualityToggle(this.sky);
-    scene.add(this.pieces.root, this.pieceFx.root, this.impacts.mesh, this.fire.light);
+    scene.add(this.pieces.root, this.pieceFx.root, this.impacts.mesh, this.fire.light, this.footprints.mesh);
     collidables.push(...this.pieces.proxies);
     this.pieces.onProxiesChanged = () => {
       for (let i = collidables.length - 1; i >= 0; i--) if (collidables[i].name.startsWith('pieceHull:')) collidables.splice(i, 1);
@@ -74,6 +83,7 @@ export class World {
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
     clearNpcSpots(); // the shop/potion props below register their keepers
+    lampSpots.length = 0; // the harbor street lamps below register their light pools
     const { root, collidables } = buildIslands(def, teamColors, this.scatter);
     this.scatter.build();
     this.scene.add(this.scatter.root);
@@ -83,6 +93,8 @@ export class World {
     this.collidables.push(...collidables);
     const map = def.islands;
     this.impacts.setMap(def);
+    this.footprints.clear();
+    this.footprints.surfaces = this.impacts.surf;
     this.water = buildWater(def);
     this.scene.add(this.water.mesh);
     // The ambient env map is deliberately hazy/desaturated (for shading); at grazing angles it turned the far sea
@@ -106,8 +118,12 @@ export class World {
     const cos = STRESS > 1 ? stressOffsets().flatMap(([ox, oz], k) => def.cosmetics.map((c) => k === 0 ? c : { ...c, id: 1e6 * k + c.id, pos: { ...c.pos, x: c.pos.x + ox, z: c.pos.z + oz } })) : def.cosmetics;
     this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
+    this.lampPools = new LampPools(lampSpots, cos);
+    this.scene.add(this.lampPools.mesh);
     this.hazards = new HazardLayer(def.hazards ?? []);
     this.scene.add(this.hazards.root);
+    this.docks = new DockLayer(def.docks ?? [], def.waterY);
+    this.scene.add(this.docks.root);
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
     // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
     // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
@@ -141,12 +157,22 @@ export class World {
     this.critters = null;
     this.cosmetics?.dispose();
     this.cosmetics = null;
+    this.lampPools?.dispose();
+    this.lampPools = null;
     this.hazards?.dispose();
     this.hazards = null;
+    this.docks?.dispose();
+    this.docks = null;
   }
 
+  /** Pier sections: snapshot state (broken, scorched). */
+  syncDocks(broken: number[] | undefined, hurt: number[] | undefined) { this.docks?.sync(broken ?? [], hurt ?? []); }
+
+  /** A pier section just broke: stubs, flying planks, spray. */
+  dockEvent(e: MatchEvent, waterY: number) { if (e.type === 'dockBroken') this.docks?.onBroken(e.data, this.pieceFx.particles, waterY); }
+
   /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
-  syncCosmetics(broken: number[]) { this.cosmetics?.sync(broken); }
+  syncCosmetics(broken: number[]) { this.cosmetics?.sync(broken); this.lampPools?.sync(broken); }
 
   /** A cosmetic prop just broke: debris burst at its position. */
   cosmeticEvent(e: MatchEvent) {
@@ -198,6 +224,7 @@ export class World {
     this.pieceFx.update(now);
     this.impacts.setQuality(this.sky.quality);
     this.impacts.update();
+    this.footprints.update();
     this.fire.setQuality(this.sky.quality);
     this.fire.update(Math.min(0.05, dt), this.sky.camera);
     this.hazards?.update(now, this.pieceFx.particles);

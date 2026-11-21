@@ -84,7 +84,7 @@ export class RecapTracker {
     if (!k && !inWater && cause) weapon = cause;
     const distance = k && !hidden && k.alive && this.lastPos ? Math.round(Math.hypot(k.pos.x - this.lastPos.x, k.pos.y - this.lastPos.y, k.pos.z - this.lastPos.z)) : null;
     const viaW = (kLast ?? lastHit)?.weapon;
-    const via = viaW === 'barrel' || viaW === 'propane' ? ` via ${viaW}` : '';
+    const via = viaW === 'barrel' || viaW === 'propane' ? ` via ${viaW}` : viaW === 'trap' ? ' via spike trap' : '';
     const title = k ? `Killed by ${k.name}${via}`
       : inWater ? 'You drowned'
       : self ? `You blew yourself up${via}`
