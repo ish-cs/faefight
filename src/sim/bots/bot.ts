@@ -1641,7 +1641,11 @@ export class Bot {
   private buyDecks(c: Ctx): Act | null {
     const me = c.me, now = c.view.now, price = PIECES.scaffold.price;
     if (me.inv.cash < price) {
-      if (me.vault.cash < price) return null;
+      if (me.vault.cash < price) {
+        // Broke (e.g. just respawned with nothing): empty my generator first (interact fires at it).
+        if (c.view.generators[c.home.index] >= price) return { ...this.goTo(c.home.generator, 1.5), sprint: true };
+        return null;
+      }
       const walk = this.goTo(c.home.vault, 1.8);
       if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > now) return walk;
       return { ...walk, vault: { withdraw: { cash: Math.min(me.vault.cash, price * 20) } } };
