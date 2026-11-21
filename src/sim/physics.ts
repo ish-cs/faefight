@@ -76,6 +76,9 @@ export class Physics {
     for (const [id, k] of this.pieceKinds) ph.pieceKinds.set(id, k);
     for (const [id, c] of this.players) ph.players.set(id, same(c));
     for (const h of this.slits) ph.slits.add(h);
+    for (const [id, y] of this.pieceBaseY) ph.pieceBaseY.set(id, y);
+    for (const h of this.anchors) ph.anchors.add(h);
+    for (const [g, z] of this.zones) ph.zones.set(g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } })));
     ph.dirty = this.dirty;
     return ph;
   }
