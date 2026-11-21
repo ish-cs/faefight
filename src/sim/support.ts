@@ -12,7 +12,8 @@ function grounded(physics: Physics, p: PieceState): boolean {
   const hx = s.w / 2 - 0.05, hz = s.d / 2 - 0.05;
   for (const local of [v3(0, 0, 0), v3(-hx, 0, -hz), v3(hx, 0, -hz), v3(-hx, 0, hz), v3(hx, 0, hz)]) {
     const w = add(p.pos, rotateY(local, p.rotY));
-    const below = physics.probeDown(w.x, p.pos.y + GROUND_EPS, w.z, 2 * GROUND_EPS);
+    // Skip the piece's own collider: the probe starts inside it and can report its own base first.
+    const below = physics.probeDown(w.x, p.pos.y + GROUND_EPS, w.z, 2 * GROUND_EPS, p.id);
     if (below?.hit.type === 'world') return true;
   }
   return false;

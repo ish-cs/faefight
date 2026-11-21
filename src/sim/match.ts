@@ -250,6 +250,7 @@ export class Match implements MatchApi {
   /** Move the potion sellers (tests/e2e, and until the map places the real one). */
   debugSetPotionShops(positions: Vec3[]): void {
     this.potionShops = potionShopsAt(positions);
+    this.physics.setPotionShops(positions);
   }
 
   debugKill(playerId: number): void {

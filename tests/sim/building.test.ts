@@ -104,36 +104,37 @@ describe('damagePiece', () => {
 });
 
 describe('forgiving placement', () => {
+  // In front of the island (fwd 2): clear of the shop/generator/vault no-build zones at fwd 6..8.
   const wall = (id: number, pos: Vec3, rotY: number): PieceState => ({ id, kind: 'wood', owner: 0, pos, rotY, hp: 250 });
   test('a wall just touching / slightly overlapping its neighbour is accepted', async () => {
     const ph = await Physics.create(map);
-    ph.addPiece(wall(1, spot(7, 2), yaw()));
+    ph.addPiece(wall(1, spot(2, 2), yaw()));
     // 2 m wide walls side by side, overlapping by 0.1 m.
-    const r = validatePlacement(ph, 'wood', spot(7, 2 + 1.9), yaw(), spot(4, 3));
+    const r = validatePlacement(ph, 'wood', spot(2, 2 + 1.9), yaw(), spot(-1, 3));
     expect(r.ok).toBe(true);
   });
   test('a rotated wall whose corner clips a neighbour is accepted', async () => {
     const ph = await Physics.create(map);
-    ph.addPiece(wall(1, spot(7, 2), yaw()));
-    const r = validatePlacement(ph, 'wood', spot(7.3, 4), yaw() + Math.PI / 6, spot(4, 3));
+    ph.addPiece(wall(1, spot(2, 2), yaw()));
+    const r = validatePlacement(ph, 'wood', spot(2.3, 4), yaw() + Math.PI / 6, spot(-1, 3));
     expect(r.ok).toBe(true);
   });
   test('a bigger overlap is nudged clear (by at most half a metre)', async () => {
     const ph = await Physics.create(map);
-    ph.addPiece(wall(1, spot(7, 2), yaw()));
-    const want = spot(7, 2 + 1.6); // overlaps 0.4 m
-    const r = validatePlacement(ph, 'wood', want, yaw(), spot(4, 3));
+    ph.addPiece(wall(1, spot(2, 2), yaw()));
+    const want = spot(2, 2 + 1.6); // overlaps 0.4 m
+    const r = validatePlacement(ph, 'wood', want, yaw(), spot(-1, 3));
     expect(r.ok).toBe(true);
     if (r.ok) expect(Math.hypot(r.pos.x - want.x, r.pos.z - want.z)).toBeLessThanOrEqual(0.51);
   });
   test('placing right on top of an existing wall is still rejected', async () => {
     const ph = await Physics.create(map);
-    ph.addPiece(wall(1, spot(7, 2), yaw()));
-    expect(validatePlacement(ph, 'wood', spot(7, 2), yaw(), spot(4, 3)).ok).toBe(false);
+    ph.addPiece(wall(1, spot(2, 2), yaw()));
+    expect(validatePlacement(ph, 'wood', spot(2, 2), yaw(), spot(-1, 3)).ok).toBe(false);
   });
   test('never places a piece inside a player', async () => {
     const ph = await Physics.create(map);
-    ph.addPlayer(2, spot(7, 3));
-    expect(validatePlacement(ph, 'wood', spot(7, 3), yaw(), spot(4, 3)).ok).toBe(false);
+    ph.addPlayer(2, spot(2, 3));
+    expect(validatePlacement(ph, 'wood', spot(2, 3), yaw(), spot(-1, 3)).ok).toBe(false);
   });
 });

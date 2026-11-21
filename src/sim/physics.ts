@@ -1,6 +1,8 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { HEAD, PIECES, PLAYER } from './constants';
+import { islandNoBuildZones, potionZone, type NoBuildZone } from './building';
 import { bunkerWallBoxes, type IslandLayout } from './map';
+import { defaultPotionShops } from './potions';
 import type { PieceState, Vec3 } from './types';
 import { v3 } from './vec';
 
@@ -37,6 +39,8 @@ export class Physics {
   private pieceKinds = new Map<number, PieceState['kind']>();
   private players = new Map<number, RAPIER.Collider>();
   private dirty = true;
+  /** No-build zones by group ('islands', 'potion'), see building.ts. */
+  private zones = new Map<string, NoBuildZone[]>();
 
   private constructor() {
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
@@ -49,6 +53,8 @@ export class Physics {
   static async create(map: IslandLayout[]): Promise<Physics> {
     await ensureInit();
     const ph = new Physics();
+    ph.setNoBuildZones('islands', map.flatMap(islandNoBuildZones));
+    ph.setPotionShops(defaultPotionShops().map((s) => s.pos));
     for (const isl of map) {
       const desc = RAPIER.ColliderDesc.cylinder(ISLAND_DEPTH / 2, isl.radius)
         .setTranslation(isl.center.x, isl.groundY - ISLAND_DEPTH / 2, isl.center.z);
@@ -72,6 +78,19 @@ export class Physics {
     if (!this.dirty) return;
     this.world.step();
     this.dirty = false;
+  }
+
+  setNoBuildZones(group: string, zones: NoBuildZone[]): void {
+    this.zones.set(group, zones);
+  }
+
+  /** Potion sellers move with the map (and tests/e2e): keep their no-build zones in step. */
+  setPotionShops(positions: Vec3[]): void {
+    this.setNoBuildZones('potion', positions.map((p) => potionZone(p)));
+  }
+
+  noBuildZones(): NoBuildZone[] {
+    return [...this.zones.values()].flat();
   }
 
   addStaticBox(center: Vec3, half: Vec3, rotY: number) {
@@ -201,10 +220,11 @@ export class Physics {
   }
 
   /** Like surfaceBelow, but also reports what was hit. */
-  probeDown(x: number, yFrom: number, z: number, maxDrop: number): { y: number; hit: HitTarget } | null {
+  probeDown(x: number, yFrom: number, z: number, maxDrop: number, ignorePiece?: number): { y: number; hit: HitTarget } | null {
     this.sync();
     const ray = new RAPIER.Ray({ x, y: yFrom, z }, { x: 0, y: -1, z: 0 });
-    const h = this.world.castRay(ray, maxDrop, false, undefined, undefined, undefined, undefined,
+    const own = ignorePiece !== undefined ? this.pieces.get(ignorePiece) : undefined;
+    const h = this.world.castRay(ray, maxDrop, false, undefined, undefined, own, undefined,
       (c) => this.entities.get(c.handle)?.type !== 'player');
     if (!h) return null;
     return { y: yFrom - h.timeOfImpact, hit: this.entities.get(h.collider.handle) ?? { type: 'world' } };

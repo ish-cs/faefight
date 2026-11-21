@@ -1,6 +1,7 @@
 import { BUILD, PIECES, PIECE_DMG_MULT, type DamageSource } from './constants';
 import type { Physics } from './physics';
 import type { PieceKind, PieceState, Vec3 } from './types';
+import type { IslandLayout } from './map';
 import { add, dist2D, rotateY, v3 } from './vec';
 
 const ROT_STEP = (BUILD.rotStepDeg * Math.PI) / 180;
@@ -77,12 +78,59 @@ function placeAt(physics: Physics, kind: PieceKind, pos: Vec3, rotY: number, pla
   }
 
   const center = v3(pos.x, restY + s.h / 2 + 0.01, pos.z);
+  const zone = physics.noBuildZones().find((z) => boxesOverlap(center, v3(s.w / 2 - 0.02, s.h / 2 - 0.02, s.d / 2 - 0.02), rotY, z));
+  if (zone) return { ok: false, reason: zone.reason };
   const strict = v3(s.w / 2 - 0.02, s.h / 2 - 0.02, s.d / 2 - 0.02);
   if (physics.overlapsBox(center, strict, rotY).some((h) => h.type === 'player')) return { ok: false, reason: 'blocked' };
   const slack = (n: number) => Math.max(0.02, n / 2 - OVERLAP_SLACK);
   const loose = v3(slack(s.w), s.h / 2 - 0.02, slack(s.d));
   if (physics.overlapsBox(center, loose, rotY).some((h) => h.type !== 'player')) return { ok: false, reason: 'blocked' };
   return { ok: true, pos: v3(pos.x, restY, pos.z) };
+}
+
+/**
+ * No-build zones: the volume of an NPC stall or station (generator, vault) plus a little clearance, so
+ * pieces can't clip through them and they stay reachable. An oriented box (Y rotation only); its base
+ * sits at `center.y - half.y`. Bunkers have none: sealing a doorway with walls is the win condition.
+ */
+export type NoBuildZone = { center: Vec3; half: Vec3; rotY: number; reason: string };
+
+/** Side clearance (m) kept free around stations and NPCs. */
+export const ZONE_CLEARANCE = 0.75;
+
+/** Box in a prop's local frame (origin at its base centre, rotated by yaw): x/z extents and height. */
+function localZone(base: Vec3, yaw: number, x0: number, x1: number, z0: number, z1: number, h: number, reason: string): NoBuildZone {
+  const c = add(base, rotateY(v3((x0 + x1) / 2, 0, (z0 + z1) / 2), yaw));
+  return { center: v3(c.x, base.y + h / 2, c.z), half: v3((x1 - x0) / 2, h / 2, (z1 - z0) / 2), rotY: yaw, reason };
+}
+
+const C = ZONE_CLEARANCE;
+/** Shopkeeper + pole + cantilevered awning (x ±1.2, z -0.3..1.7, top ~2.85 m; see client shopProp), clear 1 m above. */
+export const shopZone = (base: Vec3, yaw: number) => localZone(base, yaw, -1.2 - C, 1.2 + C, -0.3 - C, 1.7 + C, 3.85, 'too close to shop');
+/** Generator body 1.2 × 1.4 × 1.2; a piece may sit 0.6 m above it. */
+export const generatorZone = (base: Vec3, yaw: number) => localZone(base, yaw, -0.6 - C, 0.6 + C, -0.6 - C, 0.6 + C, 2.0, 'too close to generator');
+/** Vault body 1.2 × 2.0 × 1.0: sides kept clear, but pieces may rest on top of it or bridge over it. */
+export const vaultZone = (base: Vec3, yaw: number) => localZone(base, yaw, -0.6 - C, 0.6 + C, -0.5 - C, 0.5 + C, 2.02, 'too close to vault');
+/** Potion seller stall (counter x ±0.8 z 0.3..0.9, robe z ≥ -0.52, flask top ~2.7 m; see client potionSeller). */
+export const potionZone = (base: Vec3) => localZone(base, 0, -0.8 - C, 0.8 + C, -0.52 - C, 0.9 + C, 3.2, 'too close to potion seller');
+
+export const islandNoBuildZones = (isl: IslandLayout): NoBuildZone[] => {
+  const y = isl.bunker.facingYaw;
+  return [generatorZone(isl.generator, y), vaultZone(isl.vault, y), shopZone(isl.shop, y)];
+};
+
+/** Oriented box (Y rotation) vs zone: Y intervals, then 2D separating axes. */
+export function boxesOverlap(center: Vec3, half: Vec3, rotY: number, z: NoBuildZone): boolean {
+  if (Math.abs(center.y - z.center.y) >= half.y + z.half.y) return false;
+  const axes = (r: number) => [rotateY(v3(1, 0, 0), r), rotateY(v3(0, 0, 1), r)];
+  const [ax, az] = axes(rotY), [bx, bz] = axes(z.rotY);
+  const dx = z.center.x - center.x, dz = z.center.z - center.z;
+  for (const n of [ax, az, bx, bz]) {
+    const ra = Math.abs(n.x * ax.x + n.z * ax.z) * half.x + Math.abs(n.x * az.x + n.z * az.z) * half.z;
+    const rb = Math.abs(n.x * bx.x + n.z * bx.z) * z.half.x + Math.abs(n.x * bz.x + n.z * bz.z) * z.half.z;
+    if (Math.abs(n.x * dx + n.z * dz) >= ra + rb) return false;
+  }
+  return true;
 }
 
 /** Applies damage with material multipliers. Returns true if the piece is destroyed. */
