@@ -28,11 +28,14 @@ type Preset = {
   shadow: ShadowPreset;
   post: PostOptions;
 };
+/** Competitive mode's post chain overrides (see setCompetitive). */
+const COMPETITIVE_POST: Partial<PostOptions> = { samples: 2, bloom: false, ao: false, flare: false };
+
 // low: 2 small cascades over a short range; high: 3 cascades (crisp near, shorter reach than ultra);
 // ultra: 4 cascades with a long reach. GTAO + bloom on high/ultra (AO at half resolution).
 const PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, shadow: { cascades: 2, mapSize: 1024, far: 90 }, post: { samples: 4, bloom: false, ao: false } },
-  high: { pixelRatio: 1.5, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 10 }, flare: true } },
+  high: { pixelRatio: 1.25, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true } },
   ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 16 }, flare: true } },
 };
 
@@ -123,8 +126,19 @@ export class SkyLighting {
   }
   private dynScale = 1;
 
+  /**
+   * Competitive mode (Settings → Video): readable but fast on top of any preset: 1× render scale, no GTAO, bloom
+   * or lens flare, MSAA ×2. Changing it rebuilds the post chain (settings change, never mid-frame-loop governance).
+   */
+  private competitive = settings.get().video.competitive;
+  setCompetitive(on: boolean) {
+    if (on === this.competitive) return;
+    this.competitive = on;
+    this.apply();
+  }
+
   private applyPixelRatio() {
-    const base = Math.min(window.devicePixelRatio, PRESETS[this.quality].pixelRatio);
+    const base = Math.min(window.devicePixelRatio, this.competitive ? 1 : PRESETS[this.quality].pixelRatio);
     this.gpu.setPixelRatio(Math.min(2, Math.max(0.5, base * this.resScale * this.dynScale)));
   }
 
@@ -150,16 +164,20 @@ export class SkyLighting {
     }
 
     this.pipeline?.dispose();
-    const built = buildPipeline(this.gpu, this.scene, this.camera, PRESETS[this.quality].post, this.interiorAO);
+    const post = this.competitive ? { ...PRESETS[this.quality].post, ...COMPETITIVE_POST } : PRESETS[this.quality].post;
+    const built = buildPipeline(this.gpu, this.scene, this.camera, { ...post, ...this.postOverride }, this.interiorAO);
     this.pipeline = built.pipe;
     this.scenePass = built.scenePass;
     this.aoPass = built.aoPass;
     this.applyAoBudget();
   }
   private aoPass: { resolutionScale: number } | null = null;
+  /** Debug/profiling only (GPU cost bisect): post options over the preset's; rebuilds the chain (a full recompile). */
+  private postOverride: Partial<PostOptions> = {};
+  debugPost(o: Partial<PostOptions>) { this.postOverride = o; this.apply(); }
   /** GTAO budget: the governor's cheap mode renders AO at 60 % of the preset's resolution (live, no recompile). */
   private applyAoBudget() {
-    const ao = PRESETS[this.quality].post.ao;
+    const ao = this.competitive ? false : PRESETS[this.quality].post.ao;
     if (this.aoPass && ao) this.aoPass.resolutionScale = ao.resolution * (this.govAo ? 1 : 0.6);
   }
 

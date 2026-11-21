@@ -737,6 +737,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const offSettings = settings.subscribe((st) => {
     sky.setQuality(st.video.quality);
     sky.setResolutionScale(st.video.resolutionScale);
+    sky.setCompetitive(st.video.competitive);
     governor.enabled = st.video.dynamicResolution;
     perfDetail = st.video.perfDetail || DEBUG;
     if (sky.quality !== govQuality) { govQuality = sky.quality; governor.reset(); govSkip(); }
