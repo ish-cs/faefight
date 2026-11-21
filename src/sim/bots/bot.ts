@@ -654,7 +654,7 @@ export class Bot {
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
-      traps: total >= this.P.trap.rich ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
+      traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
