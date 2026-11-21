@@ -19,7 +19,7 @@ import { MatchStats } from './stats';
 import { isPlaceholderBotName, nickname } from './names';
 import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
-import type { BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
+import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { clone, dist, dist2D, forward, norm, sub, v3 } from './vec';
 
@@ -441,6 +441,7 @@ export class Match implements MatchApi {
     const { landingSpeed } = stepMove(p as PlayerState & { mv: typeof mv }, adsMoveCmd(p, cmd), DT, { movePlayer: (d) => this.physics.movePlayer(p.id, d) },
       speedMult(p, this.s.time) * adsSpeed(p));
     mv.ack = cmd.seq;
+    p.stamina = mv.stamina;
     if (landingSpeed > LIFECYCLE.safeFallSpeed)
       this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time, { bypassShield: true, weapon: 'fall' }));
   }
@@ -548,11 +549,42 @@ export class Match implements MatchApi {
       suddenDeath: this.s.suddenDeath,
       winner: this.s.winner,
       potionShops: this.potionShops,
+      brains: this.brainInfos(),
       events: this.events,
       // Totals only once there's a result: keeps the per-tick snapshot (and the network budget) unchanged.
       ...(this.s.winner !== null ? { stats: this.stats.totals(this.s.players.values(), this.s.time) } : {}),
     };
     return this.cloneSnapshots ? structuredClone(s) : s;
+  }
+
+  /** Each bot's thinking for spectators (whatever the bot exposes: the brain's debug view, else its current action). */
+  private brainInfos(): BotBrainInfo[] {
+    const out: BotBrainInfo[] = [];
+    for (const [id, brain] of this.bots) {
+      const b = brain as BotBrain & Partial<{
+        personality: { archetype: string }; difficulty: Difficulty; currentGoal: string; currentTarget: number | null;
+        planScores: { goal: string; score: number }[];
+        debug: {
+          action: string; goal: string | null; reason: string; fightOdds: number | null; thought: string; stepIndex: number; step: string;
+          target: number | null; options?: { goal: string; score: number }[];
+        };
+        currentPlan: { steps: { label: string }[]; step: number } | null;
+      }>;
+      const d = b.debug;
+      const plan = b.currentPlan ?? null;
+      const action = d?.action ?? b.currentGoal ?? 'idle';
+      out.push({
+        id, personality: b.personality?.archetype ?? 'Bot', difficulty: b.difficulty ?? 'medium', action,
+        goal: d?.goal ?? null, reason: d?.reason ?? '',
+        steps: plan ? plan.steps.map((s) => s.label) : d?.step ? [d.step] : [],
+        step: plan ? plan.step : d?.step ? 0 : -1,
+        fightOdds: d?.fightOdds ?? null,
+        target: d?.target ?? b.currentTarget ?? null,
+        options: (d?.options ?? b.planScores ?? []).slice(0, 4).map((o) => ({ goal: o.goal, score: Math.round(o.score * 100) / 100 })),
+        thought: d?.thought || `Doing: ${action}`,
+      });
+    }
+    return out;
   }
 
   private mustPlayer(id: number) {

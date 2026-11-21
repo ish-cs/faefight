@@ -2,6 +2,7 @@ import {
   CHARGE, DT, GRENADE, HEAD, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
 } from './constants';
 import { damagePiece } from './building';
+import { stressFromDamage } from './movement';
 import { bloomAfterShot, coneOffset, DEG, falloff, hash01, magCap, nextBurst, recoilKick, reloadTime, shellsLoadedBy, spreadDeg } from './gunplay';
 import type { Physics, RayHit } from './physics';
 import type { MatchEvent, PieceState, PlayerState, Projectile, Vec3 } from './types';
@@ -69,6 +70,8 @@ export function applyPlayerDamage(
   target.shield = had - shieldAmount;
   target.hp -= amount - shieldAmount;
   target.lastDamagedAt = now;
+  // Getting hurt is stressful: less stamina now and slower recovery for a while (movement.ts).
+  if (target.mv) { stressFromDamage(target.mv, amount); target.stamina = target.mv.stamina; }
   const broke = had > 0 && target.shield <= 0;
   const { bypassShield: _bypass, ...info } = opts;
   const out = [ev(now, 'hit', { target: target.id, by: attackerId, amount, shieldAmount, broke, ...info })];

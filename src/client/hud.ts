@@ -2,13 +2,15 @@ import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRENADE, LIFECYCLE, MEDKIT, PIECE
 import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
 import type { CenterIsland, IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem, isPotionItem } from '../sim/hotbar';
-import type { GunKind, HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
+import type { BotBrainInfo, GunKind, HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
 import { dist2D } from '../sim/vec';
 import { PIECE_ORDER } from './input';
+import { STAMINA } from '../sim/movement';
 import { ISLAND_COLORS, ISLAND_NAMES } from './render';
 import { endState } from './endState';
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
+import { dragOutcome } from './hotbarDrag';
 
 const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
 const LABEL: Record<string, string> = {
@@ -83,6 +85,10 @@ export type HudContext = {
   spreadPx?: number;
   reload?: number | null;
   scoped?: boolean;
+  /** Your predicted stamina (client prediction; null/absent = the snapshot's). */
+  stamina?: number | null;
+  /** Spectating: the player whose HUD to show instead of yours (null = yours). */
+  viewId?: number | null;
 };
 export type HudActions = {
   /** `bulk`: Shift+click (buy several of a building piece). */
@@ -91,6 +97,8 @@ export type HudActions = {
   select(slot: number): void;
   /** Hotbar slot dragged onto another. */
   moveSlot(from: number, to: number): void;
+  /** Hotbar slot dragged out over the game view: drop it (the sim's drop action). */
+  dropSlot?(slot: number, amount: 'one' | 'stack'): void;
   /** End-screen buttons (default: Back to menu). over = the match has a result (not just you eliminated). */
   endButtons?(over: boolean): HTMLElement[];
 };
@@ -124,6 +132,8 @@ export class Hud {
   private heal = el('div', 'heal');
   private healFill = el('div', 'heal-fill');
   private hotbarSig = '';
+  /** Items in the shown hotbar (drag-out drops). */
+  private hotbarItems: (HotbarItem | null)[] = [];
   private dragFrom: number | null = null;
   private timer = el('div', 'timer');
   private seals = el('div', 'seals');
@@ -137,6 +147,14 @@ export class Hud {
   private damage = el('div', 'damage-flash');
   private endScreen = el('div', 'end-screen');
   private fps = el('div', 'fps');
+  private stamina = el('div', 'stamina');
+  private staminaFill = el('div', 'stamina-fill');
+  private staminaText = el('div', 'stamina-text');
+  private exhausted = false;
+  /** "Spectating NAME" tag over the followed player's HUD. */
+  private watchTag = el('div', 'watch-tag');
+  private brain = el('div', 'brain-panel glass');
+  private brainSig = '';
   private panel = el('div', 'panel');
   private panelKind: 'shop' | 'potions' | 'vault' | null = null;
   private vaultCash!: HTMLInputElement;
@@ -152,7 +170,12 @@ export class Hud {
     this.speedBuff.dataset.testid = 'speed-buff';
     this.buffs.append(this.speedBuff);
     const bl = el('div', 'bl');
-    bl.append(this.buffs, this.shield, this.hp);
+    this.stamina.append(this.staminaFill, this.staminaText);
+    this.stamina.dataset.testid = 'stamina';
+    this.watchTag.dataset.testid = 'watch-tag';
+    this.brain.dataset.testid = 'brain-panel';
+    this.brain.style.display = 'none';
+    bl.append(this.watchTag, this.buffs, this.shield, this.hp, this.stamina);
     const br = el('div', 'br');
     br.append(this.weapon, this.extras);
     const tc = el('div', 'tc');
@@ -175,7 +198,7 @@ export class Hud {
     this.fps.dataset.testid = 'fps';
     this.scope.dataset.testid = 'scope';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
-      this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
+      this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel, this.brain);
     parent.append(this.root);
   }
 
@@ -200,7 +223,9 @@ export class Hud {
       const lock = el('span', 'hb-lock');
       lock.innerHTML = LOCK_ICON;
       lock.title = 'Locked: you respawn with it';
-      s.append(el('span', 'hb-key', String(i + 1)), el('span', 'hb-icon'), el('span', 'hb-name'), el('span', 'hb-count'), lock);
+      const ammo = el('span', 'hb-ammo');
+      ammo.append(el('i'));
+      s.append(el('span', 'hb-prog'), el('span', 'hb-key', String(i + 1)), el('span', 'hb-icon'), el('span', 'hb-name'), el('span', 'hb-count'), ammo, lock);
       return s;
     });
     this.hotbar.replaceChildren(...slots);
@@ -208,11 +233,34 @@ export class Hud {
       const s = t instanceof Element ? t.closest<HTMLElement>('.hb-slot') : null;
       return s ? Number(s.dataset.slot) : null;
     };
+    // Dragging out of the bar over the game view drops the item (a "Drop" tag follows the pointer).
+    const hint = el('div', 'drag-drop-hint', 'Drop');
+    hint.dataset.testid = 'drag-drop-hint';
+    this.root.append(hint);
+    const where = (x: number, y: number) => {
+      const t = document.elementFromPoint(x, y);
+      const onBar = !!t?.closest('.hotbar');
+      return { slot: slotAt(t), onBar, overGame: !!t && !onBar && !t.closest('.panel, .chat, .chat-ui, button, input, textarea, .overlay, .menu, .end-screen, .brain-panel') };
+    };
     const clearDrag = () => {
       this.dragFrom = null;
-      this.hotbar.classList.remove('dragging');
+      this.hotbar.classList.remove('dragging', 'drop-out');
+      hint.classList.remove('on');
       slots.forEach((s) => s.classList.remove('drag-src', 'drag-over'));
     };
+    window.addEventListener('pointermove', (e) => {
+      if (this.dragFrom === null) return;
+      const w = where(e.clientX, e.clientY);
+      const out = dragOutcome(this.dragFrom, w, e.shiftKey, !this.hotbarItems[this.dragFrom]).kind === 'drop';
+      this.hotbar.classList.toggle('drop-out', out);
+      hint.classList.toggle('on', out);
+      if (out) {
+        const item = this.hotbarItems[this.dragFrom];
+        setText(hint, e.shiftKey || !item || isGunItem(item) ? `Drop ${item ? SHORT[item] : ''}` : `Drop ${SHORT[item]} (all · Shift: 1)`);
+        hint.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 10}px)`;
+      }
+    });
+    window.addEventListener('keydown', (e) => { if (e.code === 'Escape' && this.dragFrom !== null) clearDrag(); });
     this.hotbar.addEventListener('pointerdown', (e) => {
       const i = slotAt(e.target);
       if (i === null || e.button !== 0) return;
@@ -229,17 +277,19 @@ export class Hud {
     window.addEventListener('pointerup', (e) => {
       const from = this.dragFrom;
       if (from === null) return;
-      const to = slotAt(document.elementFromPoint(e.clientX, e.clientY));
+      const r = dragOutcome(from, where(e.clientX, e.clientY), e.shiftKey, !this.hotbarItems[from]);
       clearDrag();
-      if (to === null) return;
-      if (to === from) this.act.select(to);
-      else this.act.moveSlot(from, to);
+      if (r.kind === 'select') this.act.select(r.slot);
+      else if (r.kind === 'move') this.act.moveSlot(r.from, r.to);
+      else if (r.kind === 'drop') this.act.dropSlot?.(r.slot, r.amount);
     });
   }
 
-  private updateHotbar(me: PlayerState, ctx: HudContext) {
+  private updateHotbar(me: PlayerState, ctx: HudContext, now: number) {
     const inv = me.inv;
     const reloading = me.reloadUntil > 0;
+    this.updateHotbarProgress(me, ctx.selected, now);
+    this.hotbarItems = me.hotbar;
     const sig = JSON.stringify([me.hotbar, { ...inv, cash: 0 }, ctx.selected, reloading, me.locked]);
     this.hotbar.classList.toggle('editing', ctx.inventory);
     this.hotbar.dataset.ghost = ctx.ghostOk === null ? 'none' : ctx.ghostOk ? 'ok' : 'blocked';
@@ -257,13 +307,117 @@ export class Hud {
       s.classList.toggle('locked', isGunItem(k) && me.locked.includes(k));
       setText(s.querySelector('.hb-name') as HTMLElement, k ? SHORT[k] : '');
       let count = '';
+      const bar = (s.querySelector('.hb-ammo i') as HTMLElement);
       if (k && isGunItem(k)) {
         const a = inv.weapons[k];
         count = a ? `${a.mag}/${a.spare}` : '';
+        // Magazine gauge: how full the mag is; amber when low, red when empty.
+        const frac = a ? Math.max(0, Math.min(1, a.mag / WEAPONS[k].mag)) : 0;
+        bar.style.width = `${Math.round(frac * 100)}%`;
+        s.dataset.ammo = !a || a.mag === 0 ? 'empty' : frac <= 0.25 ? 'low' : 'ok';
         s.classList.toggle('reloading', reloading && i === ctx.selected);
-      } else if (k) count = String(countOf(inv, k));
+      } else {
+        if (k) count = String(countOf(inv, k));
+        s.classList.remove('reloading');
+        delete s.dataset.ammo;
+      }
+      s.classList.toggle('stack', !!k && !isGunItem(k));
       setText(s.querySelector('.hb-count') as HTMLElement, count);
     });
+  }
+
+  /**
+   * Live progress overlays (fill rising from the bottom of the slot): reload on the gun in hand,
+   * medkit use, potion drinking.
+   */
+  private updateHotbarProgress(me: PlayerState, selected: number, now: number) {
+    let slot = -1, p = 0;
+    if (me.alive && me.reloadUntil > 0 && me.reloadSec > 0) {
+      slot = selected; p = 1 - (me.reloadUntil - now) / me.reloadSec;
+    } else if (me.alive && me.healAt != null) {
+      slot = me.hotbar.indexOf('medkit'); p = 1 - (me.healAt - now) / MEDKIT.useSec;
+    } else if (me.alive && me.drinking) {
+      slot = me.hotbar.indexOf(me.drinking.kind); if (slot < 0) slot = selected;
+      p = 1 - (me.drinking.doneAt - now) / POTIONS[me.drinking.kind].useSec;
+    }
+    p = Math.max(0, Math.min(1, p));
+    Array.from(this.hotbar.children).forEach((node, i) => {
+      const s = node as HTMLElement;
+      const on = i === slot;
+      s.classList.toggle('busy', on);
+      const bar = s.firstChild as HTMLElement;
+      const h = on ? `${Math.round(p * 100)}%` : '0%';
+      if (bar.style.height !== h) bar.style.height = h;
+    });
+  }
+
+  /** Slim stamina bar under HP: calm teal → stressed red (pulsing when low); EXHAUSTED once run dry until back over 30. */
+  private updateStamina(v: number, alive: boolean) {
+    const s = Math.max(0, Math.min(STAMINA.max, alive ? v : STAMINA.max));
+    if (s <= 0.5) this.exhausted = true;
+    else if (s >= STAMINA.recoverAt) this.exhausted = false;
+    const w = `${((100 * s) / STAMINA.max).toFixed(1)}%`;
+    if (this.staminaFill.style.width !== w) this.staminaFill.style.width = w;
+    // Hue: 170 (calm teal) at full → 0 (red) at empty.
+    const hue = Math.round(170 * Math.pow(s / STAMINA.max, 0.8));
+    this.stamina.style.setProperty('--sta-hue', String(hue));
+    this.stamina.classList.toggle('low', s < STAMINA.recoverAt);
+    this.stamina.classList.toggle('critical', s < STAMINA.startMin);
+    this.stamina.classList.toggle('exhausted', this.exhausted);
+    this.stamina.classList.toggle('full', s >= STAMINA.max - 0.5);
+    setText(this.staminaText, this.exhausted ? 'EXHAUSTED' : '');
+  }
+
+  /** Spectating a bot: what it's thinking (bot.debug via the snapshot's `brains`). */
+  private updateBrain(b: BotBrainInfo | null, snap: Snapshot) {
+    this.brain.style.display = b ? '' : 'none';
+    if (!b) { this.brainSig = ''; return; }
+    const sig = JSON.stringify(b);
+    if (sig === this.brainSig) return;
+    this.brainSig = sig;
+    const name = (id: number | null) => (id === null ? null : snap.players.find((p) => p.id === id)?.name ?? `#${id}`);
+    const head = el('div', 'bb-head');
+    head.append(el('span', 'bb-title', 'BOT BRAIN'), el('span', 'bb-tag', b.personality), el('span', `bb-tag diff-${b.difficulty}`, b.difficulty.toUpperCase()));
+    const goal = el('div', 'bb-goal');
+    goal.dataset.testid = 'brain-goal';
+    goal.append(el('span', 'bb-label', 'Goal'), el('span', 'bb-goal-name', (b.goal ?? b.action).toUpperCase()));
+    const target = name(b.target);
+    if (target) goal.append(el('span', 'bb-target', `→ ${target}`));
+    const parts: HTMLElement[] = [head, goal];
+    if (b.reason) parts.push(el('div', 'bb-reason', `because ${b.reason}`));
+    if (b.steps.length) {
+      const ol = el('ol', 'bb-steps');
+      b.steps.forEach((s, i) => ol.append(el('li', i < b.step ? 'done' : i === b.step ? 'cur' : '', s)));
+      parts.push(ol);
+    }
+    if (b.fightOdds !== null) {
+      const odds = el('div', 'bb-odds');
+      const bar = el('div', 'bb-odds-bar');
+      const fill = el('i');
+      fill.style.width = `${Math.round(b.fightOdds * 100)}%`;
+      bar.append(fill);
+      odds.append(el('span', 'bb-label', 'Fight odds'), bar, el('span', 'bb-odds-val', `${Math.round(b.fightOdds * 100)}%`));
+      parts.push(odds);
+    }
+    if (b.options.length) {
+      const opts = el('div', 'bb-opts');
+      opts.append(el('div', 'bb-label', 'Why: top options'));
+      const top = Math.max(1e-6, ...b.options.map((o) => o.score));
+      for (const o of b.options) {
+        const row = el('div', `bb-opt${o.goal === (b.goal ?? b.action) ? ' chosen' : ''}`);
+        const bar = el('div', 'bb-opt-bar');
+        const fill = el('i');
+        fill.style.width = `${Math.max(4, Math.round((100 * Math.max(0, o.score)) / top))}%`;
+        bar.append(fill);
+        row.append(el('span', 'bb-opt-name', o.goal), bar, el('span', 'bb-opt-val', o.score.toFixed(2)));
+        opts.append(row);
+      }
+      parts.push(opts);
+    }
+    const thought = el('div', 'bb-thought', `“${b.thought}”`);
+    thought.dataset.testid = 'brain-thought';
+    parts.push(thought);
+    this.brain.replaceChildren(...parts);
   }
 
   /** Blue shield bar over the health bar (4 × 25 segments), plus the speed-buff timer. */
@@ -306,10 +460,17 @@ export class Hud {
   update(snap: Snapshot, ctx: HudContext) {
     this.snap = snap;
     const found = snap.players.find((p) => p.id === this.humanId) ?? null;
-    // After /spectate mid-match our old player is bot-driven: it's not "us" any more, so no player widgets.
-    const me = found && !found.isBot ? found : null;
-    this.me = me;
-    // No player of our own (spectating host): player widgets hidden, match info and the end screen still live.
+    // After /spectate mid-match our old player is bot-driven: it's not "us" any more, so no player widgets of our own.
+    const own = found && !found.isBot ? found : null;
+    this.me = own;
+    // Spectating someone: their HUD (hp, shield, stamina, cash, hotbar, gun, crosshair) as if you were them.
+    const followed = ctx.viewId != null && ctx.viewId !== this.humanId ? snap.players.find((p) => p.id === ctx.viewId) ?? null : null;
+    const me = followed ?? own;
+    const watching = !!followed;
+    this.root.classList.toggle('watching', watching);
+    this.updateBrain(watching ? snap.brains?.find((b) => b.id === followed!.id) ?? null : null, snap);
+    // No player of our own and nobody followed (spectating host in free fly): player widgets hidden,
+    // match info and the end screen still live.
     this.root.classList.toggle('no-player', !me);
     if (!me) {
       this.center.style.display = 'none';
@@ -322,6 +483,7 @@ export class Hud {
       this.tickFeed();
       return;
     }
+    if (watching) ctx = { ...ctx, selected: me.selected, ghostOk: null, buildNote: null, inventory: false };
     const inv = me.inv;
 
     this.hpFill.style.width = `${Math.max(0, me.hp)}%`;
@@ -329,6 +491,8 @@ export class Hud {
     setText(this.hpText, `${Math.ceil(me.hp)}`);
     this.updateShield(me, snap);
     setText(this.cash, `$${inv.cash}`);
+    this.updateStamina(watching ? me.stamina : ctx.stamina ?? me.stamina, me.alive);
+    setText(this.watchTag, watching ? `${me.isBot ? 'BOT · ' : ''}${me.name}` : '');
 
     // Generator stored: shown for whichever generator you're near (yours, or theirs to steal).
     const near = snap.generators
@@ -342,8 +506,8 @@ export class Hud {
       setText(this.gen, `${near.g.island === me.island ? 'Your generator' : `${ISLAND_NAMES[near.g.island % 8]} generator`}  $${Math.floor(near.g.stored)} · Lv${lv}`);
     }
 
-    const station = this.nearStation();
-    const promptText = isPieceItem(me.hotbar[ctx.selected]) ? '' :
+    const station = watching ? null : this.nearStation();
+    const promptText = watching ? '' : isPieceItem(me.hotbar[ctx.selected]) ? '' :
       station === 'shop' ? 'E  Shop' : station === 'potions' ? 'E  Potion seller' : station === 'vault' ? 'E  Vault' :
       station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` :
       station === 'gold' ? `E  Collect $${Math.floor(snap.center?.gold ?? 0)}` :
@@ -362,7 +526,7 @@ export class Hud {
     setText(this.extras, reloading ? 'Reloading…' : '');
     this.extras.style.display = reloading ? '' : 'none';
 
-    this.updateHotbar(me, ctx);
+    this.updateHotbar(me, ctx, snap.time);
     const healing = me.alive && me.healAt != null;
     this.heal.style.display = healing ? '' : 'none';
     if (healing) this.healFill.style.width = `${Math.round(100 * Math.min(1, Math.max(0, 1 - (me.healAt! - snap.time) / MEDKIT.useSec)))}%`;
@@ -381,7 +545,22 @@ export class Hud {
     this.reloadRing.style.display = rl === null ? 'none' : '';
     if (rl !== null) this.reloadRing.style.setProperty('--p', `${Math.round(rl * 360)}deg`);
 
-    this.updateMatchInfo(snap, me.island);
+    this.updateMatchInfo(snap, own ? own.island : -1);
+    if (!own) {
+      // Spectating host following someone: no player of our own, so no banners/end of our own.
+      this.center.style.display = 'none';
+      this.sealedBanner.style.display = 'none';
+      const end = endState(snap.winner, 0, false, snap.players);
+      if (end) this.showEnd(snap, end);
+      this.tickFeed();
+      return;
+    }
+    this.updateOwn(snap, own, watching ? null : buildKind, ctx);
+  }
+
+  /** Banners and messages about your own player (respawn countdown, sealed bunker, build hint, end screen). */
+  private updateOwn(snap: Snapshot, me: PlayerState, buildKind: PieceKind | null, ctx: HudContext) {
+    const inv = me.inv;
     const ownSealed = !!snap.sealed[me.island];
     const trapped = me.alive && me.breakoutUntil != null;
     setText(this.sealedBanner, trapped

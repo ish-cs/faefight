@@ -8,6 +8,7 @@ import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
 import { PotionSellers } from './world/potionSeller';
+import { LootView } from './lootView';
 
 export { pieceGeometry };
 import { ISLAND_COLORS } from './colors';
@@ -44,7 +45,8 @@ export class Renderer {
   private lastFrame = performance.now();
   /** Animated player avatars (src/client/characters). */
   readonly characters = new CharacterSystem(this.scene, (island) => ISLAND_COLORS[island % 8]);
-  private loot = new Map<number, THREE.Mesh>();
+  /** Loot on the ground drawn as its items, with labels nearby (lootView.ts). */
+  readonly lootView = new LootView(this.scene);
   private potionSellers = new PotionSellers(this.scene);
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
   private fx: Fx[] = [];
@@ -59,8 +61,6 @@ export class Renderer {
   private ghostTmp2 = new THREE.Vector3();
   private ghostWhite = new THREE.Color(0xffffff);
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
-  private lootGeo = new THREE.SphereGeometry(0.28, 16, 10).scale(1, 0.8, 1);
-  private lootMat = new THREE.MeshStandardNodeMaterial({ color: 0x8b5a2b, roughness: 0.9 });
   /** Level pips above each island's generator (lit = reached), by island. */
   private genPips: THREE.Mesh[][] = [];
   private pipGeo = new THREE.BoxGeometry(0.18, 0.18, 0.18);
@@ -232,19 +232,7 @@ export class Renderer {
   }
 
   private syncLoot(snap: Snapshot) {
-    const seen = new Set<number>();
-    for (const l of snap.loot) {
-      seen.add(l.id);
-      let m = this.loot.get(l.id);
-      if (!m) {
-        m = new THREE.Mesh(this.lootGeo, this.lootMat);
-        m.castShadow = true;
-        this.scene.add(m);
-        this.loot.set(l.id, m);
-      }
-      m.position.set(l.pos.x, l.pos.y + 0.3, l.pos.z);
-    }
-    for (const [id, m] of this.loot) if (!seen.has(id)) { this.scene.remove(m); this.loot.delete(id); }
+    this.lootView.sync(snap.loot);
   }
 
   /** Display-rate motion of a player: predicted for the local player, else interpolated at the render clock. */
@@ -345,7 +333,8 @@ export class Renderer {
     const snap = this.curr;
     if (snap) {
       this.characters.sync(snap.players, this.humanId, localYaw, snap.time, this.motionOf, snap.hidden);
-      for (const m of this.loot.values()) m.rotation.y += 1.2 * dt;
+      // Labels within reach of the player (predicted feet when playing, else the camera).
+      this.lootView.frame(dt, now / 1000, this.local?.pos ?? this.camera.position, this.camera);
     }
 
     for (let i = this.fx.length - 1; i >= 0; i--) {
