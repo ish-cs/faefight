@@ -260,7 +260,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
           sink.snapshot(m.snap);
           session?.onSnapshot(m.snap);
           if (session) syncWatch();
-          // Vs bot: quick chat (ours and the bots') shows as chat lines here; online the host session relays it.
+          // Vs bot: quick chat (ours; bots never chat) shows as chat lines here; online the host session relays it.
           if (!session) for (const l of quipLines(m.snap.events, m.snap.players)) sink.chat(l.from, l.text);
         } else if (m.type === 'brains') {
           const mine = localWatch === null ? undefined : m.digests.find((d) => d.id === localWatch);

@@ -2,9 +2,9 @@ import { describe, expect, test } from 'vitest';
 import { Match } from '../../src/sim/match';
 import {
   DEFAULT_WHEEL, EMOTES, QUIP_SHOW_SEC, WHEEL_COOLDOWN_SEC, WHEEL_DEADZONE_PX, WHEEL_IDS, WheelLimiter,
-  emoteEnd, isWheelId, quipLines, wheelSlot,
+  emoteEnd, isQuipId, isWheelId, quipLines, wheelSlot,
 } from '../../src/sim/emotes';
-import { Banter, BANTER } from '../../src/sim/bots/banter';
+import { Banter } from '../../src/sim/bots/banter';
 import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type MatchEvent, type PlayerInput, type PlayerState } from '../../src/sim/types';
 import { v3 } from '../../src/sim/vec';
@@ -172,37 +172,15 @@ describe('bot banter', () => {
   }));
   const ev = (type: MatchEvent['type'], data: Record<string, unknown>, t = 0): MatchEvent => ({ t, type, data });
 
-  test('match end: some bots say GG, staggered, once', () => {
-    const b = new Banter(() => 0.1);
+  test('bots never chat: even fights, match end, every dice roll firing', () => {
+    const b = new Banter(() => 0); // any chance-gated line would fire
     const ps = players(8);
+    ps.get(1)!.hp = 1; // every kill by p1 is an even fight
     const due: { id: number; what: string }[] = [];
-    due.push(...b.onTick([ev('win', { winner: 3 })], ps, 100));
-    for (let t = 100; t < 110; t += 1 / 30) due.push(...b.onTick([ev('win', { winner: 3 })], ps, t));
-    expect(due.filter((d) => d.what === 'gg').length).toBe(8);
-    expect(due.find((d) => d.id === 3 && d.what !== 'gg')).toBeTruthy(); // the winner celebrates
-    expect(new Set(due.map((d) => `${d.id}:${d.what}`)).size).toBe(due.length); // nothing twice
-  });
-
-  test('mid-match: rare, only after an even fight, and never spammy', () => {
-    let seed = 7;
-    const rng = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-    const b = new Banter(rng);
-    const ps = players(8);
-    const hurt = ps.get(1)!;
-    hurt.hp = 30;
-    let lines = 0;
-    // A kill every 2 s for 10 minutes, every one of them an even fight.
-    for (let t = 0; t < 600; t += 1 / 30) {
-      const kill = Math.abs(t % 2) < 1 / 60 ? [ev('kill', { killer: 1, victim: 2 + Math.floor(t) % 7 })] : [];
-      lines += b.onTick(kill, ps, t).length;
-    }
-    expect(lines).toBeGreaterThan(0);
-    expect(lines).toBeLessThanOrEqual(600 / BANTER.quietSec);
-    // A one-sided kill (killer healthy) never triggers anything.
-    const calm = new Banter(() => 0);
-    hurt.hp = 100;
-    expect(calm.onTick([ev('kill', { killer: 1, victim: 2 })], ps, 1)).toEqual([]);
-    for (let t = 1; t < 5; t += 0.1) expect(calm.onTick([], ps, t)).toEqual([]);
+    for (let t = 0; t < 30; t += 1 / 30) due.push(...b.onTick([ev('kill', { killer: 1, victim: 2 + (Math.floor(t) % 7) })], ps, t));
+    for (let t = 30; t < 40; t += 1 / 30) due.push(...b.onTick([ev('win', { winner: 3 })], ps, t));
+    expect(due.filter((d) => isQuipId(d.what))).toEqual([]);
+    expect(due).toEqual([{ id: 3, what: 'wave' }]); // only the bot winner's one emote, once
   });
 
   test('humans never get banter', () => {
@@ -213,15 +191,17 @@ describe('bot banter', () => {
     expect(out).toEqual([]);
   });
 
-  test('two minutes of an 6-bot match stay quiet', async () => {
+  test('two minutes of a 6-bot match: no chat line, no speech bubble', async () => {
     const m = await Match.create({ players: Array.from({ length: 6 }, () => ({ name: 'Bot (hard)', isBot: true, difficulty: 'hard' as const })), seed: 3 });
-    const lines: string[] = [];
+    let lines = 0;
+    let bubbles = 0;
     for (let i = 0; i < 30 * 120; i++) {
       const s = m.tick(new Map());
-      for (const l of quipLines(s.events, s.players)) lines.push(l.text);
+      lines += quipLines(s.events, s.players).length;
+      bubbles += s.players.filter((p) => p.quip).length;
     }
-    expect(lines.length).toBeLessThanOrEqual(120 / BANTER.quietSec);
-    expect(lines.every((t) => ['GG', 'Nice shot!'].includes(t))).toBe(true);
+    expect(lines).toBe(0);
+    expect(bubbles).toBe(0);
   }, 120_000);
 });
 
