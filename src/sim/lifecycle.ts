@@ -57,7 +57,7 @@ const ev = (t: number, type: MatchEvent['type'], data: Record<string, unknown>):
 const PARKED = v3(0, -1000, 0);
 
 const isEmpty = (inv: Inventory) =>
-  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 && Object.values(inv.potions).every((n) => !n) &&
+  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 && !inv.traps && Object.values(inv.potions).every((n) => !n) &&
   Object.keys(inv.weapons).length === 0 && Object.values(inv.pieces).every((n) => !n);
 
 /**

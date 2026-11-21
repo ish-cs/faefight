@@ -65,8 +65,8 @@ export function feedEntries(events: readonly MatchEvent[], ctx: FeedCtx): FeedEn
       // The sim names world causes (the storm ring, a lightning strike); a plain drowning is water.
       if (d.cause === 'storm' || d.cause === 'lightning') { markers.push(d.cause); weapon = null; }
       else if (d.inWater === true) { markers.push('water'); weapon = null; }
-      const via = d.via === 'barrel' || d.via === 'propane' ? d.via : undefined;
-      if (via && !markers.includes('explosion')) markers.push('explosion');
+      const via = d.via === 'barrel' || d.via === 'propane' ? d.via : d.via === 'trap' ? 'spike trap' : undefined;
+      if (via && via !== 'spike trap' && !markers.includes('explosion')) markers.push('explosion');
       if (self && !weapon && !markers.length) markers.push('explosion');
       out.push({
         kind: 'kill', killer, victim, weapon, markers, ...(via ? { via } : {}),

@@ -7,9 +7,11 @@ import { islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, typ
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
+import { Docks, overDock } from './docks';
 import { Hazards, isExplosive, type HazardHost } from './hazards';
 import { HAZARD } from './constants';
 import { Fire, fireZones, type FireCtx } from './fire';
+import { Traps, validateTrap } from './traps';
 import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
@@ -75,9 +77,13 @@ export class Match implements MatchApi {
   private cosmetics: Cosmetics;
   /** Explosive barrels / propane tanks and lootable crates (hazards.ts). */
   private hazards: Hazards;
+  /** Wooden pier sections explosions break (docks.ts). */
+  private docks: Docks;
   /** Bound to ctx: rebuilt by rebind(), never saved. */
   private hazardHost!: HazardHost;
   private hazardSeed: number;
+  /** Spike traps players placed (traps.ts). */
+  private traps = new Traps();
   /** Burning pieces and ground fires (sim/fire.ts). */
   private fire: Fire;
   private fireCtx: FireCtx;
@@ -120,6 +126,7 @@ export class Match implements MatchApi {
     islandOf.forEach((isl, i) => { def.colors![isl] = teams[i] === undefined ? picked[i] : TEAM_COLORS[teams[i]!]; });
     this.cosmetics = new Cosmetics(def.cosmetics);
     this.hazards = new Hazards(def.hazards);
+    this.docks = new Docks(def.docks ?? []);
     this.hazardSeed = setup.seed ?? 1;
     this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
     this.potionShops = potionShopsAt([def.center.potionShop]);
@@ -201,11 +208,18 @@ export class Match implements MatchApi {
         // Only environment causes go on the kill event (death recap / feed); weapon kills are told by the killer.
         const env = killer === null && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
         // A barrel / tank someone set off: the feed says "X via barrel".
-        const via = cause === 'barrel' || cause === 'propane' ? cause : undefined;
+        const via = cause === 'barrel' || cause === 'propane' || cause === 'trap' ? cause : undefined;
         this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env, via));
       },
-      castHazard: (o, d, max) => this.hazards.ray(o, d, max),
-      hitHazard: (id, amount, source, by, now, at) => this.hazards.damage(this.hazardHost, id, amount, source, by, now, at),
+      // Spike traps ride the hazard hooks with negative ids (bullets and fists stop at the nearer of the two).
+      castHazard: (o, d, max) => {
+        const h = this.hazards.ray(o, d, max);
+        const t = this.traps.ray(o, d, h ? h.dist : max);
+        return t ? { id: -t.id, dist: t.dist } : h;
+      },
+      hitHazard: (id, amount, source, by, now, at) => (id < 0
+        ? this.traps.damage(-id, amount, by, now)
+        : this.hazards.damage(this.hazardHost, id, amount, source, by, now, at)),
     };
   }
 
@@ -286,6 +300,9 @@ export class Match implements MatchApi {
     this.events.push(...tickExplosives(this.ctx, now));
     this.events.push(...this.hazards.onExplosions(this.hazardHost, this.events, now));
     this.events.push(...this.hazards.tick(this.hazardHost, now));
+    this.events.push(...this.traps.onExplosions(this.events, now));
+    this.events.push(...this.traps.tick(this.ctx, now));
+    this.breakDocks(now);
     this.fire.onEvents(this.events, now, this.fireCtx);
     this.events.push(...this.fire.tick(now, this.s.waterY, this.fireCtx, !!this.s.storm));
     this.collapseUnsupported(now);
@@ -364,6 +381,18 @@ export class Match implements MatchApi {
   }
 
   /** Pieces left with nothing holding them up fall apart (no floating bridges or walls). */
+  /** Pier sections this tick's explosions broke: open water there, anything built on them falls, loot sinks. */
+  private breakDocks(now: number) {
+    const out = this.docks.onEvents(this.events, now);
+    for (const e of out) {
+      const d = this.docks.defs.find((x) => x.id === e.data.id)!;
+      this.physics.removeDock(d.id);
+      this.supportDirty = true;
+      for (const [id, b] of this.s.loot) if (overDock(d, b.pos, 0.3) && Math.abs(b.pos.y - (d.center.y + d.half.y)) < 0.6) this.s.loot.delete(id);
+    }
+    this.events.push(...out);
+  }
+
   private collapseUnsupported(now: number) {
     if (!this.supportDirty) return;
     this.supportDirty = false;
@@ -381,6 +410,11 @@ export class Match implements MatchApi {
     this.events.push(...applyPlayerDamage(this.ctx, this.mustPlayer(playerId), amount, null, this.s.time));
   }
 
+  /** Top surface under (x, z), or null over open water (tests/debug). */
+  debugGroundAt(x: number, z: number): number | null {
+    return this.physics.isGroundAt(x, z);
+  }
+
   /** Hazard state (tests/debug/e2e). */
   debugHazards() {
     return this.hazards.list.map((h) => ({ id: h.def.id, kind: h.def.kind, pos: clone(h.pos), hp: h.hp, st: h.st, by: h.by }));
@@ -389,6 +423,16 @@ export class Match implements MatchApi {
   /** Damage a hazard as if `by` shot it (tests/e2e). */
   debugDamageHazard(id: number, amount: number, by: number | null = null, source: 'bullet' | 'explosive' = 'bullet'): void {
     this.events.push(...this.hazards.damage(this.hazardHost, id, amount, source, by, this.s.time, undefined));
+  }
+
+  /** Spike traps standing (tests/debug). */
+  debugTraps() {
+    return this.traps.list.map((t) => ({ ...t, pos: clone(t.pos) }));
+  }
+
+  /** Damage a spike trap as if `by` shot it (tests/e2e). */
+  debugDamageTrap(id: number, amount: number, by: number | null = null): void {
+    this.events.push(...this.traps.damage(id, amount, by, this.s.time));
   }
 
   /** Every kill so far (tests/debug). */
@@ -578,6 +622,7 @@ export class Match implements MatchApi {
     }
     if (input.throwGrenade) throwGrenade(this.ctx, p, now);
     if (input.placeCharge) placeCharge(this.ctx, p, now);
+    if (input.trap) this.events.push(...this.traps.place(this.physics, p, input.trap, now, () => this.s.nextId++));
     if (input.useMedkit) startMedkit(p, now);
     if (input.drink) startDrink(p, now);
     const queued = this.queuedBuild.get(p.id);
@@ -763,6 +808,7 @@ export class Match implements MatchApi {
       hazards: this.hazards.list.filter((h) => h.st !== 2 && dist(h.pos, eye) <= SIGHT_RANGE).map((h) => ({
         id: h.def.id, kind: h.def.kind, pos: clone(h.pos), center: this.hazards.center(h), radius: isExplosive(h.def.kind) ? HAZARD[h.def.kind].radius : 0, fusing: h.st === 1,
       })),
+      docks: this.docks.standing(),
       clearShot: (to) => {
         const d = dist(eye, to);
         const dir = norm(sub(to, eye));
@@ -778,6 +824,8 @@ export class Match implements MatchApi {
       potionShops: this.potionShops.map((sh) => clone(sh.pos)),
       groundAt: (x, z) => this.physics.isGroundAt(x, z),
       canPlace: (kind, pos, rotY) => validatePlacement(this.physics, kind, pos, rotY, self.pos),
+      traps: this.traps.list.filter((t) => dist(t.pos, eye) <= SIGHT_RANGE).map(({ on: _on, ...t }) => ({ ...t, pos: clone(t.pos) })),
+      canTrap: (req, from) => validateTrap(this.physics, req, from ?? self.pos, this.traps.list),
     };
   }
 
@@ -809,6 +857,7 @@ export class Match implements MatchApi {
 
   private snapshot(): Snapshot {
     const hz = this.hazards.net();
+    const traps = this.traps.net();
     const s: Snapshot = {
       time: this.s.time,
       tick: this.tickNo,
@@ -820,7 +869,10 @@ export class Match implements MatchApi {
       generators: this.s.generators,
       center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       broken: this.cosmetics.broken,
+      ...(this.docks.broken.length ? { docks: this.docks.broken } : {}),
+      ...(this.docks.hurt.length ? { dockHurt: this.docks.hurt } : {}),
       ...(hz ? { hz } : {}),
+      ...(traps ? { traps } : {}),
       genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,

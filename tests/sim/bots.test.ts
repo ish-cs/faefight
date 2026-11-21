@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { Bot } from '../../src/sim/bots/bot';
 import { AIM, angleBetween, lookAt } from '../../src/sim/bots/aim';
+import { GUN_SKILL, PARAM_RANGES } from '../../src/sim/bots/params';
 import { lane, laneAt } from '../../src/sim/bots/nav';
 import { plugSpot } from '../../src/sim/bots/plans';
 import type { BotView, OtherStatus } from '../../src/sim/bots/view';
@@ -201,6 +202,55 @@ describe('Bot aim', () => {
     expect(hard).toBeLessThan(easy);
     expect(pro).toBeLessThan(hard);
     expect(easy).toBeLessThan((10 * Math.PI) / 180);
+  });
+});
+
+describe('Bot gun handling (recoil: params.ts gunSkill)', () => {
+  /** Rifle duel `range` m out; the test plays the sim's fire clock (rps) and returns the shot times. */
+  const shots = (difficulty: Difficulty, range: number, sec: number) => {
+    const self = newPlayer(0, 'bot', true, 0, onIsland(0, 0, 0));
+    self.inv.weapons.rifle = { mag: 999, spare: 0 };
+    self.equipped = 'rifle';
+    const enemy = newPlayer(1, 'foe', false, 1, onIsland(0, range, 0));
+    const exact = lookAt(eyePos(self), v3(enemy.pos.x, enemy.pos.y + 1.2, enemy.pos.z));
+    self.yaw = exact.yaw; self.pitch = exact.pitch;
+    self.pos = { ...self.pos };
+    const view = makeView(self, { enemies: [enemy] });
+    const bot = new Bot(0, difficulty, mulberry32(7));
+    const out: number[] = [];
+    let nextFireAt = 0;
+    const t0 = view.now;
+    for (let k = 0; k < sec * TICK_HZ; k++) {
+      view.now = t0 + k * DT;
+      const inp = bot.think(view);
+      self.yaw = inp.yaw; self.pitch = inp.pitch;
+      if (inp.fire && view.now >= nextFireAt) { out.push(view.now); self.lastShotAt = view.now; nextFireAt = view.now + 1 / WEAPONS.rifle.rps; }
+    }
+    return out;
+  };
+  /** Longest run of back-to-back shots (no gap past one fire interval + a tick). */
+  const longestRun = (ts: number[]) => {
+    let best = ts.length ? 1 : 0, run = 1;
+    for (let i = 1; i < ts.length; i++) { run = ts[i] - ts[i - 1] <= 1 / WEAPONS.rifle.rps + DT + 1e-6 ? run + 1 : 1; best = Math.max(best, run); }
+    return best;
+  };
+  test('PRO bursts at range (short runs with pauses) but goes full auto up close', () => {
+    const far = shots('pro', 28, 4);
+    expect(far.length).toBeGreaterThan(6);
+    expect(longestRun(far)).toBeLessThanOrEqual(GUN_SKILL.pro.burstShots);
+    const close = shots('pro', 8, 4);
+    expect(longestRun(close)).toBeGreaterThan(GUN_SKILL.pro.burstShots * 2);
+  });
+  test('easy sprays at any range', () => {
+    expect(longestRun(shots('easy', 28, 4))).toBeGreaterThan(GUN_SKILL.easy.burstShots > 20 ? 8 : 0);
+  });
+  test('better players control recoil harder; every skill is human, none perfect but PRO near it', () => {
+    const c = (d: Difficulty) => GUN_SKILL[d].recoilComp;
+    expect(c('easy')).toBeLessThan(c('medium'));
+    expect(c('medium')).toBeLessThan(c('hard'));
+    expect(c('hard')).toBeLessThan(c('pro'));
+    expect(c('pro')).toBeLessThan(1);
+    for (const d of ['medium', 'hard', 'pro'] as Difficulty[]) expect(PARAM_RANGES[`gunSkill.${d}.burstShots`]).toBeDefined();
   });
 });
 

@@ -13,7 +13,7 @@
 import { LIFECYCLE, PIECES } from './constants';
 import { SETTING_RANGES } from './settings';
 import { countOf, equippedFor, heldKinds, isHotbarItem, HOTBAR_SIZE, validSlot } from './hotbar';
-import { buildMap, bunkerWallBoxes, type Box, type IslandLayout } from './map';
+import { buildMapDef, bunkerWallBoxes, type Box, type DockDef, type IslandLayout } from './map';
 import { PROP_HALF } from './physics';
 import { isSealed } from './seal';
 import { sealBlocker, sidesLeft } from './teams';
@@ -75,6 +75,8 @@ type StuckWindow = { since: number; x: number; z: number };
 export class InvariantChecker {
   readonly violations: Violation[] = [];
   private map: IslandLayout[] | null;
+  /** Pier sections of the map (standing ones support pieces like the ground). */
+  private docks: DockDef[];
   private readonly stuckSec: number;
   private readonly maxMatchSec: number;
   private readonly maxPerKind: number;
@@ -92,8 +94,9 @@ export class InvariantChecker {
   private winChecked = false;
   private found: Violation[] = [];
 
-  constructor(opts: { map?: IslandLayout[]; stuckSec?: number; maxMatchSec?: number; maxPerKind?: number } = {}) {
+  constructor(opts: { map?: IslandLayout[]; docks?: DockDef[]; stuckSec?: number; maxMatchSec?: number; maxPerKind?: number } = {}) {
     this.map = opts.map ?? null;
+    this.docks = opts.docks ?? [];
     this.stuckSec = opts.stuckSec ?? STUCK_SEC;
     this.maxMatchSec = opts.maxMatchSec ?? DEFAULT_MAX_MATCH_SEC;
     this.maxPerKind = opts.maxPerKind ?? DEFAULT_MAX_PER_KIND;
@@ -106,7 +109,11 @@ export class InvariantChecker {
     const hidden = new Set(snap.hidden ?? []);
     const visible = snap.players.filter((p) => !hidden.has(p.id));
     const fullSnapshot = snap.hidden === undefined;
-    if (!this.map && snap.players.length >= 2 && snap.players.length <= 8) this.map = buildMap(snap.players.length);
+    if (!this.map && snap.players.length >= 2 && snap.players.length <= 8) {
+      const def = buildMapDef(snap.players.length);
+      this.map = def.islands;
+      this.docks = def.docks ?? [];
+    }
 
     this.checkNonFinite(snap, visible, seen);
     this.checkNegative(snap, visible, seen);
@@ -336,7 +343,8 @@ export class InvariantChecker {
     const { ids } = this.floatCheck;
     this.floatCheck = null;
     const seen = new Set<string>();
-    for (const id of floatingPieces(map, snap.pieces)) {
+    const broken = new Set(snap.docks ?? []);
+    for (const id of floatingPieces(map, snap.pieces, this.docks.filter((d) => !broken.has(d.id)))) {
       if (!ids.has(id)) continue; // placed after the collapse pass ran: validated by placement, not support
       const pc = snap.pieces.find((p) => p.id === id)!;
       this.record(snap, `floatingPiece:${id}`, {
@@ -353,7 +361,7 @@ export class InvariantChecker {
 /** Every count in an inventory as [path, value] (gun mag/spare included). */
 function inventoryCounts(inv: Inventory): [string, number][] {
   const out: [string, number][] = [
-    ['cash', inv.cash], ['grenades', inv.grenades], ['charges', inv.charges], ['medkits', inv.medkits],
+    ['cash', inv.cash], ['grenades', inv.grenades], ['charges', inv.charges], ['medkits', inv.medkits], ['traps', inv.traps],
   ];
   for (const [k, n] of Object.entries(inv.pieces ?? {})) if (n !== undefined) out.push([`pieces.${k}`, n]);
   for (const [k, n] of Object.entries(inv.potions ?? {})) if (n !== undefined) out.push([`potions.${k}`, n]);
@@ -372,9 +380,10 @@ const ISLAND_DEPTH = 12;
 
 type Obb = { cx: number; cz: number; hx: number; hz: number; rotY: number; y0: number; y1: number };
 
-function worldBoxes(map: IslandLayout[]): Obb[] {
+function worldBoxes(map: IslandLayout[], docks: readonly Box[]): Obb[] {
   const out: Obb[] = [];
   const push = (b: Box) => out.push({ cx: b.center.x, cz: b.center.z, hx: b.half.x, hz: b.half.z, rotY: b.rotY, y0: b.center.y - b.half.y, y1: b.center.y + b.half.y });
+  for (const d of docks) push(d); // standing pier sections
   for (const isl of map) {
     for (const b of bunkerWallBoxes(isl.bunker)) push(b);
     for (const key of ['generator', 'vault', 'shop'] as const) {
@@ -416,8 +425,8 @@ const pieceBox = (p: PieceState, pad: number): Obb => {
  * - touching: boxes overlap after growing the query piece by TOUCH_EPS (+ slack); ramps use their full box,
  *   a superset of their wedge collider.
  */
-export function floatingPieces(map: IslandLayout[], pieces: PieceState[]): number[] {
-  const boxes = worldBoxes(map);
+export function floatingPieces(map: IslandLayout[], pieces: PieceState[], docks: readonly Box[] = []): number[] {
+  const boxes = worldBoxes(map, docks);
   const band = GROUND_EPS + SLACK;
   const grounded = (p: PieceState) => {
     const s = PIECES[p.kind];

@@ -204,6 +204,8 @@ export class BrainInspector {
     stat('Cash', `$${s.cash}`); stat('Vault', `$${s.vault}`); stat('Gear', `$${s.inv}`);
     stat('Stress', s.stress > 0 ? `${s.stress.toFixed(1)} s` : 'calm'); stat('Aim error', `${s.aimErr.toFixed(1)}°`);
     stat('Reaction', `${s.react.toFixed(2)} s${s.reactLeft > 0 ? ` (${s.reactLeft.toFixed(2)} left)` : ''}`);
+    stat('Recoil control', `${Math.round(s.comp * 100)}%`);
+    stat('Burst', s.spray === null ? 'full auto' : s.rest > 0 ? `resting ${s.rest.toFixed(2)} s` : `${s.burst[0]}/${s.burst[1]} past ${s.spray} m`);
     const traits = el('div', 'bx-traits');
     TRAIT_KEYS.forEach((k, i) => {
       const t = el('div', 'bx-trait');

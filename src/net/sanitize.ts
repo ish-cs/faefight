@@ -1,7 +1,7 @@
 import type { MoveCmd } from '../sim/movement';
 import { PIECES, WEAPONS } from '../sim/constants';
 import { POTION_KINDS, validSlot } from '../sim/hotbar';
-import type { BuildRequest, GunKind, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
+import type { BuildRequest, GunKind, Inventory, PieceKind, PlayerInput, ShopItem, TrapRequest, VaultAction, Vec3, WeaponKind } from '../sim/types';
 import { clampSettings, isColor, type GameSettings } from '../sim/settings';
 import { CHAT_MAX_LEN, type ClientMsg, type ViewExtras } from './protocol';
 import { isWheelId } from '../sim/emotes';
@@ -19,7 +19,7 @@ const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 const WEAPON_KINDS = Object.keys(WEAPONS) as WeaponKind[];
 const GUN_KINDS = WEAPON_KINDS.filter((k): k is GunKind => k !== 'fists');
 const SHOP_ITEMS: ShopItem[] = [
-  ...PIECE_KINDS, ...GUN_KINDS, 'ammo', 'grenade', 'charge', 'medkit', ...POTION_KINDS,
+  ...PIECE_KINDS, ...GUN_KINDS, 'ammo', 'grenade', 'charge', 'medkit', 'trap', ...POTION_KINDS,
   'genUpgrade', ...GUN_KINDS.map((g) => `lock:${g}` as const),
 ];
 const oneOf = <T extends string>(list: readonly T[], x: unknown): T | null => (list.includes(x as T) ? (x as T) : null);
@@ -56,10 +56,17 @@ function buildReq(x: unknown): BuildRequest | null {
   return { kind, pos, rotY: x.rotY, free: bool(x.free) };
 }
 
+function trapReq(x: unknown): TrapRequest | undefined {
+  if (!isObj(x)) return undefined;
+  const pos = vec(x.pos);
+  if (!pos || typeof x.rotY !== 'number' || !Number.isFinite(x.rotY)) return undefined;
+  return { pos, rotY: x.rotY, wall: bool(x.wall) };
+}
+
 function partialInv(x: unknown): Partial<Inventory> | null {
   if (!isObj(x)) return null;
   const out: Partial<Inventory> = {};
-  for (const k of ['cash', 'grenades', 'charges', 'medkits'] as const) {
+  for (const k of ['cash', 'grenades', 'charges', 'medkits', 'traps'] as const) {
     if (x[k] === undefined) continue;
     const n = count(x[k]);
     if (n === null) return null;
@@ -135,6 +142,7 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     drink: bool(x.drink),
     ...(x.view === 0 || x.view === 1 ? { view: x.view } : {}),
     ...(typeof x.viewT === 'number' && Number.isFinite(x.viewT) ? { viewT: x.viewT } : {}),
+    ...(x.trap != null && trapReq(x.trap) ? { trap: trapReq(x.trap) } : {}),
   };
 }
 

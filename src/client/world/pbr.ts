@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { applyWet } from './wetness';
 import { abs, float, luminance, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3, normalWorld } from 'three/tsl';
 
 /**
@@ -218,6 +219,8 @@ export type PbrOpts = {
   triplanar?: number;
   side?: THREE.Side;
   aoStrength?: number;
+  /** standing puddles on its flat parts when it rains (wetness.ts) */
+  puddles?: boolean;
 };
 
 /** MeshStandardNodeMaterial from a PBR set (vertexColors on: per-part tint keeps working). */
@@ -246,4 +249,6 @@ export function applyPbr(m: THREE.MeshStandardNodeMaterial, s: PbrSample, o: Pbr
   m.roughnessNode = max(float(0.04), s.arm.g.mul(o.roughMul ?? 1).add(o.roughAdd ?? 0)).min(1);
   m.metalnessNode = o.metalness !== undefined ? float(o.metalness) : s.arm.b;
   m.aoNode = mix(float(1), s.arm.r, o.aoStrength ?? 1);
+  // rain: metal and paint darken less than porous stone / wood
+  applyWet(m, { porosity: o.metalness !== undefined ? 1 - o.metalness * 0.8 : 0.85, puddles: o.puddles });
 }

@@ -41,7 +41,7 @@ Pick a map and a bot difficulty on the menu, then click the game to capture the 
 - **Container Yard**: smaller islands 26 m apart, with fixed container stacks as cover and high ground.
 - **Random**: a different map than the last one, every match.
 
-Every map has a neutral **center island**, reachable only by bridging to it. Anyone can use its stations: a gold generator (twice the normal rate, up to $1000, first come first served), a supply generator (free sandbags, and now and then a steel plate), a shield well (stand in it to refill shield up to 50) and the potion seller. Built-in cover (containers, concrete barriers) can't be destroyed; barrels, crates, fences, palms, lamps and bollards break when shot or blown up.
+Every map has a neutral **center island**, reachable only by bridging to it. Anyone can use its stations: a gold generator (twice the normal rate, up to $1000, first come first served), a supply generator (free sandbags, and now and then a steel plate), a shield well (stand in it to refill shield up to 50) and the potion seller. Built-in cover (containers, concrete barriers) can't be destroyed; barrels, crates, fences, palms, lamps and bollards break when shot or blown up. Each player island has a wooden pier running out toward the island in front of it (a head start on that bridge); rockets, grenades, charges and exploding barrels blow its 2 m sections out, dropping whoever stands there into the sea. Bots do it too, and deck over a blown-out gap when they push.
 
 Every bunker wall has narrow firing slits at chest height: you can shoot and see through them, but nobody (and no grenade or rocket) gets through, and they never count as a way out for sealing.
 

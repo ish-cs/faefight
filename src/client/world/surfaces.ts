@@ -75,6 +75,8 @@ export class SurfaceMap {
       }
     }
     if (harbor) for (const b of harborCraneBoxes(def.islands)) this.boxes.push({ ...b, surface: 'metal' });
+    // Pier decks: planks (a broken section's water is below the box, so shots there never land in it).
+    for (const d of def.docks ?? []) this.boxes.push({ center: d.center, half: d.half, rotY: d.rotY, surface: 'wood' });
   }
 
   /** Ground surface of the island under (x, z), or null when not over an island top. */

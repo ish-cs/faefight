@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { AIM, Aim, wrapAngle, type Angles } from '../../src/sim/bots/aim';
 import { aimStats, type AimSample } from '../../src/sim/bots/aimStats';
-import { AIM_PARAMS } from '../../src/sim/bots/params';
-import { DT } from '../../src/sim/constants';
+import { AIM_PARAMS, GUN_SKILL } from '../../src/sim/bots/params';
+import { DT, WEAPONS } from '../../src/sim/constants';
 import { Match } from '../../src/sim/match';
 import { mulberry32 } from '../../src/sim/rng';
 import type { Difficulty } from '../../src/sim/types';
@@ -12,7 +12,7 @@ const DEG = Math.PI / 180;
 
 describe('bot aim hand (Aim.look)', () => {
   test.each(TIERS)('%s: a 90° flick eases in, stays under the speed/acceleration caps and settles', (d) => {
-    const aim = new Aim(AIM[d], mulberry32(1), AIM_PARAMS.feel[d]);
+    const aim = new Aim({ ...AIM[d], recoilComp: GUN_SKILL[d].recoilComp }, mulberry32(1), AIM_PARAMS.feel[d]);
     const want: Angles = { yaw: Math.PI / 2, pitch: 0 };
     let cur: Angles = { yaw: 0, pitch: 0 }, prevV = 0, peak = 0;
     const settleBy = d === 'pro' || d === 'hard' ? 0.5 : 1.2;
@@ -31,7 +31,7 @@ describe('bot aim hand (Aim.look)', () => {
   });
 
   test('aim error drifts smoothly (low-frequency), not tick-to-tick noise', () => {
-    const aim = new Aim(AIM.hard, mulberry32(7), AIM_PARAMS.feel.hard);
+    const aim = new Aim({ ...AIM.hard, recoilComp: GUN_SKILL.hard.recoilComp }, mulberry32(7), AIM_PARAMS.feel.hard);
     const eye = { x: 0, y: 1.6, z: 0 }, target = { x: 0, y: 1.6, z: -20 };
     let cur: Angles = { yaw: 0, pitch: 0 };
     const offs: number[] = [];
@@ -50,6 +50,13 @@ describe('bot aim hand (Aim.look)', () => {
     expect(flips / (offs.length * DT)).toBeLessThan(6); // white noise would flip ~15 times a second
   });
 });
+
+/**
+ * The sim adds a gun's recoil kick on top of the hand's move in the tick a shot goes out, so the snapshot view can
+ * exceed the hand's cap by one kick. Bound (°/s) for the biggest single kick of any gun (recoilKick's maxima).
+ */
+const MAX_KICK_DPS = Math.max(...Object.values(WEAPONS).map(({ recoil: r }) =>
+  Math.hypot(r.up * (1 + r.upGrow * 10) * 1.1, Math.abs(r.sideBias) + r.side))) / DT;
 
 /** 8-bot mixed FFA: each player's view per tick. */
 async function viewTracks(seed: number, secs: number) {
@@ -79,7 +86,9 @@ describe('bot view in a match (spectating feels human)', () => {
       expect(s.reversalsPerSec, msg).toBeLessThan(0.15);
       expect(s.flickBacksPerSec, msg).toBeLessThan(0.03);
       expect(s.spikesPerSec, msg).toBeLessThan(0.03);
-      expect(s.max, msg).toBeLessThanOrEqual(Math.max(AIM[d].maxTurn, 8) / DEG + 1); // never faster than a hand (or the walk turn)
+      // Never faster than a hand (or the walk turn), plus at most one recoil kick in that tick.
+      expect(s.p99, msg).toBeLessThanOrEqual(Math.max(AIM[d].maxTurn, 8) / DEG + 1);
+      expect(s.max, msg).toBeLessThanOrEqual(Math.max(AIM[d].maxTurn, 8) / DEG + MAX_KICK_DPS + 1);
     }
   }, 120_000);
 

@@ -6,7 +6,8 @@ import { bodyMaterial } from './characters/charMaterials';
 import { handGeometry } from './characters/hands';
 import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import {
-  adsFov, angleDelta, approach, bobOffset, bobRate, idleSway, PUNCH_SCALE, recoilKick, reloadClock, reloadPose, toggleMode, type CameraMode,
+  adsFov, angleDelta, approach, blastShake, bobOffset, bobRate, cameraBob, heavyHit, HIT_STOP, hitStopScale, idleSway, PUNCH_SCALE, recoilKick,
+  reloadClock, reloadPose, toggleMode, type CameraMode,
 } from './firstPerson';
 import { activeKeymap, bindingLabel, isAction } from './keymap';
 import { settings } from './settings/store';
@@ -47,6 +48,9 @@ const VM_KICK: Record<WeaponKind, { back: number; climb: number }> = {
 
 const v3 = (a: [number, number, number]) => new THREE.Vector3(...a);
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _qi = new THREE.Quaternion();
+const _bob = { x: 0, y: 0, roll: 0 }, _sway = { x: 0, y: 0 }, _cbob = { x: 0, y: 0, roll: 0 };
+/** Hit-stop zoom punch (fraction of the view) at full screen-shake intensity. */
+const HIT_ZOOM = 0.03;
 
 /** Gripped cylinder per gun, in the grip frame: the pistol grip (right hand) and where the support hand holds. */
 const GRIPS: Record<Exclude<WeaponKind, 'fists'>, { tilt: number; left: { center: V; axis: V; radius: number; palm: V; wrist: V; thumbWrap?: boolean } }> = {
@@ -154,6 +158,16 @@ export class FirstPersonView {
   private punch = 0;
   private punchVel = 0;
   private shakeT = 0;
+  // Hit-stop (visual only): seconds left / length / strength; `vnow` is the visual clock (ms) it slows.
+  private stopLeft = 0;
+  private stopDur = 0;
+  private stopK = 0;
+  private timeScale = 1;
+  private vnow = 0;
+  private zoomSet = 1;
+  // Camera bob (first person, own or spectated).
+  private camPhase = 0;
+  private camBobK = 0;
 
   constructor(private renderer: Renderer, private enabled: () => boolean) {
     this.scene.add(this.cam);
@@ -218,20 +232,53 @@ export class FirstPersonView {
     if (this.adsK < 1e-3) this.adsK = 0;
   }
 
-  /** Visual shake (both camera modes): `amp` rad of jitter that settles; `kick` rad of upward punch. */
+  /**
+   * Visual shake (both camera modes): `amp` rad of jitter that settles, scaled by Settings → Screen shake;
+   * `kick` rad of upward recoil punch (weapon feel, not scaled).
+   */
   shake(amp: number, kick = 0) {
-    this.shakeAmp = Math.min(0.05, this.shakeAmp + amp);
+    this.shakeAmp = Math.min(0.05, this.shakeAmp + amp * settings.get().gameplay.screenShake);
     this.punchVel += kick * 30;
   }
 
-  /** Add the camera shake/punch to the world camera. Call after the aim ray was taken, before rendering. */
-  applyShake(dt: number) {
+  /** Hit-stop: `sec` of near-frozen camera / viewmodel animation (never the sim, input or look). Off at 0% shake. */
+  hitStop(sec: number) {
+    const k = settings.get().gameplay.screenShake;
+    if (k <= 0 || sec <= this.stopLeft) return;
+    this.stopLeft = this.stopDur = sec;
+    this.stopK = k * (sec / HIT_STOP.kill);
+  }
+
+  /**
+   * Add the visual camera motion to the world camera: recoil punch, shake, hit-stop zoom and (first person,
+   * `bobSpeed` ≥ 0 = the viewed player's ground speed) camera bob. Call after the aim ray was taken, before
+   * rendering: none of it moves the aim. Everything is added on top of a camera pose set fresh each frame.
+   */
+  applyShake(dt: number, bobSpeed = -1) {
     const cam = this.renderer.camera;
+    this.timeScale = hitStopScale(this.stopLeft, this.stopDur);
+    this.stopLeft = Math.max(0, this.stopLeft - dt);
+    const sdt = dt * this.timeScale; // visual time: slowed during a hit-stop
+    this.vnow += sdt * 1000;
+    // Hit-stop zoom: a small punch in that eases out with it.
+    const zoom = this.stopLeft > 0 ? 1 + HIT_ZOOM * this.stopK * (this.stopLeft / this.stopDur) : 1;
+    if (zoom !== this.zoomSet) { this.zoomSet = zoom; cam.zoom = zoom; cam.updateProjectionMatrix(); }
+    // Camera bob: position + roll only, so the screen centre (the aim) doesn't move.
+    const bobOn = bobSpeed >= 0 && settings.get().gameplay.cameraBob;
+    this.camBobK += ((bobOn ? Math.min(1, bobSpeed / PLAYER.walk) : 0) - this.camBobK) * approach(8, sdt);
+    if (this.camBobK > 1e-3) {
+      this.camPhase += bobRate(Math.max(0, bobSpeed)) * sdt;
+      const b = cameraBob(this.camPhase, Math.max(0, bobSpeed), _cbob);
+      const k = this.camBobK * (1 - this.adsK * 0.8);
+      cam.translateX(b.x * k);
+      cam.translateY(b.y * k);
+      cam.rotation.z += b.roll * k;
+    }
     // Punch: a critically damped spring back to rest.
-    this.punchVel += (-this.punch * 260 - this.punchVel * 2 * Math.sqrt(260)) * dt;
-    this.punch += this.punchVel * dt;
-    this.shakeT += dt;
-    this.shakeAmp *= Math.exp(-9 * dt);
+    this.punchVel += (-this.punch * 260 - this.punchVel * 2 * Math.sqrt(260)) * sdt;
+    this.punch += this.punchVel * sdt;
+    this.shakeT += sdt;
+    this.shakeAmp *= Math.exp(-9 * sdt);
     if (this.shakeAmp < 1e-4 && Math.abs(this.punch) < 1e-5) return;
     const a = this.shakeAmp, t = this.shakeT * 37;
     cam.rotation.x += this.punch + Math.sin(t * 1.3) * a;
@@ -257,20 +304,26 @@ export class FirstPersonView {
     return out;
   }
 
+  /**
+   * Camera feel from match events, for the player whose view we show (`humanId`: us, or whoever we spectate):
+   * blasts near them, damage they take, their shots (punch + shake), and a hit-stop on their kills and heavy hits.
+   */
   onEvents(events: MatchEvent[], humanId: number, myPos: Vec3 | null) {
     for (const e of events) {
       if (e.type === 'explosion' && myPos) {
         const p = e.data.pos as Vec3;
-        const d = Math.hypot(p.x - myPos.x, p.y - myPos.y, p.z - myPos.z);
-        if (d < 30) this.shake(0.03 * Math.max(0, 1 - d / 30) ** 2 * (e.data.kind === 'grenade' ? 0.7 : 1));
+        const s = blastShake(Math.hypot(p.x - myPos.x, p.y - myPos.y, p.z - myPos.z), e.data.kind === 'grenade');
+        if (s > 0) this.shake(s);
       }
       if (e.type === 'hit' && e.data.target === humanId) this.shake(0.004 + Math.min(0.01, Number(e.data.amount) / 4000));
+      if (e.type === 'hit' && e.data.by === humanId && e.data.target !== humanId && heavyHit(Number(e.data.amount), e.data.part)) this.hitStop(HIT_STOP.heavy);
+      if (e.type === 'kill' && e.data.killer === humanId && e.data.victim !== humanId) this.hitStop(HIT_STOP.kill);
       if (e.type !== 'shot' || e.data.by !== humanId || e.data.echo) continue; // echo: kicked when predicted
       const weapon = (e.data.weapon as WeaponKind) ?? 'pistol';
       this.kickKind = weapon;
       const s = PUNCH_SCALE[weapon] ?? 1;
       this.shake(0.0012 * s, 0.006 * s * (this.adsK > 0.5 ? 0.6 : 1));
-      this.shotAt = performance.now();
+      this.shotAt = this.vnow;
       this.punchSide = this.punchSide === 1 ? -1 : 1;
       if (this.rig?.flash) {
         this.rig.flash.rotation.z = Math.random() * Math.PI;
@@ -306,33 +359,34 @@ export class FirstPersonView {
   render(me: PlayerState | undefined, yaw: number, pitch: number, dt: number, vel?: Vec3, simNow = 0) {
     if (this.warmFrames > 0) { this.warmFrames--; this.drawWarm(); return; }
     if (!this.active || !me) return;
-    const now = performance.now();
+    const now = this.vnow; // visual clock: holds still during a hit-stop
     this.setWeapon(me.equipped, me.island);
     const rig = this.rig!;
-    this.t += dt;
+    const adt = dt * this.timeScale; // animation time (look velocity below still uses the real dt)
+    this.t += adt;
 
     // Walk / run bob, faded in with speed and suppressed in the air.
     const v = vel ?? me.vel;
     const speed = Math.hypot(v.x, v.z);
     const grounded = Math.abs(v.y) < 0.8;
-    this.moveK += ((grounded ? Math.min(1, speed / PLAYER.walk) : 0) - this.moveK) * approach(8, dt);
-    this.phase += bobRate(speed) * dt;
-    const bob = bobOffset(this.phase, speed);
-    const sway = idleSway(this.t);
+    this.moveK += ((grounded ? Math.min(1, speed / PLAYER.walk) : 0) - this.moveK) * approach(8, adt);
+    this.phase += bobRate(speed) * adt;
+    const bob = bobOffset(this.phase, speed, _bob);
+    const sway = idleSway(this.t, _sway);
 
     // Turn lag: the weapon trails the view a little, springing back.
     const yawVel = angleDelta(yaw, this.lastYaw) / Math.max(dt, 1e-3);
     const pitchVel = (pitch - this.lastPitch) / Math.max(dt, 1e-3);
     this.lastYaw = yaw; this.lastPitch = pitch;
     const clampV = (v: number) => THREE.MathUtils.clamp(v, -6, 6);
-    this.lagYaw += (clampV(yawVel) - this.lagYaw) * approach(LAG_RATE, dt);
-    this.lagPitch += (clampV(pitchVel) - this.lagPitch) * approach(LAG_RATE, dt);
+    this.lagYaw += (clampV(yawVel) - this.lagYaw) * approach(LAG_RATE, adt);
+    this.lagPitch += (clampV(pitchVel) - this.lagPitch) * approach(LAG_RATE, adt);
 
     // Reload: the sim's clock drives a per-gun choreography (mag out / in, rack, shells, rocket).
     const clock = reloadClock(me, simNow);
     const pose = clock ? reloadPose(me.equipped, clock.elapsed, clock.duration, clock.magStart, clock.beats) : null;
-    this.dip += ((pose ? pose.tilt : 0) - this.dip) * approach(14, dt);
-    this.raise += (1 - this.raise) * approach(RAISE_RATE, dt);
+    this.dip += ((pose ? pose.tilt : 0) - this.dip) * approach(14, adt);
+    this.raise += (1 - this.raise) * approach(RAISE_RATE, adt);
     if (rig.mag && rig.magHome) {
       const empty = me.equipped === 'rocket' && !pose && (me.inv.weapons.rocket?.mag ?? 0) === 0;
       rig.mag.position.copy(rig.magHome);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyInventory } from '../../src/sim/economy';
-import { buildMap } from '../../src/sim/map';
+import { buildMap, buildMapDef } from '../../src/sim/map';
 import type { MatchEvent, MatchEventType, PieceState, PlayerState, Snapshot, Vec3 } from '../../src/sim/types';
 import { occlusion, pieceSurface, shoreDistance, SoundDirector, surfaceAt, type Cue } from '../../src/client/audio/events';
 import {
@@ -249,6 +249,13 @@ describe('surfaces', () => {
     expect(surfaceAt(at(map[0].radius - 2), [], map)).toBe('sand');
     expect(surfaceAt(map[0].bunker.center, [], map)).toBe('concrete');
     expect(shoreDistance(at(0), map)).toBeCloseTo(map[0].radius);
+  });
+  it('pier planks: wood while the section stands, nothing of the sort once it broke', () => {
+    const docks = buildMapDef(2).docks!;
+    const d = docks[1];
+    const on = { x: d.center.x, y: d.center.y + d.half.y, z: d.center.z };
+    expect(surfaceAt(on, [], map, docks)).toBe('wood');
+    expect(surfaceAt(on, [], map, docks, [d.id])).not.toBe('wood');
   });
   it('standing on a piece: its material (rotated footprint)', () => {
     const p0 = at(10, 10);
