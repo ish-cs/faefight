@@ -45,7 +45,7 @@ import { Scoreboard } from './scoreboard';
 import { applyDocumentSettings } from './settings/apply';
 import { openSettings } from './settings/panel';
 import { settings } from './settings/store';
-import { VerticalSmoother } from './interp';
+import { LookSmoother, VerticalSmoother } from './interp';
 import type { Predictor } from './predict';
 import { MAX_CMDS_PER_MSG } from '../net/sanitize';
 import { SealAnnouncer } from './announce';
@@ -1800,6 +1800,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const feet = new THREE.Vector3();
   const aimDir = new THREE.Vector3();
   const specMotion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  /** Watched player's view, lightly smoothed (spectator camera only; our own camera never goes through it). */
+  const specLook = new LookSmoother();
   const viewMotion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
   let lastFollow: number | null = null;
   const specCam = new SpectatorCamera();
@@ -1961,7 +1963,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const kc = bodyCam.active(fid, now / 1000) ? { victim: bodyCam.victim!, killer: bodyCam.killer } : null;
       spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId: replay ? 0 : humanId, players: snap!.players,
         posOf: (id, out) => renderer.playerPos(id, out),
-        lookOf: (id) => renderer.playerMotion(id, specMotion), firstPerson: fp, killcam: kc, hold: holdId });
+        lookOf: (id) => { const m = renderer.playerMotion(id, specMotion); return m && specLook.update(id, m.yaw, m.pitch, dt); },
+        firstPerson: fp, killcam: kc, hold: holdId });
       // A human's build ghost and open shop / vault, as they see them.
       const fv = spectator.following !== null && !snap!.players.find((p) => p.id === spectator.following)?.isBot ? backend.viewOf?.(spectator.following) ?? null : null;
       const g = kc ? null : fv?.ghost ?? null;
