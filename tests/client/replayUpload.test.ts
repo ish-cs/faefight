@@ -41,6 +41,22 @@ describe('ReplayUploader', () => {
     expect(posts.length).toBe(2);
   });
 
+  it('settled() waits for queued uploads (leaving a match), bounded by a timeout', async () => {
+    const { d, posts } = deps([]);
+    let go: () => void = () => {};
+    const u = new ReplayUploader(d, '/api/replays', () => new Promise<void>((r) => { go = r; }));
+    expect(await u.settled(10)).toBeUndefined(); // nothing queued
+    void u.share(bytes, { id: 's0', unfinished: true, duration: 61 });
+    const t0 = Date.now();
+    await u.settled(30); // the upload is stuck waiting for idle: gives up after the timeout
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(25);
+    expect(posts.length).toBe(0);
+    const s = u.settled(5000);
+    go();
+    await s;
+    expect(posts.length).toBe(1);
+  });
+
   it('a rejected upload (4xx) is not retried and never throws', async () => {
     const { d, posts } = deps([422]);
     const u = new ReplayUploader(d, '/api/replays', now);

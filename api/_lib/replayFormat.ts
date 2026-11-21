@@ -4,7 +4,8 @@
  * Recorder; the trainer does the full decode when it consumes the file.
  */
 export const REPLAY_MAGIC = 'FAER';
-export const REPLAY_VERSIONS = new Set([1]);
+/** 1: whole matches; 2: adds match id / segment / start checkpoint (src/sim/replay/format.ts READ_FORMATS). */
+export const REPLAY_VERSIONS = new Set([1, 2]);
 const MIN_BYTES = 16;
 
 export function validateReplay(bytes: Uint8Array): string | null {

@@ -9,7 +9,9 @@ import type { BuildRequest, Difficulty, Inventory, PieceKind, PlayerInput, Vec3 
  * out-of-band operations), plus analytics that don't need a re-run (event log, per-second summaries).
  * Bots need nothing: they're seeded from the match rng and see only sim state.
  */
-export const REPLAY_FORMAT = 1;
+export const REPLAY_FORMAT = 2;
+/** Formats this build decodes (1: no segments; read as segment 0 of its own match, starting at tick 0). */
+export const READ_FORMATS: readonly number[] = [1, 2];
 /** Ticks between state hashes and per-second summaries. */
 export const HASH_EVERY = 30;
 
@@ -19,12 +21,25 @@ export type ReplayHeader = {
   format: number;
   /** Unique id (also the storage key). */
   id: string;
+  /**
+   * The match this recording is part of. A host migration splits a match into segments, each recorded
+   * (and uploaded) by the machine hosting it then; all share the matchId of segment 0 (= its id).
+   */
+  matchId: string;
+  /** 0 = recorded from the start of the match; k > 0 = recorded by the k-th migration's new host. */
+  segment: number;
+  /**
+   * Sim tick the recording starts after (0 = a fresh match from `setup`). > 0: the replay carries the
+   * match checkpoint it starts from (Replay.checkpoint). Stitching: segment k supersedes the earlier
+   * segments from its startTick on (the old host may have run a little past it before it left).
+   */
+  startTick: number;
   kind: ReplayKind;
   /** ms since epoch when recording started. */
   recordedAt: number;
   /** Code version that recorded it (replays only re-run exactly on the same sim + bot code). */
   build: string;
-  /** Exactly what Match.create got, seed filled in. */
+  /** Exactly what Match.create got, seed filled in (a later segment repeats segment 0's). */
   setup: MatchSetup & { seed: number };
   /** The recording machine's own player (0 = none, e.g. self-play). */
   localId: number;
@@ -83,14 +98,28 @@ export type SecondSummary = { t: number; tick: number; p: (number | string)[][];
 export type Replay = {
   header: ReplayHeader;
   footer: ReplayFooter;
-  /** ticks[i] = inputs for tick i + 1 (only humans; empty for all-bot ticks). */
+  /** ticks[i] = inputs for tick startTick + i + 1 (only humans; empty for all-bot ticks). */
   ticks: TickInput[][];
+  /** `tick` = ticks of this recording already run (0 = before its first tick). */
   ops: { tick: number; op: ReplayOp }[];
-  /** stateHash of the snapshot after tick (k + 1) * HASH_EVERY. */
+  /** stateHash of the k-th snapshot whose tick is a multiple of HASH_EVERY (after startTick). */
   hashes: number[];
   events: LogEvent[];
   seconds: SecondSummary[];
+  /** Raw match checkpoint (net/matchCheckpoint.ts saveMatch) the recording starts from; null when startTick = 0. */
+  checkpoint: Uint8Array | null;
 };
+
+/** What the next host needs to continue a recording after a host migration (travels in the checkpoint's SessionMeta). */
+export type RecordingLink = { matchId: string; segment: number; setup: MatchSetup & { seed: number } };
+
+/** Is `v` a well-formed RecordingLink (it comes off the network)? */
+export function isRecordingLink(v: unknown): v is RecordingLink {
+  const l = v as RecordingLink | null;
+  return !!l && typeof l === 'object' && typeof l.matchId === 'string' && /^[0-9a-z_-]{1,64}$/i.test(l.matchId)
+    && Number.isInteger(l.segment) && l.segment >= 0 && l.segment < 1000
+    && !!l.setup && typeof l.setup === 'object' && Array.isArray(l.setup.players) && typeof l.setup.seed === 'number';
+}
 
 const CHATTY = /chat/i;
 
@@ -112,6 +141,9 @@ export type ReplayMeta = {
   id: string;
   recordedAt: number;
   kind: ReplayKind;
+  /** Header matchId / segment (absent on rows stored before segments existed). */
+  matchId?: string;
+  segment?: number;
   players: { id: number; name: string; isBot: boolean }[];
   localId: number;
   mapName: string;
@@ -128,6 +160,8 @@ export function metaOf(r: Pick<Replay, 'header' | 'footer'>, size: number): Repl
     id: r.header.id,
     recordedAt: r.header.recordedAt,
     kind: r.header.kind,
+    matchId: r.header.matchId,
+    segment: r.header.segment,
     players: r.header.players.map(({ id, name, isBot }) => ({ id, name, isBot })),
     localId: r.header.localId,
     mapName,

@@ -1,3 +1,4 @@
+import { loadMatch } from '../../net/matchCheckpoint';
 import { Match, type MatchOptions } from '../match';
 import type { MoveCmd } from '../movement';
 import type { PlayerInput, Snapshot } from '../types';
@@ -31,7 +32,9 @@ export type RunnerOpts = {
 };
 
 /**
- * Re-runs a replay: the recorded inputs and ops go into a fresh Match tick by tick. Seeking backwards
+ * Re-runs a replay: the recorded inputs and ops go into a fresh Match (or, for a segment recorded after a
+ * host migration, the match restored from the replay's checkpoint) tick by tick. `tick`, `length` and
+ * seek() count this recording's ticks; the sim's own tick is startTick + that. Seeking backwards
  * restarts from the nearest checkpoint (a Match.fork taken on the way) instead of from the start.
  * Recorded state hashes are checked as it goes: `divergedAt` is the first tick that didn't match
  * (different sim/bot code than the recording, or a determinism bug).
@@ -56,9 +59,17 @@ export class ReplayRunner {
   }
 
   static async create(replay: Replay, opts: RunnerOpts = {}): Promise<ReplayRunner> {
-    const m = await Match.create(replay.header.setup, opts.makeBot ? { makeBot: opts.makeBot } : undefined);
+    let m: Match;
+    if (replay.checkpoint) {
+      m = await loadMatch(replay.checkpoint);
+      if (m.tickCount !== replay.header.startTick) throw new Error(`ReplayRunner: checkpoint is at tick ${m.tickCount}, the replay starts at ${replay.header.startTick}`);
+      if (opts.makeBot) (m as unknown as { makeBot: MatchOptions['makeBot'] }).makeBot = opts.makeBot;
+    } else m = await Match.create(replay.header.setup, opts.makeBot ? { makeBot: opts.makeBot } : undefined);
     return new ReplayRunner(replay, m, opts);
   }
+
+  /** Sim tick the recording starts after (0 unless it starts from a checkpoint). */
+  get startTick() { return this.replay.header.startTick; }
 
   get length() { return this.replay.ticks.length; }
   get done() { return this.tick >= this.length; }
@@ -78,7 +89,7 @@ export class ReplayRunner {
     this.tick++;
     this.last = snap;
     if (snap.tick % HASH_EVERY === 0 && this.divergedAt === null) {
-      const want = this.replay.hashes[snap.tick / HASH_EVERY - 1];
+      const want = this.replay.hashes[snap.tick / HASH_EVERY - 1 - Math.floor(this.startTick / HASH_EVERY)];
       if (want !== undefined && want !== stateHash(snap)) {
         this.divergedAt = snap.tick;
         console.warn(`[replay] diverged from the recording at tick ${snap.tick} (recorded on build ${this.replay.header.build})`);

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { NEEDS_GPU, ON_CI } from './gpu';
+import { decodeReplay } from '../../src/sim/replay/codec';
 
 test.skip(ON_CI, NEEDS_GPU); // plays a match
 
@@ -142,5 +143,97 @@ test('2 players: the guest takes over and plays on vs the bots', async ({ contex
   expect(s.players.find((x) => x.id === 1)!.isBot).toBe(true);
   expect(s.players.find((x) => x.id === 2)!.isBot).toBe(false);
   await expect(b.getByTestId('fatal')).toHaveCount(0);
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+/** Esc → pause card → Leave match (the way a player leaves on purpose). */
+async function leaveMatch(p: Page) {
+  await p.bringToFront();
+  await p.locator('canvas.game').click();
+  await expect.poll(() => p.evaluate(() => !!document.pointerLockElement)).toBe(true);
+  await p.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await p.evaluate(() => document.exitPointerLock());
+  await expect(p.getByTestId('pause-quit')).toHaveText('Leave match');
+  await p.getByTestId('pause-quit').click();
+}
+
+test('every segment of a migrated match is recorded and uploaded, linked by match id and segment', async ({ context }) => {
+  test.setTimeout(240_000);
+  const errors: string[] = [], logs: string[] = [];
+  // Uploads on (?telemetry=1); the endpoint is stubbed here and keeps what it was sent.
+  const uploads: Buffer[] = [];
+  await context.route('**/api/replays', async (route) => {
+    uploads.push(route.request().postDataBuffer()!);
+    await route.fulfill({ status: 201, contentType: 'application/json', body: '{}' });
+  });
+  await context.route('**/api/errors', (route) => route.fulfill({ status: 201, contentType: 'application/json', body: '{}' }));
+  const a = await context.newPage(), b = await context.newPage(), c = await context.newPage();
+  watch('A', a, errors, logs); watch('B', b, errors, logs); watch('C', c, errors, logs);
+
+  await a.goto('/?net=local&debug=1&telemetry=1');
+  await a.getByTestId('name-input').fill('Alice');
+  await a.getByTestId('host-game').click();
+  await expect(a.getByTestId('lobby-code')).toHaveText(/^[A-Z2-9]{6}$/);
+  const code = (await a.getByTestId('lobby-code').textContent())!;
+  for (const [p, name] of [[b, 'Bob'], [c, 'Carol']] as const) {
+    await p.goto('/?net=local&debug=1&telemetry=1');
+    await p.getByTestId('name-input').fill(name);
+    await p.getByTestId('code-input').fill(code);
+    await p.getByTestId('join-game').click();
+    await expect(p.getByText('Waiting for host…')).toBeVisible();
+    await expect(a.getByTestId(`seat-${name === 'Bob' ? 1 : 2}`)).toContainText(name);
+    await a.getByTestId('add-seat').click();
+  }
+  await a.getByTestId('seat-slider-3').locator('.stop-easy').click();
+  await a.getByTestId('start-match').click();
+  for (const p of [a, b, c]) await expect.poll(async () => (await snapOf(p))?.players.length ?? 0, { timeout: 45_000 }).toBe(4);
+
+  // Past the partial-upload minimum (60 s of play), with a checkpoint taken after that.
+  await expect.poll(async () => (await snapOf(a))?.tick ?? 0, { timeout: 100_000, intervals: [2000] }).toBeGreaterThan(61 * 30);
+  const n0 = checkpoints(logs);
+  await expect.poll(() => checkpoints(logs), { timeout: 20_000 }).toBeGreaterThan(n0);
+
+  // Alice leaves: her recording so far goes up (unfinished), and Bob or Carol takes the match over.
+  await leaveMatch(a);
+  await expect.poll(() => uploads.length, { timeout: 20_000 }).toBe(1);
+  await expect.poll(async () => [await migrated(b), await migrated(c)].sort().join(','), { timeout: 20_000 }).toBe('guest,host');
+  const [newHost, follower] = (await migrated(b)) === 'host' ? [b, c] : [c, b];
+  const t1 = (await snapOf(newHost))!.tick;
+  await expect.poll(async () => (await snapOf(newHost))!.tick, { timeout: 10_000 }).toBeGreaterThan(t1 + 90);
+
+  // The new host leaves too (the follower first, so nobody takes over again): the rest of the match goes up.
+  await follower.close();
+  await leaveMatch(newHost);
+  await expect.poll(() => uploads.length, { timeout: 20_000 }).toBe(2);
+
+  const [seg0, seg1] = (await Promise.all(uploads.map((u) => decodeReplay(new Uint8Array(u))))).sort((x, y) => x.header.segment - y.header.segment);
+  expect(seg0.header).toMatchObject({ segment: 0, startTick: 0, matchId: seg0.header.id, kind: 'host' });
+  expect(seg0.footer.unfinished).toBe(true);
+  expect(seg0.checkpoint).toBeNull();
+  expect(seg1.header).toMatchObject({ segment: 1, matchId: seg0.header.id, kind: 'host', setup: seg0.header.setup });
+  expect(seg1.header.id).not.toBe(seg0.header.id);
+  expect(seg1.checkpoint).not.toBeNull();
+  // Segment 1 starts from a checkpoint inside segment 0 (stitch: segment 0 up to there, then segment 1).
+  expect(seg1.header.startTick).toBeGreaterThan(61 * 30);
+  expect(seg1.header.startTick).toBeLessThanOrEqual(seg0.footer.ticks);
+  expect(seg1.ops[0]).toEqual({ tick: 0, op: { k: 'setBot', id: 1, difficulty: 'medium' } }); // Alice's seat to a bot
+  // Both re-run exactly as recorded (segment 1 from its checkpoint), in the browser like the replay viewer.
+  // (Not in Node: browser-recorded host replays don't re-run identically under Node yet, segment 0 included.)
+  for (const [i, u] of uploads.entries()) {
+    const res = await a.evaluate(async ([b64, codecUrl, runnerUrl]) => {
+      const { decodeReplay } = (await import(codecUrl)) as typeof import('../../src/sim/replay/codec');
+      const { ReplayRunner } = (await import(runnerUrl)) as typeof import('../../src/sim/replay/runner');
+      const r = await decodeReplay(Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0)));
+      const run = await ReplayRunner.create(r, { checkpointEvery: 0 });
+      while (!run.done) run.step();
+      const out = { divergedAt: run.divergedAt, last: run.last?.tick ?? null, end: r.header.startTick + r.ticks.length };
+      run.dispose();
+      return out;
+    }, [u.toString('base64'), '/src/sim/replay/codec.ts', '/src/sim/replay/runner.ts'] as const);
+    expect(res.divergedAt, `upload ${i}`).toBeNull();
+    expect(res.last, `upload ${i}`).toBe(res.end);
+  }
+  console.info(`[e2e] segment 0: ${seg0.footer.ticks} ticks; segment 1: ticks ${seg1.header.startTick + 1}..${seg1.header.startTick + seg1.ticks.length}`);
+
   expect(errors, errors.join('\n')).toEqual([]);
 });

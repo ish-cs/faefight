@@ -3,7 +3,7 @@ import type { MatchSetup } from '../matchApi';
 import type { MoveCmd } from '../movement';
 import { NO_INPUT, type PlayerInput, type PlayerState, type Snapshot } from '../types';
 import { encodeReplay, TickWriter } from './codec';
-import { HASH_EVERY, REPLAY_FORMAT, withoutChat, type LogEvent, type ReplayHeader, type ReplayKind, type ReplayOp, type SecondSummary, type TickInput } from './format';
+import { HASH_EVERY, REPLAY_FORMAT, withoutChat, type LogEvent, type RecordingLink, type ReplayHeader, type ReplayKind, type ReplayOp, type SecondSummary, type TickInput } from './format';
 import { stateHash } from './hash';
 
 export type RecorderOpts = {
@@ -16,6 +16,9 @@ export type RecorderOpts = {
   recordedAt?: number;
   bots?: Record<number, unknown>;
   tags?: Record<string, unknown>;
+  /** A later segment of a migrated match (see ReplayHeader.matchId); default: a new match, segment 0. */
+  matchId?: string;
+  segment?: number;
 };
 
 /** Sim events kept in the replay's event log (the per-shot/per-piece-hit chatter is left out). */
@@ -43,11 +46,20 @@ export class Recorder {
   private last: Snapshot | null = null;
   /** A preview was recorded since the last tick (later ones can't change anything: see ReplayOp). */
   private previewed = false;
+  private checkpoint: Uint8Array | null = null;
 
+  /**
+   * `match` must be fresh from Match.create(opts.setup), or use fromCheckpoint. Nothing may be done to
+   * it before the recorder is made (ops after that go through op()).
+   */
   constructor(private match: Match, opts: RecorderOpts) {
+    const id = opts.id ?? randomId();
     this.header = {
       format: REPLAY_FORMAT,
-      id: opts.id ?? randomId(),
+      id,
+      matchId: opts.matchId ?? id,
+      segment: opts.segment ?? 0,
+      startTick: match.tickCount,
       kind: opts.kind,
       recordedAt: opts.recordedAt ?? Date.now(),
       build: opts.build ?? 'dev',
@@ -60,7 +72,22 @@ export class Recorder {
     };
   }
 
+  /**
+   * Record a match restored from a checkpoint (host migration): `checkpoint` is the raw saveMatch bytes
+   * `match` was just loaded from (net/matchCheckpoint.ts loadMatch), nothing done to it since. The replay
+   * starts from those bytes; opts.setup is the original match's (segment 0's) setup.
+   */
+  static fromCheckpoint(match: Match, checkpoint: Uint8Array, opts: RecorderOpts): Recorder {
+    if (!checkpoint.length) throw new Error('Recorder.fromCheckpoint: empty checkpoint');
+    const r = new Recorder(match, opts);
+    if (r.header.startTick === 0) throw new Error('Recorder.fromCheckpoint: the match has not ticked yet (record it from its setup instead)');
+    r.checkpoint = checkpoint;
+    return r;
+  }
+
   get id() { return this.header.id; }
+  /** What a host taking this match over needs to record the next segment of it. */
+  get link(): RecordingLink { return { matchId: this.header.matchId, segment: this.header.segment, setup: this.header.setup }; }
   get tickCount() { return this.ticks.count; }
   /** Bytes of input data so far (uncompressed). */
   get inputBytes() { return this.ticks.size; }
@@ -136,7 +163,7 @@ export class Recorder {
       unfinished: last?.winner == null,
     };
     const { header, events } = withoutChat({ header: this.header, events: this.events });
-    const bytes = await encodeReplay({ header, footer, ticks: this.ticks, ops: this.ops, hashes: this.hashes, events, seconds: this.seconds });
+    const bytes = await encodeReplay({ header, footer, ticks: this.ticks, ops: this.ops, hashes: this.hashes, events, seconds: this.seconds, checkpoint: this.checkpoint });
     return { bytes, header, footer };
   }
 }

@@ -7,6 +7,7 @@ import { stateHash } from '../../src/sim/replay/hash';
 import { recordHeadlessMatch } from '../../src/sim/replay/headless';
 import { Recorder } from '../../src/sim/replay/recorder';
 import { ReplayRunner } from '../../src/sim/replay/runner';
+import { loadMatch, saveMatch } from '../../src/net/matchCheckpoint';
 import { NO_INPUT, type HotbarItem, type Inventory, type PlayerInput, type Snapshot } from '../../src/sim/types';
 
 const seat = (i: number) => ({ name: `Bot (pro) ${i}`, isBot: true, difficulty: 'pro' as const });
@@ -169,10 +170,11 @@ describe('replay codec', () => {
       [{ id: 1, input: base }],
     ];
     return {
-      header: { format: 1, id: 'x', kind: 'test', recordedAt: 1, build: 'b', setup: { players: [{ name: 'a', isBot: false }, { name: 'b', isBot: false }], seed: 3 }, localId: 1, players: [], map: [] },
+      header: { format: 2, id: 'x', matchId: 'x', segment: 0, startTick: 0, kind: 'test', recordedAt: 1, build: 'b', setup: { players: [{ name: 'a', isBot: false }, { name: 'b', isBot: false }], seed: 3 }, localId: 1, players: [], map: [] },
       footer: { ticks: 5, duration: 0.16, winner: null, unfinished: true },
       ticks, ops: [{ tick: 2, op: { k: 'setBot', id: 2, difficulty: 'hard' } }], hashes: [1, 4294967295], events: [[3, 'kill', { victim: 2, killer: 1 }]],
       seconds: [{ t: 1, tick: 30, p: [[1, 0.1, 2, 3, 100, 0, 1, 50, 0, 0, 'fists', 0, 0]], pieces: 0, sealed: [0, 1], waterY: -1 }],
+      checkpoint: null,
     };
   };
 
@@ -219,5 +221,114 @@ describe('replay codec', () => {
     expect(bytes.length).toBeLessThan(3e6);
     const back = await decodeReplay(bytes);
     expect(back.ticks[20000]).toEqual(ticks[20000]);
+  });
+});
+
+describe('replay segments (host migration)', { timeout: 240_000 }, () => {
+  /** Player 1 is scripted, player 2 ("the old host") is human and idle, 3 and 4 are bots. */
+  const setup = { players: [{ name: 'You', isBot: false }, { name: 'Host', isBot: false }, seat(1), seat(2)], seed: 33 };
+  const drive = (rec: Recorder, m: Match, from: number, to: number, snap: Snapshot, hashes: number[]) => {
+    for (let t = from; t <= to; t++) {
+      if (t % 150 === 0) { m.debugGive(1, { cash: 200 }); rec.op({ k: 'give', id: 1, inv: { cash: 200 } }); }
+      snap = rec.tick(new Map([[1, humanInput(t, snap)]]));
+      hashes.push(stateHash(snap));
+    }
+    return snap;
+  };
+
+  it('a segment recorded from a checkpoint replays to the identical state, linked to the segment before it', async () => {
+    const m = await Match.create(setup);
+    const rec0 = new Recorder(m, { setup, kind: 'host', localId: 2, id: 'seg0' });
+    let snap = rec0.tick(new Map());
+    snap = drive(rec0, m, 2, 707, snap, []); // not a multiple of HASH_EVERY: hashes must line up from mid-interval
+    // Migration: the backup restores the host's checkpoint, botifies the old host and records from there.
+    const raw = saveMatch(m);
+    const r = await loadMatch(raw);
+    const rec1 = Recorder.fromCheckpoint(r, raw, { setup: rec0.link.setup, kind: 'host', localId: 1, id: 'seg1', matchId: rec0.link.matchId, segment: rec0.link.segment + 1 });
+    r.setBot(2, 'medium'); rec1.op({ k: 'setBot', id: 2, difficulty: 'medium' });
+    const live: number[] = [];
+    const end = drive(rec1, r, 708, 1600, snap, live);
+    // The old host ran on a little after its last checkpoint before it left; its recording ends there.
+    drive(rec0, m, 708, 760, snap, []);
+    const seg0 = await decodeReplay((await rec0.finish()).bytes);
+    const { bytes } = await rec1.finish();
+    m.dispose(); r.dispose();
+
+    const seg1 = await decodeReplay(bytes);
+    expect(seg0.header).toMatchObject({ id: 'seg0', matchId: 'seg0', segment: 0, startTick: 0 });
+    expect(seg0.checkpoint).toBeNull();
+    expect(seg1.header).toMatchObject({ id: 'seg1', matchId: 'seg0', segment: 1, startTick: 707, setup });
+    expect(seg1.checkpoint).toEqual(raw);
+    expect(seg1.ticks.length).toBe(1600 - 707);
+    expect(seg1.seconds[0].tick).toBe(720);
+
+    const runner = await ReplayRunner.create(seg1, { checkpointEvery: 300 });
+    expect(runner.startTick).toBe(707);
+    for (let i = 0; i < live.length; i++) {
+      const s = runner.step()!;
+      if (stateHash(s) !== live[i]) throw new Error(`diverged at tick ${s.tick}`);
+    }
+    expect(runner.done).toBe(true);
+    expect(runner.divergedAt).toBeNull();
+    expect(stateHash(runner.last!)).toBe(stateHash(end));
+    expect(runner.last!.players.find((p) => p.id === 2)!.isBot).toBe(true);
+    // Seeking inside the segment (back to a fork taken on the way) lands on the same states.
+    for (const t of [450, 10, 893]) expect(stateHash(runner.seek(t)!), `seek ${t}`).toBe(live[t - 1]);
+    // A tampered hash is caught at the right sim tick.
+    seg1.hashes[2] ^= 1;
+    const bad = await ReplayRunner.create(seg1, { checkpointEvery: 0 });
+    while (!bad.done) bad.step();
+    expect(bad.divergedAt).toBe(780);
+    runner.dispose(); bad.dispose();
+  });
+
+  it('round-trips a segment (checkpoint bytes, match id, start tick) through the codec', async () => {
+    const m = await Match.create({ players: [seat(1), seat(2)], seed: 4 });
+    for (let i = 0; i < 90; i++) m.tick(new Map());
+    const raw = saveMatch(m);
+    const r = await loadMatch(raw);
+    const rec = Recorder.fromCheckpoint(r, raw, { setup: { players: [seat(1), seat(2)], seed: 4 }, kind: 'host', localId: 0, id: 'b', matchId: 'a', segment: 3, recordedAt: 5 });
+    for (let i = 0; i < 40; i++) rec.tick(new Map());
+    const { bytes, header } = await rec.finish();
+    m.dispose(); r.dispose();
+    const back = await decodeReplay(bytes);
+    expect(back.header).toEqual(header);
+    expect(back.header).toMatchObject({ matchId: 'a', segment: 3, startTick: 90 });
+    expect(back.checkpoint).toEqual(raw);
+    expect(back.hashes).toHaveLength(1); // tick 120
+    const again = await decodeReplay(await encodeReplay(back));
+    expect(again).toEqual(back);
+  });
+
+  it('refuses a recording from a match that never ticked, and a segment without its checkpoint', async () => {
+    const m = await Match.create({ players: [seat(1), seat(2)], seed: 4 });
+    expect(() => Recorder.fromCheckpoint(m, saveMatch(m), { setup: { players: [seat(1), seat(2)], seed: 4 }, kind: 'host', localId: 0 })).toThrow(/not ticked/);
+    m.dispose();
+    const bad: Replay = {
+      header: { format: 2, id: 'x', matchId: 'x', segment: 1, startTick: 30, kind: 'test', recordedAt: 1, build: 'b', setup: { players: [], seed: 1 }, localId: 0, players: [], map: [] },
+      footer: { ticks: 0, duration: 0, winner: null, unfinished: true }, ticks: [], ops: [], hashes: [], events: [], seconds: [], checkpoint: null,
+    };
+    await expect(encodeReplay(bad)).rejects.toThrow(/no checkpoint/);
+  });
+
+  it('still reads format 1 files (whole matches): segment 0 of their own match, from tick 0', async () => {
+    const { bytes } = await recordScripted(60, 5);
+    // Rebuild the same recording as format 1: no segment fields in the header, no checkpoint section.
+    const through = async (b: Uint8Array, s: CompressionStream | DecompressionStream) => new Uint8Array(await new Response(new Blob([b as BlobPart]).stream().pipeThrough(s)).arrayBuffer());
+    const body = await through(bytes.subarray(5), new DecompressionStream('deflate-raw'));
+    expect(body[body.length - 1]).toBe(0); // empty checkpoint section
+    let n = 0, len = 0, mul = 1, b: number;
+    do { b = body[n++]; len += (b & 0x7f) * mul; mul *= 0x80; } while (b & 0x80);
+    const h = JSON.parse(new TextDecoder().decode(body.subarray(n, n + len)));
+    delete h.matchId; delete h.segment; delete h.startTick; h.format = 1;
+    const hj = new TextEncoder().encode(JSON.stringify(h));
+    const lenBytes: number[] = [];
+    for (let v = hj.length; ; v = Math.floor(v / 0x80)) { if (v < 0x80) { lenBytes.push(v); break; } lenBytes.push((v % 0x80) | 0x80); }
+    const v1body = new Uint8Array([...lenBytes, ...hj, ...body.subarray(n + len, body.length - 1)]);
+    const v1 = new Uint8Array([...bytes.subarray(0, 4), 1, ...(await through(v1body, new CompressionStream('deflate-raw')))]);
+    const r = await decodeReplay(v1);
+    expect(r.header).toMatchObject({ format: 1, id: 'test', matchId: 'test', segment: 0, startTick: 0 });
+    expect(r.checkpoint).toBeNull();
+    expect(r.ticks.length).toBe(60);
   });
 });
