@@ -193,7 +193,7 @@ export class Critters {
   }
 
   private matrixOf(a: Agent, out: THREE.Matrix4) {
-    const sc = Math.max(0.001, a.show);
+    const sc = Math.max(0.001, a.show) * (a.def.scale ?? 1);
     _s.set(sc, sc, sc);
     _p.set(a.x, a.y, a.z);
     const w = a.home.wall;

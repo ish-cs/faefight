@@ -12,7 +12,11 @@ export type WallFrame = { ux: number; uz: number; nx: number; nz: number; w: num
  * A place a critter lives: a round patch (x, y, z, radius r) it wanders, facing `yaw` when it rests. `wall` = a
  * vertical panel instead (climbers). `water` = y is relative to the live sea level (it rises in sudden death).
  */
-export type Anchor = { x: number; y: number; z: number; r: number; yaw: number; wall?: WallFrame; water?: boolean };
+export type Anchor = {
+  x: number; y: number; z: number; r: number; yaw: number; wall?: WallFrame; water?: boolean;
+  /** set by buildHabitats: the anchor stands on walkable map ground (`Habitats.ground`), so walkers there must stay on it */
+  grounded?: boolean;
+};
 
 export const HABITATS = [
   'quay', 'pallet', 'nap', 'beach', 'rocks', 'shallows', 'water', 'perch', 'piling', 'palm', 'wall', 'containerTop',
@@ -22,6 +26,11 @@ export type Habitat = (typeof HABITATS)[number];
 export type Habitats = Record<Habitat, Anchor[]> & {
   /** solid ground (islands, center island, backdrop quays + beach): birds only dive outside, fish stay outside */
   land: (x: number, z: number) => boolean;
+  /**
+   * Walkable ground height at (x, z) — island and center-island decks, the backdrop quays, the dry harbor beach —
+   * or null over water / past a quay edge. Mirrors the map art (islands.ts, detail.ts buildBeach).
+   */
+  ground: (x: number, z: number) => number | null;
 };
 
 /** islands.ts CHANNEL / backdropFrame (kept in sync by hand; the backdrop is drawn there). */
@@ -150,7 +159,8 @@ export function buildHabitats(def: MapDef, perches: PerchIn[] = []): Habitats {
     if (k.kind === 'palm') H.palm.push(A(k.pos.x, k.pos.y + 6, k.pos.z, 1));
   }
 
-  const discs = [...def.islands.map((i) => ({ x: i.center.x, z: i.center.z, r: i.radius })), { x: def.center.center.x, z: def.center.center.z, r: def.center.radius }];
+  const discs = [...def.islands.map((i) => ({ x: i.center.x, z: i.center.z, r: i.radius, y: i.groundY })), { x: def.center.center.x, z: def.center.center.z, r: def.center.radius, y: def.center.groundY }];
+  const tops = def.islands.map((i) => backdropFrameOf(i, n).top);
   H.land = (x, z) => {
     for (const d of discs) if ((x - d.x) ** 2 + (z - d.z) ** 2 < (d.r + 1) ** 2) return true;
     for (const b of backs) {
@@ -161,7 +171,35 @@ export function buildHabitats(def: MapDef, perches: PerchIn[] = []): Habitats {
     }
     return false;
   };
-  // water anchors must be over water
+  H.ground = (x, z) => {
+    // decks: keep 0.35 m off the coping edge
+    for (const d of discs) if ((x - d.x) ** 2 + (z - d.z) ** 2 < (d.r - 0.35) ** 2) return d.y;
+    for (let i = 0; i < backs.length; i++) {
+      const b = backs[i];
+      const c = Math.cos(b.yaw), s = Math.sin(b.yaw);
+      const rx = x - b.cx, rz = z - b.cz;
+      const lx = rx * c - rz * s, lz = rx * s + rz * c;
+      if (Math.abs(lx) > b.hw - 0.35) continue;
+      if (lz > b.z0 + 0.35 && lz < b.z0 + 80) return tops[i];
+      if (!harbor) continue;
+      // the harbor beach (detail.ts buildBeach): local t 0 = water edge .. 1 = wall foot; dry above y = 0.1
+      for (const [u0, u1] of BACKDROP_DECOR.beaches) {
+        const x0 = u0 * b.hw, x1 = u1 * b.hw, len = x1 - x0, mx = lx - (x0 + x1) / 2;
+        const t = (lz - (b.z0 - 7.8)) / 8;
+        if (Math.abs(mx) > len / 2 || t < 0 || t > 1) continue;
+        const ends = Math.min(1, (len / 2 - Math.abs(mx)) / 2.5);
+        const y = -1.3 + 2.4 * Math.pow(t, 0.8) * Math.max(0, ends);
+        if (y > 0.1) return Math.min(1.1, y);
+      }
+    }
+    return null;
+  };
+  // water anchors must be over water; mark anchors that stand on walkable ground
   H.water = H.water.filter((a) => !H.land(a.x, a.z));
+  for (const h of HABITATS) for (const a of H[h]) {
+    if (a.wall || a.water) continue;
+    const g = H.ground(a.x, a.z);
+    a.grounded = g !== null && Math.abs(g - a.y) < 0.5;
+  }
   return H;
 }

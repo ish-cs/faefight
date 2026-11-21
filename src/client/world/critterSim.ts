@@ -31,6 +31,8 @@ export type Agent = {
   /** animation: gait phase (rad), gait 0..1 (legs / wing beat), pose 0..1 (sniff / peck / nap / claws), shown 0..1 */
   phase: number; gait: number; pose: number; show: number;
   cd: number; seen: boolean;
+  /** a walker found itself off the ground (should not happen): removed at the end of the frame */
+  lost?: boolean;
 };
 
 export type V3 = { x: number; y: number; z: number };
@@ -72,7 +74,7 @@ function turn(from: number, to: number, k: number) {
 /** three.js yaw of a heading (forward = -Z). */
 export const yawOf = (dx: number, dz: number) => Math.atan2(-dx, -dz);
 /** Big animals never pop in on screen: they spawn off screen or at least this far away. */
-const POP_R = 40;
+const POP_R = 25;
 
 export class CritterSim {
   readonly agents: Agent[] = [];
@@ -82,6 +84,7 @@ export class CritterSim {
   private nextId = 1;
   private spawns = 0;
   private spawnClock = 0;
+  private flockClock = 8;
   private rnd: () => number;
   /** agents per (species, anchor index) */
   private used = new Map<string, number>();
@@ -104,8 +107,23 @@ export class CritterSim {
       if (a.st !== 'fly' && a.st !== 'circle' && !v.visible(a.x, a.y, a.z, 1 + a.def.size)) continue;
       this.step(a, dt, v);
     }
+    this.flockClock -= dt;
+    if (this.flockClock <= 0) { this.flockClock = rr(this.rnd, 12, 25); this.flockFlight(v); }
+    for (let i = this.agents.length - 1; i >= 0; i--) if (this.agents[i].lost) { console.warn(`[critters] ${this.agents[i].def.name} off the ground; removed`); this.remove(i); }
     for (const n of this.noises) n.age += dt;
     this.noises = this.noises.filter((n) => n.age < 0.3);
+  }
+
+  /** Life moment: a calm, visible flock (pigeons) takes off together, circles and lands again. */
+  private flockFlight(v: View) {
+    const lead = this.agents.find((a) => a.def.flockFlights && a.st === 'idle' && v.visible(a.x, a.y, a.z, 2));
+    if (!lead) return;
+    const flock = this.agents.filter((a) => a.def === lead.def && a.homeIdx === lead.homeIdx && (a.st === 'idle' || a.st === 'move'));
+    for (const a of flock) {
+      a.tx = a.home.x + rr(a.rnd, -3, 3); a.tz = a.home.z + rr(a.rnd, -3, 3); a.ty = a.y + rr(a.rnd, 4, 7);
+      a.arc = rr(a.rnd, 3, 6); a.fage = rr(a.rnd, 0, TAU); a.st = 'circle'; a.t = rr(a.rnd, 3, 6);
+    }
+    this.sound('flap', lead, v);
   }
 
   // ------------------------------------------------------------------ spawning
@@ -138,8 +156,15 @@ export class CritterSim {
         if (def.size >= 0.3 && !def.emerges && dd < POP_R * POP_R && v.visible(p.x, p.y, p.z, 1.5)) continue;
         cand.push(i);
       }
+      // favour anchors in view and close (ahead of the camera), with some randomness
+      const score = (i: number) => {
+        const p = list[i];
+        return Math.sqrt(d2(p.x, p.z, v.cam.x, v.cam.z)) * (v.visible(p.x, p.y, p.z, 1) ? 1 : 3);
+      };
+      const scores = new Map(cand.map((i) => [i, score(i)]));
+      cand.sort((a, b) => scores.get(a)! - scores.get(b)!);
       while (n < cap && cand.length) {
-        const k = Math.floor(this.rnd() * cand.length);
+        const k = Math.floor(this.rnd() ** 2 * cand.length);
         const i = cand[k];
         // flocks: fill the anchor up in one go
         const group = Math.min(cap - n, def.perAnchor - (this.used.get(`${def.name}:${i}`) ?? 0));
@@ -174,6 +199,7 @@ export class CritterSim {
       fx: 0, fy: 0, fz: 0, fdur: 1, fage: 0, arc: 0, dive: false,
       speed: 0, phase: rr(rnd, 0, TAU), gait: 0, pose: 0, show: 1, cd: rr(rnd, 1, 6), seen: false,
     };
+    if (!this.onHome(a, a.x, a.z)) { a.x = h.x; a.z = h.z; }
     if (def.emerges) { a.st = 'hidden'; a.show = 0; }
     if (def.rest && rnd() < def.rest.chance) { a.st = 'rest'; a.t = rr(rnd, def.rest.time[0], def.rest.time[1]); a.pose = 1; }
     this.place(a);
@@ -190,7 +216,10 @@ export class CritterSim {
     const w = a.home.wall;
     if (w) { a.x = a.home.x + w.ux * a.ws + w.nx * 0.02; a.y = a.home.y + a.wh; a.z = a.home.z + w.uz * a.ws + w.nz * 0.02; }
     else if (a.def.mode === 'perch' && (a.st === 'idle' || a.st === 'rest')) { a.x = a.home.x; a.y = a.home.y; a.z = a.home.z; }
-    else if (a.def.mode !== 'perch' && a.st !== 'jump') {
+    else if (a.def.mode === 'ground' && a.home.grounded && a.st !== 'fly' && a.st !== 'circle') {
+      const g = this.hab.ground(a.x, a.z);
+      if (g === null) a.lost = true; else a.y = g;
+    } else if (a.def.mode !== 'perch' && a.st !== 'jump') {
       a.y = this.baseY(a, waterY);
       if (a.def.mode === 'water' || a.def.wades) a.y += waveHeight(a.x, a.z, waveTime()) * (a.def.mode === 'water' ? 0.6 : 0);
     }
@@ -278,7 +307,10 @@ export class CritterSim {
           const dx = a.tx - a.x, dz = a.tz - a.z, l = Math.hypot(dx, dz);
           if (l < 0.04 || a.t <= 0) this.arrive(a);
           else {
-            const k = Math.min(l, sp * dt) / l; a.x += dx * k; a.z += dz * k;
+            const k = Math.min(l, sp * dt) / l;
+            // every step stays on its ground (or inside its patch): at an edge, stop and settle / duck away
+            if (!this.onHome(a, a.x + dx * k, a.z + dz * k)) { this.arrive(a); break; }
+            a.x += dx * k; a.z += dz * k;
             if (!D.sidestep) a.yaw = turn(a.yaw, yawOf(dx, dz), dt * 10);
           }
         }
@@ -330,7 +362,11 @@ export class CritterSim {
           let near = false;
           for (const p of v.players) if (d2(p.x, p.z, a.home.x, a.home.z) < (D.fear[0] + 2) ** 2) near = true;
           if (near) a.t = rr(a.rnd, 3, 6);
-          else this.fly(a, a.home.x + (a.home.r ? rr(a.rnd, -a.home.r, a.home.r) : 0), a.home.y, a.home.z + (a.home.r ? rr(a.rnd, -a.home.r, a.home.r) : 0), 2.5, false);
+          else {
+            let lx = a.home.x + (a.home.r ? rr(a.rnd, -a.home.r, a.home.r) : 0), lz = a.home.z + (a.home.r ? rr(a.rnd, -a.home.r, a.home.r) : 0);
+            if (!this.onHome(a, lx, lz)) { lx = a.home.x; lz = a.home.z; }
+            this.fly(a, lx, a.home.grounded ? this.hab.ground(lx, lz) ?? a.home.y : a.home.y, lz, 2.5, false);
+          }
         }
         break;
       }
@@ -356,7 +392,16 @@ export class CritterSim {
       const w = a.home.wall;
       a.tx = a.ws < w.w / 2 ? 0 : w.w; a.ty = Math.min(w.h, Math.max(0, a.wh + rr(a.rnd, -0.4, 0.4)));
     } else {
+      // scurry for cover on land: the most direct escape whose end point is still walkable ground
       this.away(a, th.x, th.z, D.fleeDist);
+      if (!this.onHome(a, a.tx, a.tz)) {
+        const bx = a.x - th.x, bz = a.z - th.z, base = Math.atan2(bz, bx);
+        for (const off of [0.6, -0.6, 1.2, -1.2, 1.8, -1.8, Math.PI]) {
+          const ang = base + off, d = D.fleeDist * 0.7;
+          const tx = a.x + Math.cos(ang) * d, tz = a.z + Math.sin(ang) * d;
+          if (this.onHome(a, tx, tz)) { a.tx = tx; a.tz = tz; break; }
+        }
+      }
       if (D.sidestep) a.yaw = yawOf(a.tz - a.z, -(a.tx - a.x)); // run sideways
     }
     a.st = 'flee'; a.t = rr(a.rnd, 0.6, 1.3) * (D.fleeDist / Math.max(1, D.run));
@@ -366,14 +411,14 @@ export class CritterSim {
   private away(a: Agent, x: number, z: number, dist: number) {
     const ax = a.x - x, az = a.z - z, l = Math.hypot(ax, az) || 1;
     let tx = a.x + (ax / l) * dist, tz = a.z + (az / l) * dist;
-    const h = a.home, R = h.r * 1.6 + 1, dx = tx - h.x, dz = tz - h.z, dl = Math.hypot(dx, dz);
+    const h = a.home, R = h.grounded ? h.r * 1.6 + 1 : h.r, dx = tx - h.x, dz = tz - h.z, dl = Math.hypot(dx, dz);
     if (dl > R) { tx = h.x + (dx / dl) * R; tz = h.z + (dz / dl) * R; }
     a.tx = tx; a.tz = tz;
   }
 
   private arrive(a: Agent) {
     const D = a.def;
-    if (a.st === 'flee' && D.flee === 'hide') { a.st = 'hidden'; a.t = rr(a.rnd, 4, 10); return; }
+    if (a.st === 'flee' && D.flee === 'hide') { const h = D.hideTime ?? [4, 10]; a.st = 'hidden'; a.t = rr(a.rnd, h[0], h[1]); return; }
     if (D.rest && a.rnd() < D.rest.chance * 0.4) { a.st = 'rest'; a.t = rr(a.rnd, D.rest.time[0], D.rest.time[1]); return; }
     a.st = 'idle'; a.t = rr(a.rnd, D.idle[0], D.idle[1]);
   }
@@ -404,7 +449,19 @@ export class CritterSim {
   private relocate(a: Agent) {
     if (a.home.wall || a.home.r <= 0) return;
     const an = rr(a.rnd, 0, TAU), r = Math.sqrt(a.rnd()) * a.home.r;
-    a.x = a.home.x + Math.cos(an) * r; a.z = a.home.z + Math.sin(an) * r;
+    const x = a.home.x + Math.cos(an) * r, z = a.home.z + Math.sin(an) * r;
+    if (this.onHome(a, x, z)) { a.x = x; a.z = z; }
+  }
+
+  /** Walkers on map ground stay on it (no quay-edge or water steps, no >0.6 m drops); the rest keep to their patch. */
+  onHome(a: Agent, x: number, z: number): boolean {
+    const h = a.home;
+    if (a.def.mode !== 'ground' || h.wall) return true;
+    if (h.grounded) {
+      const g = this.hab.ground(x, z);
+      return g !== null && Math.abs(g - h.y) < 0.6;
+    }
+    return (x - h.x) ** 2 + (z - h.z) ** 2 <= h.r * h.r + 1e-6;
   }
 
   private perchIdle(a: Agent, v: View) {

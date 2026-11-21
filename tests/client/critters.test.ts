@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildMapDef } from '../../src/sim/map';
 import { buildHabitats, type Habitats } from '../../src/client/world/critterHabitats';
 import { type Agent, CritterSim, type View } from '../../src/client/world/critterSim';
@@ -109,5 +109,46 @@ describe('critter behaviour', () => {
     };
     expect(run(5)).toBe(run(5));
     expect(run(5)).not.toBe(run(6));
+  });
+});
+
+describe('critters stay on land', () => {
+  for (const [tpl, n] of [['harbor', 8], ['yard', 6]] as const) {
+    it(`no land critter ends up over water on ${tpl} after a minute of wandering and fleeing`, () => {
+      const d = buildMapDef(n, tpl, 2);
+      const H = buildHabitats(d);
+      const sim = new CritterSim(H, 9);
+      sim.quality = 'ultra';
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const bad: string[] = [];
+      for (const isl of d.islands.slice(0, 3)) {
+        const cam = { x: isl.center.x, y: 4, z: isl.center.z };
+        for (let i = 0; i < 600; i++) {
+          // a player runs laps along the rim; shots and blasts every few seconds
+          const p = { x: isl.center.x + Math.cos(i / 25) * (isl.radius - 2), y: isl.groundY, z: isl.center.z + Math.sin(i / 25) * (isl.radius - 2) };
+          if (i % 40 === 0) sim.noise(i % 80 === 0 ? 'explosion' : 'shot', [{ ...p, y: p.y + 1.5 }]);
+          sim.update(0.1, view(cam, [p]));
+          for (const a of sim.agents) {
+            if (a.def.mode !== 'ground' || a.st === 'fly' || a.st === 'circle' || a.st === 'hidden') continue;
+            if (a.home.grounded) {
+              const g = H.ground(a.x, a.z);
+              if (g === null || Math.abs(g - a.y) > 0.01) bad.push(`${a.def.name} ${a.st} @${a.x.toFixed(1)},${a.z.toFixed(1)} y=${a.y.toFixed(2)} g=${g}`);
+            } else if (Math.hypot(a.x - a.home.x, a.z - a.home.z) > a.home.r + 1e-3) bad.push(`${a.def.name} left its patch`);
+          }
+        }
+      }
+      expect(bad.slice(0, 5)).toEqual([]);
+      expect(warn).not.toHaveBeenCalled(); // nobody had to be removed for being off the ground
+      warn.mockRestore();
+      expect(sim.agents.some((a) => a.def.mode === 'ground')).toBe(true);
+    });
+  }
+
+  it('walkable ground: decks yes, the harbor channel no', () => {
+    const isl = def.islands[0];
+    expect(hab.ground(isl.center.x, isl.center.z)).toBe(isl.groundY);
+    // 7 m out past the quay rim, toward the backdrop: open water
+    const y = isl.bunker.facingYaw, ox = Math.sin(y), oz = Math.cos(y);
+    expect(hab.ground(isl.center.x + ox * (isl.radius + 7), isl.center.z + oz * (isl.radius + 7))).toBeNull();
   });
 });

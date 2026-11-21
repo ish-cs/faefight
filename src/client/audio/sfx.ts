@@ -546,6 +546,8 @@ export function critterCall(k: Kit, out: AudioNode, t: number, kind: string): nu
     case 'flap':
       for (let i = 0; i < 4; i++) noise(k, out, t + i * 0.11, { dur: 0.07, peak: 0.1, type: 'bandpass', freq: 700 * p, q: 0.8 });
       return 0.5;
+    case 'gull':
+      return gull(k, out, t);
     case 'splash':
       noise(k, out, t, { dur: 0.25, peak: 0.12, type: 'highpass', freq: 1500 });
       return 0.3;
