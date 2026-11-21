@@ -3,26 +3,30 @@ import { cameraPosition, color, dot, exp, float, fog, luminance, max, mix, norma
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { perfOff } from './perfFlags';
+import { dayLook, type DayLook, type Rgb } from './dayCycle';
+import { lightU } from './lightUniforms';
 
 /**
  * The scene's lighting rig in one place: sky dome, image-based lighting (PMREM of the sky above a sand/sea bounce
  * hemisphere), warm key sun with cascaded shadows, a hemisphere fill tinted by sand and water, aerial-perspective
- * haze and the tone-mapping exposure. Everything weather-dependent is a uniform or light property that
- * `setWeather(t)` blends between a clear late morning (t = 0) and a dark rain squall (t = 1), so a storm can dim the
- * whole scene without rebuilding shaders or the environment map.
+ * haze and the tone-mapping exposure. Everything time- and weather-dependent is a uniform or light property, set
+ * from two inputs:
+ *   - `setDay(look)`: the day/night cycle (dayNight.ts / dayCycle.ts). The rig's own clear-weather key (CLEAR, tuned
+ *     for late morning) is scaled by how the cycle's look at that moment differs from its own phase 0: golden hour,
+ *     dusk and night keep the rig's balance (sun vs hemisphere vs IBL) while following the cycle.
+ *   - `setWeather(t)`: blends that day key toward a dark rain squall (t = 1). The squall is night-aware: it never
+ *     lights the scene more than the time of day does, its haze darkens with the night, and its clouds hide the stars.
+ * No shader or environment-map rebuild either way.
  *
  * For other systems (storm, water, viewmodel):
- *   - `SUN_DIR` direction toward the sun (fixed; shadows and the sky are built around it)
- *   - `lighting.current` the live rig (null before the renderer starts): `.sun`, `.hemi`, `.u` (uniforms), `.weather`
+ *   - `SUN_DIR` direction toward the late-morning sun (env map, impostor bake and viewmodel use it; the live sun is
+ *     lightU.sunDir / lightU.keyDir, moved by the day/night cycle)
+ *   - `lighting.current` the live rig (null before the renderer starts): `.sun`, `.hemi`, `.u` (uniforms), `.weather`, `.night`
  *   - `setWeather(t)` module-level shortcut; safe to call before the rig exists (applied when it's created)
- *   - `glint` uniform: sun-glint strength on water/wet surfaces (1 clear → ~0 under storm cloud)
  */
 
-/** Late-morning sun ≈ 38° elevation. Sky dome, environment map, key light, haze and water glints all derive from this. */
+/** Late-morning sun ≈ 38° elevation (the day/night cycle's phase 0). */
 export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 38), THREE.MathUtils.degToRad(58));
-
-/** Sun-glint strength for water / wet materials (0..1); follows the weather. */
-export const glint = uniform(1);
 
 type WeatherKey = {
   sun: number; sunColor: THREE.Color;
@@ -46,6 +50,20 @@ const STORM: WeatherKey = {
   skyGain: 0.24, skySat: 0.12, turbidity: 10, rayleigh: 0.4, clouds: 1, cloudDensity: 1,
   haze: new THREE.Color(0x5f6a74), hazeSun: new THREE.Color(0x707a84), hazeDensity: 0.0065,
 };
+
+/** The cycle's phase-0 look (= late morning, what CLEAR is tuned for): setDay scales CLEAR by look ÷ this. */
+const DAY0 = dayLook(0);
+const tmpA = new THREE.Color(), tmpB = new THREE.Color();
+/** out = base × (look ÷ ref) per linear channel (`hueOnly`: the ratio normalised to its largest channel). */
+function ratioTint(base: THREE.Color, look: Rgb, ref: Rgb, out: THREE.Color, hueOnly = false) {
+  const a = tmpA.setRGB(look[0], look[1], look[2], THREE.SRGBColorSpace), b = tmpB.setRGB(ref[0], ref[1], ref[2], THREE.SRGBColorSpace);
+  let r = a.r / Math.max(b.r, 1e-4), g = a.g / Math.max(b.g, 1e-4), bl = a.b / Math.max(b.b, 1e-4);
+  if (hueOnly) { const m = Math.max(r, g, bl, 1e-4); r /= m; g /= m; bl /= m; }
+  return out.setRGB(base.r * r, base.g * g, base.b * bl);
+}
+const cloneKey = (k: WeatherKey): WeatherKey => ({
+  ...k, sunColor: k.sunColor.clone(), hemiSky: k.hemiSky.clone(), hemiGround: k.hemiGround.clone(), haze: k.haze.clone(), hazeSun: k.hazeSun.clone(),
+});
 
 const SKY = { turbidity: CLEAR.turbidity, rayleigh: CLEAR.rayleigh, mieCoefficient: 0.002, mieDirectionalG: 0.9 };
 
@@ -87,10 +105,17 @@ export class Lighting {
     hazeHeightFalloff: uniform(0.012),
     /** brightness of the bounce hemisphere baked into the environment map (tweak, then buildEnvironment()) */
     envGround: uniform(12),
-    glint,
   };
   /** current weather 0 (clear) .. 1 (storm) */
   weather = 0;
+  /** time of day: 0 day → 1 night (setDay) */
+  night = 0;
+  /** clear-weather key for the current time of day (setDay); setWeather blends it toward the squall */
+  private day = cloneKey(CLEAR);
+  /** the storm key for the current time of day (apply's scratch) */
+  private squall = cloneKey(STORM);
+  /** water glint colour × strength for the time of day, before the storm dims it */
+  private dayGlint = new THREE.Vector3(1, 1, 1);
   /** the cascaded shadow node (sky.ts culls small casters out of its far cascades and caches them) */
   csm: CSMShadowNode | null = null;
 
@@ -120,7 +145,7 @@ export class Lighting {
     // the horizon while nearby props stay crisp), warmer when looking toward the sun.
     const u = this.u;
     const viewDir = normalize(positionWorld.sub(cameraPosition));
-    const toSun = pow(max(dot(viewDir, uniform(SUN_DIR.clone())), 0), 6);
+    const toSun = pow(max(dot(viewDir, lightU.sunDir), 0), 6);
     const dist = positionView.z.negate();
     const heightK = exp(max(positionWorld.y, 0).mul(u.hazeHeightFalloff).negate());
     // a little extra density past ~250 m: the horizon line melts into the sky instead of a hard sea edge
@@ -129,7 +154,7 @@ export class Lighting {
     scene.fogNode = fog(mix(u.hazeColor, u.hazeSunColor, toSun.mul(0.6)), amount);
 
     lighting.current = this;
-    if (pendingWeather !== null) this.setWeather(pendingWeather);
+    this.setWeather(pendingWeather ?? 0);
   }
 
   /**
@@ -164,7 +189,7 @@ export class Lighting {
     }
   }
 
-  private envIntensity() { return THREE.MathUtils.lerp(CLEAR.env, STORM.env, this.weather); }
+  private envIntensity() { return THREE.MathUtils.lerp(this.day.env, this.squall.env, this.weather); }
 
   /**
    * Cascaded shadows: crisp near the player, still casting long shadows out to `far`. CSMShadowNode snaps each
@@ -187,32 +212,78 @@ export class Lighting {
     return !!prev;
   }
 
-  /** Blend clear (0) → storm (1). Cheap: lights, uniforms and exposure only (no shader or env-map rebuild). */
+  /**
+   * Time of day (dayNight.ts, whenever the cycle's look changes). CLEAR scaled by the look relative to the cycle's
+   * phase 0: light, ambient (IBL + hemisphere), exposure and haze follow the cycle; the sky's shape stays the rig's.
+   */
+  setDay(look: DayLook) {
+    const d = this.day, r = DAY0, k = look.light / r.light, amb = look.env / r.env;
+    d.sun = CLEAR.sun * k;
+    ratioTint(CLEAR.sunColor, look.lightC, r.lightC, d.sunColor);
+    d.hemi = CLEAR.hemi * amb;
+    ratioTint(CLEAR.hemiSky, look.haze, r.haze, d.hemiSky, true);
+    d.env = CLEAR.env * amb;
+    d.exposure = CLEAR.exposure * (look.exposure / r.exposure);
+    d.skyGain = CLEAR.skyGain * (look.skyGain / r.skyGain);
+    d.skySat = CLEAR.skySat * (look.skySat / r.skySat);
+    ratioTint(CLEAR.haze, look.haze, r.haze, d.haze);
+    ratioTint(CLEAR.hazeSun, look.hazeSun, r.hazeSun, d.hazeSun);
+    d.hazeDensity = CLEAR.hazeDensity * (look.density / r.density);
+    this.night = look.night;
+    // sun sparkle on the water → a fainter, cooler moon path
+    const g = Math.min(1, k * (1 + 3 * look.night)), c = d.sunColor;
+    this.dayGlint.set(c.r / CLEAR.sunColor.r * g, c.g / CLEAR.sunColor.g * g, c.b / CLEAR.sunColor.b * g);
+    this.apply();
+  }
+
+  /** Blend clear (0) → storm (1) on top of the time of day. Cheap: lights, uniforms and exposure only. */
   setWeather(t: number) {
     if (!Number.isFinite(t)) { console.warn(`[world/lighting] setWeather(${t}) ignored`); return; }
-    t = Math.min(1, Math.max(0, t));
-    this.weather = t;
+    this.weather = Math.min(1, Math.max(0, t));
+    this.apply();
+  }
+
+  /**
+   * The squall for this time of day: never more key light or IBL than the day key has, overcast fill that follows
+   * the day's ambient, haze darkened by the night (a night storm reads as a stormy night, not a grey day or double
+   * darkness). Then lerp day → squall by the weather.
+   */
+  private apply() {
+    const d = this.day, q = this.squall, t = this.weather, n = this.night;
+    const dark = 1 - 0.55 * n;
+    q.sun = Math.min(d.sun, STORM.sun);
+    q.hemi = Math.max(d.hemi, STORM.hemi * (d.env / CLEAR.env));
+    q.env = Math.min(d.env, STORM.env);
+    q.exposure = d.exposure * (STORM.exposure / CLEAR.exposure);
+    q.skyGain = Math.min(d.skyGain, STORM.skyGain);
+    q.skySat = Math.min(d.skySat, STORM.skySat);
+    q.haze.copy(STORM.haze).multiplyScalar(dark);
+    q.hazeSun.copy(STORM.hazeSun).multiplyScalar(dark);
+    q.hazeDensity = Math.max(d.hazeDensity, STORM.hazeDensity);
+
     const L = THREE.MathUtils.lerp;
     const C = (a: THREE.Color, b: THREE.Color, out: THREE.Color) => out.copy(a).lerp(b, t);
-    this.sun.intensity = L(CLEAR.sun, STORM.sun, t);
-    C(CLEAR.sunColor, STORM.sunColor, this.sun.color);
-    this.hemi.intensity = L(CLEAR.hemi, STORM.hemi, t);
-    C(CLEAR.hemiSky, STORM.hemiSky, this.hemi.color);
-    C(CLEAR.hemiGround, STORM.hemiGround, this.hemi.groundColor);
+    this.sun.intensity = L(d.sun, q.sun, t);
+    C(d.sunColor, q.sunColor, this.sun.color);
+    this.hemi.intensity = L(d.hemi, q.hemi, t);
+    C(d.hemiSky, q.hemiSky, this.hemi.color);
+    C(d.hemiGround, q.hemiGround, this.hemi.groundColor);
     this.scene.environmentIntensity = this.envIntensity();
-    this.gpu.toneMappingExposure = L(CLEAR.exposure, STORM.exposure, t);
+    this.gpu.toneMappingExposure = L(d.exposure, q.exposure, t);
     const u = this.u;
-    u.skyGain.value = L(CLEAR.skyGain, STORM.skyGain, t);
-    u.skySaturation.value = L(CLEAR.skySat, STORM.skySat, t);
-    this.sky.turbidity.value = L(CLEAR.turbidity, STORM.turbidity, t);
-    this.sky.rayleigh.value = L(CLEAR.rayleigh, STORM.rayleigh, t);
-    this.sky.cloudCoverage.value = L(CLEAR.clouds, STORM.clouds, t);
-    this.sky.cloudDensity.value = L(CLEAR.cloudDensity, STORM.cloudDensity, t);
+    u.skyGain.value = L(d.skyGain, q.skyGain, t);
+    u.skySaturation.value = L(d.skySat, q.skySat, t);
+    this.sky.turbidity.value = L(d.turbidity, q.turbidity, t);
+    this.sky.rayleigh.value = L(d.rayleigh, q.rayleigh, t);
+    this.sky.cloudCoverage.value = L(d.clouds, q.clouds, t);
+    this.sky.cloudDensity.value = L(d.cloudDensity, q.cloudDensity, t);
     this.sky.showSunDisc.value = t < 0.6 ? 1 : 0;
-    C(CLEAR.haze, STORM.haze, u.hazeColor.value);
-    C(CLEAR.hazeSun, STORM.hazeSun, u.hazeSunColor.value);
-    u.hazeDensity.value = L(CLEAR.hazeDensity, STORM.hazeDensity, t);
-    glint.value = Math.pow(1 - t, 2);
+    C(d.haze, q.haze, u.hazeColor.value);
+    C(d.hazeSun, q.hazeSun, u.hazeSunColor.value);
+    u.hazeDensity.value = L(d.hazeDensity, q.hazeDensity, t);
+    // storm clouds hide the stars and moon (lightning still shows through the dark sky gain)
+    lightU.night.value = n * (1 - 0.85 * t);
+    (lightU.glint.value as THREE.Vector3).copy(this.dayGlint).multiplyScalar((1 - t) * (1 - t));
   }
 
   dispose() {

@@ -3,7 +3,7 @@ import { NEEDS_GPU, ON_CI } from './gpu';
 
 test.skip(ON_CI, NEEDS_GPU);
 
-type Stats = { state: string; played: number; dropped: number; active: number; bySound: Record<string, number> };
+type Stats = { state: string; played: number; dropped: number; active: number; bySound: Record<string, number>; music: string };
 
 const stats = (page: Page) => page.evaluate(() =>
   (window as unknown as { __faefight: { audio: () => Stats } }).__faefight.audio());
@@ -25,6 +25,10 @@ test('audio: context starts on click, sounds play while shooting, M mutes, no co
   await page.getByTestId('open-settings').click();
   await page.getByTestId('settings-tab-audio').click();
   await expect(page.getByTestId('set-mute')).toBeChecked();
+  // Mixer: one slider per bus, music on by default at a modest level.
+  for (const id of ['set-master', 'set-effects', 'set-ui', 'set-ambience', 'set-music']) await expect(page.getByTestId(id)).toBeVisible();
+  await expect(page.getByTestId('set-music-on')).toBeChecked();
+  await expect(page.getByTestId('set-music')).toHaveValue('0.4');
   await page.getByTestId('settings-close').click();
   await page.keyboard.press('KeyM');
   await expect.poll(muted).toBe(false);
@@ -59,6 +63,12 @@ test('audio: context starts on click, sounds play while shooting, M mutes, no co
     { sound: 'explosion', kind: 'grenade' }, { sound: 'explosion', kind: 'charge', far: true },
     ...['impact', 'hurt', 'hitmarker', 'splash', 'coin', 'loot', 'purchase', 'vault', 'kill', 'death', 'eliminated', 'win', 'lose', 'draw', 'alarm', 'escaped', 'horn'].map((sound) => ({ sound })),
     { sound: 'tick', kind: 'normal' }, { sound: 'tick', kind: 'urgent' },
+    // Round 11: impacts by surface, equip, jump, wet/gravel steps, UI click and the feature hooks.
+    ...['wood', 'metal', 'concrete', 'sand', 'grass', 'water', 'gravel'].map((kind) => ({ sound: 'impact', kind })),
+    ...['fists', 'pistol', 'smg', 'shotgun', 'rifle', 'rocket'].map((kind) => ({ sound: 'equip', kind, own: true })),
+    ...['wet', 'gravel', 'water'].flatMap((kind) => [{ sound: 'footstep', kind }, { sound: 'land', kind }, { sound: 'jump', kind }]),
+    ...['click', 'grappleFire', 'grappleAttach', 'grappleReel', 'grappleRelease', 'spikeArm', 'spikeTrigger', 'dockCreak', 'dockBreak'].map((sound) => ({ sound })),
+    { sound: 'shellCasing', kind: 'concrete' }, { sound: 'shellCasing', kind: 'grass' }, { sound: 'ragdollThud', kind: 'wood' },
   ];
   const playedBefore = (await stats(page)).played;
   for (const v of variants) {
@@ -71,6 +81,9 @@ test('audio: context starts on click, sounds play while shooting, M mutes, no co
     await page.waitForTimeout(20); // new frame → per-frame caps reset
   }
   await expect.poll(async () => (await stats(page)).played - playedBefore).toBeGreaterThanOrEqual(variants.length - 2);
+
+  // Music plays during the match, in a mood (calm while building at the start).
+  expect(['calm', 'tense']).toContain((await stats(page)).music);
 
   // Frame rate stays healthy with audio running (HUD shows a live fps readout).
   const fps = Number((await page.locator('.fps').textContent())?.replace(/\D/g, ''));

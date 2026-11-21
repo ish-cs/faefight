@@ -14,7 +14,8 @@ const MODELS: Record<CosmeticKind, { build: (b: StaticBatch) => void; cast: bool
   lamp: { build: lampModel, cast: true },
   bollard: { build: bollardModel, cast: false },
 };
-const BARREL_COLORS = [0x1f5fa8, 0xb23a26, 0x46505a, 0x2f6b3a];
+// No red: red drums are the explosive ones (hazards.ts).
+const BARREL_COLORS = [0x1f5fa8, 0x6b6448, 0x46505a, 0x2f6b3a];
 const GRIME = new THREE.Color(0x5e5244), CHALK = new THREE.Color(0xc8c4b8);
 /** Sun-faded / grimy paint per barrel (instance tint; the weathered paint material adds rust and chips on top). */
 function fadedBarrel(c: THREE.Color, id: number) {

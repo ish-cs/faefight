@@ -1,7 +1,7 @@
 import { LIFECYCLE, MAP, PLAYER, SEAL, WEAPONS } from './constants';
 import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
-import { addKind, countOf, emptyHotbar, heldKinds, takeOut } from './hotbar';
-import type { IslandLayout } from './map';
+import { addKind, countOf, emptyHotbar, heldKinds, isGunItem, takeOut } from './hotbar';
+import { spawnYaw, type IslandLayout } from './map';
 import type { Physics } from './physics';
 import { refillStamina, STAMINA } from './movement';
 import { isSealed } from './seal';
@@ -63,12 +63,14 @@ const isEmpty = (inv: Inventory) =>
  * Moves what fits from a loot bag into a player's inventory: cash always, kinds the player already
  * holds, and new kinds while hotbar slots are free. Returns true when the bag is now empty.
  */
-export function pickUp(p: PlayerState, bag: Inventory): boolean {
+export function pickUp(p: PlayerState, bag: Inventory, ammoOnly = false): boolean {
   const got = emptyInventory();
   got.cash = bag.cash;
   bag.cash = 0;
   mergeInventory(p.inv, got);
   for (const kind of heldKinds(bag)) {
+    // Crate ammo: only for someone who owns that gun (it goes to their spare rounds).
+    if (ammoOnly && isGunItem(kind) && !p.inv.weapons[kind]) continue;
     if (countOf(p.inv, kind) === 0 && addKind(p.hotbar, kind) < 0) continue;
     const taken = takeOut(bag, kind, 'stack');
     if (taken) mergeInventory(p.inv, taken);
@@ -80,6 +82,8 @@ export function killPlayer(
   s: MatchStateCore, physics: Physics, victimId: number, now: number, inWater: boolean, killer: number | null = null,
   /** What killed them when it wasn't a player ('storm', 'lightning'); recorded on the kill event. */
   cause?: string,
+  /** What set it off when it wasn't the killer's own weapon (e.g. 'barrel'): the feed says "X via barrel". */
+  via?: string,
 ): MatchEvent[] {
   const p = s.players.get(victimId);
   if (!p) throw new Error(`killPlayer: no player ${victimId}`);
@@ -111,12 +115,12 @@ export function killPlayer(
     p.respawnAt = null;
     p.eliminated = true;
     physics.setPlayerPos(victimId, PARKED);
-    const kill = cause ? { victim: victimId, killer, inWater, cause } : { victim: victimId, killer, inWater };
+    const kill = { victim: victimId, killer, inWater, ...(cause ? { cause } : {}), ...(via ? { via } : {}) };
     return [ev(now, 'kill', kill), ev(now, 'eliminated', { player: victimId })];
   }
   p.respawnAt = now + LIFECYCLE.respawnSec;
   physics.setPlayerPos(victimId, PARKED);
-  return [ev(now, 'kill', cause ? { victim: victimId, killer, inWater, cause } : { victim: victimId, killer, inWater })];
+  return [ev(now, 'kill', { victim: victimId, killer, inWater, ...(cause ? { cause } : {}), ...(via ? { via } : {}) })];
 }
 
 /**
@@ -187,7 +191,7 @@ export function tickLifecycle(
     for (const p of s.players.values()) {
       if (!p.alive || dist(p.pos, bag.pos) > LIFECYCLE.lootPickupRadius) continue;
       if (bag.noPickup && bag.noPickup.id === p.id && now < bag.noPickup.until) continue;
-      if (pickUp(p, bag.inv)) { s.loot.delete(bag.id); break; }
+      if (pickUp(p, bag.inv, bag.ammoOnly)) { s.loot.delete(bag.id); break; }
     }
   }
 
@@ -215,6 +219,10 @@ export function tickLifecycle(
     grantLockedGuns(p);
     // Come back with a pistol + one spare mag so a camper with a rifle isn't a guaranteed kill.
     if (!p.inv.weapons.pistol && addKind(p.hotbar, 'pistol') >= 0) p.inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag };
+    // Face out through the bunker's front doorway from wherever the free spot put us; level the view.
+    p.yaw = spawnYaw(map[p.island].bunker, spawn);
+    p.pitch = 0;
+    out.push(ev(now, 'spawn', { player: p.id, yaw: p.yaw }));
     p.invulnUntil = now + LIFECYCLE.spawnProtectMaxSec;
     p.spawnProtected = true;
     physics.setPlayerPos(p.id, spawn);

@@ -1,3 +1,4 @@
+import * as dm from '../dmath';
 import type { Vec3 } from '../types';
 import { clone, v3 } from '../vec';
 import { islandAt } from './nav';
@@ -38,7 +39,7 @@ export class Memory {
     const dt = Number.isNaN(this.lastNow) ? 0 : Math.max(0, now - this.lastNow);
     this.lastNow = now;
     if (dt > 0) {
-      const k = 0.5 ** (dt / GRUDGE_HALF_LIFE);
+      const k = dm.exp(-Math.LN2 * dt / GRUDGE_HALF_LIFE); // 0.5^(dt/half-life)
       for (const [id, g] of this.grudge) {
         if (g * k < 0.5) this.grudge.delete(id);
         else this.grudge.set(id, g * k);
@@ -111,10 +112,12 @@ export type RivalFacts = {
   onMyIsland: boolean;
   /** Seen away from their own island recently (home unguarded). */
   away: boolean;
+  /** I carry a full seal kit. */
+  kit?: boolean;
 };
 
 /** Desirability of going after this rival; higher is better. Personality only shifts weights. */
-export function rivalScore(f: RivalFacts, t: Traits): number {
+export function rivalScore(f: RivalFacts, t: Traits, sealAwayTarget = 0.6): number {
   let s = 1;
   s -= f.reach ? 0 : Math.min(2, f.scaffolds * 0.06 * (1.2 - 0.4 * t.aggression));
   s -= (f.dist / 100) * (0.25 + 0.35 * t.aggression);
@@ -127,6 +130,8 @@ export function rivalScore(f: RivalFacts, t: Traits): number {
   if (f.kills > 0 && f.kills >= f.leaderKills) s += 0.15 + 0.25 * t.aggression;
   if (f.onMyIsland) s += 0.5 + 0.6 * t.caution;
   if (f.away && !f.sealed) s += 0.35 * t.opportunism;
+  // Kit in hand, owner out and their island in walking reach: seal the empty bunker.
+  if (f.kit && f.away && f.reach && !f.sealed) s += sealAwayTarget;
   return s;
 }
 

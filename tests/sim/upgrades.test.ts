@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { GENERATOR_LEVELS, LOCK_PRICE_MULT, WEAPONS } from '../../src/sim/constants';
+import { GENERATOR_LEVELS, LIFECYCLE, LOCK_PRICE_MULT, WEAPONS } from '../../src/sim/constants';
 import { buy, grantLockedGuns, lockPrice, tickGenerator } from '../../src/sim/economy';
 import { Match } from '../../src/sim/match';
 import { nextPurchase, PLAIN_STYLE, shoppingPlan } from '../../src/sim/bots/plans';
@@ -71,7 +71,7 @@ describe('generator upgrade', () => {
     expect(snap.players[0].inv.cash).toBe(1550 - 1450);
 
     m.debugKill(1);
-    for (let i = 0; i < 30 * 4; i++) snap = m.tick(new Map());
+    for (let i = 0; i < 30 * (LIFECYCLE.respawnSec + 1); i++) snap = m.tick(new Map());
     expect(snap.players[0].alive).toBe(true);
     expect(snap.genLevels).toEqual([4, 1]);
 
@@ -167,7 +167,7 @@ describe('gun lock', () => {
     m.debugKill(1);
     snap = m.tick(new Map());
     expect(snap.loot.some((b) => b.inv.weapons.smg)).toBe(true); // dropped like any gun
-    for (let i = 0; i < 30 * 4; i++) snap = m.tick(new Map());
+    for (let i = 0; i < 30 * (LIFECYCLE.respawnSec + 1); i++) snap = m.tick(new Map());
     const me = snap.players[0];
     expect(me.alive).toBe(true);
     expect(me.inv.weapons.smg).toEqual({ mag: WEAPONS.smg.mag, spare: WEAPONS.smg.mag });

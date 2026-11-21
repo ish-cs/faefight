@@ -55,6 +55,11 @@ export class ReplayUploader {
     return job;
   }
 
+  /** Resolves once every queued upload is done, or after `timeoutMs` (leaving a match waits for its recording to go up). */
+  settled(timeoutMs = 8000): Promise<void> {
+    return Promise.race([this.queue.then(() => {}, () => {}), new Promise<void>((r) => setTimeout(r, timeoutMs))]);
+  }
+
   private async upload(bytes: Uint8Array, meta: RecordingMeta): Promise<boolean> {
     try {
       await this.idle();

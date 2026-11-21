@@ -9,7 +9,7 @@ difficulty = human skill (reaction, aim, decision speed, sloppiness), never arti
 You win by being the last player not eliminated. Elimination needs two things: your bunker sealed **and** you dead.
 Kills alone never end anything before sudden death, so a kill is only worth as much as what it sets up:
 
-- **Kill + seal inside the 3 s respawn window** → the victim respawns trapped, with fists only. Fists do 7 dmg/hit to
+- **Kill + seal inside the 5 s respawn window (3 s before 2026-11-21)** → the victim respawns trapped, with fists only. Fists do 7 dmg/hit to
   wood and 5 to sandbags (2 hits/s): clearing even one plug takes 15–18 s, longer than the 10 s breakout window.
   So a seal on a respawning player is in practice an elimination.
 - **Seal while the owner is away** (out bridging, fighting someone else) → their next death is final. In an 8-player
@@ -211,3 +211,44 @@ seal, damping retreats from far shooters, giving up on unreachable loot.
   as before).
 - **Retreat only when losing**: no disengage while ahead in HP + shield of the enemy in front of me; a retreat
   (disengage/heal) ends after 20 s unless still being hit or under 30 HP.
+
+## 12. Elimination pipeline and movement fixes (branch `bots-elimination`)
+
+All tunables now live in `bots/params.ts` (`BotParams = { drive, buildSkill, buildTuning }`, flat keys via
+`flattenParams` / `withParams`, search box `PARAM_RANGES`); a Bot takes them as its 5th constructor argument.
+
+- **Water**: jumps only where the whole arc stays over solid ground and never off a deck; stuck detection runs after the
+  edge check (held back at an edge isn't stuck); in the air bots steer to land on something solid; hanging over a
+  rim they step back; edge probes at body width and stopping distance; on a deck they walk its centreline; detours
+  keep one side for 1.5 s. 8-medium drownings went from 8 to 0 on seed 7 (tests/sim/botDrown.test.ts: no
+  unexplained water deaths).
+- **Fights that never end**: an empty mag is reloaded with an enemy in sight (bots stood with mag 0 / spare 72);
+  in sudden death fists fight too. The storm fence only applies at the ring edge (it blocked walking home for decks),
+  and no retreat into the storm. Medium storm endgame: 20/20 seeds resolve with ≤ 1 storm death (STORM_SEEDS=1-20).
+- **Goal watchdog**: a goal with no ground covered, nothing built, bought or shot for `stallSec` is dropped for
+  `stallBanSec` (and its rival penalised): bots used to sit 300+ s in seal/bridge plans that couldn't work.
+- **Elimination**: always a full seal kit when there's a rival; steel kit from $550 (a respawn pistol can't break it);
+  seal empty bunkers (owner seen away, or not seen home lately); seal race when a rival dies near their open bunker;
+  camp a sealed bunker's weakest door while the owner is in or around it.
+
+Measured (GitHub Actions, 20 seeds; base = drive branch + falloff → this branch):
+
+| | base | now |
+|---|---|---|
+| 8-PRO decisive < 15:00 · median elims < 15:00 | 0/20 · 3 | 0/20 · 3 |
+| 8-Hard | 0/20 · 2 | 0/20 · 4 |
+| 8-mixed | 0/20 · 2.5 | 0/20 · 3–4 |
+| engagement PRO / Hard / mixed | 42 / 34 / 34 m | 40 / 32 / 30 m |
+| attack share (PRO) · home | 37 % · 10 % | 51 % · 7 % |
+| avg length (PRO) | 17.4 min | 16.4 min |
+| Hard 1v1 decisive · PRO vs Hard | 14/20 · 75 % | 13–16/20 · 70–90 % |
+
+Why games still don't end before 15:00: ~145 kills but only 2–5 seals per 8-PRO game; only ~6 % of kills happen
+within 25 m of the victim's bunker (most at the center and on bridges), bots live ~45 s, so a kit rarely reaches a
+rival's door, and a trapped respawn has spawn protection so a camper can't finish them. Tried and dropped: holding
+fire past the gun's damage floor (`drive.fireRangeMult` = 1: PRO engagement 41 → 33 m, but Hard 1v1 decisive
+16 → 11/20; left at 2 = off).
+
+Rule levers measured on this branch (8-PRO, 20 seeds, median eliminations before 15:00, decisive): respawn 3 → 10 s:
+5, 0/20; breakout 10 → 5 s: 4, 0/20; both: 5, 0/20. Neither gets near the ~7 eliminations a decisive 8-player game
+needs; see the agent report for the stronger levers.

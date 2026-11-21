@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { HEAD, PIECES, PLAYER, TICK_HZ } from './constants';
 import { generatorZone, islandNoBuildZones, potionZone, type NoBuildZone } from './building';
@@ -46,7 +47,7 @@ const ISLAND_DEPTH = 12;
 /** Sim ticks per second: movePlayer's `desired` is one tick of motion. */
 const PUSH_HZ = TICK_HZ;
 const CAPSULE_HALF = (PLAYER.height - 2 * PLAYER.radius) / 2;
-const quatY = (r: number) => ({ x: 0, y: Math.sin(r / 2), z: 0, w: Math.cos(r / 2) });
+const quatY = (r: number) => ({ x: 0, y: dm.sin(r / 2), z: 0, w: dm.cos(r / 2) });
 
 /** Station props (generator, vault, shop NPC) as solid boxes: half extents. */
 export const PROP_HALF = { generator: v3(0.6, 0.7, 0.6), vault: v3(0.6, 1.0, 0.5), shop: v3(0.3, 0.9, 0.3) };
@@ -54,7 +55,7 @@ export const PROP_HALF = { generator: v3(0.6, 0.7, 0.6), vault: v3(0.6, 1.0, 0.5
 export const CENTER_PROP_HALF = { goldGen: v3(0.6, 0.7, 0.6), supplyGen: v3(0.7, 0.6, 0.7), potionShop: v3(0.3, 0.9, 0.3) };
 
 /** Center stations face the island middle. */
-export const centerPropYaw = (p: { x: number; z: number }, c: { x: number; z: number }) => Math.atan2(p.x - c.x, p.z - c.z);
+export const centerPropYaw = (p: { x: number; z: number }, c: { x: number; z: number }) => dm.atan2(p.x - c.x, p.z - c.z);
 
 export class Physics {
   private world: RAPIER.World;

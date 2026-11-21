@@ -91,6 +91,7 @@ export function blockedOnIsland(def: MapDef, isl: IslandLayout, x: number, z: nu
     }
   }
   for (const s of def.statics) if (inBox(x, z, s.center.x, s.center.z, s.half.x, s.half.z, s.rotY, 0.4)) return 'cover';
+  for (const h of def.hazards ?? []) if (Math.hypot(x - h.pos.x, z - h.pos.z) < 1.2) return 'hazard';
   return null;
 }
 
@@ -103,6 +104,7 @@ export function blockedOnCenter(def: MapDef, x: number, z: number): string | nul
   }
   if (Math.hypot(x - c.shieldWell.x, z - c.shieldWell.z) < 2.5) return 'well';
   for (const s of def.statics) if (inBox(x, z, s.center.x, s.center.z, s.half.x, s.half.z, s.rotY, 0.4)) return 'cover';
+  for (const h of def.hazards ?? []) if (Math.hypot(x - h.pos.x, z - h.pos.z) < 1.2) return 'hazard';
   return null;
 }
 

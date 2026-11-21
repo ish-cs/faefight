@@ -143,7 +143,7 @@ export function lightMast(b: StaticBatch, B: THREE.Matrix4) {
   const M = mats();
   b.add(M.galv, cyl(0.18, 18, 8), at(B, mat(0, 9, 0)));
   b.add(M.dark, box(1.8, 0.6, 0.4), at(B, mat(0, 18.2, 0)));
-  b.add(M.paint, box(1.6, 0.4, 0.05), at(B, mat(0, 18.1, -0.22)), 0xfff6d8);
+  b.add(M.lamp, box(1.6, 0.4, 0.05), at(B, mat(0, 18.1, -0.22)), 0xfff6d8);
 }
 
 export function bollard(b: StaticBatch, B: THREE.Matrix4) {

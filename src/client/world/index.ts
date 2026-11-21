@@ -1,15 +1,17 @@
 import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
-import type { FirePatch, MatchEvent, PieceState, PlayerState, Snapshot } from '../../sim/types';
+import type { FirePatch, HazardNet, MatchEvent, PieceState, PlayerState, Snapshot } from '../../sim/types';
 import { FireFx } from './fireFx';
 import { ImpactMarks } from './impacts';
 import { clearNpcSpots } from '../characters/npcSpots';
 import { CosmeticLayer } from './cosmetics';
 import { Debris } from './debris';
+import { HazardLayer } from './hazards';
 import { Critters } from './critters';
 import type { CritterSound, V3 } from './critterSim';
 import { Boats, gullPerches, Gulls } from './dressing';
-import { defineDetailKinds } from './detail';
+import { LampPools } from './dayNight';
+import { defineDetailKinds, lampSpots } from './detail';
 import { GameProps } from './gameProps';
 import { PROP_KINDS } from '../../sim/props';
 import { Grass } from './grass';
@@ -49,6 +51,10 @@ export class World {
   private cosmetics: CosmeticLayer | null = null;
   /** Tier A gameplay props (sim-owned rigid bodies), posed from snapshots. */
   private gameProps: GameProps | null = null;
+  /** Night light pools under the lamps (day/night cycle). */
+  private lampPools: LampPools | null = null;
+  /** Explosive barrels / propane tanks / supply crates. */
+  private hazards: HazardLayer | null = null;
   /** instanced grass beds (high/ultra) */
   readonly grass = new Grass();
   /** instanced small detail (litter, rubble, shells, seaweed…) */
@@ -92,6 +98,7 @@ export class World {
     const noProps = q.includes('noprops');
     // finer A/B switches: ?noclusters / ?nogameprops / ?nodebris drop one layer each
     const noClusters = noProps || q.includes('noclusters'), noGameProps = noProps || q.includes('nogameprops'), noDebris = noProps || q.includes('nodebris');
+    lampSpots.length = 0; // the harbor street lamps below register their light pools
     const { root, collidables } = buildIslands(def, teamColors, this.scatter, noClusters ? undefined : this.props);
     this.props.build();
     this.scene.add(this.props.root);
@@ -140,6 +147,10 @@ export class World {
       const cam = this.sky.camera.position;
       gameProps.onPose = (id, p, q) => sim.moveObstacle(id, p, [q.x, q.y, q.z, q.w], cam);
     });
+    this.lampPools = new LampPools(lampSpots, cos);
+    this.scene.add(this.lampPools.mesh);
+    this.hazards = new HazardLayer(def.hazards ?? []);
+    this.scene.add(this.hazards.root);
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
     // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
     // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
@@ -148,7 +159,7 @@ export class World {
       r.updateMatrixWorld(true);
       r.traverse((o) => { o.matrixAutoUpdate = false; o.matrixWorldAutoUpdate = false; });
     }
-    console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
+    console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics, ${(def.hazards ?? []).length} hazards in ${Math.round(performance.now() - t0)} ms`);
   }
 
   /** Drop a previous map (setMap twice in one session). Shared materials/textures stay cached. */
@@ -178,10 +189,14 @@ export class World {
     this.gameProps?.dispose();
     this.gameProps = null;
     this.props.clear();
+    this.lampPools?.dispose();
+    this.lampPools = null;
+    this.hazards?.dispose();
+    this.hazards = null;
   }
 
   /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
-  syncCosmetics(broken: number[]) { this.cosmetics?.sync(broken); }
+  syncCosmetics(broken: number[]) { this.cosmetics?.sync(broken); this.lampPools?.sync(broken); }
 
   /** A cosmetic prop just broke: debris burst at its position. */
   cosmeticEvent(e: MatchEvent) {
@@ -191,6 +206,12 @@ export class World {
 
   /** Snapshot `props` (displaced gameplay props; the rest are at spawn). */
   syncProps(poses: Snapshot['props']) { this.gameProps?.sync(poses); }
+
+  /** Barrels / tanks / crates: snapshot state (gone, fusing). */
+  syncHazards(hz: HazardNet[] | undefined) { this.hazards?.sync(hz); }
+
+  /** `hazard` events and hazard explosions → fuse fx, fireball debris, scorch, crate splinters. */
+  hazardEvent(e: MatchEvent) { this.hazards?.onEvent(e, this.pieceFx.particles); }
 
   syncPieces(pieces: PieceState[], fires?: FirePatch[]) {
     this.pieces.sync(pieces);
@@ -238,6 +259,7 @@ export class World {
     this.impacts.update();
     this.fire.setQuality(this.sky.quality);
     this.fire.update(Math.min(0.05, dt), this.sky.camera);
+    this.hazards?.update(now, this.pieceFx.particles);
     this.sky.render(); // cascaded shadows follow the camera themselves
   }
 }

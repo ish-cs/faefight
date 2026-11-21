@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { emptyInventory } from '../../src/sim/economy';
 import { buildMap } from '../../src/sim/map';
 import type { MatchEvent, MatchEventType, PieceState, PlayerState, Snapshot, Vec3 } from '../../src/sim/types';
-import { pieceSurface, shoreDistance, SoundDirector, surfaceAt, type Cue } from '../../src/client/audio/events';
+import { occlusion, pieceSurface, shoreDistance, SoundDirector, surfaceAt, type Cue } from '../../src/client/audio/events';
 import {
   audibility, distanceCutoff, distanceGain, echoSend, heartbeatInterval, muffleCutoff, VoiceLimiter, waveLevel,
 } from '../../src/client/audio/voices';
@@ -136,7 +136,7 @@ describe('SoundDirector: events → cues', () => {
     expect(sounds(d.update(snap(1.1, ps, [['hit', { target: ME, by: BOT, amount: 30, shieldAmount: 10, broke: true }]])))).toEqual(['shieldHit', 'shieldBreak', 'hurt']);
     expect(sounds(d.update(snap(1.2, ps, [['hit', { target: BOT, by: ME, amount: 20, shieldAmount: 20, broke: false }]])))).toEqual(['shieldHit', 'hitmarker']);
     const cues = d.update(snap(1.3, ps, [['hit', { target: BOT, by: ME, amount: 20, shieldAmount: 5, broke: true }]]));
-    expect(sounds(cues)).toEqual(['shieldHit', 'shieldBreak', 'impact', 'hitmarker']);
+    expect(sounds(cues)).toEqual(['shieldHit', 'shieldBreak', 'impact', 'hitmarker', 'shieldCrack']); // + your crack
     expect(cues[1].pos).not.toBeNull();
   });
 
@@ -229,8 +229,8 @@ describe('SoundDirector: events → cues', () => {
     for (let i = 0; i <= 30; i++) n += d.update(snap(i / 30, [player(ME, at(i * 0.15))])).filter((c) => c.sound === 'footstep').length; // 4.5 m/s for 1 s
     expect(n).toBe(2); // 4.5 m / 1.7 m stride
     let air = 0;
-    for (let i = 31; i <= 60; i++) air += d.update(snap(i / 30, [player(ME, at(i * 0.15), { vel: { x: 0, y: 3, z: 0 } })])).length;
-    expect(air).toBe(0);
+    for (let i = 31; i <= 60; i++) air += d.update(snap(i / 30, [player(ME, at(i * 0.15), { vel: { x: 0, y: 3, z: 0 } })])).filter((c) => c.sound === 'footstep').length;
+    expect(air).toBe(0); // (leaving the ground is a jump cue, not a step)
     expect(d.update(snap(2.1, [player(ME, at(-15))])).length).toBe(0); // teleport
   });
 
@@ -258,5 +258,86 @@ describe('surfaces', () => {
     expect(surfaceAt({ x: p0.x, y: p0.y + 1.2, z: p0.z + 1.8 }, [scaffold], map)).not.toBe('hollow');
     expect(pieceSurface('container')).toBe('metal');
     expect(pieceSurface('wood')).toBe('wood');
+  });
+});
+
+describe('round 11: equip, jump, bullet impacts by surface, wet/fast steps', () => {
+  it('switching weapons: equip cue (yours 2D, theirs positional), not on the first snapshot', () => {
+    const d = director();
+    expect(sounds(d.update(snap(1, [player(ME, at(0), { equipped: 'rifle' }), player(BOT, at(5))])))).toEqual([]);
+    const cues = d.update(snap(1.1, [player(ME, at(0), { equipped: 'shotgun' }), player(BOT, at(5), { equipped: 'smg' })]));
+    expect(sounds(cues)).toEqual(['equip:shotgun', 'equip:smg']);
+    expect(cues[0]).toMatchObject({ pos: null, own: true });
+    expect(cues[1].pos).not.toBeNull();
+  });
+
+  it('jump: leaving the ground upward makes a push-off on the surface left', () => {
+    const d = director();
+    d.update(snap(1, [player(ME, at(0))]));
+    expect(sounds(d.update(snap(1.04, [player(ME, at(0), { vel: { x: 0, y: 4.4, z: 0 } })])))).toEqual(['jump:grass']);
+    // Still rising next snapshot: no second jump.
+    expect(sounds(d.update(snap(1.07, [player(ME, at(0), { vel: { x: 0, y: 4.0, z: 0 } })])))).toEqual([]);
+  });
+
+  it('bullet impacts: piece material from pieceHit, ground surface, water; none for player hits, misses at max range or same-point shots', () => {
+    const d = director();
+    const ps = [player(ME, at(0)), player(BOT, at(20))];
+    d.update(snap(1, ps));
+    const from = { ...at(0), y: at(0).y + 1.6 };
+    const wall = at(4);
+    const cues = d.update(snap(1.1, ps, [
+      ['shot', { by: BOT, weapon: 'rifle', from, to: wall }],
+      ['pieceHit', { piece: 9, kind: 'metal', by: BOT, source: 'bullet', pos: wall }],
+      ['shot', { by: BOT, weapon: 'rifle', from, to: at(6, 3) }], // grass
+      ['shot', { by: BOT, weapon: 'rifle', from, to: { x: home.x + 100, y: -0.5, z: home.z } }], // water (waterY 0)
+      ['shot', { by: BOT, weapon: 'smg', from, to: { ...from, x: from.x + 45 } }], // max range miss: silent
+      ['shot', { by: BOT, weapon: 'rifle', from, to: at(1) }],
+      ['hit', { target: BOT, by: ME, amount: 10, pos: at(1) }], // a player hit there: flesh, not ground
+    ]));
+    expect(sounds(cues).filter((s) => s.startsWith('impact'))).toEqual(['impact:metal', 'impact:grass', 'impact:water', 'impact']);
+  });
+
+  it('shotgun pellets: at most 3 impact cues per shot', () => {
+    const d = director();
+    const ps = [player(ME, at(0)), player(BOT, at(20))];
+    d.update(snap(1, ps));
+    const from = { ...at(0), y: at(0).y + 1.6 };
+    const tos = Array.from({ length: 9 }, (_, i) => at(5, i * 0.2 - 1));
+    const cues = d.update(snap(1.1, ps, [['shot', { by: BOT, weapon: 'shotgun', from, to: at(5), tos }]]));
+    expect(cues.filter((c) => c.sound === 'impact').length).toBe(3);
+  });
+
+  it('footsteps: sprinting is louder than walking; rain makes them wet', () => {
+    const steps = (speed: number, extra: Partial<Snapshot> = {}) => {
+      const d = director();
+      const out: Cue[] = [];
+      for (let i = 0; i <= 30; i++) out.push(...d.update(snap(i / 30, [player(ME, at(i * speed / 30))], [], extra)).filter((c) => c.sound === 'footstep'));
+      return out;
+    };
+    const walk = steps(4.5), sprint = steps(7.5);
+    expect(sprint.length).toBeGreaterThan(walk.length);
+    expect(sprint[0].gain).toBeGreaterThan(walk[0].gain);
+    expect(walk[0].kind).toBe('grass');
+    expect(steps(4.5, { suddenDeath: true })[0].kind).toBe('wet');
+  });
+});
+
+describe('occlusion', () => {
+  it('a wall between listener and source occludes; open air, scaffold floors and walls off the line do not', () => {
+    const a = { ...at(0), y: at(0).y + 1.6 }, b = { ...at(10), y: at(0).y + 1.2 };
+    // Rotated 90°: its 2 m width spans world Z, so it stands across the X-axis line.
+    const wall: PieceState = { id: 1, kind: 'wood', owner: ME, pos: at(5), rotY: Math.PI / 2, hp: 100 };
+    expect(occlusion(a, b, [], map)).toBe(0);
+    expect(occlusion(a, b, [wall], map)).toBe(1);
+    expect(occlusion(a, b, [{ ...wall, pos: at(5, 4) }], map)).toBe(0);
+    expect(occlusion(a, b, [{ ...wall, kind: 'scaffold' }], map)).toBe(0);
+    expect(occlusion(a, b, [{ ...wall, pos: { ...at(5), y: at(5).y + 5 } }], map)).toBe(0); // above the line
+    expect(occlusion(a, b, [wall, { ...wall, id: 2, pos: at(7) }], map)).toBe(2);
+  });
+  it('bunker walls: one end inside a bunker, the other outside → occluded', () => {
+    const inside = map[0].bunker.center;
+    const outside = { x: inside.x + 30, y: inside.y, z: inside.z };
+    expect(occlusion(inside, outside, [], map)).toBeGreaterThanOrEqual(1);
+    expect(occlusion(outside, { ...outside, x: outside.x + 1 }, [], map)).toBe(0);
   });
 });

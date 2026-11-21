@@ -200,6 +200,7 @@ function recapCard(r: Recap): HTMLElement {
 
 const WEAPON_NAME: Record<string, string> = {
   fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket', grenade: 'Grenade', charge: 'Breach charge',
+  barrel: 'Fuel barrel', propane: 'Propane tank',
 };
 const ITEM_NAME: Record<string, string> = {
   ...WEAPON_NAME, sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
@@ -282,8 +283,16 @@ export class QolHud {
     this.alerts.setMap(map, humanId);
   }
 
-  /** Every applied snapshot (after the HUD's own update). */
-  onSnapshot(s: Snapshot, selected: number) {
+  /** Spectating: compass, alerts, hit arcs and death recap follow the viewed player (viewed.ts). */
+  setViewed(id: number, island: number) {
+    if (id === this.humanId) return;
+    this.humanId = id;
+    if (island >= 0) this.myIsland = island;
+    this.alerts.setViewed(id);
+  }
+
+  /** Every applied snapshot (after the HUD's own update). Returns the death recap on the snapshot you died. */
+  onSnapshot(s: Snapshot, selected: number): Recap | null {
     const now = performance.now();
     const me = s.players.find((p) => p.id === this.humanId);
     for (const e of s.events) {
@@ -297,6 +306,7 @@ export class QolHud {
     if (me) this.updateAmmo(me, selected);
     this.alerts.onSnapshot(s);
     this.updateSummary(s);
+    return r;
   }
 
   /** Remote snapshot arrival (before buffering): drives the "bad connection" indicator. */

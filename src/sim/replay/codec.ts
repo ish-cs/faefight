@@ -1,13 +1,14 @@
 import type { MoveCmd } from '../movement';
 import type { PlayerInput, WeaponKind } from '../types';
-import { REPLAY_FORMAT, type Replay, type TickInput } from './format';
+import { READ_FORMATS, REPLAY_FORMAT, type Replay, type ReplayHeader, type TickInput } from './format';
 
 /**
  * .faereplay binary: "FAER" + format byte + deflate-raw( sections ). Inputs are delta-coded per player
  * against that player's previous input (a bitmask of changed fields, then just those fields), move
  * commands against the input they came with; numbers are zigzag varints when integral, float32 when
  * that's exact, else float64. Everything else (header, ops, event log, summaries) is JSON inside the
- * compressed stream. Lossless: decode(encode(r)) deep-equals r.
+ * compressed stream. Format 2 adds, at the end, the raw match checkpoint a segment starts from
+ * (varint length, 0 = none, then the bytes). Lossless: decode(encode(r)) deep-equals r.
  */
 
 const MAGIC = [0x46, 0x41, 0x45, 0x52]; // FAER
@@ -47,7 +48,7 @@ class Writer {
   f32(v: number) { this.need(4); this.dv.setFloat32(this.n, v, true); this.n += 4; }
   f64(v: number) { this.need(8); this.dv.setFloat64(this.n, v, true); this.n += 8; }
   num(v: number) {
-    if (Number.isInteger(v) && !Object.is(v, -0) && Math.abs(v) < 2 ** 40) { this.u8(0); this.zigzag(v); }
+    if (Number.isInteger(v) && !Object.is(v, -0) && Math.abs(v) < 1099511627776 /* 2^40 */) { this.u8(0); this.zigzag(v); }
     else if (Math.fround(v) === v || Number.isNaN(v)) { this.u8(1); this.f32(v); }
     else { this.u8(2); this.f64(v); }
   }
@@ -91,6 +92,7 @@ class Reader {
     return s;
   }
   json<T>(): T { return JSON.parse(this.str()) as T; }
+  bytes(len: number) { this.check(len); const b = this.buf.slice(this.n, this.n + len); this.n += len; return b; }
 }
 
 const boolWord = (i: PlayerInput) => BOOLS.reduce((w, k, b) => (i[k] ? w | (1 << b) : w), 0);
@@ -228,6 +230,7 @@ async function pipe(data: Uint8Array, stream: CompressionStream | DecompressionS
 export type ReplayParts = Omit<Replay, 'ticks'> & { ticks: TickInput[][] | TickWriter };
 
 export async function encodeReplay(r: ReplayParts): Promise<Uint8Array> {
+  if (r.header.startTick > 0 && !r.checkpoint?.length) throw new Error(`encodeReplay: starts at tick ${r.header.startTick} but has no checkpoint`);
   const w = new Writer();
   w.json(r.header);
   w.json(r.footer);
@@ -239,6 +242,8 @@ export async function encodeReplay(r: ReplayParts): Promise<Uint8Array> {
   for (const h of r.hashes) w.u32(h);
   w.json(r.events);
   w.json(r.seconds);
+  w.varint(r.checkpoint?.length ?? 0);
+  if (r.checkpoint) w.raw(r.checkpoint);
   const body = await pipe(w.bytes(), new CompressionStream('deflate-raw'));
   const out = new Uint8Array(5 + body.length);
   out.set(MAGIC, 0);
@@ -249,12 +254,14 @@ export async function encodeReplay(r: ReplayParts): Promise<Uint8Array> {
 
 export async function decodeReplay(bytes: Uint8Array): Promise<Replay> {
   if (bytes.length < 5 || MAGIC.some((b, i) => bytes[i] !== b)) throw new Error('decodeReplay: not a .faereplay file');
-  if (bytes[4] !== REPLAY_FORMAT) throw new Error(`decodeReplay: format ${bytes[4]} is not supported (this build reads ${REPLAY_FORMAT})`);
+  const format = bytes[4];
+  if (!READ_FORMATS.includes(format)) throw new Error(`decodeReplay: format ${format} is not supported (this build reads ${READ_FORMATS.join(', ')})`);
   let body: Uint8Array;
   try { body = await pipe(bytes.subarray(5), new DecompressionStream('deflate-raw')); }
   catch (err) { throw new Error(`decodeReplay: corrupt data (${(err as Error).message})`); }
   const r = new Reader(body);
-  const header = r.json<Replay['header']>();
+  const header = r.json<ReplayHeader>();
+  if (format === 1) Object.assign(header, { matchId: header.id, segment: 0, startTick: 0 });
   const footer = r.json<Replay['footer']>();
   const ticks = readTicks(r);
   const ops = r.json<Replay['ops']>();
@@ -263,5 +270,8 @@ export async function decodeReplay(bytes: Uint8Array): Promise<Replay> {
   for (let i = 0; i < nh; i++) hashes.push(r.u32());
   const events = r.json<Replay['events']>();
   const seconds = r.json<Replay['seconds']>();
-  return { header, footer, ticks, ops, hashes, events, seconds };
+  const ckLen = format >= 2 ? r.varint() : 0;
+  const checkpoint = ckLen ? r.bytes(ckLen) : null;
+  if (header.startTick > 0 && !checkpoint) throw new Error(`decodeReplay: starts at tick ${header.startTick} but has no checkpoint`);
+  return { header, footer, ticks, ops, hashes, events, seconds, checkpoint };
 }

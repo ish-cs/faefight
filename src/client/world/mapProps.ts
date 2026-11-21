@@ -204,7 +204,7 @@ export function lampModel(b: StaticBatch) {
   b.add(M.paint, new THREE.CylinderGeometry(0.16, 0.2, 0.35, 8), mat(0, 0.175, 0), 0x3c4a52);
   b.add(M.paint, cyl(0.04, 0.9, 6).rotateZ(Math.PI / 2), mat(0.42, 4.75, 0), 0x3c4a52);
   b.add(M.paint, box(0.5, 0.14, 0.26), mat(0.82, 4.72, 0), 0x2f3a40);
-  b.add(M.paint, box(0.42, 0.03, 0.2), mat(0.82, 4.64, 0), 0xfff4d6);
+  b.add(M.lamp, box(0.42, 0.03, 0.2), mat(0.82, 4.64, 0), 0xfff4d6);
 }
 
 /** Palm tree (≈8 m), the backdrop palm with a fixed seed. */

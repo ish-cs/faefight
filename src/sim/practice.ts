@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import { MAP, PLAYER, WEAPONS } from './constants';
 import { eyePos } from './combat';
 import { emptyInventory } from './economy';
@@ -108,7 +109,8 @@ export function practiceMapDef(seed = 1): MapDef {
   });
   const lanes = (p: Vec3) => p.x > PRACTICE.laneX[0] - 5 && p.x < PRACTICE.laneX[3] + 5 && p.z < PRACTICE.lineZ + 2;
   const dummies = (p: Vec3) => p.x > -51 && p.x < -29 && p.z > 7 && p.z < 18;
-  return { ...def, name: 'Practice Range', statics, cosmetics: def.cosmetics.filter((c) => !lanes(c.pos) && !dummies(c.pos)) };
+  return { ...def, name: 'Practice Range', statics, cosmetics: def.cosmetics.filter((c) => !lanes(c.pos) && !dummies(c.pos)),
+    hazards: def.hazards.filter((h) => !lanes(h.pos) && !dummies(h.pos)) };
 }
 
 /**
@@ -288,7 +290,7 @@ export class PracticeRange {
     if (hit?.hit.type !== 'player' || hit.hit.id !== me.id) return;
     const jitter = () => ((this.rng() * 2 - 1) * PRACTICE.shooterJitterDeg * Math.PI) / 180;
     input.yaw = yawOf(sub(chest, eye)) + jitter();
-    input.pitch = Math.atan2(chest.y - eye.y, dist2D(chest, eye)) + jitter();
+    input.pitch = dm.atan2(chest.y - eye.y, dist2D(chest, eye)) + jitter();
     if (now >= d.nextShotAt) { input.fire = true; d.nextShotAt = now + PRACTICE.shooterEverySec; }
   }
 

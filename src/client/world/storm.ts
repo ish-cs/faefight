@@ -38,9 +38,9 @@ export class StormFx {
   private readonly markers: { ring: THREE.Mesh; disc: THREE.Mesh; ringMat: THREE.MeshBasicNodeMaterial; discMat: THREE.MeshBasicNodeMaterial }[] = [];
   private bolts: { mesh: THREE.Mesh; born: number }[] = [];
   private boltMat = new THREE.MeshBasicNodeMaterial({ color: new THREE.Color(0xd8e4ff).multiplyScalar(BOOST * 1.6), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
-  private stormHaze = new THREE.Color(0x3c4252);
   private stormHazeOut = new THREE.Color(0x4a3a6e);
   private tmpC = new THREE.Color();
+  private tmpH = new THREE.Color();
   private weatherDirty = false;
   /** Perf debugging (tests/visual/storm.mjs): hide one part. */
   debugHide: 'rain' | 'wall' | null = null;
@@ -193,25 +193,26 @@ export class StormFx {
   }
 
   /**
-   * Storm lighting = the lighting rig's own weather blend (world/lighting.ts setWeather: sun, sky, env, exposure,
-   * haze) plus this module's extras on top: lightning flashes and the violet haze outside the storm wall.
+   * Storm lighting = the lighting rig's own weather blend on top of the time of day (world/lighting.ts setWeather:
+   * sun, sky, env, exposure, haze, stars hidden; night-aware) plus this module's extras: lightning flashes (harder at
+   * night, when they light a dark scene) and the violet haze outside the storm wall.
    */
   private applyWeather(w: number, flash: number, outside: boolean) {
     const s = this.sky;
-    // Clear day: leave the lighting alone (debug tweaks stay), after one exact restore to the baseline.
+    // Clear weather: DayNight owns the lighting; after one exact restore to its current time of day, leave it alone.
     if (w === 0 && flash < 0.001) { if (!this.weatherDirty) return; this.weatherDirty = false; } else this.weatherDirty = true;
     s.setWeather(w);
-    const L = s.lighting;
+    const L = s.lighting, f = flash * (1 + 0.8 * L.night);
     if (outside) {
-      (L.u.hazeColor.value as THREE.Color).lerp(this.stormHazeOut, w);
+      (L.u.hazeColor.value as THREE.Color).lerp(this.tmpH.copy(this.stormHazeOut).multiplyScalar(1 - 0.55 * L.night), w);
       L.u.hazeDensity.value = (L.u.hazeDensity.value as number) * (1 + w);
     }
-    if (flash > 0.001) {
-      L.sun.intensity += flash * 16;
-      L.u.skyGain.value = (L.u.skyGain.value as number) + flash * 0.9;
-      (L.u.hazeColor.value as THREE.Color).lerp(this.tmpC.set(0xc8d0ff), Math.min(1, flash * 0.6));
-      this.scene.environmentIntensity += flash * 0.9;
-      this.gpu.toneMappingExposure += flash * 0.2;
+    if (f > 0.001) {
+      L.sun.intensity += f * 16;
+      L.u.skyGain.value = (L.u.skyGain.value as number) + f * 0.9;
+      (L.u.hazeColor.value as THREE.Color).lerp(this.tmpC.set(0xc8d0ff), Math.min(1, f * 0.6));
+      this.scene.environmentIntensity += f * 0.9;
+      this.gpu.toneMappingExposure += f * 0.2;
     }
   }
 

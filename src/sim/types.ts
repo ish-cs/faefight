@@ -1,5 +1,6 @@
 import type { MoveState } from './movement';
 import type { PropPose } from './props';
+import type { EmoteId, QuipId } from './emotes';
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -42,6 +43,8 @@ export type PlayerInput = {
   fire: boolean;
   /** Aim down sights (held): tighter spread, zoom, slower move. */
   ads: boolean;
+  /** Camera the player looks through: 0 third person, 1 first person (cosmetic: spectators follow it). */
+  view?: 0 | 1;
   reload: boolean;
   interact: boolean;
   slot: WeaponKind | null;
@@ -121,6 +124,8 @@ export type PlayerState = {
   nextFireAt: number;
   /** Aiming down sights (sim-validated: needs a gun in hand, not sprinting or reloading). */
   ads: boolean;
+  /** Their camera: 0 third person (bots, default), 1 first person. Cosmetic; spectators follow it. */
+  view?: 0 | 1;
   /** Spread bloom (deg) as of `lastShotAt`; it recovers over time (gunplay.ts). */
   bloom: number;
   lastShotAt: number;
@@ -131,18 +136,33 @@ export type PlayerState = {
   stamina: number;
   /** Movement state (grounding, coyote/jump-buffer timers, last applied command seq): see movement.ts. */
   mv?: MoveState;
+  /** Cosmetic emote playing since sim time `at` (emotes.ts); absent when none. Moving, firing or damage ends it. */
+  emote?: { id: EmoteId; at: number };
+  /** Last quick-chat line (speech bubble for QUIP_SHOW_SEC from `at`); absent when none. */
+  quip?: { id: QuipId; at: number };
 };
 
 /** `burning`: on fire right now (sim/fire.ts); omitted when not, so it costs nothing on the wire. */
 export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number; burning?: true };
 /** A ground fire (grass patch, or a burning crate/palm prop): small sim entity, see sim/fire.ts. */
 export type FirePatch = { id: number; kind: 'grass' | 'crate' | 'palm'; pos: Vec3 };
-/** `noPickup`: a dropped bag its dropper can't grab back until `until`. */
-export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number } };
+/**
+ * `noPickup`: a dropped bag its dropper can't grab back until `until`. `ammoOnly`: the guns in it are just
+ * ammo (a supply crate drop): only someone who owns that gun can take it, as spare rounds.
+ */
+export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number }; ammoOnly?: true };
+
+/**
+ * A hazard (MapDef.hazards) that isn't intact and at full health, as the snapshot carries it. st: 0 damaged,
+ * 1 fusing (about to blow), 2 gone (waiting to respawn). Intact ones are left out, so a quiet map costs nothing.
+ */
+export type HazardNet = { id: number; st: 0 | 1 | 2; hp: number };
 
 export type MatchEventType =
-  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning';
+  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped' | 'spawn'
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning'
+  /** Emote / quick-chat wheel use: data { by, id } (emotes.ts). */
+  | 'wheel' | 'hazard';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -165,6 +185,8 @@ export type Snapshot = {
   broken?: number[];
   /** Tier A props away from their spawn pose (props.ts), ascending id; absent ids are at their spawn. */
   props?: PropPose[];
+  /** Hazards (barrels, tanks, crates) that are damaged, fusing or gone; absent when every one is intact. */
+  hz?: HazardNet[];
   /** Generator level (1-4) of each island, by island index. */
   genLevels: number[];
   sealed: boolean[];

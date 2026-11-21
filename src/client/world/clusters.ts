@@ -3,6 +3,9 @@ import { CENTER, MAP } from '../../sim/constants';
 import { COSMETIC, type IslandLayout, type MapDef } from '../../sim/map';
 import { BACKDROP_DECOR, ISLAND_DECOR } from './decor';
 
+/** Dressing clearance (m) around a hazard's centre (barrel/propane/crate footprint + room to walk up to it). */
+const HAZARD_CLEAR = 1.6;
+
 /**
  * Dense, purposeful dock dressing: PURE placement (no THREE), deterministic per seed. Clusters with a job (work
  * area, storage corner, trash corner, site office, fishing gear, aggregate bays, timber/rebar, IBC/drum/reel yards,
@@ -163,7 +166,8 @@ class Kit {
 }
 
 const WOOD = [0xe0cca8, 0xd2b890, 0xc8ab84, 0xb99c74, 0xe8d8b8];
-const DRUM = [0x1f5fa8, 0xb23a26, 0x2f6b3a, 0xd8a020, 0x46505a, 0x1f5fa8];
+// No red: red drums are the explosive hazards (hazards.ts).
+const DRUM = [0x1f5fa8, 0x6b6448, 0x2f6b3a, 0xd8a020, 0x46505a, 0x1f5fa8];
 const PLASTIC_BIN = [0x2f6b3a, 0x3a3f44, 0x1f4e79, 0x6b6e70];
 const FISH = [0x2f7fc0, 0xd84a2a, 0x3a9a5a, 0xd8d8d0];
 const NET = [0x2f6a58, 0x3a5a8a, 0xc8642a, 0x2a2a2a];
@@ -615,6 +619,8 @@ export function islandZones(def: MapDef, isl: IslandLayout): Zones {
     const p = L(pr.pos), e = PROP_KINDS[pr.kind].ext;
     caps.push({ ax: p.x, az: p.z, bx: p.x, bz: p.z, r: Math.hypot(e.x, e.z) + 0.9 });
   }
+  // explosive barrels / propane / supply crates (sim hazards): keep dressing off them
+  for (const h of def.hazards ?? []) if (h.island === isl.index) { const p = L(h.pos); caps.push({ ax: p.x, az: p.z, bx: p.x, bz: p.z, r: HAZARD_CLEAR }); }
   return { caps, rects };
 }
 
@@ -635,6 +641,7 @@ export function centerZones(def: MapDef): Zones {
     const p = L(pr.pos), e = PROP_KINDS[pr.kind].ext;
     caps.push({ ax: p.x, az: p.z, bx: p.x, bz: p.z, r: Math.hypot(e.x, e.z) + 0.9 });
   }
+  for (const h of def.hazards ?? []) if (h.island === -1) { const p = L(h.pos); caps.push({ ax: p.x, az: p.z, bx: p.x, bz: p.z, r: HAZARD_CLEAR }); }
   return { caps, rects };
 }
 

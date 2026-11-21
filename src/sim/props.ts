@@ -4,6 +4,7 @@ import type { CenterIsland, CosmeticDef, IslandLayout, StaticBox } from './map';
 import type { Physics, PropPush } from './physics';
 import { boxesOverlap, generatorZone, islandNoBuildZones, type NoBuildZone, potionZone } from './propZones';
 import type { MatchEvent, PieceState, PlayerState, Vec3, WeaponKind } from './types';
+import * as dm from './dmath';
 import { add, dist2D, forward, right, rotateY, scale, v3 } from './vec';
 
 /**
@@ -70,12 +71,12 @@ export const PROPS = {
   avoidM: 1.5,
 };
 
-const quatYaw = (yaw: number): Quat => [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+const quatYaw = (yaw: number): Quat => [0, dm.sin(yaw / 2), 0, dm.cos(yaw / 2)];
 function qmul(a: Quat, b: Quat): Quat {
   const [ax, ay, az, aw] = a, [bx, by, bz, bw] = b;
   return [aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx, aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz];
 }
-const ROLL: Quat = [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)];
+const ROLL: Quat = [0, 0, dm.sin(Math.PI / 4), dm.cos(Math.PI / 4)];
 export const spawnRot = (kind: PropKind, yaw: number): Quat => (PROP_KINDS[kind].roll ? qmul(quatYaw(yaw), ROLL) : quatYaw(yaw));
 
 export function propColliderDesc(kind: PropKind): RAPIER.ColliderDesc {
@@ -124,7 +125,8 @@ const EDGE_CLUSTERS: Cluster[] = [
 ];
 const CENTER_SPOTS: { kind: PropKind; rad: number; deg: number }[] = [
   { kind: 'crate', rad: 4.5, deg: 30 }, { kind: 'drum', rad: 4.5, deg: 150 }, { kind: 'crate', rad: 4.5, deg: 270 },
-  { kind: 'pallet', rad: 7.8, deg: 75 }, { kind: 'tire', rad: 7.8, deg: 200 }, { kind: 'drum', rad: 7.6, deg: 320 }, { kind: 'drum', rad: 8, deg: 330 },
+  { kind: 'pallet', rad: 7.8, deg: 100 }, { kind: 'tire', rad: 7.8, deg: 215 }, // clear of the center hazards (map.ts: 65/72/125/190/245/345°)
+  { kind: 'drum', rad: 7.6, deg: 320 }, { kind: 'drum', rad: 8, deg: 330 },
 ];
 
 /**
@@ -156,7 +158,7 @@ export type PlacementWorld = { islands: IslandLayout[]; center: CenterIsland; st
 /** Zones props keep out of: no-build zones of every island and the center stations. */
 export function propZones(def: Pick<PlacementWorld, 'islands' | 'center'>): NoBuildZone[] {
   const c = def.center;
-  const face = (p: Vec3) => Math.atan2(p.x - c.center.x, p.z - c.center.z);
+  const face = (p: Vec3) => dm.atan2(p.x - c.center.x, p.z - c.center.z);
   return [
     ...def.islands.flatMap(islandNoBuildZones),
     generatorZone(c.goldGen, face(c.goldGen)), generatorZone(c.supplyGen, face(c.supplyGen)), potionZone(c.potionShop),
@@ -246,7 +248,7 @@ export function placeProps(w: PlacementWorld): PropSpawn[] {
   const c = w.center;
   for (const s of CENTER_SPOTS) {
     const a = (s.deg * Math.PI) / 180, e = PROP_KINDS[s.kind].ext;
-    const pos = v3(c.center.x + Math.cos(a) * s.rad, c.groundY + e.y, c.center.z + Math.sin(a) * s.rad);
+    const pos = v3(c.center.x + dm.cos(a) * s.rad, c.groundY + e.y, c.center.z + dm.sin(a) * s.rad);
     const yaw = rng() * Math.PI * 2;
     if (propBlockedBy(w, s.kind, pos, yaw, zones) || !free(pos, Math.hypot(e.x, e.z))) continue;
     push(s.kind, pos, yaw, -1);

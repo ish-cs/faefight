@@ -62,7 +62,8 @@ const MODELS: Record<PropKind, (b: StaticBatch) => void> = {
     b.add(mats().rubber, new THREE.TorusGeometry(0.36, 0.14, 10, 20).rotateX(Math.PI / 2), null, 0xffffff);
   },
 };
-const DRUM_COLORS = [0x1f5fa8, 0xb23a26, 0x2f6b3a, 0xc8641e];
+// No red: red drums are the explosive hazards (hazards.ts).
+const DRUM_COLORS = [0x1f5fa8, 0x6b6448, 0x2f6b3a, 0xc8641e];
 
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(1, 1, 1), _m = new THREE.Matrix4();
 

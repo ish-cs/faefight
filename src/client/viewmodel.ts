@@ -13,6 +13,7 @@ import { settings } from './settings/store';
 import type { Renderer } from './render';
 import { islandColor } from './colors';
 import { SUN_DIR } from './world/sky';
+import { dayNightState, lightU } from './world/lightUniforms';
 
 /**
  * First-person view: the V toggle, the eye camera, and the viewmodel (arms + equipped weapon).
@@ -147,6 +148,8 @@ export class FirstPersonView {
   adsK = 0;
   private kickKind: WeaponKind = 'pistol';
   // Camera shake (visual only: applied after the aim ray is taken).
+  private readonly sun = new THREE.DirectionalLight(0xffe6c2, 3.4);
+  private readonly hemi = new THREE.HemisphereLight(0xcfe8ff, 0x8a7a58, 0.9);
   private shakeAmp = 0;
   private punch = 0;
   private punchVel = 0;
@@ -155,9 +158,9 @@ export class FirstPersonView {
   constructor(private renderer: Renderer, private enabled: () => boolean) {
     this.scene.add(this.cam);
     this.cam.add(this.motion);
-    const sun = new THREE.DirectionalLight(0xffe6c2, 3.4);
+    const sun = this.sun;
     sun.position.copy(SUN_DIR).multiplyScalar(5);
-    this.scene.add(sun, new THREE.HemisphereLight(0xcfe8ff, 0x8a7a58, 0.9));
+    this.scene.add(sun, this.hemi);
     window.addEventListener('keydown', (e) => {
       if (!isAction('camera', e.code) || e.repeat || !this.enabled()) return;
       const t = e.target as HTMLElement | null;
@@ -196,7 +199,8 @@ export class FirstPersonView {
    */
   updateCamera(feet: THREE.Vector3, yaw: number, pitch: number, me: PlayerState, humanId: number): boolean {
     const cam = this.renderer.camera;
-    this.active = this.mode === 'first' && me.alive;
+    // An emote is meant to be seen: third person while it plays, whatever the camera setting.
+    this.active = this.mode === 'first' && me.alive && !me.emote;
     const v = settings.get().video;
     // Aiming zooms both views (rifle 2x, others less).
     const fov = adsFov(this.active ? v.fovFirst : v.fovThird, me.equipped, me.alive ? this.adsK : 0);
@@ -439,6 +443,11 @@ export class FirstPersonView {
     const gpu = this.renderer.gpu;
     this.scene.environment = this.renderer.scene.environment;
     this.scene.environmentIntensity = this.renderer.scene.environmentIntensity;
+    // follow the day/night cycle: the same key light (sun → moon) and ambient the world has now
+    this.sun.intensity = 3.4 * dayNightState.key;
+    this.sun.color.copy(dayNightState.keyColor);
+    this.sun.position.copy(lightU.keyDir.value as THREE.Vector3).multiplyScalar(5);
+    this.hemi.intensity = 0.9 * dayNightState.env;
     const aspect = this.renderer.camera.aspect;
     if (this.cam.aspect !== aspect) { this.cam.aspect = aspect; this.cam.updateProjectionMatrix(); }
     this.cam.quaternion.copy(this.renderer.camera.quaternion);

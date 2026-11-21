@@ -3,6 +3,7 @@ import type { Vec3 } from '../sim/types';
 import { PLAYER } from '../sim/constants';
 import { type Action, isHeld, slotForCode } from './keymap';
 import { ThirdPersonCamera } from './camera';
+import { EarlyKey } from './viewed';
 
 /** Free-fly speeds (m/s) and height limits for the spectator camera. */
 export const SPECTATE = { speed: 14, fastMul: 3, minY: -20, maxY: 250 };
@@ -47,6 +48,10 @@ type Frame = {
   lookOf?(id: number): { yaw: number; pitch: number } | null;
   /** Follow from their eyes (first person) instead of over their shoulder; toggled with the camera key (V). */
   firstPerson?: boolean;
+  /** Stay on this (dead) followed player instead of moving on: their killcam is still to resolve, or they respawn soon. */
+  hold?: number | null;
+  /** The followed player was just killed: stay on them, looking at the killer (viewed.ts BodyCam: the killcam fallback). */
+  killcam?: { victim: number; killer: number | null } | null;
 };
 
 /**
@@ -66,7 +71,15 @@ export class Spectator {
   private pendingCycle = false;
   private follow: ThirdPersonCamera;
   private tmp = new THREE.Vector3();
+  private tmp2 = new THREE.Vector3();
+  /** Where the followed player was last drawn (a killcam holds on that spot once they're gone). */
+  private lastAt = new THREE.Vector3();
+  private killcamOn = false;
+  /** When the spectator last picked a target or flew off themselves (ms): overrides the automatic switch to a killer. */
+  manualAt = -Infinity;
   private banner = document.createElement('div');
+  /** A follow key pressed in the frame before the camera started spectating. */
+  private early = new EarlyKey();
 
   constructor(parent: HTMLElement, cam: THREE.PerspectiveCamera, blockers: () => THREE.Object3D[], canvas: HTMLElement, private enabled: () => boolean) {
     this.follow = new ThirdPersonCamera(cam, blockers);
@@ -76,6 +89,10 @@ export class Spectator {
     parent.append(this.banner);
     const typing = (e: Event) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
     window.addEventListener('keydown', (e) => {
+      if (!this.active && this.enabled() && !typing(e) && !e.repeat) {
+        const s = slotForCode(e.code);
+        if (s >= 0 || e.code === 'Digit0') this.early.press(s >= 0 ? s + 1 : 0, performance.now());
+      }
       if (!this.active || !this.enabled() || typing(e)) return;
       this.keys.add(e.code);
       if (e.code === 'ControlLeft' || e.code === 'ControlRight') e.preventDefault();
@@ -107,6 +124,7 @@ export class Spectator {
     this.followId = null;
     this.pos.copy(from);
     this.banner.style.display = '';
+    this.pendingDigit = this.early.take(performance.now());
   }
 
   exit() {
@@ -127,6 +145,7 @@ export class Spectator {
       if (n === 0) this.mode = 'free';
       else if (order[n - 1] !== undefined) { this.mode = 'follow'; this.followId = order[n - 1]; }
       this.pendingDigit = null;
+      this.manualAt = performance.now();
     }
     if (this.pendingCycle) {
       this.pendingCycle = false;
@@ -134,12 +153,39 @@ export class Spectator {
         const i = this.mode === 'follow' && this.followId !== null ? order.indexOf(this.followId) : -1;
         this.mode = 'follow';
         this.followId = order[(i + 1) % order.length];
+        this.manualAt = performance.now();
       }
     }
     const keys = this.flyKeys();
     if (this.mode === 'follow' && (keys.fwd || keys.back || keys.left || keys.right || keys.up || keys.down)) {
       this.mode = 'free';
       this.pos.copy(f.cam.position); // take off from where the follow camera was
+      this.manualAt = performance.now();
+    }
+    const kc = f.killcam && this.mode === 'follow' && f.killcam.victim === this.followId ? f.killcam : null;
+    this.killcamOn = !!kc;
+    if (kc) {
+      // Body cam (killcam fallback): over the victim's body, turned toward whoever killed them.
+      const at = f.posOf(kc.victim, this.tmp) ?? this.lastAt;
+      const k = kc.killer !== null ? f.posOf(kc.killer, this.tmp2) : null;
+      const yaw = k ? Math.atan2(-(k.x - at.x), -(k.z - at.z)) : f.yaw;
+      this.firstPerson = false;
+      this.follow.update(at, yaw, -0.12, f.dt);
+      const name = (id: number) => f.players.find((p) => p.id === id)?.name ?? `#${id}`;
+      const text = kc.killer !== null ? `KILLCAM — ${name(kc.victim)} was killed by ${name(kc.killer)}` : `KILLCAM — ${name(kc.victim)} died`;
+      if (this.banner.textContent !== text) this.banner.textContent = text;
+      return;
+    }
+    const held = this.mode === 'follow' && this.followId !== null && f.hold === this.followId;
+    if (held) {
+      // Holding on a dead followed player (killcam to resolve / respawn coming): over their body.
+      const at = f.posOf(this.followId!, this.tmp) ?? this.lastAt;
+      this.firstPerson = false;
+      this.follow.update(at, f.yaw, f.pitch, f.dt);
+      const who = f.players.find((p) => p.id === this.followId)?.name ?? `#${this.followId}`;
+      const text = `SPECTATING — ${who} (down)  ·  click next · 0 free fly`;
+      if (this.banner.textContent !== text) this.banner.textContent = text;
+      return;
     }
     if (this.mode === 'follow' && (this.followId === null || !order.includes(this.followId))) {
       // The followed player died: next living one, else free fly from here.
@@ -148,6 +194,7 @@ export class Spectator {
     }
 
     const target = this.mode === 'follow' && this.followId !== null ? f.posOf(this.followId, this.tmp) : null;
+    if (target) this.lastAt.copy(target);
     this.firstPerson = !!target && !!f.firstPerson;
     if (target) {
       // Their view: their own aim, from their eyes (V) or over their shoulder.
@@ -176,6 +223,6 @@ export class Spectator {
 
   /** Debug/e2e view of the spectator. */
   info() {
-    return { active: this.active, mode: this.mode, followId: this.followId, firstPerson: this.firstPerson, pos: { x: this.pos.x, y: this.pos.y, z: this.pos.z } };
+    return { active: this.active, mode: this.mode, followId: this.followId, firstPerson: this.firstPerson, killcam: this.killcamOn, pos: { x: this.pos.x, y: this.pos.y, z: this.pos.z } };
   }
 }

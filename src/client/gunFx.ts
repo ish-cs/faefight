@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import type { MatchEvent, Projectile, Vec3, WeaponKind } from '../sim/types';
 import { Casings } from './world/casings';
+import { dayNightState } from './world/lightUniforms';
 import type { Particles } from './world/particles';
 
 /**
@@ -196,7 +197,7 @@ export class GunFx {
     const p = d.pos as Vec3 | undefined;
     if (!p) return;
     const rocket = d.kind === 'rocket';
-    const big = rocket ? 1.25 : d.kind === 'charge' ? 1.1 : 1;
+    const big = rocket ? 1.25 : d.kind === 'barrel' ? 1.35 : d.kind === 'propane' ? 1.2 : d.kind === 'charge' ? 1.1 : 1;
     this.boomLight.position.set(p.x, p.y + 0.5, p.z);
     this.boomPeak = 260 * big;
     this.boomAt = performance.now();
@@ -274,9 +275,13 @@ export class GunFx {
     }
     if (this.warmGroup && ++this.warmFrames > 20) { this.root.remove(this.warmGroup); this.warmGroup = null; }
     const mk = now < this.muzzleUntil ? 1 : 0;
-    this.muzzleLight.intensity = this.muzzlePeak * mk;
+    // at night (day/night cycle) flashes light the dark surroundings harder and further
+    const nightK = 1 + 0.6 * dayNightState.night;
+    this.muzzleLight.intensity = this.muzzlePeak * mk * nightK;
+    this.muzzleLight.distance = 9 * (1 + 0.35 * dayNightState.night);
     const bk = (now - this.boomAt) / 1000;
-    this.boomLight.intensity = bk < 0.6 ? this.boomPeak * Math.exp(-bk * 7) : 0;
+    this.boomLight.intensity = bk < 0.6 ? this.boomPeak * nightK * Math.exp(-bk * 7) : 0;
+    this.boomLight.distance = 28 * (1 + 0.35 * dayNightState.night);
 
     const { dust, sparks } = this.particles;
     for (const v of this.projs.values()) {

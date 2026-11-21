@@ -1,6 +1,6 @@
 import { CASING_CAP } from './world/casings';
 import * as THREE from 'three/webgpu';
-import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
+import { GENERATOR_MAX_LEVEL, LIFECYCLE, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
 import type { MatchEvent, PieceKind, PieceState, Snapshot, Vec3, WeaponKind } from '../sim/types';
@@ -13,6 +13,7 @@ import { pieceGeometry, World } from './world';
 import { preloadPbr } from './world/pbr';
 import { PotionSellers, stall } from './world/potionSeller';
 import { loadQuality } from './world/sky';
+import { DayNight } from './world/dayNight';
 import { StormFx } from './world/storm';
 import { LootView, lootWarmObjects } from './lootView';
 export { lods } from './world/lod';
@@ -87,6 +88,8 @@ export class Renderer {
 
   /** Sudden-death weather: storm wall, rain, telegraph markers, lightning (world/storm.ts). */
   storm!: StormFx;
+  /** Day → night over the match, night at sudden death (world/dayNight.ts). */
+  dayNight!: DayNight;
   /** Tracers, muzzle light/smoke, shell casings, hit sparks, projectiles, explosion flashes. */
   gunFx!: GunFx;
   private snapArrived = performance.now();
@@ -121,6 +124,7 @@ export class Renderer {
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
+    r.dayNight = new DayNight(r.world.sky);
     r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
     r.resize();
     return r;
@@ -152,6 +156,7 @@ export class Renderer {
     this.npcs.sync(); // keepers registered by the map art (before the loading warm-up compiles the scene)
     const map = def.islands;
     this.storm.setMap(map, def.center);
+    this.dayNight.setCycle(def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt);
     this.gunFx.warmUp([this.boomMat]);
     if (this.genPips) { this.scene.remove(this.genPips); this.genPips.dispose(); }
     const h = PROP_HALF.generator;
@@ -216,13 +221,52 @@ export class Renderer {
   /** Debug: current interpolation delay (s) behind the newest snapshot. */
   get interpDelay() { return this.clock.delay; }
 
+  /**
+   * Killcam replay: while set, the scene shows `snap` (a past snapshot: its players, pieces and
+   * projectiles) with players placed by `motion`, and live snapshots only update the HUD-side state
+   * (their pieces/projectiles/effects are applied again when the replay ends).
+   */
+  private replay: { snap: Snapshot; motion: (id: number, out: Motion) => Motion | null } | null = null;
+  private replaySnap: Snapshot | null = null;
+
+  setReplay(r: { snap: Snapshot; motion: (id: number, out: Motion) => Motion | null } | null) {
+    if (r) {
+      if (r.snap !== this.replaySnap) {
+        this.replaySnap = r.snap;
+        this.world.syncPieces(r.snap.pieces, r.snap.fires);
+        this.gunFx.syncProjectiles(r.snap.projectiles ?? []);
+        this.snapArrived = performance.now();
+      }
+      this.replay = r;
+      return;
+    }
+    if (!this.replay) return;
+    this.replay = null;
+    this.replaySnap = null;
+    const c = this.curr;
+    if (c) { this.world.syncPieces(this.predicted.length ? c.pieces.concat(this.predicted) : c.pieces, c.fires); this.gunFx.syncProjectiles(c.projectiles ?? []); }
+  }
+
+  get replaying() { return this.replay !== null; }
+
+  /** Effects of past events during a replay (tracers, muzzle flashes, hit sparks, explosions). */
+  replayEvents(events: readonly MatchEvent[]) {
+    for (const e of events) if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.onEvent(e);
+  }
+
   /** Feed a snapshot's discrete state (pieces, loot, events). Returns its events for the HUD. */
   pushSnapshot(snap: Snapshot): MatchEvent[] {
     this.curr = snap;
     this.waterY = snap.waterY;
+    if (this.replay) {
+      // The replay owns pieces, projectiles and effects until it ends.
+      this.syncLoot(snap);
+      return snap.events;
+    }
     this.world.syncPieces(this.predicted.length ? snap.pieces.concat(this.predicted) : snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
     this.world.syncProps(snap.props);
+    this.world.syncHazards(snap.hz);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
     this.snapArrived = performance.now();
@@ -260,9 +304,13 @@ export class Renderer {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {
       this.world.cosmeticEvent(e);
+    } else if (e.type === 'hazard') {
+      this.world.hazardEvent(e);
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
-      if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : e.data.kind === 'rocket' ? 3.6 : 4);
+      const k = e.data.kind;
+      if (pos) this.addBoom(pos, k === 'charge' ? 2 : k === 'rocket' ? 3.6 : k === 'barrel' ? 5 : k === 'propane' ? 4.6 : 4);
+      if (typeof e.data.hazard === 'number') this.world.hazardEvent(e);
     } else if (e.type === 'lightning') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.storm.strike(pos, this.camera);
@@ -441,9 +489,11 @@ export class Renderer {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
-    const snap = this.curr;
+    const snap = this.replay?.snap ?? this.curr;
+    const motion = this.replay?.motion ?? this.motionOf;
     if (snap) {
-      this.characters.sync(snap.players, this.humanId, localYaw, snap.time, this.motionOf, snap.hidden);
+      // Replay: nobody is "local" (everyone's yaw comes from the recording).
+      this.characters.sync(snap.players, this.replay ? -1 : this.humanId, localYaw, snap.time, motion, snap.hidden);
       // Labels within reach of the player (predicted feet when playing, else the camera).
       this.lootView.frame(dt, now / 1000, this.local?.pos ?? this.camera.position, this.camera);
     }
@@ -460,11 +510,14 @@ export class Renderer {
     let nf = 0;
     if (snap) for (const p of snap.players) {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
-      if (this.playerPos(p.id, this.feet[nf])) nf++;
+      const m = motion(p.id, this.motion);
+      if (m) { this.feet[nf].copy(m.pos); nf++; }
     }
     if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
     this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
-    this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
+    const simT = this.playT ?? snap?.time ?? 0;
+    this.dayNight.frame(simT, !!snap?.suddenDeath);
+    this.storm.frame(dt, this.camera, this.world.sky.quality, simT);
     const feet = this.feet.slice(0, nf);
     this.npcs.frame(dt, this.camera, feet);
     this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw
@@ -487,3 +540,4 @@ export class Renderer {
     return { backend: this.backend, drawCalls: this.lastInfo.drawCalls, triangles: this.lastInfo.triangles };
   }
 }
+export { BrainOverlay } from './brainOverlay';
