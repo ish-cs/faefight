@@ -13,6 +13,7 @@ type Viewmodel = { warmUp(frames: number): void };
 /** Raycast-only stand-ins: never drawn, so never compiled. */
 const NEVER_DRAWN = /^(pieceHull|proxy):/;
 const WARM_FRAMES = 3;
+const GPU_IDLE_WAIT_MS = 3000;
 
 /**
  * Shader/pipeline warm-up behind the loading screen, once the map, avatars and first snapshot are in.
@@ -92,7 +93,12 @@ export async function warmUp(r: Renderer, loop: WarmLoop, fpv: Viewmodel, onStep
   onStep(0.9, 'Warming up the GPU');
   // Sync pipeline builds and texture uploads run in the GPU process: let them finish before the reveal.
   const device = (gpu.backend as { device?: { queue: { onSubmittedWorkDone(): Promise<void> } } }).device;
-  if (device) await device.queue.onSubmittedWorkDone();
+  // Bounded: a GPU shared with other busy apps can take long, and the bar shouldn't sit still for it.
+  if (device) {
+    const t = performance.now();
+    const idle = await Promise.race([device.queue.onSubmittedWorkDone().then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), GPU_IDLE_WAIT_MS))]);
+    console.info(`[warmup] GPU queue ${idle ? 'drained' : `still busy after ${GPU_IDLE_WAIT_MS} ms; revealing anyway`} (${Math.round(performance.now() - t)} ms)`);
+  }
   onStep(1, 'Warming up the GPU');
   console.info(`[warmup] ${compiled} render objects compiled, ${forced.length} hidden + ${culled.length} culled objects warmed in ${Math.round(performance.now() - t0)} ms`);
 }

@@ -4,8 +4,8 @@ import { expect, test, type Page } from '@playwright/test';
  * Start-of-match hitches: 8-player vs-bot match on high. For the first 20 s after the loading screen
  * hides, the player looks all the way around, then fires/throws/places every hotbar item and switches to
  * first person — everything that used to build shaders on first sight. Fails if a frame takes over 100 ms.
- * Best of 2 (the machine running the suite may be busy); also logs pipelines created after the reveal
- * (should be 0: the warm-up compiles everything behind the loading screen).
+ * Best of 2 (the machine running the suite may be busy). Also fails if any render pipeline is built after the reveal
+ * (load-independent: the warm-up compiles everything behind the loading screen; pre-fix code built 22 here).
  */
 const WINDOW_MS = 20_000;
 const MAX_FRAME_MS = 100;
@@ -91,5 +91,7 @@ test('no frame over 100 ms in the first 20 s of a match (best of 2)', async ({ b
       + `${r.pipelines.length} pipelines after reveal${r.pipelines.length ? `: ${r.pipelines.slice(0, 8).join(', ')}` : ''}`);
     if (r.maxFrame <= MAX_FRAME_MS) break;
   }
+  // Deterministic (load-independent) half: nothing compiles on first sight after the reveal.
+  for (const r of results) expect(r.pipelines, 'pipelines built after the loading screen hid').toEqual([]);
   expect(Math.min(...results.map((r) => r.maxFrame)), JSON.stringify(results.map((r) => ({ max: r.maxFrame, pipes: r.pipelines.length })))).toBeLessThanOrEqual(MAX_FRAME_MS);
 });
