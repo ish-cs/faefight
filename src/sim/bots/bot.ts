@@ -75,7 +75,7 @@ const COLLECT_BEFORE_LEAVING = 40, COLLECT_NEAR_CAP = 400;
 const NADE_MIN = 6.5, NADE_MAX = 22, NADE_GAP = 3, NADE_SEEN_SEC = 2.5;
 /** Cash (carried + banked) at which a bot stocks up on grenades / a steel seal kit. */
 const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, hard: 450, pro: 400 };
-const STEEL_RICH = 800;
+const STEEL_RICH = 550;
 /** Rebuy money for after a death: pistol + a box of ammo. */
 const INSURANCE = WEAPONS.pistol.price + 25;
 /** HP at or below which a bot uses a medkit it carries. */
@@ -117,6 +117,10 @@ const STALL_SEC: Partial<Record<Goal, number>> = {
 const STALL_DIST = 2.5, STALL_BAN_SEC = 20;
 /** Camping a sealed bunker: this far out from the doorway (outside a grenade's reach of the door). */
 const SIEGE_DIST = 6.5, SIEGE_AFTER_DEATH = 16;
+/** Doorways per bunker. */
+const MAP_DOORS = 3;
+/** A rival who just died with their bunker this close (m) is worth a seal race. */
+const SEAL_RACE_M = 30;
 const TARGETED = new Set<Goal>(['seal', 'attack', 'bridge']);
 const PUSH_GEAR: ShopItem[] = ['pistol', 'ammo', 'scaffold', 'wood', 'metal', 'steel', 'charge'];
 
@@ -275,6 +279,7 @@ export class Bot {
     this.view = view;
     this.nav.begin(view);
     this.checkPurchase(me, now);
+    this.sealRace(view);
     if (now >= this.nextScoreAt) this.chooseTarget(view);
     const ctx = this.context(view);
     this.coverTrigger(ctx);
@@ -475,8 +480,29 @@ export class Bot {
         leaderKills,
         onMyIsland: !!fresh && o.alive && dist2D(fresh.pos, view.map[home].center) < view.map[home].radius + 6,
         away: !!seen && o.alive && seen.island !== o.island,
+        kit: sealKit(me.inv) >= MAP_DOORS,
       };
     });
+  }
+
+  /**
+   * Seal race: someone just died (kill feed) and their bunker is close with its doors open while I carry the kit
+   * to plug them all: they respawn in a few seconds, so drop everything and go plug it.
+   */
+  private sealRace(view: BotView) {
+    const me = view.self, now = view.now;
+    if (view.suddenDeath || sealKit(me.inv) < MAP_DOORS) return;
+    for (const o of view.others) {
+      if (o.alive || o.eliminated || o.respawnAt === null || o.id === this.targetId || o.island === me.island) continue;
+      if (now - (this.mem.diedAt.get(o.id) ?? -Infinity) > 1) continue;
+      const isl = view.map[o.island];
+      if (view.sealed[isl.index] || dist2D(me.pos, isl.bunker.center) > SEAL_RACE_M) continue;
+      const n = this.nav.nodeAt(me.pos);
+      if (n !== isl.index && (n < 0 || this.nav.hop(n, isl.index) === null)) continue;
+      this.targetId = o.id;
+      this.nextScoreAt = now;
+      return;
+    }
   }
 
   /** Score every rival; keep the current one unless another is clearly better. */
@@ -542,7 +568,8 @@ export class Bot {
     const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
     return {
       scaffolds: this.scaffoldsNeeded(c),
-      kit: c.openDoors.length,
+      // A full seal kit whenever there's someone to seal: their doors get reopened, the next rival has three.
+      kit: c.rival ? Math.max(c.openDoors.length, MAP_DOORS) : 0,
       // A hard plug in my own doorway: only a charge gets through.
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
@@ -844,7 +871,7 @@ export class Bot {
         const ownerAway = !!c.rival && c.rival.alive && this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)?.island !== c.rival.island &&
           !!this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC);
         return (kit >= c.openDoors.length ? 0.6 : 0.3) + (rivalDown ? 0.5 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
-          (ownerAway ? 0.2 * t.opportunism : 0);
+          (ownerAway ? 0.25 + 0.2 * t.opportunism : 0);
       }
       case 'cut': {
         if (!gun || c.on !== home.index || view.suddenDeath) return 0;
