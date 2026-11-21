@@ -58,7 +58,9 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await expect(page.getByTestId('cash')).toHaveText(`$${cash - 50}`);
   await expect(page.getByTestId('buy-pistol')).toBeDisabled();
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', 'pistol');
-  await expect(page.getByTestId('hotbar-slot-0')).toContainText(/pistol\s*12\/36/i);
+  // Slots show the mag only; mag/spare is the big ammo readout bottom-right.
+  await expect(page.getByTestId('hotbar-slot-0')).toContainText(/pistol/i);
+  await expect(page.locator('[data-testid="hotbar-slot-0"] .hb-count')).toHaveText('12');
   // Shop cards are icon + price; the name is only the accessible label / tooltip.
   await expect(page.getByTestId('buy-pistol')).toHaveAttribute('aria-label', /^Pistol, \$50, Owned/);
   await expect(page.getByTestId('buy-pistol')).not.toContainText('Pistol');
