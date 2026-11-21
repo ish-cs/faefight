@@ -6,15 +6,19 @@ specs, interleaved A/B, under the heavy lock). See `docs/perf.md` for the LOD, b
 
 ## The frame (8.3 ms)
 
-| where | budget | today (ultra, 2× DPR, 8 players) |
+| where | budget | today (ultra, 2× DPR, 8 players, Nov 21) |
 |---|---|---|
-| main thread (sim apply, interp, three's draw submission) | **≤ 5.5 ms** | see "Measured" |
-| GPU total | **≤ 7.5 ms** | see "Measured" |
-| — scene pass (opaque + transparent, TAAU input res) | ≤ 3.5 ms | |
-| — shadow cascades (2 near every frame, far cached) | ≤ 1.2 ms | |
-| — GTAO (half of scene res) | ≤ 1.0 ms | |
-| — TAAU resolve + bloom + grade/sharpen (output res) | ≤ 1.0 ms | |
+| main thread (sim apply, interp, three's draw submission) | **≤ 5.5 ms** | 3.3–8.0 ms (load-dependent; worst at mid-map, 360+ draws) |
+| GPU total | **≤ 7.5 ms** | ≈ 5.3–9 ms (110–256 GPU-done fps per view) |
+| — scene pass (opaque + transparent, 0.7× MSAA ×4) | ≤ 4.5 ms | largest share (≈ 2/3 of timestamp total) |
+| — GTAO (half of scene res, 12 samples) | ≤ 1.5 ms | ≈ 1/3 |
+| — output-res grade + upscale/sharpen + flare | ≤ 1.5 ms | ≈ 1/3 |
+| — ocean | ≤ 0.6 ms | ≈ 1/10 |
+| — shadow cascades (2 near every frame, far cached) | ≤ 0.5 ms | ≈ 0 (cached) |
+| — bloom | ≤ 0.2 ms | ≈ 3 % |
 | — headroom for new features, all of round 11 together | ≤ 0.8 ms | |
+
+Shares come from `tests/visual/passCost.mjs` (GPU timestamps overlap on Apple GPUs, so shares don't sum to 100 %).
 
 A single new feature may cost at most **~2 % of frame time (≈ 0.15 ms GPU, 0.1 ms CPU)** at the same view.
 
@@ -60,6 +64,12 @@ scales the *input* resolution only; output-sized targets keep their size.
 - GPU timestamp ms (`?gputime=1`) are **inflated** on Apple GPUs (tile-based passes overlap; 47 ms reported while
   the GPU finishes 120 frames/s) — use them only as *relative* per-pass shares (`tests/visual/passCost.mjs`).
 - `look→GPU done` latency is in perfMatch too; it must stay under ~3 frames.
+
+## GPU queue latency cap
+
+The frame loop skips a rAF while the oldest unfinished GPU frame is older than 40 ms (`refresh.ts` `FrameQueue`).
+Without it, a GPU-bound frame loop queued 0.2–0.6 s of work (look → GPU done). A 2-frame count cap was tried first and
+starved the GPU, because Chrome reports `onSubmittedWorkDone` 15–25 ms late. `?gpuqueue=25` / `=0` for A/B.
 
 ## Frame governor
 

@@ -65,7 +65,7 @@ async function run(quality) {
   ] : [])];
   for (const s of spots) {
     await dbg('hp', 100000);
-    if (s.storm) { await dbg('time', 899); await page.waitForTimeout(9000); await dbg('time', 1000); await page.waitForTimeout(1500); await dbg('hp', 100000); }
+    if (s.storm) { await page.evaluate(() => { window.__keepAlive = setInterval(() => window.__faefight.hp(100000), 100); }); await dbg('time', 899); await page.waitForTimeout(9000); await dbg('time', 1000); await page.waitForTimeout(1500); await dbg('hp', 100000); }
     const w = s.world ?? toWorld(...s.at);
     await dbg('teleport', w.x, w.z);
     await page.evaluate(([y, p]) => { window.__faefight.input.yaw = y; window.__faefight.input.pitch = p; }, [s.yaw ?? yawToward(s.at, s.look), s.pitch]);
