@@ -19,7 +19,7 @@ export type Anchor = {
 };
 
 export const HABITATS = [
-  'quay', 'pallet', 'nap', 'beach', 'rocks', 'shallows', 'water', 'perch', 'piling', 'palm', 'wall', 'containerTop',
+  'quay', 'pallet', 'beach', 'rocks', 'shallows', 'water', 'perch', 'piling', 'palm', 'wall', 'containerTop',
   'trash', 'grass', 'flowers', 'puddle',
 ] as const;
 export type Habitat = (typeof HABITATS)[number];
@@ -93,22 +93,20 @@ export function buildHabitats(def: MapDef, perches: PerchIn[] = []): Habitats {
       if (k.kind === 'litter') H.trash.push(W(k.x, gy + 0.3, k.z, 0.5));
       if (k.kind === 'flowers' && harbor) H.flowers.push(W(k.x, gy + 0.45, k.z, 1.2));
     }
-    // cats, dogs, pigeons: the open back half of the deck
+    // dogs, pigeons: the open back half of the deck
     H.quay.push(W(-10, gy, 9, 4), W(10, gy, 9, 4), W(0, gy, -6, 3));
 
     const f = backdropFrameOf(isl, n);
     backs.push({ cx: isl.center.x, cz: isl.center.z, yaw, hw: f.hw, z0: f.z0 });
     if (!harbor) continue;
     const { hw, z0, top } = f;
-    // the backdrop quay front: rats, pigeons, cats, dogs
+    // the backdrop quay front: rats, pigeons, dogs
     for (let x = -hw + 4; x < hw - 3; x += 7) H.quay.push(W(x, top, z0 + 1.6, 1.5, Math.PI / 2));
     for (const p of BACKDROP_DECOR.pallets) {
       H.pallet.push(W(p.x * hw, top, z0 + p.z, 1.6));
       H.trash.push(W(p.x * hw + 1.1, top + 0.3, z0 + p.z - 1.1, 0.5));
-      H.nap.push(W(p.x * hw - 1.4, top, z0 + p.z + 0.2, 0, Math.PI / 2));
     }
     H.trash.push(W(hw * 0.38, top + 1.1, z0 + 3, 0.8), W(-hw * 0.3, top + 1.1, z0 + 5, 0.8));
-    H.nap.push(W(-hw * 0.38 + 6, top, z0 + 17.5, 0), W(-hw * 0.05 + 2.4, top, z0 + 4.8, 0, 0.3));
     // the beach in front of the quay wall: dry sand for crabs / turtles, the waterline for herons + jellyfish
     for (const [u0, u1] of BACKDROP_DECOR.beaches) {
       for (let u = u0 + 0.05; u < u1 - 0.03; u += 0.06) {
@@ -134,7 +132,7 @@ export function buildHabitats(def: MapDef, perches: PerchIn[] = []): Habitats {
     H.quay.push(A(cc.center.x, cc.groundY, cc.center.z, cc.radius * 0.5));
   }
 
-  // container cover: rats skirt the bases, lizards bask on the sunny sides, iguanas on top, cats nap in the shade
+  // container cover: rats skirt the bases, lizards bask on the sunny sides, iguanas on top
   for (const b of def.statics) {
     if (b.look !== 'container') continue;
     const c = Math.cos(b.rotY), s = Math.sin(b.rotY);
@@ -149,7 +147,6 @@ export function buildHabitats(def: MapDef, perches: PerchIn[] = []): Habitats {
       const fx = b.center.x + nx * (off + 0.02), fz = b.center.z + nz * (off + 0.02);
       const sun = nx * SUN_FLAT.x + nz * SUN_FLAT.z;
       if (sun > 0.25 && b.half.y > 0.8) H.wall.push(A(fx - ux * along, y0 + 0.2, fz - uz * along, 0, 0, { wall: { ux, uz, nx, nz, w: along * 2, h: Math.min(2.4, b.half.y * 2 - 0.4) } }));
-      if (sun < -0.5) H.nap.push(A(fx + nx * 0.5, y0, fz + nz * 0.5, 0, Math.atan2(ux, uz)));
     }
   }
   for (const k of def.cosmetics) {

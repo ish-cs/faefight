@@ -102,10 +102,6 @@ const BUILD: Record<string, () => THREE.BufferGeometry> = {
     .ell(0, 0.15, 0, 0.065, 0.065, 0.13, 0x16161a).ell(0, 0.23, -0.1, 0.04, 0.042, 0.045, 0x1c1c22, 5, 0.03)
     .ell(0, 0.225, -0.155, 0.012, 0.011, 0.03, 0x111111, 5, 0.03).box(-0.04, 0.14, 0.1, 0.04, 0.155, 0.24, 0x121216)
     .wings(0.05, 0.17, 0, 0.32, 0.16, 0x1a1a20).build(),
-  cat: () => quad(new Builder(), 0.17, 0.055, 0.13, 0.016, 0xe8e2da, 0.08)
-    .ell(0, 0.2, 0, 0.075, 0.075, 0.2, 0xece6de).ell(0, 0.27, -0.22, 0.065, 0.06, 0.06, 0xece6de, 5, 0.13)
-    .tri([-0.05, 0.31, -0.24], [-0.035, 0.36, -0.23], [-0.02, 0.32, -0.24], 0xd8b8b0, 5, 0.13).tri([0.05, 0.31, -0.24], [0.035, 0.36, -0.23], [0.02, 0.32, -0.24], 0xd8b8b0, 5, 0.13)
-    .box(-0.01, 0.2, 0.18, 0.01, 0.38, 0.21, 0xece6de, 4, 0.08).build(),
   dog: () => quad(new Builder(), 0.3, 0.08, 0.2, 0.025, 0xc9a074, 0.12)
     .ell(0, 0.36, 0, 0.11, 0.11, 0.3, 0xc9a074).ell(0, 0.47, -0.32, 0.085, 0.085, 0.1, 0xc59a6c, 5, 0.08)
     .ell(0, 0.44, -0.42, 0.045, 0.04, 0.07, 0x8a6a4a, 5, 0.08).ell(0, 0.455, -0.49, 0.015, 0.015, 0.012, 0x151515, 5, 0.08)
@@ -197,7 +193,6 @@ export function critterGeometry(name: string): THREE.BufferGeometry {
 
 /** Per-instance colour variety (multiplies the vertex colours). */
 export const TINTS: Record<string, number[]> = {
-  cat: [0xe8a050, 0x303030, 0xb0aaa0, 0xf0ece4, 0x8a6a4a],
   dog: [0xffffff, 0x8a7060, 0xf0e0c8, 0x505050],
   parrot: [0x30c040, 0xe03030, 0x3070e0, 0xf0c020],
   butterfly: [0xf0a020, 0xf0f0f0, 0x60a0f0, 0xf06040, 0xf0e040],

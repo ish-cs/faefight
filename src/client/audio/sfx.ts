@@ -522,10 +522,6 @@ export function critterCall(k: Kit, out: AudioNode, t: number, kind: string): nu
       chirp(k, out, t, 'sawtooth', 420 * p, 260 * p, 0.14, 0.18);
       noise(k, out, t, { dur: 0.12, peak: 0.12, type: 'bandpass', freq: 900 * p, q: 2 });
       return 0.2;
-    case 'meow':
-      chirp(k, out, t, 'triangle', 700 * p, 1100 * p, 0.18, 0.1);
-      chirp(k, out, t + 0.18, 'triangle', 1100 * p, 600 * p, 0.3, 0.1);
-      return 0.5;
     case 'coo':
       chirp(k, out, t, 'sine', 420 * p, 360 * p, 0.25, 0.08);
       chirp(k, out, t + 0.3, 'sine', 460 * p, 330 * p, 0.35, 0.07);
