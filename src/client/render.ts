@@ -524,8 +524,8 @@ export class Renderer {
       let target: THREE.Vector3 | null = null;
       if (h.st === 2 && h.tgt !== undefined) {
         const m = motion(h.tgt, this.motion);
-        const q = m ? null : snap.players.find((x) => x.id === h.tgt);
-        target = m ? this.ropeTo.copy(m.pos) : q ? this.ropeTo.set(q.pos.x, q.pos.y, q.pos.z) : null;
+        if (m) target = this.ropeTo.copy(m.pos);
+        else for (const q of snap.players) if (q.id === h.tgt) target = this.ropeTo.set(q.pos.x, q.pos.y, q.pos.z);
       }
       r.add(from, h, t, target);
     }
