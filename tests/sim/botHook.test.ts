@@ -24,7 +24,7 @@ function world(gap: number) {
   return { nodes, groundAt, castHook };
 }
 
-function viewAt(gap: number, pos: Vec3): BotView {
+function viewAt(gap: number, pos: Vec3, enemies: Vec3[] = []): BotView {
   const w = world(gap);
   const self = newPlayer(1, 'b', true, 0, pos);
   self.inv.grapples = 3;
@@ -33,7 +33,16 @@ function viewAt(gap: number, pos: Vec3): BotView {
   return {
     now: 10, self, enemies: [], others: [], map: [], pieces: [], generators: [], sealed: [], hurt: [], shots: [], feed: [], loot: [],
     waterY: 0, suddenDeath: false, groundAt: w.groundAt, canPlace: () => ({ ok: false, reason: 'test' }) as never,
-    castHook: (dir) => w.castHook(eye, dir),
+    castHook: (dir) => {
+      // Enemies (id 2) stand as 1 m spheres at chest height; else the islands.
+      for (const e of enemies) {
+        const c = v3(e.x, e.y + 1.1, e.z), oc = v3(c.x - eye.x, c.y - eye.y, c.z - eye.z);
+        const t = oc.x * dir.x + oc.y * dir.y + oc.z * dir.z;
+        const miss = Math.hypot(oc.x - dir.x * t, oc.y - dir.y * t, oc.z - dir.z * t);
+        if (t > 0 && miss < 0.5) return { point: c, dist: t, player: 2 };
+      }
+      return w.castHook(eye, dir);
+    },
   } as BotView;
 }
 
@@ -66,15 +75,19 @@ describe('bot grappling hook decisions (bots/hook.ts)', () => {
   });
 
   test('yanks across water, off high ground, or into shotgun range; not when it does not pay', () => {
-    const v = viewAt(20, v3(19, 2, 0));
+    const at = [v3(41, 2, 0), v3(9, 2, 0), v3(9, 6, 0)];
+    const v = viewAt(20, v3(19, 2, 0), at.slice(0, 1));
     const e = newPlayer(2, 'e', true, 1, v3(19 + 22, 2, 0));
     expect(yankReason(v, HOOK, e, 22, 'rifle')).toMatch(/water/);
+    const v2 = viewAt(20, v3(19, 2, 0), at.slice(1, 2));
     const near = newPlayer(2, 'e', true, 0, v3(9, 2, 0));
-    expect(yankReason(v, HOOK, near, 10, 'rifle')).toBeNull();
-    expect(yankReason(v, HOOK, near, 10, 'shotgun')).toMatch(/shotgun range/);
+    expect(yankReason(v2, HOOK, near, 10, 'rifle')).toBeNull();
+    expect(yankReason(v2, HOOK, near, 10, 'shotgun')).toMatch(/shotgun range/);
+    expect(yankReason(viewAt(20, v3(19, 2, 0)), HOOK, near, 10, 'shotgun')).toBeNull(); // the rope wouldn't reach them
+    const v3_ = viewAt(20, v3(19, 2, 0), at.slice(2, 3));
     const up = newPlayer(2, 'e', true, 0, v3(9, 6, 0));
-    expect(yankReason(v, HOOK, up, 10, 'rifle')).toMatch(/high ground/);
+    expect(yankReason(v3_, HOOK, up, 10, 'rifle')).toMatch(/high ground/);
     up.spawnProtected = true;
-    expect(yankReason(v, HOOK, up, 10, 'rifle')).toBeNull();
+    expect(yankReason(v3_, HOOK, up, 10, 'rifle')).toBeNull();
   });
 });

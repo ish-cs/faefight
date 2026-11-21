@@ -61,8 +61,10 @@ export function escapeFrom(view: BotView, P: HookParams, from: Vec3, nodeAt: (p:
 export function yankReason(view: BotView, P: HookParams, e: PlayerState, d: number, gun: WeaponKind): string | null {
   const me = view.self;
   if (d < P.yankMin || d > Math.min(P.yankMax, GRAPPLE.range - 1) || unyankable(e, view.now)) return null;
+  // The rope must reach them: the hook's own ray at their chest catches them first.
   const chest = v3(e.pos.x, e.pos.y + PLAYER.height * 0.6, e.pos.z);
-  if (view.clearShot && !view.clearShot(chest)) return null;
+  const hit = view.castHook?.(norm(sub(chest, eyePos(me))));
+  if (!hit || hit.player !== e.id) return null;
   // Water between us: a yank from further than it can drag drops them in.
   const reach = GRAPPLE.yankSpeed * GRAPPLE.yankSec + GRAPPLE.yankStop;
   if (d > reach) {

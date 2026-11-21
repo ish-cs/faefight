@@ -68,8 +68,8 @@ export type Needs = {
   /** A rival's base is wooden: worth a rocket launcher to set it on fire (medium+ bots, when rich). */
   rocket?: boolean;
   scaffolds: number; kit: number; charge: boolean; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
-  /** Carry a grappling hook (rich enough: HookParams.buyAt). */
-  grapple?: boolean;
+  /** Carry a grappling hook: 'cross' (a crossing to make: bought before scaffolds), 'rich' (spare cash). */
+  grapple?: 'cross' | 'rich';
   /** Pieces wanted for building (fortifications, combat cover, bridge walls) on top of the seal kit. */
   build?: Partial<Record<PieceKind, number>>;
 };
@@ -111,6 +111,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
   const room = (k: HotbarItem) => countOf(inv, k) > 0 || canAdd(p.hotbar, k);
   if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
+  if (needs.grapple === 'cross' && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
     if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price) return 'steel';
