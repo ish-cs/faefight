@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { type Placement, PROP_SPEC, type PropType } from './clusters';
+import { ChunkedInstances } from './chunked';
 import { mat, merge, StaticBatch } from './geo';
 import { propModel } from './propModels';
 import type { Quality } from './sky';
@@ -53,7 +54,8 @@ type Inst ={ m: THREE.Matrix4; tint: number; tier: number };
 export class PropLayer {
   readonly root = new THREE.Group();
   private pending = new Map<PropType, Inst[]>();
-  private meshes: { mesh: THREE.InstancedMesh; tiers: number[] }[] = [];
+  /** instanced types: chunked (16 m grid, frustum + distance culled per chunk, near-cascade shadows only) */
+  private layers: { layer: ChunkedInstances; type: PropType; n: number }[] = [];
   private quality: Quality = 'high';
   private counts = { baked: 0, instanced: 0, skipped: 0 };
   /** CPU time spent placing/baking (load-time budget) */
@@ -91,11 +93,10 @@ export class PropLayer {
   /** Build the instanced meshes (call once after every place()). */
   build() {
     const t0 = performance.now();
-    for (const mesh of this.quiet.build(this.root, 'dockQuiet')) mesh.castShadow = false;
+    for (const mesh of this.quiet.build(this.root, 'dockQuiet', { chunked: true })) mesh.castShadow = false;
     this.ms += performance.now() - t0;
     for (const [type, list] of this.pending) {
       list.sort((a, b) => a.tier - b.tier); // stable: within a tier, placement order (stack bottoms first)
-      const tiers = list.map((i) => i.tier);
       // one geometry per material: instanced parts all take the instance tint
       const byMat = new Map<THREE.Material, THREE.BufferGeometry[]>();
       let cast = false;
@@ -105,24 +106,17 @@ export class PropLayer {
         xs.push(part.geometry.clone());
         byMat.set(part.material, xs);
       }
-      for (const [material, geos] of byMat) {
-        const geo = geos.length === 1 ? geos[0] : merge(geos);
-        const mesh = new THREE.InstancedMesh(geo, material, list.length);
-        list.forEach((it, i) => { mesh.setMatrixAt(i, it.m); mesh.setColorAt(i, _c.set(it.tint)); });
-        mesh.instanceMatrix.needsUpdate = true;
-        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-        mesh.castShadow = cast;
-        mesh.receiveShadow = true;
-        mesh.name = `props:${type}:${material.name || 'mat'}`;
-        mesh.computeBoundingSphere();
-        this.root.add(mesh);
-        this.meshes.push({ mesh, tiers });
-      }
+      const parts = [...byMat].map(([material, geos]) => ({ material, geometry: geos.length === 1 ? geos[0] : merge(geos), cast, receive: true }));
+      // tiny ground pieces: full detail near, gone past 60 m (they shrink below a pixel well before that)
+      const layer = new ChunkedInstances({ name: `props:${type}`, levels: [{ parts, maxDist: 60 }], small: true, chunk: 16 });
+      for (const it of list) layer.add(it.m, _c.set(it.tint), it.tier);
+      this.root.add(layer.build());
+      this.layers.push({ layer, type, n: list.length });
       this.counts.instanced += list.length;
     }
     this.pending.clear();
     this.applyQuality();
-    console.info(`[world/props] ${this.counts.baked} baked + ${this.counts.instanced} instanced (${this.meshes.length} meshes) dock props, ${this.counts.skipped} above tier ${this.buildTier}; placed in ${Math.round(this.ms)} ms`);
+    console.info(`[world/props] ${this.counts.baked} baked + ${this.counts.instanced} instanced (${this.layers.length} chunked layers) dock props, ${this.counts.skipped} above tier ${this.buildTier}; placed in ${Math.round(this.ms)} ms`);
   }
 
   setQuality(q: Quality) {
@@ -132,19 +126,13 @@ export class PropLayer {
   }
 
   private applyQuality() {
-    const lim = TIER_LIMIT[this.quality];
-    for (const { mesh, tiers } of this.meshes) {
-      let n = 0;
-      while (n < tiers.length && tiers[n] <= lim) n++;
-      mesh.count = n;
-      mesh.visible = n > 0;
-    }
+    for (const { layer } of this.layers) layer.setTierLimit(TIER_LIMIT[this.quality]);
   }
 
   /** Drop everything (map change). Model geometry stays cached in propModels. */
   clear() {
-    for (const { mesh } of this.meshes) { mesh.geometry.dispose(); mesh.dispose(); mesh.removeFromParent(); }
-    this.meshes = [];
+    for (const { layer } of this.layers) layer.dispose();
+    this.layers = [];
     this.pending.clear();
     for (const o of [...this.root.children]) { if (o instanceof THREE.Mesh) o.geometry.dispose(); o.removeFromParent(); }
     this.quiet = new StaticBatch();
@@ -154,6 +142,6 @@ export class PropLayer {
 
   /** debug: instances drawn per mesh + totals */
   stats() {
-    return { ...this.counts, meshes: this.meshes.length, drawn: Object.fromEntries(this.meshes.map(({ mesh }) => [mesh.name, mesh.count])) };
+    return { ...this.counts, layers: this.layers.length, instanced: Object.fromEntries(this.layers.map(({ type, n }) => [type, n])) };
   }
 }

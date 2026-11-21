@@ -72,7 +72,9 @@ export class World {
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
     this.props.buildTier = TIER_LIMIT[this.sky.quality];
-    const { root, collidables } = buildIslands(def, teamColors, this.scatter, location.search.includes('noprops') ? undefined : this.props);
+    // ?noprops (perf A/B): no dock clusters, no physics debris, no gameplay-prop meshes (the sim still has them)
+    const noProps = typeof location !== 'undefined' && location.search.includes('noprops');
+    const { root, collidables } = buildIslands(def, teamColors, this.scatter, noProps ? undefined : this.props);
     this.props.build();
     this.scene.add(this.props.root);
     this.scatter.build();
@@ -105,10 +107,10 @@ export class World {
     this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
     this.scene.add(this.debris.root);
-    const gameProps = this.gameProps = new GameProps(def.props ?? []);
+    const gameProps = this.gameProps = new GameProps(noProps ? [] : def.props ?? []);
     this.scene.add(gameProps.root);
     // debris collides with the gameplay props (kinematic, following their snapshot poses)
-    void this.debris.build(def, this.sky.quality).then(() => {
+    if (!noProps) void this.debris.build(def, this.sky.quality).then(() => {
       const sim = this.debris.sim;
       if (!sim || this.gameProps !== gameProps) return;
       for (const s of def.props ?? []) sim.addObstacle(s.id, PROP_KINDS[s.kind].shape, s.pos, s.rot);
