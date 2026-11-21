@@ -4,19 +4,22 @@
 //   GAME_URL=… node tests/visual/profile.mjs [--preset=high] [--secs=5] [--label=x]
 import { chromium } from '@playwright/test';
 
-const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? d;
+const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
 const preset = arg('preset', 'high');
 const secs = Number(arg('secs', '5'));
 const label = arg('label', 'profile');
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
 const vsync = arg('vsync', '0') === '1';
+const dpr = Number(arg('dpr', '1'));
+/** harbor | props | mid */
+const spot = arg('spot', 'harbor');
 
 const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', ...(vsync ? [] : ['--disable-gpu-vsync', '--disable-frame-rate-limit'])] });
-const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: dpr });
 page.setDefaultTimeout(240_000);
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
-await page.addInitScript((q) => { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q, dynamicResolution: false } })); }, preset);
+await page.addInitScript((q) => { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q, dynamicResolution: false }, onboarding: { howToSeen: true } })); }, preset);
 await page.goto(`${url}/?debug=1&bots=7&gputime=1`);
 await page.getByTestId('play-easy').click();
 await page.waitForFunction(() => window.__faefight?.snapshot?.() && !window.__faefightLoading?.visible(), null, { timeout: 180_000 });
@@ -29,9 +32,12 @@ const home = map[me.island ?? 0];
 const yaw0 = home.bunker.facingYaw;
 const W = (x, z) => ({ x: home.center.x + x * Math.cos(yaw0) + z * Math.sin(yaw0), z: home.center.z - x * Math.sin(yaw0) + z * Math.cos(yaw0) });
 await dbg('hp', 100000);
-const at = W(6, 13), to = W(14, 60);
+const L = Math.hypot(home.center.x, home.center.z), ux = home.center.x / L, uz = home.center.z / L;
+const [at, to, pitch] = spot === 'props' ? [W(-8, -12), W(-1, -8), -0.32]
+  : spot === 'mid' ? [{ x: ux * L * 0.45, z: uz * L * 0.45 }, { x: 0, z: 0 }, 0]
+    : [W(6, 13), W(14, 60), 0.02];
 await dbg('teleport', at.x, at.z);
-await page.evaluate((y) => { window.__faefight.input.yaw = y; window.__faefight.input.pitch = 0.02; }, Math.atan2(-(to.x - at.x), -(to.z - at.z)));
+await page.evaluate(([y, p]) => { window.__faefight.input.yaw = y; window.__faefight.input.pitch = p; }, [Math.atan2(-(to.x - at.x), -(to.z - at.z)), pitch]);
 await page.waitForTimeout(1200);
 
 // --- CPU profile + frame stats + GPU ms over the same window
@@ -77,9 +83,37 @@ if (await page.evaluate(() => typeof window.__faefight.lookProbe === 'function')
   lat = await dbg('latency');
   await dbg('lookProbe', false);
 }
+// draw census at this view: visible meshes inside the camera frustum, grouped by name prefix
+const census = await page.evaluate(() => {
+  const r = window.__faefight.renderer, cam = r.camera, scene = r.scene;
+  const m = cam.projectionMatrix.clone().multiply(cam.matrixWorldInverse);
+  const e = m.elements, planes = [[e[3] + e[0], e[7] + e[4], e[11] + e[8], e[15] + e[12]], [e[3] - e[0], e[7] - e[4], e[11] - e[8], e[15] - e[12]], [e[3] + e[1], e[7] + e[5], e[11] + e[9], e[15] + e[13]], [e[3] - e[1], e[7] - e[5], e[11] - e[9], e[15] - e[13]], [e[3] + e[2], e[7] + e[6], e[11] + e[10], e[15] + e[14]], [e[3] - e[2], e[7] - e[6], e[11] - e[10], e[15] - e[14]]];
+  const out = {};
+  const visit = (o) => {
+    if (!o.visible || !(o.layers.mask & cam.layers.mask)) return;
+    if (o.isMesh || o.isSprite || o.isLine || o.isPoints) {
+      let inside = true;
+      if (o.frustumCulled !== false && o.geometry) {
+        if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+        const bs = o.geometry.boundingSphere, c = bs.center.clone().applyMatrix4(o.matrixWorld), rad = bs.radius * o.matrixWorld.getMaxScaleOnAxis();
+        for (const p of planes) { const n = Math.hypot(p[0], p[1], p[2]); if ((p[0] * c.x + p[1] * c.y + p[2] * c.z + p[3]) / n < -rad) { inside = false; break; } }
+      }
+      if (inside && !(o.isInstancedMesh && o.count === 0)) {
+        const k = (o.name || o.parent?.name || o.type).split(/[:#\d]/)[0] || o.type;
+        const mats = Array.isArray(o.material) ? o.material.length : 1;
+        out[k] = (out[k] ?? 0) + mats;
+      }
+    }
+    for (const ch of o.children) visit(ch);
+  };
+  visit(scene);
+  return Object.entries(out).sort((a, b) => b[1] - a[1]).slice(0, 25);
+});
 await browser.close();
+console.log('-- camera draws by group (approx) --');
+for (const [k, v] of census) console.log(`${String(v).padStart(5)}  ${k}`);
 
-console.log(`\n== ${label} (${preset}, ${secs}s, ${frames.n} frames) ==`);
+console.log(`\n== ${label} (${preset}, ${spot}, dpr ${dpr}, ${secs}s, ${frames.n} frames) ==`);
 console.log(`fps ${(1000 / frames.avg).toFixed(1)} · avg ${frames.avg.toFixed(2)} ms · p99 ${frames.p99.toFixed(2)} ms · hitches>25ms ${frames.hitches} · main-thread work ${frames.cpuAvg.toFixed(2)} ms/frame · gpu ${(gpu.avg ?? 0).toFixed(2)} ms · draws ${info.drawCalls} · tris ${(info.triangles / 1e6).toFixed(2)}M`);
 console.log(`input→submit ${lat.cpuAvg.toFixed(2)} ms (p95 ${lat.cpuP95.toFixed(2)}) · input→GPU done ${lat.gpuAvg.toFixed(2)} ms (p95 ${lat.gpuP95.toFixed(2)}) · n=${lat.n}`);
 console.log(`profiled ${total.toFixed(0)} ms main thread`);
