@@ -14,7 +14,8 @@ import { movingVariant } from './weathering';
  * Tier-B cosmetic debris (bottles, cans, small boxes, cones, planks, small buoys): instanced meshes driven by the
  * client-only DebrisSim. Purely visual: nothing here reaches the sim, blocks players or bullets.
  */
-const DENSITY: Record<Quality, number> = { low: 0.35, high: 0.75, ultra: 1 };
+/** low: no physics debris at all (frame budget; the static scatter still litters the ground) */
+const DENSITY: Record<Quality, number> = { low: 0, high: 0.75, ultra: 1 };
 const CAP: Record<Quality, number> = { low: 60, high: 150, ultra: 150 };
 
 /** One place per kind for geometry (centred on the body origin, like the colliders). */
@@ -74,6 +75,7 @@ export class Debris {
     this.clear();
     const gen = ++this.gen;
     const t0 = performance.now();
+    if (DENSITY[quality] === 0) { console.info('[debris] off at this preset'); return Promise.resolve(); }
     const spawns = placeDebris(def, DENSITY[quality]);
     this.building = DebrisSim.create(def, spawns, { cap: CAP[quality] }).then((sim) => {
       if (gen !== this.gen) { sim.dispose(); return; }
