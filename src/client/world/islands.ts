@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
 import { bunkerSlitBoxes, bunkerWallBoxes, harborBackdropFrame, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { registerDistanceCull } from './lod';
 import { buildCenter, paintedTopMaterial } from './center';
 import { boxUV, mat, StaticBatch } from './geo';
@@ -127,21 +128,16 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   }
   const topGeo = new THREE.CircleGeometry(R, 128).rotateX(-Math.PI / 2);
 
+  const tops: THREE.BufferGeometry[] = [], walls: THREE.BufferGeometry[] = [];
   for (const isl of map) {
     const yaw = isl.bunker.facingYaw;
     const L = new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, 0, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
     const rng = makeRng(101 + isl.index * 977);
 
     // --- playable disc: exactly the sim's flat cylinder (radius R, top at groundY)
-    const top = new THREE.Mesh(topGeo, topMat);
-    top.position.set(isl.center.x, groundY, isl.center.z);
-    top.rotation.y = yaw;
-    top.receiveShadow = true;
-    const wall = new THREE.Mesh(wallGeo, wallMat);
-    wall.position.set(isl.center.x, (groundY - QUAY_DEPTH) / 2, isl.center.z);
-    wall.receiveShadow = true;
-    root.add(top, wall);
-    collidables.push(top, wall);
+    // every island's slab and quay wall merge into one mesh each (built after the loop): 2 draws instead of 2 × n
+    tops.push(topGeo.clone().applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, groundY, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1))));
+    walls.push(wallGeo.clone().translate(isl.center.x, (groundY - QUAY_DEPTH) / 2, isl.center.z));
 
     // fenders hang on the outside of the wall (outside the disc): rubber blocks (harbor) or tyres (yard).
     // The mooring bollards on the coping are breakable cosmetics now (cosmetics.ts).
@@ -184,11 +180,10 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
       const DF = BL.clone().multiply(mat(0, 0, 0, 0, d, 0));
       for (const sx of [-1, 1]) dress.add(M.paint, new THREE.PlaneGeometry(1.3, 0.22).rotateY(Math.PI), DF.clone().multiply(mat(sx * 1.6, 1.95, -2.305)), team, false);
     }
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.3, 0.05), new THREE.MeshStandardNodeMaterial({ color: team, roughness: 0.5 }));
+    // team plate: into the shared paint bin with the team colour as vertex tint (was its own material + draw)
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-    plate.position.set(b.center.x, groundY + 2.4, b.center.z).addScaledVector(fwd, 2.33);
-    plate.rotation.y = yaw;
-    root.add(plate);
+    const pp = new THREE.Vector3(b.center.x, groundY + 2.4, b.center.z).addScaledVector(fwd, 2.33);
+    dress.add(M.paint, new THREE.BoxGeometry(1.2, 0.3, 0.05), new THREE.Matrix4().compose(pp, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1)), team, false);
 
     // --- gameplay props: detailed visuals + invisible exact-size collision proxies
     const props = [
@@ -256,6 +251,16 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   if (yard) gapCranes(dress, map, groundY, def.center);
   distantIslands(dress, map);
 
+  {
+    const top = new THREE.Mesh(mergeGeometries(tops, false)!, topMat);
+    top.name = 'islandTops';
+    top.receiveShadow = true;
+    const wall = new THREE.Mesh(mergeGeometries(walls, false)!, wallMat);
+    wall.name = 'quayWalls';
+    wall.receiveShadow = true;
+    root.add(top, wall);
+    collidables.push(top, wall);
+  }
   const bunkers = solid.build(root, 'bunkers', { chunked: true });
   collidables.push(...bunkers);
   dress.build(root, 'dressing', { chunked: true });
