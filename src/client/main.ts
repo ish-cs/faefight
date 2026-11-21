@@ -32,6 +32,7 @@ import { openHowTo } from './howTo';
 import { SnapshotBuffer } from './snapBuffer';
 import { FrameGovernor } from './governor';
 import { lods } from './world/lod';
+import { pbrStats } from './world/pbr';
 import { endButtons, GameScope, type EndRole } from './rematch';
 import { Scoreboard } from './scoreboard';
 import { applyDocumentSettings } from './settings/apply';
@@ -1083,6 +1084,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; },
       gpuMs: () => renderer.gpuStats(),
       renderScale: () => ({ dyn: governor.knobs.res, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: governor.smoothedMs }),
+      pbr: () => pbrStats,
       governor: () => ({ level: governor.level, knobs: governor.knobs, enabled: governor.enabled, lodTargets: lods.count, lodScale: lods.scale }),
       interpDelay: () => renderer.interpDelay,
       shotPredict: () => ({ ...shots.stats, inFlight: shots.inFlight, times: shotTimes }),

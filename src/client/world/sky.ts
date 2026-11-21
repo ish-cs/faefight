@@ -7,6 +7,7 @@ import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
 import { SMALL_CASTER_LAYER } from './lod';
+import { cascadeToRefresh, type CascadeCacheState, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen } from './post';
 
 export type Quality = 'low' | 'high' | 'ultra';
@@ -229,6 +230,7 @@ export class SkyLighting {
     csm.fade = true;
     sh.shadowNode = csm;
     this.csm = csm;
+    this.shadowCache = null; // new cascades: render them all fresh
     if (prev) {
       prev.dispose();
       // the shadow node is baked into every lit material's shader → rebuild them
@@ -265,6 +267,7 @@ export class SkyLighting {
       const size = PRESETS[this.quality].shadowMap * k.shadowScale;
       this.sun.shadow.mapSize.set(size, size);
       for (const l of this.csm?.lights ?? []) l.shadow!.mapSize.set(size, size);
+      this.shadowCache = null; // cached far maps are the old size: redraw them
     }
   }
 
@@ -292,6 +295,29 @@ export class SkyLighting {
     if (!lights?.length) return;
     const near = lights.length >= 3 ? 2 : 1;
     for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i < near ? this.camera.layers.mask : FAR_CASCADE_MASK;
+    this.cacheFarCascades(lights, near);
+  }
+
+  /** Far cascades re-render only when the camera moved/turned enough or they got old (shadowCache.ts). */
+  shadowCacheEnabled = true;
+  private shadowCache: CascadeCacheState | null = null;
+  private cacheAnchor = { pos: new THREE.Vector3(), dir: new THREE.Vector3(), tmp: new THREE.Vector3() };
+  /** far-cascade renders skipped / done (debug) */
+  readonly shadowCacheStats = { skipped: 0, rendered: 0 };
+  private cacheFarCascades(lights: { shadow?: THREE.LightShadow | null }[], near: number) {
+    if (!this.shadowCacheEnabled) { for (const l of lights) l.shadow!.autoUpdate = true; return; }
+    if (!this.shadowCache || this.shadowCache.age.length !== lights.length) this.shadowCache = newCacheState(lights.length);
+    const a = this.cacheAnchor, cam = this.camera;
+    cam.getWorldDirection(a.tmp);
+    const moved = cam.position.distanceTo(a.pos) > SHADOW_CACHE.moveM || a.tmp.angleTo(a.dir) > SHADOW_CACHE.turnRad;
+    if (moved) { a.pos.copy(cam.position); a.dir.copy(a.tmp); }
+    const pick = cascadeToRefresh(this.shadowCache, near, moved);
+    for (let i = 0; i < lights.length; i++) {
+      const sh = lights[i].shadow!;
+      if (i < near) { sh.autoUpdate = true; continue; }
+      sh.autoUpdate = false;
+      if (i === pick) { sh.needsUpdate = true; this.shadowCacheStats.rendered++; } else this.shadowCacheStats.skipped++;
+    }
   }
 
   dispose() { this.pipeline?.dispose(); this.csm?.dispose(); }

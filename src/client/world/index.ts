@@ -10,7 +10,8 @@ import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
 import { setBuiltInPotionStalls } from './potionSeller';
-import { installQualityToggle, SkyLighting } from './sky';
+import { installQualityToggle, SkyLighting, SUN_DIR } from './sky';
+import { impostors, SUN_FOR_BAKE } from './impostor';
 import { lods, releaseLods } from './lod';
 import { STRESS, stressOffsets } from './stress';
 import { buildWater, type Ocean } from './water';
@@ -39,8 +40,9 @@ export class World {
   private gulls: Gulls | null = null;
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
-  constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
+  constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
     this.sky = new SkyLighting(gpu, scene, camera);
+    SUN_FOR_BAKE.dir.copy(SUN_DIR);
     installQualityToggle(this.sky);
     scene.add(this.pieces.root, this.pieceFx.root);
     collidables.push(...this.pieces.proxies);
@@ -129,6 +131,7 @@ export class World {
     this.grass.setQuality(this.sky.quality);
     this.scatter.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
+    impostors.step(this.gpu, this.scene.environment); // one queued impostor bake per frame (load/reveal frames)
     lods.setQuality(this.sky.quality);
     lods.update(this.sky.camera.position);
     this.pieceFx.update(performance.now());

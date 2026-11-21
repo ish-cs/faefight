@@ -62,6 +62,11 @@ pallets.dispose();                                // map teardown (unregisters)
 
 - `parts` is the same `{ geometry, material, cast, receive }[]` that `StaticBatch.take()` returns. Build a model
   once with `StaticBatch` and pass `take()`.
+- **Impostors**: add a level `{ parts: null, impostor: { views: 8, cell: 128 }, maxDist: 4000 }`. Level 0 is
+  baked once into an 8-view atlas, lit by the world's sun and environment (impostor.ts). It is drawn as one
+  camera-facing quad per instance (one draw per chunk) and keeps each instance's tint, scale, yaw and hidden state.
+  Bakes are queued, one model per frame, during the loading/reveal frames. Use impostors for anything tall that
+  stays visible far away: palms, lamps, cranes, stacks. Breakable cosmetics use them from 70 m (cosmetics.ts).
 - A level can be `parts: null`, meaning nothing is drawn in that distance band.
 - `simplify: r` generates the level from level 0 asynchronously. Level 0 geometry shows until it's ready, so
   load never blocks on it.
@@ -89,6 +94,20 @@ N frames) and call `lods.register(target)`. The pure math lives in `lodMath.ts` 
 - Don't set `castShadow` on flat ground clutter (decals, chains, puddles, footprints). It doubles their cost for
   nothing.
 - Chunked meshes are also culled per cascade by the cascade's own frustum. A map-wide mesh is not.
+- **Cached far cascades** (shadowCache.ts, sky.ts): the sun never moves and the world is static, so the far
+  cascades re-render only when the camera has moved 1.5 m or turned 3.4° since their last render, or after 24
+  frames at most. At most one far cascade renders per frame. Near cascades render every frame. Far-away
+  *moving* casters can therefore lag up to 24 frames in the far cascades, which is invisible at that distance.
+  Don't rely on far cascades for anything that moves fast and matters.
+
+## Textures
+
+PBR sets (`public/assets/textures/<set>/{albedo,normal,arm}`) ship as KTX2/Basis: ETC1S for albedo and ARM,
+UASTC+RDO+Zstd for normals, full mip chains baked in, Y-flipped to match the JPEG path. `preloadPbr()` loads them
+before the world builds and transcodes them in a worker to BC7/BC1/ASTC/ETC2, whatever the GPU supports. Any map
+that fails falls back to its JPEG. `?ktx2=0` forces JPEG for A/B. To re-encode after changing a JPEG, run
+`node scripts/encodeKtx2.mjs [set]` (see the script header for the dev-only encoder install). Anisotropy is
+2/8/16 for low/high/ultra.
 
 ## Idle work
 
@@ -110,4 +129,8 @@ the APIs above.
   `window.__faefight.governor()` and `.renderInfo()` return the same data.
 - Harness (headless, 1600×900, vsync off, 8 players). Run it under the heavy lock:
   `node tests/visual/perfMatch.mjs [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-x]`.
-  It needs `pnpm vite --port 5299` (or set `GAME_URL`). `?debug=1&stress=3` triples every decorative prop.
+  It needs a running server (`GAME_URL`). `tests/visual/perfAB.mjs` wraps it: it takes the heavy lock, starts one
+  vite per source tree, runs each spec, then kills the servers and releases the lock.
+  `?debug=1&stress=3` triples every decorative prop.
+- `tests/visual/sceneCensus.mjs`: meshes grouped by name (count, visible, casters, triangles). Use it to find
+  what costs draws.

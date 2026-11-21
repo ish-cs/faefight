@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { type ImpostorAtlas, impostorQuad, impostors } from './impostor';
 import { lods, type LodTarget, simplifyGeometry, SMALL_CASTER_LAYER } from './lod';
 import { chunkCoord, chunkKey, distToSphere, selectLod } from './lodMath';
 
@@ -17,6 +18,8 @@ export type LodLevelSpec = {
   maxDist: number;
   /** auto-generate this level's parts by simplifying level 0 to this vertex ratio (0.05–1) */
   simplify?: number;
+  /** billboard impostor of level 0 (baked at load, impostor.ts): views around the model, atlas cell px */
+  impostor?: { views?: number; cell?: number };
 };
 export type ChunkedSpec = {
   name: string;
@@ -31,6 +34,7 @@ type Chunk = {
   idx: number[]; // instance ids, sorted by tier
   levels: THREE.Group[]; // one group per level (meshes per part)
   meshes: THREE.InstancedMesh[][]; // [level][part]
+  imp: THREE.Mesh | null; // impostor quads (one per instance), if the spec has an impostor level
   center: THREE.Vector3;
   radius: number;
   current: number;
@@ -38,7 +42,8 @@ type Chunk = {
 };
 
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
-const _p = new THREE.Vector3();
+const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler();
+const HIDDEN_MAT = new THREE.MeshBasicNodeMaterial({ visible: false });
 
 export class ChunkedInstances implements LodTarget {
   readonly root = new THREE.Group();
@@ -53,6 +58,7 @@ export class ChunkedInstances implements LodTarget {
   private thresholds: number[] = [];
   private tierLimit = Infinity;
   private built = false;
+  private atlas: ImpostorAtlas | null = null;
 
   constructor(readonly spec: ChunkedSpec) {
     if (spec.levels.length === 0) throw new Error(`[world/chunked] ${spec.name}: no levels`);
@@ -80,6 +86,11 @@ export class ChunkedInstances implements LodTarget {
     const base = spec.levels[0].parts;
     const pending: { li: number; pi: number; ratio: number }[] = [];
     this.levelParts = spec.levels.map((l, li) => {
+      if (l.impostor) {
+        if (!base) throw new Error(`[world/chunked] ${spec.name}: impostor needs level 0 parts`);
+        this.atlas = impostors.request(base, l.impostor.views ?? 8, l.impostor.cell ?? 128);
+        return null;
+      }
       if (l.simplify === undefined) return l.parts;
       if (!base) throw new Error(`[world/chunked] ${spec.name}: simplify needs level 0 parts`);
       base.forEach((_, pi) => pending.push({ li, pi, ratio: l.simplify! }));
@@ -109,7 +120,7 @@ export class ChunkedInstances implements LodTarget {
       const sphere = box.getBoundingSphere(new THREE.Sphere());
       let maxScale = 1;
       for (const i of idx) maxScale = Math.max(maxScale, this.mats[i].getMaxScaleOnAxis());
-      const chunk: Chunk = { idx, levels: [], meshes: [], center: sphere.center, radius: sphere.radius + modelR * maxScale, current: -1, tierCount: [] };
+      const chunk: Chunk = { idx, levels: [], meshes: [], imp: null, center: sphere.center, radius: sphere.radius + modelR * maxScale, current: -1, tierCount: [] };
       idx.forEach((id, slot) => { this.where[id] = { chunk, slot }; });
       const maxTier = this.tiers[idx[idx.length - 1]];
       for (let t = 0; t <= maxTier; t++) chunk.tierCount[t] = idx.filter((i) => this.tiers[i] <= t).length;
@@ -134,6 +145,7 @@ export class ChunkedInstances implements LodTarget {
           g.add(m);
           return m;
         });
+        if (spec.levels[li].impostor) g.add((chunk.imp = this.impostorMesh(chunk)));
         chunk.levels.push(g);
         chunk.meshes.push(meshes);
         this.root.add(g);
@@ -151,6 +163,34 @@ export class ChunkedInstances implements LodTarget {
     return this.root;
   }
 
+  /** One impostor quad per instance of the chunk: per-instance centre + yaw, tint + scale (0 = hidden). */
+  private impostorMesh(chunk: Chunk): THREE.Mesh {
+    const n = chunk.idx.length, quad = impostorQuad();
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.setIndex(quad.index);
+    geo.setAttribute('position', quad.getAttribute('position'));
+    geo.setAttribute('uv', quad.getAttribute('uv'));
+    const C = new Float32Array(n * 4), T = new Float32Array(n * 4);
+    chunk.idx.forEach((id, slot) => {
+      this.mats[id].decompose(_p, _q, _s);
+      _e.setFromQuaternion(_q, 'YXZ');
+      const c = this.cols[id];
+      C.set([_p.x, _p.y, _p.z, _e.y], slot * 4);
+      T.set([c?.r ?? 1, c?.g ?? 1, c?.b ?? 1, this.hidden.has(id) ? 0 : Math.max(_s.x, _s.y, _s.z)], slot * 4);
+    });
+    geo.setAttribute('impCenter', new THREE.InstancedBufferAttribute(C, 4));
+    geo.setAttribute('impTint', new THREE.InstancedBufferAttribute(T, 4));
+    geo.instanceCount = n;
+    geo.boundingSphere = new THREE.Sphere(chunk.center.clone(), chunk.radius);
+    const atlas = this.atlas!;
+    const mesh = new THREE.Mesh(geo, atlas.ready ? atlas.material : HIDDEN_MAT);
+    mesh.name = `${this.root.name}:impostor`;
+    mesh.castShadow = false;
+    mesh.visible = atlas.ready;
+    if (!atlas.ready) atlas.onReady.push(() => { mesh.material = atlas.material; mesh.visible = true; });
+    return mesh;
+  }
+
   /** Draw only instances with tier <= t (quality thinning, per chunk). */
   setTierLimit(t: number) {
     if (t === this.tierLimit) return;
@@ -163,6 +203,7 @@ export class ChunkedInstances implements LodTarget {
       const t = Math.min(this.tierLimit, c.tierCount.length - 1);
       const n = t < 0 ? 0 : c.tierCount[t];
       for (const ms of c.meshes) for (const m of ms) m.count = n;
+      if (c.imp) (c.imp.geometry as THREE.InstancedBufferGeometry).instanceCount = n;
     }
   }
 
@@ -174,6 +215,11 @@ export class ChunkedInstances implements LodTarget {
     for (const ms of w.chunk.meshes) for (const m of ms) {
       m.setMatrixAt(w.slot, visible ? this.mats[id] : ZERO);
       m.instanceMatrix.needsUpdate = true;
+    }
+    if (w.chunk.imp) {
+      const a = w.chunk.imp.geometry.getAttribute('impTint') as THREE.InstancedBufferAttribute;
+      a.setW(w.slot, visible ? this.mats[id].getMaxScaleOnAxis() : 0);
+      a.needsUpdate = true;
     }
   }
 
@@ -197,7 +243,7 @@ export class ChunkedInstances implements LodTarget {
 
   dispose() {
     lods.unregister(this);
-    for (const c of this.chunks) for (const ms of c.meshes) for (const m of ms) m.dispose();
+    for (const c of this.chunks) { for (const ms of c.meshes) for (const m of ms) m.dispose(); c.imp?.geometry.dispose(); }
     this.root.removeFromParent();
   }
 }

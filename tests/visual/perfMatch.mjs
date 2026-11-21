@@ -36,6 +36,7 @@ async function run(quality) {
   await page.waitForFunction(() => window.__faefight?.snapshot?.(), null, { timeout: 120_000 });
   await page.waitForFunction(() => !window.__faefightLoading?.visible(), null, { timeout: 180_000 });
   const loadMs = Date.now() - t0;
+  const pbr = await page.evaluate(() => window.__faefight.pbr?.() ?? null);
   await page.waitForTimeout(2500);
   const dbg = (f, ...a) => page.evaluate(([f, a]) => window.__faefight[f](...a), [f, a]);
   const humanId = await dbg('humanId');
@@ -69,7 +70,7 @@ async function run(quality) {
   const mean = (k) => per.reduce((a, x) => a + x[k], 0) / per.length;
   const avgMs = mean('avgMs');
   return {
-    preset: quality, loadMs, fps: +(1000 / avgMs).toFixed(1), avgMs: +avgMs.toFixed(2), p99: +Math.max(...per.map((x) => x.p99)).toFixed(2),
+    preset: quality, loadMs, pbr, fps: +(1000 / avgMs).toFixed(1), avgMs: +avgMs.toFixed(2), p99: +Math.max(...per.map((x) => x.p99)).toFixed(2),
     cpuMs: +mean('cpu').toFixed(2), gpuMs: +mean('gpu').toFixed(2), draws: Math.round(mean('draws')), tris: Math.round(mean('tris')),
     perSpot: per.map((x) => `${x.spot}:${(1000 / x.avgMs).toFixed(0)}fps/${Math.round(x.draws)}dc/${Math.round(x.tris / 1000)}kt`).join(' '),
     errors: errors.slice(0, 5),
@@ -82,5 +83,6 @@ console.log(`\n== ${label} (stress ×${stress}) ==`);
 console.log('| preset | load s | avg fps | p99 ms | cpu ms | gpu ms | draws | tris |');
 console.log('|---|---|---|---|---|---|---|---|');
 for (const r of rows) console.log(`| ${r.preset} | ${(r.loadMs / 1000).toFixed(1)} | ${r.fps} | ${r.p99} | ${r.cpuMs} | ${r.gpuMs} | ${r.draws} | ${(r.tris / 1e6).toFixed(2)}M |`);
+if (rows[0]?.pbr) console.log(`textures: ${JSON.stringify(rows[0].pbr)}`);
 for (const r of rows) console.log(`${r.preset}: ${r.perSpot}${r.errors.length ? `  errors: ${JSON.stringify(r.errors)}` : ''}`);
 console.log(JSON.stringify({ label, stress, rows }));
