@@ -127,6 +127,8 @@ type Backend = {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
+    /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
+    time(t: number): void; strike(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
   };
 };
@@ -173,6 +175,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
       potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
+      time: (t) => send({ type: 'debug', cmd: 'time', t }),
+      strike: (x, z) => send({ type: 'debug', cmd: 'strike', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),

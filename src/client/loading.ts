@@ -14,7 +14,7 @@ export const TIPS = [
   'Drop a medkit stack into your vault before a risky push.',
   'Hold the free-placement key to place pieces off the grid.',
   'Ctrl or Shift with the drop key throws the whole stack.',
-  'In sudden death the tide rises. Build up, not out.',
+  'At 15:00 a storm closes in on the middle of the map. Stay inside the ring.',
   'Every key can be rebound in Settings → Controls.',
 ];
 

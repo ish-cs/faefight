@@ -388,6 +388,14 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       [784, 988, 1175, 1568].forEach((f, i) => { len = i * 0.09 + partials(k, out, t + i * 0.09, f, 0.22, [[1, 1, 0.6], [2, 0.2, 0.3]]); });
       return len;
     }
+    case 'thunder':
+      if (cue.kind === 'near') {
+        // Close strike: a ripping crack, then the boom.
+        noise(k, out, t, { type: 'highpass', freq: 1800, dur: 0.12, peak: 1.0, attack: 0.001 });
+        noise(k, out, t + 0.02, { type: 'bandpass', freq: 700 * p, q: 0.6, dur: 0.5, peak: 0.9 });
+      }
+      noise(k, out, t, { type: 'lowpass', freq: 380 * p, freqEnd: 60, dur: 2.8 + k.rnd() * 1.5, peak: 1.2, attack: cue.kind === 'near' ? 0.01 : 0.25, rate: 0.5 });
+      return 0.3 + noise(k, out, t + 0.3 + k.rnd() * 0.4, { type: 'lowpass', freq: 160, freqEnd: 45, dur: 3, peak: 0.8, attack: 0.3, rate: 0.4 });
     case 'horn':
       note(k, out, t, 233, 2.2, 0.22, 'sawtooth', 1400);
       note(k, out, t, 235.5, 2.2, 0.22, 'sawtooth', 1400);

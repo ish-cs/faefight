@@ -101,6 +101,11 @@
 /* The compass sits above the timer, so the spectator banner moves off the top stack (above the hotbar). */
 .spectate-banner { top: auto; bottom: 104px; }
 .qol-compass .qc-marker.nolabel .qc-label { display: none; }
+/* Storm ring: violet marker toward the ring's centre; pulses while you're outside it. */
+.qol-compass .qc-marker.storm { --c: #9a6bff; }
+.qol-compass .qc-marker.storm .qc-label { color: #cdb8ff; font-weight: 700; }
+.qol-compass .qc-marker.storm.outside::before { animation: qc-storm 0.8s ease-in-out infinite; }
+@keyframes qc-storm { 50% { box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.45), 0 0 10px 3px rgba(154, 107, 255, 0.9); } }
 .menu .online .btn.primary { background: var(--accent); color: #062014; border-color: transparent; }
 .menu .online.qol-invited { padding: 8px 0 10px; }
 .code-row [data-testid="copy-invite"] { white-space: nowrap; }

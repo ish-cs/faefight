@@ -120,6 +120,15 @@ class Compass {
     const owned = new Set(snap.players.map((p) => p.island));
     for (const isl of map) if (!owned.has(isl.index) && isl.index !== myIsland) { this.marker(`mid${isl.index}`, 'island center', 'Center'); at(`mid${isl.index}`, isl.center); }
     (snap.potionShops ?? []).forEach((sh, i) => { this.marker(`pot${i}`, 'potion', 'Potions'); at(`pot${i}`, sh.pos); });
+    // Sudden-death storm: a marker toward the ring's centre with the distance to its edge (to safety when outside).
+    const st = snap.storm;
+    if (st) {
+      const m = this.marker('storm', 'storm', '');
+      const edge = Math.hypot(me.x - st.x, me.z - st.z) - st.r;
+      m.node.classList.toggle('outside', edge > 0);
+      setText(m.label!, edge > 0 ? `Safe · ${Math.ceil(edge)} m` : `Ring · ${Math.floor(-edge)} m`);
+      at('storm', { x: st.x, z: st.z });
+    } else if (this.markers.has('storm')) this.place(this.markers.get('storm')!, null);
     // Markers in the same direction: only the nearest keeps its label (no overlapping text).
     // Islands (players) win over the potion seller; then the nearer one.
     const rank = (m: Marker) => (m.node.classList.contains('potion') ? 1 : 0);
@@ -147,7 +156,7 @@ function recapCard(r: Recap): HTMLElement {
   const head = el('div', 'qr-head');
   const icon = el('span', 'qr-icon');
   if (r.weapon && Object.hasOwn(ICONS, r.weapon)) icon.innerHTML = ICONS[r.weapon as IconKind];
-  else icon.textContent = r.weapon === 'water' ? '≈' : r.weapon === 'fall' ? '↓' : '✕';
+  else icon.textContent = r.weapon === 'water' ? '≈' : r.weapon === 'fall' ? '↓' : r.weapon === 'lightning' ? 'ϟ' : r.weapon === 'storm' ? '◎' : '✕';
   const title = el('div', 'qr-title', r.title);
   head.append(icon, title);
   if (r.killer) {

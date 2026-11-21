@@ -97,6 +97,13 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .hud .seal-chip.sealed .state { color: var(--danger); }
 .hud .banner { font-size: 14px; font-weight: 600; color: #fff; background: rgba(255, 77, 77, 0.75); padding: 5px 14px; border-radius: 999px; }
 .hud .sealed-banner { position: absolute; top: 150px; left: 50%; transform: translateX(-50%); display: none; font-size: 34px; font-weight: 800; letter-spacing: 1px; color: #fff; background: rgba(220, 30, 30, 0.85); padding: 12px 28px; border-radius: 14px; box-shadow: 0 0 40px rgba(255, 0, 0, 0.45); animation: pulse 1.2s ease-in-out infinite; }
+.hud .banner.storm { background: rgba(92, 60, 170, 0.8); }
+.hud .storm-warn { position: absolute; top: 140px; left: 50%; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; font-size: 56px; font-weight: 900; letter-spacing: 10px; color: #e9e2ff; text-shadow: 0 0 24px rgba(140, 100, 255, 0.9), 0 2px 0 rgba(0, 0, 0, 0.5); pointer-events: none; animation: pulse 1.2s ease-in-out infinite; }
+.hud .storm-warn-sub { font-size: 16px; font-weight: 700; letter-spacing: 1px; color: #fff; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8); }
+/* Outside the storm ring: a pulsing violet edge (screen-space only, no render cost). */
+.hud .storm-vignette { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.35s; box-shadow: inset 0 0 160px 40px rgba(110, 60, 220, 0.75); background: radial-gradient(ellipse at center, transparent 55%, rgba(60, 20, 140, 0.45) 100%); }
+.hud .storm-vignette.on { opacity: 1; animation: storm-edge 1s ease-in-out infinite; }
+@keyframes storm-edge { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
 @keyframes pulse { 50% { box-shadow: 0 0 10px rgba(255, 0, 0, 0.2); } }
 .hud .hotbar { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; padding: 7px; background: linear-gradient(180deg, rgba(20, 26, 36, 0.42), rgba(10, 14, 20, 0.62)); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 18px; backdrop-filter: blur(16px) saturate(150%); -webkit-backdrop-filter: blur(16px) saturate(150%); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06); pointer-events: auto; }
 .hud .hotbar.editing { border-color: rgba(255, 209, 102, 0.6); box-shadow: 0 0 0 3px rgba(255, 209, 102, 0.12); }
