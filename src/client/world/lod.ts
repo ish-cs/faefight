@@ -159,16 +159,18 @@ const shrunk = new Map<string, THREE.Material>();
  * (`pc` attribute, geo.ts part()) between 70 % and 100 % of `far` × lodScale, so a chunk's parts dwindle away
  * before the CPU hides the chunk at `far`: no pop. Cached per (material, far): one extra pipeline per material.
  */
-export function shrinkMaterial(base: THREE.Material, far: number): THREE.Material {
-  const key = `${base.uuid}:${far}`;
+export function shrinkMaterial(base: THREE.Material, far: number, opts: { attr?: string; from?: number } = {}): THREE.Material {
+  const attr = opts.attr ?? 'pc', from = opts.from ?? 0.7;
+  const key = `${base.uuid}:${far}:${attr}:${from}`;
   let m = shrunk.get(key);
   if (m) return m;
   const n = base.clone() as THREE.NodeMaterial;
   n.name = `${base.name}~far`;
-  const pc = attribute('pc', 'vec3');
+  // `attr` holds the part/instance centre in world space (instancing is applied before positionNode)
+  const pc = attribute(attr, 'vec3');
   const d = pc.xz.sub(cameraPosition.xz).length();
   const f = lodScale.mul(far);
-  const keep = float(1).sub(smoothstep(f.mul(0.7), f, d));
+  const keep = float(1).sub(smoothstep(f.mul(from), f, d));
   const p = ((base as THREE.NodeMaterial).positionNode ?? positionLocal) as THREE.Node<'vec3'>;
   n.positionNode = pc.add(p.sub(pc).mul(keep));
   shrunk.set(key, n);

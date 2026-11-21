@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
-import { atan, attribute, cameraPosition, float, floor, mod, normalize, positionLocal, PI2, texture, uniform, vec2, vec3 } from 'three/tsl';
+import { atan, attribute, cameraPosition, float, floor, mod, normalize, positionLocal, PI2, smoothstep, texture, uniform, vec2, vec3 } from 'three/tsl';
+import { lodScale } from './lod';
 import type { LodPart } from './chunked';
 
 /**
@@ -18,6 +19,8 @@ export type ImpostorAtlas = {
   center: THREE.Vector3;
   radius: number;
   views: number;
+  /** cross-fade: impostors grow in between 85 % and 100 % of this distance (× lodScale); 0 = always full size */
+  fadeIn: number;
   ready: boolean;
   material: THREE.MeshBasicNodeMaterial;
   onReady: (() => void)[];
@@ -36,7 +39,10 @@ function impostorMaterial(atlas: ImpostorAtlas): THREE.MeshBasicNodeMaterial {
   m.name = 'impostor';
   m.alphaTest = 0.5;
   const C = attribute('impCenter', 'vec4'), T = attribute('impTint', 'vec4');
-  const scale = T.w;
+  // grows in across the cross-fade band while the full model shrinks out (chunked.ts)
+  const dist = C.xz.sub(cameraPosition.xz).length();
+  const F = lodScale.mul(atlas.fadeIn);
+  const scale = atlas.fadeIn > 0 ? T.w.mul(smoothstep(F.mul(0.85), F, dist)) : T.w;
   const R = uniform(atlas.radius), off = uniform(atlas.center);
   const center = C.xyz.add(off.mul(scale));
   const toCam = normalize(cameraPosition.xz.sub(center.xz).add(vec2(1e-5, 0)));
@@ -60,11 +66,11 @@ export class ImpostorBaker {
   baked = 0;
 
   /** Register a model for baking; returns its atlas (texture/material filled in when baked). */
-  request(parts: LodPart[], views = 8, cell = 128): ImpostorAtlas {
+  request(parts: LodPart[], views = 8, cell = 128, fadeIn = 0): ImpostorAtlas {
     const box = new THREE.Box3();
     for (const p of parts) { if (!p.geometry.boundingBox) p.geometry.computeBoundingBox(); box.union(p.geometry.boundingBox!); }
     const sphere = box.getBoundingSphere(new THREE.Sphere());
-    const atlas: ImpostorAtlas = { texture: null, center: sphere.center, radius: sphere.radius, views, ready: false, material: null!, onReady: [] };
+    const atlas: ImpostorAtlas = { texture: null, center: sphere.center, radius: sphere.radius, views, fadeIn, ready: false, material: null!, onReady: [] };
     this.queue.push({ parts, atlas, cell });
     return atlas;
   }

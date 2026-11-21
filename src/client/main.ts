@@ -629,11 +629,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     sky.setQuality(st.video.quality);
     sky.setResolutionScale(st.video.resolutionScale);
     governor.enabled = st.video.dynamicResolution;
+    perfDetail = st.video.perfDetail || DEBUG;
     if (sky.quality !== govQuality) { govQuality = sky.quality; governor.reset(); govSkip(); }
     applyGovernor();
   });
-  /** Shift+F3: perf detail under the FPS counter. */
-  let perfDetail = DEBUG;
+  /** Shift + the FPS key (F3 / `): perf detail under the FPS counter (Settings → Video → Performance stats). */
+  let perfDetail = settings.get().video.perfDetail || DEBUG, detailShown = false;
 
   // ---- reveal: map + avatars + first snapshot → shader warm-up → a few hidden frames → fade in ----
   let charsReady = false, warmStarted = false, warmed = false, revealed = false, framesAfterWarm = 0;
@@ -814,10 +815,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   // FPS counter hotkey (rebindable; Settings → Video has the same toggle).
   window.addEventListener('keydown', (e) => {
-    if (e.repeat || !isAction('fps', e.code) || e.target instanceof HTMLInputElement) return;
+    const t = e.target as HTMLElement | null;
+    if (e.repeat || !isAction('fps', e.code) || (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))) return;
     e.preventDefault();
-    if (e.shiftKey) { perfDetail = !perfDetail; if (!perfDetail) hud.setFpsDetail(null); return; }
-    settings.update((d) => { d.video.showFps = !d.video.showFps; });
+    if (e.shiftKey) settings.update((d) => { d.video.perfDetail = !d.video.perfDetail; if (d.video.perfDetail) d.video.showFps = true; });
+    else settings.update((d) => { d.video.showFps = !d.video.showFps; });
   });
 
   const spectator = new Spectator(app, renderer.camera, () => renderer.collidables, canvas, () => input.enabled);
@@ -1176,7 +1178,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     fpsFrames++;
     if (now - fpsSince >= 500) {
       hud.setFps((fpsFrames * 1000) / (now - fpsSince));
+      if (!perfDetail && detailShown) { hud.setFpsDetail(null); detailShown = false; }
       if (perfDetail) {
+        detailShown = true;
         const ri = renderer.info(), g = renderer.gpuMs.length ? renderer.gpuMs[renderer.gpuMs.length - 1] : null;
         hud.setFpsDetail([
           `${((now - fpsSince) / fpsFrames).toFixed(1)} ms${g !== null ? ` · gpu ${g.toFixed(1)} ms` : ''}`,

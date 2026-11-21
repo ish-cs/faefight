@@ -83,6 +83,8 @@ export const STATIC_CHUNKS = {
   small: { maxR: 0.6, grid: 48, cull: 90, splitTris: 25_000 },
   /** medium parts: chunked for frustum culling only (no impostors yet, so never distance-culled) */
   medium: { maxR: 4, grid: 160, cull: Infinity, splitTris: 60_000 },
+  /** a grid cell lighter than this isn't worth its own draw: it joins the bin's leftover mesh */
+  minChunkTris: 8_000,
 };
 
 const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + g.getAttribute('position').count / 3, 0);
@@ -144,7 +146,9 @@ export class StaticBatch {
           if (!e) groups.set(k, (e = []));
           e.push(g);
         }
+        const leftover: THREE.BufferGeometry[] = [];
         for (const [k, e] of groups) {
+          if (trisOf(e) < STATIC_CHUNKS.minChunkTris) { leftover.push(...e); continue; }
           const mesh = emit(bin, e, `@${cls}:${k}`);
           if (cls === 'medium') continue;
           mesh.geometry.computeBoundingSphere();
@@ -153,6 +157,12 @@ export class StaticBatch {
           mesh.material = shrinkMaterial(bin.material, C.cull);
           mesh.userData.lod = registerDistanceCull(mesh, C.cull, { center: sp.center, radius: sp.radius });
         }
+        if (!leftover.length) continue;
+        if (cls === 'medium') { rest.push(...leftover); continue; }
+        // sparse small parts: one map-wide mesh, still shrinking away with distance in the shader
+        const mesh = emit(bin, leftover, '@small:sparse');
+        mesh.layers.set(SMALL_CASTER_LAYER);
+        mesh.material = shrinkMaterial(bin.material, C.cull);
       }
       if (rest.length) emit(bin, rest, '@rest');
     }

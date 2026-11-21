@@ -36,7 +36,7 @@ export const SETTINGS_VERSION = 2;
 export type Settings = {
   v: typeof SETTINGS_VERSION;
   controls: { sensitivity: number; invertY: boolean; keys: Keymap };
-  video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean };
+  video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; perfDetail: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean };
   audio: { master: number; effects: number; ambience: number; muted: boolean };
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode };
   /** One-time things: the How to play card shows by itself until it has been seen once. */
@@ -54,7 +54,7 @@ export function defaultSettings(): Settings {
   return {
     v: SETTINGS_VERSION,
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
-    video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, resolutionScale: 1, frameCap: 0, dynamicResolution: true },
+    video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true },
     audio: { master: 0.8, effects: 1, ambience: 1, muted: false },
     gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third' },
     onboarding: { howToSeen: false },
@@ -91,6 +91,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       fovThird: Math.round(num(v.fovThird, LIMITS.fovThird[0], LIMITS.fovThird[1], d.video.fovThird)),
       fovFirst: Math.round(num(v.fovFirst, LIMITS.fovFirst[0], LIMITS.fovFirst[1], d.video.fovFirst)),
       showFps: bool(v.showFps, d.video.showFps),
+      perfDetail: bool(v.perfDetail, d.video.perfDetail),
       resolutionScale: num(v.resolutionScale, LIMITS.resolutionScale[0], LIMITS.resolutionScale[1], d.video.resolutionScale),
       frameCap: oneOf(v.frameCap, FRAME_CAPS, d.video.frameCap),
       dynamicResolution: bool(v.dynamicResolution, d.video.dynamicResolution),

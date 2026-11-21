@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { type ImpostorAtlas, impostorQuad, impostors } from './impostor';
-import { lods, type LodTarget, simplifyGeometry, SMALL_CASTER_LAYER } from './lod';
-import { chunkCoord, chunkKey, distToSphere, selectLod } from './lodMath';
+import { lods, type LodTarget, shrinkMaterial, simplifyGeometry, SMALL_CASTER_LAYER } from './lod';
+import { chunkCoord, chunkKey, distToSphere, LOD_HYSTERESIS, selectLod } from './lodMath';
 
 /**
  * Chunked instancing with LOD: the instances of one prop type are split into a spatial grid (default 16 m); each
@@ -59,6 +59,8 @@ export class ChunkedInstances implements LodTarget {
   private tierLimit = Infinity;
   private built = false;
   private atlas: ImpostorAtlas | null = null;
+  /** level 0 ↔ impostor cross-fade distance (0 = hard switch per chunk) */
+  private fade = 0;
 
   constructor(readonly spec: ChunkedSpec) {
     if (spec.levels.length === 0) throw new Error(`[world/chunked] ${spec.name}: no levels`);
@@ -88,7 +90,9 @@ export class ChunkedInstances implements LodTarget {
     this.levelParts = spec.levels.map((l, li) => {
       if (l.impostor) {
         if (!base) throw new Error(`[world/chunked] ${spec.name}: impostor needs level 0 parts`);
-        this.atlas = impostors.request(base, l.impostor.views ?? 8, l.impostor.cell ?? 128);
+        // impostor right after the full model: per-instance shader cross-fade at level 0's maxDist
+        if (li === 1) this.fade = spec.levels[0].maxDist;
+        this.atlas = impostors.request(base, l.impostor.views ?? 8, l.impostor.cell ?? 128, this.fade);
         return null;
       }
       if (l.simplify === undefined) return l.parts;
@@ -129,7 +133,16 @@ export class ChunkedInstances implements LodTarget {
         g.name = `${this.root.name}:L${li}`;
         g.visible = false;
         const meshes = (parts ?? []).map((p) => {
-          const m = new THREE.InstancedMesh(p.geometry, p.material, idx.length);
+          let geo = p.geometry, mat = p.material;
+          if (this.fade && li === 0) {
+            // per-instance centre for the shrink-out (instances, not the chunk, cross-fade)
+            geo = p.geometry.clone();
+            const cs = new Float32Array(idx.length * 3);
+            idx.forEach((id, slot) => { _p.setFromMatrixPosition(this.mats[id]); cs.set([_p.x, _p.y, _p.z], slot * 3); });
+            geo.setAttribute('lodC', new THREE.InstancedBufferAttribute(cs, 3));
+            mat = shrinkMaterial(p.material, this.fade, { attr: 'lodC', from: 0.85 });
+          }
+          const m = new THREE.InstancedMesh(geo, mat, idx.length);
           idx.forEach((id, slot) => {
             m.setMatrixAt(slot, this.hidden.has(id) ? ZERO : this.mats[id]);
             const c = this.cols[id];
@@ -224,12 +237,31 @@ export class ChunkedInstances implements LodTarget {
   }
 
   updateLod(cam: THREE.Vector3, scale: number) {
+    if (this.fade && lods.force < 0) { this.updateFade(cam, scale); return; }
     for (const c of this.chunks) {
       const d = distToSphere(cam.x, cam.y, cam.z, c.center.x, c.center.y, c.center.z, c.radius);
       const l = lods.force >= 0 ? Math.min(lods.force, this.thresholds.length - 1) : selectLod(d, this.thresholds, c.current, scale);
       if (l === c.current) continue;
       c.current = l; // l === thresholds.length → beyond the last maxDist: culled
       c.levels.forEach((g, i) => { g.visible = i === l; });
+    }
+  }
+
+  /**
+   * Cross-fade mode (full model → impostor): a chunk shows the full model while any of it is inside the fade
+   * distance, the impostors while any of it is past the start of the band, both inside it (the shaders shrink /
+   * grow each instance), nothing past the last level's distance.
+   */
+  private updateFade(cam: THREE.Vector3, scale: number) {
+    const F = this.fade * scale, last = this.thresholds[this.thresholds.length - 1] * scale, h = 1 + LOD_HYSTERESIS;
+    for (const c of this.chunks) {
+      const dmin = distToSphere(cam.x, cam.y, cam.z, c.center.x, c.center.y, c.center.z, c.radius);
+      const dmax = cam.distanceTo(c.center) + c.radius;
+      const showFull = dmin < F * h, showImp = dmax > F * 0.85 / h && dmin < last;
+      const key = (showFull ? 1 : 0) | (showImp ? 2 : 0);
+      if (key === c.current) continue;
+      c.current = key;
+      c.levels.forEach((g, i) => { g.visible = i === 0 ? showFull : i === 1 ? showImp : false; });
     }
   }
 

@@ -23,18 +23,18 @@ const tint = (d: CosmeticDef, c: THREE.Color) => {
 };
 
 /**
- * Full model up to this distance (m, high preset; LOD-scaled), billboard impostor beyond. Chunks: 64 m (they're
- * sparse and light: bigger chunks keep the draw count down).
+ * Full model up to this distance (m, high preset; LOD-scaled), billboard impostor beyond, cross-faded per
+ * instance in the shaders. Chunks: 128 m (sparse, light props: big chunks keep the draw count down).
  */
 const IMPOSTOR_FROM = 70;
-const CHUNK = 64;
+const CHUNK = 128;
 
 const R = Math.random;
 const rr = (a: number, b: number) => a + (b - a) * R();
 
 /**
  * Breakable decoration: per kind, a ChunkedInstances (chunked.ts): full model near the camera, a baked billboard
- * impostor far away, culled per 64 m chunk. A broken one is hidden by zero-scaling its instance. Never a camera/aim
+ * impostor far away, culled per 128 m chunk. A broken one is hidden by zero-scaling its instance. Never a camera/aim
  * collidable.
  */
 export class CosmeticLayer {
