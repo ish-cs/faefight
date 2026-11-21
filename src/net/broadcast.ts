@@ -149,9 +149,10 @@ class BroadcastRoom implements HostRoom {
 }
 
 export class BroadcastTransport implements Transport {
-  async host(): Promise<HostRoom> {
+  async host(code?: string): Promise<HostRoom> {
+    if (code !== undefined && normalizeCode(code) !== code) throw new Error(`Bad room code ${code}`);
     // 31^6 codes; collisions between a handful of local tabs are not a practical concern.
-    return new BroadcastRoom(newInviteCode());
+    return new BroadcastRoom(code ?? newInviteCode());
   }
 
   join(rawCode: string): Promise<Link> {

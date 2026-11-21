@@ -18,7 +18,7 @@ export const CHAT_MAX_LEN = 200;
 /** Remote client → host. */
 export type ClientMsg =
   /** `rejoin`: the token the host gave this browser for its seat (reconnect grace). */
-  | { t: 'hello'; name: string; version: number; rejoin?: string }
+  | { t: 'hello'; name: string; version: number; rejoin?: string; mkey?: string }
   /** Answer to the host's ping (round-trip time for the scoreboard). */
   | { t: 'pong'; n: number }
   /** `ack`: newest snapshot seq decoded (wire.ts delta baseline). */
@@ -41,6 +41,13 @@ export type HostMsg =
   | { t: 'net'; rtt: (number | null)[]; host: 'ok' | 'strained' }
   /** Your seat's rejoin token: hello with it after a drop to reclaim the seat from the bot (within the grace period). */
   | { t: 'rejoin'; token: string }
+  /**
+   * Host migration plan (migration.ts): if the host is lost, seat `seat`'s player takes over and opens room
+   * `code`. `key` (the checkpoint key) goes to every guest but the backup, unless the backup is the only guest.
+   */
+  | { t: 'mplan'; epoch: number; seat: number; code: string; key?: string }
+  /** To the backup only: the latest encrypted match checkpoint (checkpoint.ts). */
+  | { t: 'ckpt'; epoch: number; b: ArrayBuffer }
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */

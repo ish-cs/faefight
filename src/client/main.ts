@@ -55,6 +55,7 @@ import { BUILD, saveReplay, savesSettled, trackSave } from './replay/save';
 import { ReplayLink } from './replay/link';
 import { showReplays } from './replay/replaysUi';
 import { ReplayControls } from './replay/viewerUi';
+import { followNewHost, GuestMigration, hostReachable, takeOver, type HeldLink, type HostWorker } from './migration';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -180,6 +181,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
           else session?.onPreview(m.playerId, m.result, m.key);
         } else if (m.type === 'replay') {
           gotReplay(m);
+        } else if (m.type === 'checkpoint') {
+          session?.onCheckpoint(m.match, m.tick);
         } else if (m.type === 'error') {
           console.error(`[worker] ${m.message}`);
           errors?.report('worker', m.message);
@@ -226,12 +229,33 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
   };
 }
 
-/** Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived before the game was ready. */
-function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, early: HostMsg[]): Backend {
-  const decoder = new SnapshotDecoder();
-  const wire = new WireDecoder();
+/** Host migration hooks for a guest's backend (migration.ts); joinLobby owns the lobby-level bookkeeping. */
+type MigrationCtx = {
+  gm: GuestMigration;
+  name: string;
+  /** Room code of the current host. */
+  code(): string;
+  /** Another guest took over: its link replaces the old one (flush() is called after the handlers attach). */
+  relink(link: HeldLink, code: string): void;
+  /** This guest now hosts the match. */
+  promoted(): void;
+};
+
+/**
+ * Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived
+ * before the game was ready. With `mig`, losing the host mid-match migrates it (migration.ts): either this
+ * tab takes over (a restored worker + HostSession feed the same game) or it follows the guest who did.
+ */
+function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>, early: HostMsg[], mig?: MigrationCtx): Backend {
+  let link = firstLink;
+  let decoder = new SnapshotDecoder();
+  let wire = new WireDecoder();
   let closed = false;
   let disposed = false;
+  /** Newest snapshot tick and when it arrived; whether the match already has a result. */
+  let lastTick = 0, lastTickAt = 0, over = false;
+  /** Set once this guest has taken over as host. */
+  let hosting: { worker: Worker; session: HostSession | null; humanId: number } | null = null;
   return {
     buffered: true,
     inputHz: TICK_HZ,
@@ -241,27 +265,122 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
         if (disposed) return;
         if (m.t === 'snap') {
           const n = wire.decode<NetSnapshot>(m.b);
-          if (n) sink.snapshot(decoder.decode(n));
+          if (n) {
+            const snap = decoder.decode(n);
+            lastTick = snap.tick;
+            lastTickAt = performance.now();
+            if (snap.winner !== null) over = true;
+            sink.snapshot(snap);
+          }
         }
+        else if (mig?.gm.onHostMsg(m)) return;
         else if (m.t === 'preview') sink.preview(m.result, m.key);
         else if (m.t === 'chat') sink.chat(m.from, m.text);
-        else if (m.t === 'ended') { closed = true; if (m.reason === 'host-left') sink.fatal('Host left', 'Match over: the host left the game.'); else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`); }
+        else if (m.t === 'ended') {
+          closed = true;
+          if (m.reason === 'host-left') { if (!migrate(false)) sink.fatal('Host left', 'Match over: the host left the game.'); }
+          else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`);
+        }
+      };
+      const attach = (l: Link) => {
+        l.onMessage((raw) => { if (l === link) handle(raw as HostMsg); });
+        l.onClose(() => {
+          if (l !== link || closed || disposed) return;
+          closed = true;
+          if (migrate(true)) return;
+          // No goodbye from the host: maybe just our connection. With a fresh rejoin token, try to take the seat back.
+          if (sink.reconnect && loadRejoin()) sink.reconnect();
+          else sink.fatal('Host left', 'Match over: lost the connection to the host.');
+        });
+      };
+      /** Host lost mid-match: move the match to the backup. False if this guest can't (no plan/checkpoint yet, match over). */
+      const migrate = (probe: boolean): boolean => {
+        if (!mig || over || disposed || !mig.gm.ready) return false;
+        const { gm, name } = mig;
+        const transport = pickTransport(location.search);
+        const run = async () => {
+          // Our own connection may be what dropped: if the old host still answers, rejoin it as before.
+          if (probe && await hostReachable(transport, mig.code())) {
+            console.info('[migrate] old host still up; reconnecting to it instead');
+            if (sink.reconnect && loadRejoin()) { sink.reconnect(); return; }
+            throw new Error('lost the connection to the host');
+          }
+          toast('Host left: migrating…');
+          const t0 = performance.now();
+          if (gm.isBackup) {
+            const w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+            const h: { worker: Worker; session: HostSession | null; humanId: number } = { worker: w, session: null, humanId: start.playerId };
+            hosting = h;
+            const ready = new Promise<HostWorker>((resolve, reject) => {
+              w.onerror = (e) => { console.error('[worker] crashed', e.message); reject(new Error(e.message)); };
+              w.onmessage = (e: MessageEvent<FromWorker>) => {
+                const m = e.data;
+                if (disposed) return;
+                if (m.type === 'restored') resolve(w);
+                else if (m.type === 'snapshot') { sink.snapshot(m.snap); h.session?.onSnapshot(m.snap); }
+                else if (m.type === 'preview') { if (m.playerId === h.humanId) sink.preview(m.result, m.key); else h.session?.onPreview(m.playerId, m.result, m.key); }
+                else if (m.type === 'checkpoint') h.session?.onCheckpoint(m.match, m.tick);
+                else if (m.type === 'error') { console.error(`[worker] ${m.message}`); reject(new Error(m.message)); toast(m.message); }
+              };
+            });
+            const { session } = await takeOver({
+              transport, gm, name, map: start.map, lastTick, lastTickAt,
+              startWorker: (match, humanId, botify, toTick) => {
+                w.postMessage({ type: 'restore', match, humanId, botify, toTick } satisfies ToWorker, [match.buffer]);
+                return ready;
+              },
+              events: { lobby: () => {}, chat: (from, text) => sink.chat(from, text), net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; } },
+            });
+            h.session = session;
+            mig.promoted();
+            session.system(`${name} is now hosting`);
+            toast('You are now hosting');
+          } else {
+            const token = loadRejoin()?.token;
+            if (!token || !gm.plan) throw new Error('no seat token for the new host');
+            const plan = gm.plan;
+            const f = await followNewHost({ transport, plan, name, token });
+            gm.plan = null;
+            gm.sealed = null; // the new host sends its own plan
+            link = f.link;
+            decoder = new SnapshotDecoder();
+            wire = new WireDecoder();
+            closed = false;
+            attach(f.link);
+            mig.relink(f.link, plan.code);
+            f.link.flush();
+            toast(`${f.hostName || 'Another player'} is now hosting`);
+          }
+          console.info(`[migrate] done in ${Math.round(performance.now() - t0)} ms (${hosting ? 'now hosting' : 'following the new host'})`);
+          if (DEBUG) (window as unknown as { __faefightMigrated?: string }).__faefightMigrated = hosting ? 'host' : 'guest';
+        };
+        run().catch((err) => {
+          console.warn('[migrate] failed', err);
+          if (hosting) { hosting.worker.terminate(); hosting = null; }
+          sink.fatal('Host left', `Match over: the host left and the match could not move to another player (${err?.message ?? err}).`);
+        });
+        return true;
       };
       early.forEach(handle);
-      link.onMessage((raw) => handle(raw as HostMsg));
-      link.onClose(() => {
-        if (closed || disposed) return;
-        closed = true;
-        // No goodbye from the host: maybe just our connection. With a fresh rejoin token, try to take the seat back.
-        if (sink.reconnect && loadRejoin()) sink.reconnect();
-        else sink.fatal('Host left', 'Match over: lost the connection to the host.');
-      });
+      attach(link);
     },
-    input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds, ack: wire.ack || undefined }); },
-    preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
-    chat: (text) => link.send({ t: 'chat', text }),
-    follow: (id) => { if (!disposed) link.send({ t: 'follow', id }); },
-    close: () => { disposed = true; },
+    input: (input, cmds) => {
+      if (disposed) return;
+      if (hosting) hosting.worker.postMessage({ type: 'input', input, cmds } satisfies ToWorker);
+      else link.send({ t: 'input', input, cmds, ack: wire.ack || undefined });
+    },
+    preview: (req, key) => {
+      if (disposed) return;
+      if (hosting) hosting.worker.postMessage({ type: 'preview', playerId: hosting.humanId, req, key } satisfies ToWorker);
+      else link.send({ t: 'preview', req, key });
+    },
+    chat: (text) => { if (hosting) hosting.session?.localChat(text); else link.send({ t: 'chat', text }); },
+    close: () => {
+      disposed = true;
+      if (hosting) { hosting.session?.close(); hosting.worker.terminate(); hosting = null; }
+    },
+    // Spectator follow is for a remote host; a guest hosting after a migration has the full snapshot.
+    follow: (id) => { if (!disposed && !hosting) link.send({ t: 'follow', id }); },
   };
 }
 
@@ -601,11 +720,14 @@ async function hostLobby(name: string, menu: HTMLElement) {
   console.info(`[host] room ${session.code} open`);
 }
 
-async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?: string) {
-  const { link, lobby } = await joinRoom(pickTransport(location.search), code, name, rejoin).catch((err) => {
+async function joinLobby(firstCode: string, name: string, menu: HTMLElement, rejoin?: string) {
+  let code = firstCode;
+  const joined = await joinRoom(pickTransport(location.search), code, name, rejoin).catch((err) => {
     clearRejoin(); // the seat is gone (grace over / match ended / host left): no more offers
     throw err;
   });
+  let link: Link = joined.link;
+  const lobby = joined.lobby;
   menu.remove();
   const ui = new LobbyUi(app, code, null, () => { clearRejoin(); link.close(); location.reload(); }, (text) => {
     const c = parseCommand(text);
@@ -615,13 +737,21 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
   ui.render(lobby.slots, lobby.you, lobby.map);
   addInviteButton(ui.root, code);
   let slots = lobby.slots;
+  /** Our seat (host migration: the plan names the backup by seat). */
+  let you = lobby.you;
   let phase: 'lobby' | 'starting' | 'game' | 'over' = 'lobby';
   let early: HostMsg[] = [];
   let game: Game | null = null;
   const launch = (m: Extract<HostMsg, { t: 'start' }>, screen: HTMLElement) => {
     phase = 'starting';
     early = [];
-    const backend = remoteBackend(link, m, early);
+    const backend = remoteBackend(link, m, early, {
+      gm: new GuestMigration(you),
+      name,
+      code: () => code,
+      relink: (l, c) => { link = l; code = c; l.onMessage(onHostMsg); },
+      promoted: () => { phase = 'over'; clearRejoin(); link.close(); },
+    });
     // A spectating host has no player for the scoreboard to mark.
     startGame(backend, screen, undefined, { hostId: slots[0]?.kind === 'human' && slots[0].spectator ? null : 1, role: { kind: 'client' } }).then((g) => { game = g; phase = 'game'; }, (err) => {
       console.error('[join] failed to start', err);
@@ -632,7 +762,7 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     });
   };
   link.onClose(() => { if (phase === 'lobby') ui.error('The host closed the lobby.'); });
-  link.onMessage((raw) => {
+  const onHostMsg = (raw: unknown) => {
     const m = raw as HostMsg;
     // Connection quality + reconnect bookkeeping, in any phase.
     if (m.t === 'ping') { link.send({ t: 'pong', n: m.n }); return; }
@@ -643,14 +773,15 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     if (phase === 'game') {
       // The game's backend handles everything else; the host restarting or returning to the lobby is ours.
       if (m.t === 'start') { game?.destroy(); game = null; launch(m, loadingScreen('Host started a rematch…')); }
-      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; app.append(ui.root); ui.render(m.slots, m.you, m.map); }
+      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; you = m.you; app.append(ui.root); ui.render(m.slots, m.you, m.map); }
       return;
     }
-    if (m.t === 'lobby') { slots = m.slots; ui.render(m.slots, m.you, m.map); }
+    if (m.t === 'lobby') { slots = m.slots; you = m.you; ui.render(m.slots, m.you, m.map); }
     else if (m.t === 'chat') ui.addChat(m.from, m.text);
     else if (m.t === 'ended') { phase = 'over'; ui.error(m.reason === 'host-left' ? 'The host closed the lobby.' : `Removed from lobby (${m.reason}).`); }
     else if (m.t === 'start') { ui.loading(m.map.name); launch(m, ui.root); }
-  });
+  };
+  link.onMessage(onHostMsg);
 }
 
 // ---------------------------------------------------------------------------------------------

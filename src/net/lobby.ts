@@ -122,6 +122,17 @@ export class Lobby {
     return this.seats.map((s) => (s.kind === 'human' && s.spectator ? null : next++));
   }
 
+  /**
+   * Host migration: the seating of a match already running, as the old host last had it. The host's seat
+   * need not be 0 here; the result is only used to route a running match (never edited as a lobby).
+   */
+  static fromSlots(slots: Slot[]): Lobby {
+    if (slots.filter((s) => s.kind === 'human' && s.isHost).length !== 1) throw new Error('Lobby.fromSlots: need exactly one host seat');
+    const l = new Lobby('', '');
+    l.seats = slots.map((s) => ({ ...s }));
+    return l;
+  }
+
   /** Seats that will get a player (every seat except a spectating host). */
   playerCount(): number {
     return this.seats.length - (this.hostSpectating() ? 1 : 0);
