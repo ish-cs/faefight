@@ -148,3 +148,38 @@ Measured (seeds alternate seats; 1v1s swing on one early kill, so 20 seeds):
 Open: with shields in, 8-PRO FFAs mostly end just after sudden death starts (last two or three standing), not before.
 
 `MEASURE=1v1|ffa [A=pro B=hard SEEDS=1,2,3 TRACE=10] npx vitest run tests/sim/proMeasure.test.ts` reproduces these.
+
+## 10. Brain, params and self-play training (2026-11-20, later)
+
+**Brain** (`bots/brain.ts`): a human-like decision layer above the tick actions.
+- *Self-assessment*: my HP/shield, gear, ammo, cash, seal kit; the enemy on screen (HP, gun), range, guns on me
+  → `fightOdds` (who kills whom first by HP ÷ DPS at that range; aim left out on purpose).
+- *Goals with a reason*: seal (box in) · finish a sealed rival · upgrade · heal · retreat · bank · fortify · center ·
+  defend · raid · hunt (whoever killed me). Utility from the assessment and `BotParams`; hysteresis (`planCommit`,
+  `planMinSec`); re-plan on events (died, targetGone, targetSealed, bridgeCut, losingFight, goalDone).
+- *Steps*: each goal expands into ordered steps with done-conditions; the first unfinished one drives the action, so a
+  broken precondition sends the bot back (bridge cut → bridging). Example readout (`bot.debug.thought`):
+  `Goal: seal (P1 is respawning, I have 3 plugs) — step 7/7 plug P1's doors`.
+- *Reflexes* may interrupt a step: tide, trapped, a fight in my face, getting out of a lost fight, quick errands.
+- Seal-first endgame: no shots at spawn-protected players; a respawn/protection window means plug their doors; a kill
+  without a kit sends the bot to buy one rather than camp.
+- Tactics (`bots/tactics.ts`): strafe jukes under fire (skill-scaled amount/rhythm/notice time), break line of sight
+  when hurt, irregular peeks from cover, focus fire (shooter at me, low HP, plan target), avoid 2-on-1s, sprint to goals
+  and to close in (never while firing), rockets on hard plugs and dug-in rivals.
+- Aim (`bots/aim.ts`, all levels): error grows past 20 m and with the target's angular speed; partial re-acquire
+  after a line-of-sight break.
+
+**Params** (`bots/params.ts`): ~70 strategy/tactics weights with ranges; personalities are trait-coupled offsets;
+difficulty stays separate (aim, reaction, decision speed, dodge execution, noise).
+
+**Training** (`scripts/train-bots.ts`, `scripts/train/*`): separable evolution strategy (mirrored sampling, CMA-style
+weighted recombination, per-dimension step sizes) over normalized params. Each generation: λ=14 candidates × 5
+appearances in 8-bot PRO FFAs against a mixed field (champion = ES mean, hall of fame, frozen pre-training bot
+`tests/fixtures/legacyBots`), plus 2 duels each vs the frozen bot. Workers: `worker_threads`, one headless sim each.
+Evals: champion vs hand-tuned 4-v-4, 100 games, 95% CI. Fitness (`seatFitness`): placement; decisive win before
+sudden death +2; early eliminations/seals ≫ kills; shaping for seal progress, close fights, no hoarding, no wasted
+builds, no plinking, no idling at home. Hooks for human data: imitation term, scenario starts, champion replays.
+
+Results so far: run 1 (old plan layer, 4 gens) champion vs hand 46% (28 games); run 2 (brain, 8 gens, 434 games)
+68% → 61% (28 games: within noise) and 0 decisive FFAs. Neither passed the ship checks
+(`SHIP_CHECK=1 npx vitest run tests/sim/shipChecks.test.ts`), so bots ship hand-tuned params until run 3 does.
