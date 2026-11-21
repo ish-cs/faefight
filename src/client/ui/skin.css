@@ -354,22 +354,46 @@
 .hud .weapon.reloading .ammo { color: var(--c-yellow); }
 .hud .extras { font-family: var(--ff-display); font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--c-yellow); font-size: 14px; }
 
-/* hotbar */
-.hud .hotbar { bottom: 14px; gap: 4px; padding: 5px; background: rgba(4, 11, 17, 0.55); border: 0; border-radius: var(--r-sm); box-shadow: var(--sh-1), inset 0 0 0 1px rgba(150, 210, 228, 0.1); }
+/* hotbar (structure, gauge, stack badges and progress fill come from style.css; this is the look) */
+.hud .hotbar { bottom: 14px; gap: 4px; padding: 5px; background: rgba(4, 11, 17, 0.55); border: 0; border-radius: var(--r-sm); box-shadow: var(--sh-1), inset 0 0 0 1px rgba(150, 210, 228, 0.1); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .hud .hotbar.editing { box-shadow: 0 0 0 2px var(--c-yellow); }
-.hud .hb-slot { width: 72px; height: 70px; background: rgba(8, 22, 32, 0.84); border: 0; border-radius: var(--r-xs); box-shadow: inset 0 0 0 1px rgba(150, 210, 228, 0.14); transition: transform var(--dur-1) var(--ease-snap), box-shadow var(--dur-1), background-color var(--dur-1); }
-.hud .hb-slot.empty { background: rgba(8, 22, 32, 0.5); }
-.hud .hb-key { top: 4px; left: 6px; font-family: var(--ff-display); font-weight: 900; font-size: 12px; color: var(--c-text-faint); }
-.hud .hb-name { font-family: var(--ff-display); font-weight: 800; font-size: 13px; letter-spacing: 0.05em; text-transform: uppercase; }
+.hud .hb-slot { border: 0; border-radius: var(--r-xs); box-shadow: inset 0 0 0 1px rgba(150, 210, 228, 0.14); transition: transform var(--dur-1) var(--ease-snap), box-shadow var(--dur-1), background-color var(--dur-1); }
+.hud .hb-slot:not(.empty) { background: radial-gradient(120% 80% at 50% 0%, rgba(var(--cat), 0.16), transparent 70%), rgba(8, 22, 32, 0.86); }
+.hud .hb-slot.empty { background: rgba(8, 22, 32, 0.42); box-shadow: none; outline: 1px dashed rgba(150, 210, 228, 0.16); outline-offset: -1px; }
+.hud .hb-key { font-family: var(--ff-display); font-weight: 900; font-size: 12px; border-radius: var(--r-xs); color: var(--c-text-dim); }
+.hud .hb-name { font-family: var(--ff-display); font-weight: 800; font-size: 12.5px; letter-spacing: 0.05em; text-transform: uppercase; }
 .hud .hb-count { font-family: var(--ff-display); font-weight: 900; font-size: 15px; }
-.hud .hb-slot[data-cat="gun"] .hb-icon { color: var(--c-yellow); }
-.hud .hb-slot[data-cat="piece"] .hb-icon { color: #8fd0ff; }
-.hud .hb-slot[data-cat="explosive"] .hb-icon { color: #ff8a55; }
-.hud .hb-slot[data-cat="medkit"] .hb-icon { color: var(--c-green); }
-.hud .hb-slot.selected { background: rgba(70, 30, 8, 0.88); border: 0; box-shadow: inset 0 0 0 2px var(--c-orange), inset 0 -4px 0 var(--c-orange), 0 6px 16px rgba(0, 0, 0, 0.4); transform: translateY(-5px); }
-.hud .hb-slot.selected .hb-key { color: var(--c-orange-hi); }
-.hud .hotbar[data-ghost="blocked"] .hb-slot.selected { box-shadow: inset 0 0 0 2px var(--c-red), inset 0 -4px 0 var(--c-red); background: rgba(70, 10, 8, 0.85); }
+.hud .hb-slot[data-ammo] .hb-count { font-size: 14px; }
+.hud .hb-slot.stack .hb-count { font-size: 13px; border-radius: var(--r-xs); text-shadow: none; }
+.hud .hb-ammo, .hud .hb-ammo i { border-radius: 0; }
+.hud .hb-ammo i { background: var(--c-yellow); }
+.hud .hb-slot[data-ammo="low"] .hb-ammo i { background: var(--c-orange); }
+.hud .hb-slot[data-ammo="low"] .hb-count { color: var(--c-orange-hi); }
+.hud .hb-slot[data-ammo="empty"] .hb-count { color: var(--c-red); }
+.hud .hb-lock { border-radius: var(--r-xs); color: var(--c-violet); }
+/* Selection is always crane orange (same as every selected control in the UI). */
+.hud .hb-slot.selected { background: radial-gradient(120% 90% at 50% 0%, rgba(255, 106, 31, 0.32), rgba(255, 106, 31, 0.06) 75%), rgba(30, 14, 4, 0.88); box-shadow: inset 0 0 0 2px var(--c-orange), 0 6px 16px rgba(0, 0, 0, 0.4); transform: translateY(-4px); }
+.hud .hb-slot.selected .hb-key { color: var(--c-on-orange); background: var(--c-orange); }
+.hud .hb-slot.empty.selected { outline: 0; }
+.hud .hotbar[data-ghost="blocked"] .hb-slot.selected { box-shadow: inset 0 0 0 2px var(--c-red); background: rgba(70, 10, 8, 0.85); }
 .hud .hb-slot.drag-over { box-shadow: inset 0 0 0 2px var(--c-yellow); background: rgba(80, 60, 0, 0.6); }
+
+/* stamina: same skewed bar language as HP/shield, with a bolt icon */
+.hud .stamina { width: 300px; height: 7px; border: 0; border-radius: 0; background: rgba(4, 11, 17, 0.74); box-shadow: inset 0 0 0 1px rgba(150, 210, 228, 0.18); transform: skewX(-14deg); transform-origin: bottom left; backdrop-filter: none; -webkit-backdrop-filter: none; margin-left: 2px; }
+.hud .stamina-fill { border-radius: 0; box-shadow: none; }
+.hud .stamina::before {
+  content: ""; position: absolute; right: calc(100% + 7px); top: 50%; width: 11px; height: 11px; margin-top: -5.5px; transform: skewX(14deg); background: var(--c-teal);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2L4 14h7l-1 8 9-12h-7z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2L4 14h7l-1 8 9-12h-7z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.hud .stamina.critical, .hud .stamina.exhausted { box-shadow: inset 0 0 0 1px rgba(255, 68, 54, 0.8); }
+.hud .stamina-text { transform: translate(8px, -50%) skewX(14deg); font-family: var(--ff-display); font-weight: 900; font-size: 13px; letter-spacing: 0.12em; color: var(--c-red); }
+
+/* spectating: name tag + bot brain panel */
+.hud .watch-tag { font-family: var(--ff-display); font-weight: 900; font-size: 14px; letter-spacing: 0.1em; border-radius: var(--r-xs); color: var(--c-text); background: var(--plate-strong); border: 0; border-left: 3px solid var(--c-teal); }
+.hud .brain-panel { background: var(--plate-strong); border: 0; border-top: 3px solid var(--c-violet); border-radius: var(--r-xs); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: var(--sh-2); }
+.brain-panel .bb-title { font-family: var(--ff-display); font-weight: 900; font-size: 14px; letter-spacing: 0.14em; color: var(--c-violet); }
+.brain-panel .bb-tag { font-family: var(--ff-display); font-weight: 800; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; border-radius: var(--r-xs); border: 0; }
 
 /* prompts, centre messages, progress */
 .hud .prompt { font-family: var(--ff-display); font-weight: 900; font-size: 20px; letter-spacing: 0.08em; text-transform: uppercase; padding: 7px 16px 5px; background: var(--plate-strong); border: 0; border-left: 4px solid var(--c-yellow); border-radius: var(--r-xs); white-space: pre; }

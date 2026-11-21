@@ -32,7 +32,7 @@ export const grade = {
  */
 export function buildPipeline(
   gpu: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera, o: PostOptions, ambientOcclusion?: THREE.Node<'float'>,
-): THREE.RenderPipeline {
+): { pipe: THREE.RenderPipeline; scenePass: THREE.PassNode } {
   const pipe = new THREE.RenderPipeline(gpu);
   pipe.outputColorTransform = false; // tone map + sRGB ourselves so the grade runs in display space
 
@@ -102,5 +102,5 @@ export function buildPipeline(
   c = c.mul(vig);
   if (flare) c = c.add(flare);
   pipe.outputNode = c;
-  return pipe;
+  return { pipe, scenePass }; // the scene pass: the warm-up compiles world materials for its exact target/MRT
 }

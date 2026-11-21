@@ -83,6 +83,8 @@ export class SkyLighting {
   /** Settings → Video resolution scale: multiplies the preset's pixel ratio (result clamped to 0.5–2). */
   private resScale = settings.get().video.resolutionScale;
   private pipeline: THREE.RenderPipeline | null = null;
+  /** Main lit-scene pass of the post chain (render target + MRT + context every world material compiles for). */
+  scenePass: THREE.PassNode | null = null;
   private csm: CSMShadowNode | null = null;
   private sunTmp = new THREE.Vector3();
 
@@ -233,7 +235,9 @@ export class SkyLighting {
     }
 
     this.pipeline?.dispose();
-    this.pipeline = buildPipeline(this.gpu, this.scene, this.camera, p.post, this.interiorAO);
+    const built = buildPipeline(this.gpu, this.scene, this.camera, p.post, this.interiorAO);
+    this.pipeline = built.pipe;
+    this.scenePass = built.scenePass;
   }
 
   /** Draw the frame (cascades follow the camera on their own). */

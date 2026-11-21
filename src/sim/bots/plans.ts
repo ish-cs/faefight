@@ -61,11 +61,11 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
 }
 
 /**
- * `tower`: sandbags wanted for climbing above the sudden-death tide. `grenades`/`medkits`: how many to carry.
+ * `grenades`/`medkits`: how many to carry.
  * `steel`: rich enough that the seal kit should be steel. `genLevel`: my generator's level (unknown = no upgrades).
  */
 export type Needs = {
-  scaffolds: number; kit: number; charge: boolean; tower?: number; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
+  scaffolds: number; kit: number; charge: boolean; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
 };
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
@@ -96,7 +96,6 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     return cash >= WEAPONS.pistol.price ? 'pistol' : null;
   }
   if (needs.charge && inv.charges === 0) return cash >= CHARGE.price ? 'charge' : null;
-  if ((inv.pieces.sandbags ?? 0) < (needs.tower ?? 0)) return cash >= PIECES.sandbags.price ? 'sandbags' : null;
   const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
   const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';

@@ -7,6 +7,8 @@ import { ICONS, type IconKind } from '../icons';
 import { ammoWarning, slotAmmoState } from './combatQol';
 import { barX, headingDeg, relAngle, yawToward } from './compassMath';
 import { LinkHealth, pingLabel, type HostTick } from './netQuality';
+import { AlertHud } from './alertHud';
+import type { Cue } from '../audio/events';
 import { RecapTracker, SOURCE_LABEL, type Recap } from './recap';
 import { awards, fmtLife, summaryOrder } from './summaryData';
 import './qol.css';
@@ -84,7 +86,7 @@ class Compass {
     if (this.danger.length > 4) this.danger.shift();
   }
 
-  frame(yaw: number, me: { x: number; z: number } | null, snap: Snapshot | null, map: IslandLayout[], myIsland: number, nowMs: number) {
+  frame(yaw: number, me: { x: number; z: number } | null, snap: Snapshot | null, map: IslandLayout[], myIsland: number, nowMs: number, homeThreat = false) {
     setText(this.heading, String(headingDeg(yaw)).padStart(3, '0'));
     for (const t of this.ticks) {
       this.place(t, barX(relAngle((-t.deg * Math.PI) / 180, yaw), SPAN, HALF_W));
@@ -101,7 +103,9 @@ class Compass {
     };
     for (const isl of map) {
       if (isl.index === myIsland) {
-        this.marker('home', 'home', 'Home');
+        const home = this.marker('home', 'home', 'Home');
+        // Doorways being blocked: the home marker pulses red until they're clear.
+        if (home.node.classList.contains('threat') !== homeThreat) home.node.classList.toggle('threat', homeThreat);
         at('home', isl.bunker.center);
         continue;
       }
@@ -120,6 +124,15 @@ class Compass {
     const owned = new Set(snap.players.map((p) => p.island));
     for (const isl of map) if (!owned.has(isl.index) && isl.index !== myIsland) { this.marker(`mid${isl.index}`, 'island center', 'Center'); at(`mid${isl.index}`, isl.center); }
     (snap.potionShops ?? []).forEach((sh, i) => { this.marker(`pot${i}`, 'potion', 'Potions'); at(`pot${i}`, sh.pos); });
+    // Sudden-death storm: a marker toward the ring's centre with the distance to its edge (to safety when outside).
+    const st = snap.storm;
+    if (st) {
+      const m = this.marker('storm', 'storm', '');
+      const edge = Math.hypot(me.x - st.x, me.z - st.z) - st.r;
+      m.node.classList.toggle('outside', edge > 0);
+      setText(m.label!, edge > 0 ? `Safe · ${Math.ceil(edge)} m` : `Ring · ${Math.floor(-edge)} m`);
+      at('storm', { x: st.x, z: st.z });
+    } else if (this.markers.has('storm')) this.place(this.markers.get('storm')!, null);
     // Markers in the same direction: only the nearest keeps its label (no overlapping text).
     // Islands (players) win over the potion seller; then the nearer one.
     const rank = (m: Marker) => (m.node.classList.contains('potion') ? 1 : 0);
@@ -148,7 +161,7 @@ function recapCard(r: Recap): HTMLElement {
   const head = el('div', 'qr-head');
   const icon = el('span', 'qr-icon');
   if (r.weapon && Object.hasOwn(ICONS, r.weapon)) icon.innerHTML = ICONS[r.weapon as IconKind];
-  else icon.textContent = r.weapon === 'water' ? '≈' : r.weapon === 'fall' ? '↓' : '✕';
+  else icon.textContent = r.weapon === 'water' ? '≈' : r.weapon === 'fall' ? '↓' : r.weapon === 'lightning' ? 'ϟ' : r.weapon === 'storm' ? '◎' : '✕';
   const title = el('div', 'qr-title', r.title);
   head.append(icon, title);
   if (r.killer) {
@@ -233,7 +246,7 @@ function summaryNode(stats: PlayerStats[], snap: Snapshot, humanId: number): HTM
   return root;
 }
 
-export type QolActions = { quickBuy(item: ShopItem): void };
+export type QolActions = { quickBuy(item: ShopItem): void; play(cue: Cue): void };
 
 export class QolHud {
   private compass = new Compass();
@@ -242,6 +255,7 @@ export class QolHud {
   private ammo = el('div', 'qol-ammo');
   private net = el('div', 'qol-net glass');
   private health = new LinkHealth();
+  private alerts: AlertHud;
   private summaryKey = '';
   private map: IslandLayout[] = [];
   private humanId = 0;
@@ -256,6 +270,7 @@ export class QolHud {
     const tc = hudRoot.querySelector('.tc');
     if (tc) tc.prepend(this.compass.root); else { console.warn('[qol] HUD top-centre not found; compass on its own'); hudRoot.append(this.compass.root); }
     hudRoot.append(this.ammo, this.net);
+    this.alerts = new AlertHud(hudRoot, (c) => act.play(c));
     netStatus.online = opts.online;
     netStatus.isHost = opts.isHost;
   }
@@ -264,6 +279,7 @@ export class QolHud {
     this.map = map;
     this.humanId = humanId;
     this.myIsland = island;
+    this.alerts.setMap(map, humanId);
   }
 
   /** Every applied snapshot (after the HUD's own update). */
@@ -279,6 +295,7 @@ export class QolHud {
     if (r) this.showRecap(r);
     if (me?.alive && this.recapNode) { this.recapNode.remove(); this.recapNode = null; }
     if (me) this.updateAmmo(me, selected);
+    this.alerts.onSnapshot(s);
     this.updateSummary(s);
   }
 
@@ -290,7 +307,8 @@ export class QolHud {
   /** Every frame: compass + connection pill + shop quick-buy button. */
   frame(yaw: number, me: { x: number; z: number } | null, snap: Snapshot | null) {
     const now = performance.now();
-    this.compass.frame(yaw, me, snap, this.map, this.myIsland, now);
+    this.compass.frame(yaw, me, snap, this.map, this.myIsland, now, this.alerts.threat > 0);
+    this.alerts.frame(yaw, me, this.myIsland);
     this.updateNet(now);
     this.updateQuickBuy();
   }
