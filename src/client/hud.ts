@@ -121,6 +121,10 @@ export class Hud {
   private seals = el('div', 'seals');
   private banner = el('div', 'banner');
   private sealedBanner = el('div', 'sealed-banner', 'YOUR BUNKER IS SEALED');
+  /** Sudden death: a big STORM warning for a few seconds, and a storm-coloured screen edge while outside the ring. */
+  private stormWarn = el('div', 'storm-warn', 'STORM');
+  private stormVignette = el('div', 'storm-vignette');
+  private stormWarnUntil = 0;
   private killfeed = el('div', 'killfeed');
   private center = el('div', 'center-msg');
   private crosshair = el('div', 'crosshair');
@@ -166,8 +170,11 @@ export class Hud {
     this.reloadRing.dataset.testid = 'reload-ring';
     this.fps.dataset.testid = 'fps';
     this.scope.dataset.testid = 'scope';
+    this.stormWarn.dataset.testid = 'storm-warn';
+    this.stormWarn.append(el('div', 'storm-warn-sub', 'Sudden death · get inside the ring'));
+    this.stormVignette.dataset.testid = 'storm-vignette';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
-      this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
+      this.sealedBanner, this.stormVignette, this.stormWarn, this.damage, this.endScreen, this.fps, this.panel);
     parent.append(this.root);
   }
 
@@ -390,13 +397,22 @@ export class Hud {
     this.tickFeed();
   }
 
-  /** Timer, tide banner and the island chips (myIsland -1 = none of them is yours). */
+  /** Timer, storm banner/vignette and the island chips (myIsland -1 = none of them is yours). */
   private updateMatchInfo(snap: Snapshot, myIsland: number) {
     const left = LIFECYCLE.suddenDeathAt - snap.time;
     setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
     this.timer.classList.toggle('sd', snap.suddenDeath);
-    setText(this.banner, snap.suddenDeath ? `Tide rising · water ${snap.waterY.toFixed(1)} m` : left < 60 ? 'Sudden death soon' : '');
+    const st = snap.storm;
+    const me = snap.players.find((p) => p.id === this.humanId);
+    // Metres outside the ring (negative = inside), for a living local player.
+    const out = st && me?.alive ? Math.hypot(me.pos.x - st.x, me.pos.z - st.z) - st.r : null;
+    setText(this.banner, st
+      ? out !== null && out > 0 ? `IN THE STORM · ${Math.ceil(out)} m to safety` : out !== null ? `Storm closing · edge ${Math.floor(-out)} m away` : 'Storm closing in'
+      : left < 60 ? 'Sudden death soon' : '');
     this.banner.style.display = this.banner.textContent ? '' : 'none';
+    this.banner.classList.toggle('storm', !!st);
+    this.stormVignette.classList.toggle('on', out !== null && out > 0);
+    this.stormWarn.style.display = performance.now() < this.stormWarnUntil ? 'flex' : 'none';
 
     Array.from(this.seals.children).forEach((chip, i) => {
       const sealed = !!snap.sealed[i];
@@ -444,14 +460,17 @@ export class Hud {
     for (const e of events) {
       if (e.type === 'kill') {
         const victim = name(e.data.victim ?? e.data.target), killer = name(e.data.killer ?? e.data.by);
-        this.addFeed(killer && killer !== victim ? `${killer}  ✕  ${victim}` : `${victim} died`);
+        const how = e.data.cause === 'storm' ? 'was caught in the storm' : e.data.cause === 'lightning' ? 'was struck by lightning' : 'died';
+        this.addFeed(killer && killer !== victim ? `${killer}  ✕  ${victim}` : `${victim} ${how}`);
       } else if (e.type === 'sealed' || e.type === 'unsealed') {
         const isl = e.data.island as number | undefined;
         this.addFeed(`${isl === this.me?.island ? 'Your' : `${ISLAND_NAMES[(isl ?? 0) % 8]}'s`} bunker ${e.type === 'sealed' ? 'SEALED' : 'reopened'}`, e.type === 'sealed');
       } else if (e.type === 'eliminated') {
         this.addFeed(`${name(e.data.player ?? e.data.id) ?? 'Someone'} eliminated`, true);
       } else if (e.type === 'suddenDeath') {
-        this.addFeed('Sudden death: generators stopped, tide rising', true);
+        this.addFeed('Sudden death: generators stopped, the storm is closing in', true);
+        this.stormWarnUntil = performance.now() + 4000;
+        this.stormWarn.style.display = 'flex';
       } else if (e.type === 'hit') {
         if (e.data.by === this.humanId && e.data.target !== this.humanId && !e.data.echo) this.hitmarker(e.data.part === 'head');
         if (e.data.target === this.humanId) this.flash(this.damage, 'on');

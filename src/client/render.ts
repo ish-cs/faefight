@@ -8,6 +8,7 @@ import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
 import { PotionSellers } from './world/potionSeller';
+import { StormFx } from './world/storm';
 
 export { pieceGeometry };
 import { ISLAND_COLORS } from './colors';
@@ -67,6 +68,8 @@ export class Renderer {
   private pipOn = new THREE.MeshBasicNodeMaterial({ color: boosted(0xffd23d) });
   private pipOff = new THREE.MeshBasicNodeMaterial({ color: 0x4a525c });
 
+  /** Sudden-death weather: storm wall, rain, telegraph markers, lightning (world/storm.ts). */
+  storm!: StormFx;
   /** Tracers, muzzle light/smoke, shell casings, hit sparks, projectiles, explosion flashes. */
   gunFx!: GunFx;
   private snapArrived = performance.now();
@@ -100,6 +103,7 @@ export class Renderer {
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
+    r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
     r.resize();
     return r;
   }
@@ -126,6 +130,7 @@ export class Renderer {
     this.map = map;
     this.humanId = humanId;
     this.world.setMap(map, ISLAND_COLORS);
+    this.storm.setMap(map);
     this.gunFx.warmUp([this.boomMat]);
     for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);
     const h = PROP_HALF.generator;
@@ -189,6 +194,7 @@ export class Renderer {
       pips.forEach((m, i) => { m.material = i < level ? this.pipOn : this.pipOff; });
     });
     this.potionSellers.sync(snap.potionShops);
+    this.storm.sync(snap.storm, snap.suddenDeath);
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
   }
@@ -206,6 +212,9 @@ export class Renderer {
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : e.data.kind === 'rocket' ? 3.6 : 4);
+    } else if (e.type === 'lightning') {
+      const pos = e.data.pos as Vec3 | undefined;
+      if (pos) this.storm.strike(pos, this.camera);
     }
   }
 
@@ -358,6 +367,7 @@ export class Renderer {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
+    this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }
