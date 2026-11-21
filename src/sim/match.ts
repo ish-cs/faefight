@@ -48,6 +48,8 @@ export class Match implements MatchApi {
   private stats = new MatchStats();
 
   private bots = new Map<number, BotBrain>();
+  /** Events from debug actions taken between ticks, emitted with the next tick. */
+  private debugEvents: MatchEvent[] = [];
   private rng: Rng;
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
@@ -217,7 +219,9 @@ export class Match implements MatchApi {
     const now = this.s.time + DT;
     this.s.time = now;
     this.tickNo++;
-    this.events = [];
+    // Debug kills between ticks land in this tick's events (kill feed, killcam), not lost.
+    this.events = this.debugEvents;
+    this.debugEvents = [];
     this.practice?.before();
 
     for (const p of this.s.players.values()) {
@@ -258,6 +262,8 @@ export class Match implements MatchApi {
     return validatePlacement(this.physics, req.kind, snapped.pos, snapped.rotY, p.pos);
   }
 
+  /** A seat's bot brain (null for humans), for read-only spectator introspection (bots/introspect.ts). */
+  botBrain(id: number): BotBrain | null { return this.bots.get(id) ?? null; }
   /** Practice panel commands (reset, clear pieces, dummy toggles). Throws outside practice. */
   practiceCommand(cmd: PracticeCmd): void {
     if (!this.practice) throw new Error('Match.practiceCommand: not a practice match');
@@ -401,13 +407,13 @@ export class Match implements MatchApi {
   }
 
   debugKill(playerId: number): void {
-    this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
+    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
   }
 
   /** Kill (if alive) and eliminate for good: no respawn. The win check runs on the next tick. */
   debugEliminate(playerId: number): void {
     const p = this.mustPlayer(playerId);
-    this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
+    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
     if (p.eliminated) return;
     p.eliminated = true;
     p.respawnAt = null;
@@ -425,6 +431,7 @@ export class Match implements MatchApi {
     this.syncHand(p);
     // Sights need a gun in hand and no reload; aiming rules out sprinting (see move).
     p.ads = input.ads && p.alive && p.equipped !== 'fists' && p.reloadUntil === 0;
+    if (input.view !== undefined) p.view = input.view === 1 ? 1 : 0;
 
     if (cmds) {
       for (const c of cmds) {
