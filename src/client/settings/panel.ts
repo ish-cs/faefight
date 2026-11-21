@@ -232,6 +232,7 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
       () => v().resolutionScale, (x) => set((d) => { d.video.resolutionScale = x; }), (x) => `${Math.round(x * 100)}%`);
     segmented('Frame cap', 'Browsers always sync to the display (vsync); a cap limits below it to save power',
       'set-framecap', FRAME_CAPS, (f) => (f === 0 ? 'Vsync' : `${f}`), () => v().frameCap, (f) => set((d) => { d.video.frameCap = f; }));
+    toggle('Competitive mode', 'Maximum frame rate, still readable: 1× render scale, no ambient occlusion, bloom or lens flare', 'set-competitive', () => v().competitive, (x) => set((d) => { d.video.competitive = x; }));
     toggle('Dynamic resolution', 'Lower the render resolution briefly when the frame rate drops below target', 'set-dynres',
       () => v().dynamicResolution, (x) => set((d) => { d.video.dynamicResolution = x; }));
     {

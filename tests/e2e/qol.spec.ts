@@ -123,7 +123,8 @@ test('combat QoL: ammo warnings, auto-reload, R on a full gun, Shift+click bulk 
   const warn = page.getByTestId('ammo-warning');
   await expect(warn).toHaveText('Last rounds');
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-ammo', 'nospare');
-  await expect(page.getByTestId('hotbar-slot-0')).toContainText(/[12]\/0/);
+  await expect(page.locator('[data-testid="hotbar-slot-0"] .hb-count')).toHaveText(/^[12]$/);
+  await expect(page.getByTestId('weapon')).toContainText(/[12]\/0/);
   // More ammo: still low in the mag ("Low ammo"); the slot is fine.
   await dbg(page, 'give', { weapons: { pistol: { mag: 0, spare: 24 } } });
   await expect(warn).toHaveText('Low ammo');

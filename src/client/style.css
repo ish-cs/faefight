@@ -103,6 +103,12 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 /* Outside the storm ring: a pulsing violet edge (screen-space only, no render cost). */
 .hud .storm-vignette { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.35s; box-shadow: inset 0 0 160px 40px rgba(110, 60, 220, 0.75); background: radial-gradient(ellipse at center, transparent 55%, rgba(60, 20, 140, 0.45) 100%); }
 .hud .storm-vignette.on { opacity: 1; animation: storm-edge 1s ease-in-out infinite; }
+.hud .lowhp-vignette { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.3s; box-shadow: inset 0 0 140px 30px rgba(200, 20, 20, 0.55); }
+.hud .lowhp-vignette.on { opacity: 1; }
+/* Spectating a human: their shop / vault, read-only. */
+.panel.mirror, .panel.mirror * { pointer-events: none !important; }
+.panel.mirror::before { content: 'SPECTATING · READ-ONLY'; display: block; font-size: 10px; font-weight: 800; letter-spacing: 1.2px; color: var(--muted); margin-bottom: 6px; }
+.panel.mirror .shop-item.hover { outline: 2px solid var(--gold); outline-offset: 1px; }
 @keyframes storm-edge { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
 @keyframes pulse { 50% { box-shadow: 0 0 10px rgba(255, 0, 0, 0.2); } }
 .hud .hotbar { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; padding: 7px; background: linear-gradient(180deg, rgba(20, 26, 36, 0.42), rgba(10, 14, 20, 0.62)); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 18px; backdrop-filter: blur(16px) saturate(150%); -webkit-backdrop-filter: blur(16px) saturate(150%); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06); pointer-events: auto; }
@@ -179,6 +185,8 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .hud .crosshair.scoped i:not(.hm) { opacity: 0; }
 .hud .crosshair.hit .hm { animation: hitmark 0.28s ease-out; }
 .hud .crosshair.hit.head .hm::before, .hud .crosshair.hit.head .hm::after { background: #ff4040; }
+.hud .crosshair.hit.kill .hm { animation: hitmark 0.5s ease-out; transform: scale(1.5); }
+.hud .crosshair.hit.kill .hm::before, .hud .crosshair.hit.kill .hm::after { background: #ff2a2a; }
 @keyframes hitmark { from { opacity: 1; transform: scale(1.5); } 40% { opacity: 1; } to { opacity: 0; transform: scale(1); } }
 /* Reload progress: a thin ring around the crosshair, filled with a conic gradient. */
 .hud .reload-ring { position: absolute; top: 50%; left: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%;
@@ -581,3 +589,23 @@ canvas.shake { animation: screen-shake 0.55s ease-out; }
   .lobby-side .game-settings { width: 100%; box-sizing: border-box; }
   .lobby-side .gs-row { grid-template-columns: 104px 1fr 52px; }
 }
+
+/* ---- emote & quick-chat wheel (emoteWheel.ts) ----
+   Uses the shared UI tokens (src/client/ui/theme.css, docs/ui-style.md) with fallbacks to the legacy palette. */
+.emote-wheel { position: fixed; left: 50%; top: 50%; width: 300px; height: 300px; margin: -150px 0 0 -150px; z-index: 30; pointer-events: none; }
+.emote-wheel[hidden] { display: none; }
+.ew-ring { position: absolute; left: 0; top: 0; width: 300px; height: 300px; border-radius: 50%;
+  border: 1px solid var(--c-line, var(--line)); box-shadow: var(--hud-shadow, 0 8px 30px rgba(0, 0, 0, 0.25));
+  background: radial-gradient(circle, transparent 0 52px, var(--plate-strong, var(--glass-strong)) 53px 100%); }
+.ew-slot { position: absolute; left: 150px; top: 150px; width: 78px; height: 62px; margin: -31px 0 0 -39px;
+  transform: translate(var(--x), var(--y)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  border-radius: var(--r-sm, 6px); border: 1px solid transparent; color: var(--c-text-dim, var(--muted)); transition: transform 0.08s, opacity 0.08s; }
+.ew-slot .ew-icon svg { width: 26px; height: 26px; display: block; }
+.ew-slot .ew-label { font-family: var(--ff-display, inherit); font-size: 12px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; white-space: nowrap; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
+.ew-slot.quip .ew-icon { color: var(--c-teal, #9fe8c0); }
+.ew-slot.emote .ew-icon { color: var(--c-yellow, var(--gold)); }
+.ew-slot.active { background: var(--plate, rgba(255, 255, 255, 0.14)); border-color: var(--c-orange, var(--accent)); color: var(--c-text, var(--text)); transform: translate(var(--x), var(--y)) scale(1.1); }
+.ew-hub { position: absolute; left: 100px; top: 132px; width: 100px; height: 36px; display: flex; align-items: center; justify-content: center;
+  text-align: center; font-family: var(--ff-body, inherit); font-size: 11px; font-weight: 700; line-height: 1.15; color: var(--c-text, var(--text)); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
+.emote-wheel.cooling .ew-slot { opacity: 0.45; }
+.emote-wheel.cooling .ew-hub { color: var(--c-yellow, var(--gold)); }

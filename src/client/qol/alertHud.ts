@@ -61,9 +61,20 @@ export class AlertHud {
     hudRoot.append(this.doors, this.reopened);
   }
 
+  private ownId = 0;
+
+  /** Spectating someone: their home's alerts (a followed bot counts; our own bot-run seat doesn't). */
+  setViewed(id: number) {
+    if (id === this.humanId) return;
+    this.humanId = id;
+    this.bunker.reset();
+    this.gen.reset();
+  }
+
   setMap(map: IslandLayout[], humanId: number) {
     this.map = map;
     this.humanId = humanId;
+    this.ownId = humanId;
     this.bunker.reset();
     this.gen.reset();
   }
@@ -75,7 +86,7 @@ export class AlertHud {
     const now = performance.now();
     const me = s.players.find((p) => p.id === this.humanId);
     const isl = me ? this.map[me.island] : undefined;
-    this.live = !!me && !me.isBot && !me.eliminated && s.winner === null && !!isl;
+    this.live = !!me && (!me.isBot || me.id !== this.ownId) && !me.eliminated && s.winner === null && !!isl;
     if (!me || !isl || !this.live) {
       for (const n of [this.doors, this.reopened, this.home, this.genToast]) show(n, false);
       return;

@@ -1,4 +1,5 @@
 import type { MoveState } from './movement';
+import type { EmoteId, QuipId } from './emotes';
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -41,6 +42,8 @@ export type PlayerInput = {
   fire: boolean;
   /** Aim down sights (held): tighter spread, zoom, slower move. */
   ads: boolean;
+  /** Camera the player looks through: 0 third person, 1 first person (cosmetic: spectators follow it). */
+  view?: 0 | 1;
   reload: boolean;
   interact: boolean;
   slot: WeaponKind | null;
@@ -120,6 +123,8 @@ export type PlayerState = {
   nextFireAt: number;
   /** Aiming down sights (sim-validated: needs a gun in hand, not sprinting or reloading). */
   ads: boolean;
+  /** Their camera: 0 third person (bots, default), 1 first person. Cosmetic; spectators follow it. */
+  view?: 0 | 1;
   /** Spread bloom (deg) as of `lastShotAt`; it recovers over time (gunplay.ts). */
   bloom: number;
   lastShotAt: number;
@@ -130,6 +135,10 @@ export type PlayerState = {
   stamina: number;
   /** Movement state (grounding, coyote/jump-buffer timers, last applied command seq): see movement.ts. */
   mv?: MoveState;
+  /** Cosmetic emote playing since sim time `at` (emotes.ts); absent when none. Moving, firing or damage ends it. */
+  emote?: { id: EmoteId; at: number };
+  /** Last quick-chat line (speech bubble for QUIP_SHOW_SEC from `at`); absent when none. */
+  quip?: { id: QuipId; at: number };
 };
 
 /** `burning`: on fire right now (sim/fire.ts); omitted when not, so it costs nothing on the wire. */
@@ -141,7 +150,9 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped' | 'spawn'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning'
+  /** Emote / quick-chat wheel use: data { by, id } (emotes.ts). */
+  | 'wheel';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */

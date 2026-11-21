@@ -4,7 +4,7 @@ const ADJ = ['wavy', 'smol', 'lil', 'big', 'salty', 'sneaky', 'lucky', 'sleepy',
 const NOUN = ['bean', 'mortar', 'kestrel', 'otter', 'pickle', 'walrus', 'anchor', 'gull', 'crab', 'puffin', 'barnacle', 'taco', 'noodle', 'lantern', 'pebble', 'raft', 'cactus', 'falcon', 'mango', 'biscuit', 'sprout', 'harbor', 'kraken', 'waffle'];
 const TITLE = ['Captain', 'Admiral', 'Doc', 'Sir', 'Uncle', 'Major', 'Lady', 'Skipper'];
 const FIRST = ['Dan', 'Mia', 'Sam', 'Lou', 'Kai', 'Ivy', 'Max', 'Zoe', 'Ben', 'Ada', 'Leo', 'Ana'];
-const PHRASE = ['nobodyhome', 'IceTeaOnly', 'notabot', 'justvibing', 'NoScopeNan', 'afkbrb', 'MainCharacter', 'ggwp', 'lagmaster', 'TideWaitsNone', 'bridgetoofar', 'sendhelp'];
+const PHRASE = ['nobodyhome', 'IceTeaOnly', 'totallyhuman', 'justvibing', 'NoScopeNan', 'afkbrb', 'MainCharacter', 'ggwp', 'lagmaster', 'TideWaitsNone', 'bridgetoofar', 'sendhelp'];
 
 const cap = (w: string) => w[0].toUpperCase() + w.slice(1);
 const MAX_LEN = 15;
