@@ -68,6 +68,8 @@ const BOLT_REACT: Record<Difficulty, number> = { easy: 0.6, medium: 0.35, hard: 
 const EASY_DODGE = 0.4;
 /** Medium+ bots bridge to the centre island (where the storm ends) from this long before sudden death. */
 const STORM_PREP_SEC = 150;
+/** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
+const STORM_SPARE_DECKS = 2, STORM_SHOP_GRACE = 45;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Walls a bot throws down for cover, best first (sandbags go up two high). */
 const WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
@@ -597,7 +599,8 @@ export class Bot {
       c.view.pieces.some((p) => p.owner !== c.me.id && p.owner > 0 && isFlammable(p.kind) && this.woodNear(c.view.pieces, p) >= 3);
     return {
       rocket: wooden,
-      scaffolds: this.scaffoldsNeeded(c),
+      // Bridging to the center before the storm: spares for decks that get shot out under me (one trip, not five).
+      scaffolds: this.scaffoldsNeeded(c) + (c.bridgeTo !== null && c.bridgeTo === this.nav.centerNode && this.stormPrep(c.view) ? STORM_SPARE_DECKS : 0),
       // A full seal kit whenever there's someone to seal: their doors get reopened, the next rival has three.
       kit: c.rival ? Math.max(c.openDoors.length, MAP_DOORS) : 0,
       // A hard plug in my own doorway: only a charge gets through.
@@ -1748,7 +1751,7 @@ export class Bot {
       // Only while the shop (and the vault, if I need cash from it) is still inside the ring: a trip out into the
       // storm to shop kills just as surely.
       const shopSafe = [c.home.shop, ...(me.inv.cash < PIECES.scaffold.price ? [c.home.vault] : [])]
-        .every((p) => dist2D(p, ctr) < st.r - 2);
+        .every((p) => dist2D(p, ctr) < st.r - 2) || view.now - LIFECYCLE.suddenDeathAt < STORM_SHOP_GRACE;
       const buy = have < need && c.homeReach && shopSafe && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
       if (buy) return buy;
       if (have > 0) {
