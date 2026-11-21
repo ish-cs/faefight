@@ -6,6 +6,8 @@ on the Mac heavy-test lock. Your Mac does nothing but `gh` calls.
 
 Requirements: `gh` logged in, and the ref you measure **pushed to origin** (any branch name; agent branches
 are fine — push with `git push origin HEAD:refs/heads/<your-branch>`, never force-push, never to main).
+Pushing needs Ishaan's approval like any push; the coordinator/steward can grant a standing OK for bot
+branches. Without one, ask for your branch to be pushed, or measure `main` / an already-pushed ref.
 Until the `bots-on-ci` branch is merged, prefix the commands with `WORKFLOW_REF=bots-on-ci`.
 
 ## Measure
