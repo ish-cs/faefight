@@ -261,6 +261,7 @@ export class Renderer {
     this.world.syncCosmetics(snap.broken ?? []);
     this.world.syncHazards(snap.hz);
     this.traps.sync(snap.traps);
+    this.world.syncDocks(snap.docks, snap.dockHurt);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
     this.snapArrived = performance.now();
@@ -293,6 +294,8 @@ export class Renderer {
       this.world.hazardEvent(e);
     } else if (e.type === 'trap') {
       this.traps.onEvent(e, this.world.pieceFx.particles);
+    } else if (e.type === 'dockBroken') {
+      this.world.dockEvent(e, this.waterY);
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
       const k = e.data.kind;

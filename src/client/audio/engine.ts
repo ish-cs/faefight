@@ -10,7 +10,7 @@
 // Mixer buses = Settings → Audio: Effects (sfxBus + echo), Interface (uiBus), Ambience (ambBus), Music
 // (musicBus, also on/off), under Master. Music skips the compressor so gunfire doesn't pump it.
 
-import type { IslandLayout } from '../../sim/map';
+import type { DockDef, IslandLayout } from '../../sim/map';
 import type { Snapshot, Vec3 } from '../../sim/types';
 import { type Cue, type Env, occlusion, type SoundId, SoundDirector } from './events';
 import { type Mood, MUSIC_TRIM, MusicDirector, MusicPlayer } from './music';
@@ -302,8 +302,8 @@ export class AudioSystem {
   /** Whose ears: the followed player while spectating, else the local player (viewed.ts). */
   setViewed(id: number) { this.director.setViewed(id); this.musicDir.setViewed(id); }
 
-  setMap(map: IslandLayout[], humanId: number) {
-    this.director.setMap(map, humanId);
+  setMap(map: IslandLayout[], humanId: number, docks: readonly DockDef[] = []) {
+    this.director.setMap(map, humanId, docks);
     this.map = map;
     this.musicDir.reset();
     this.musicDir.setViewed(humanId);

@@ -239,6 +239,22 @@ export const MAP = {
   },
 };
 
+/**
+ * Wooden piers (map.ts docks, sim/docks.ts). Each player island has one, running out from its front rim along
+ * the bots' bridge lane toward the center island (2 players: toward the rival), `width` wide, in `chunk`-long
+ * sections, at most `maxLen` long and always leaving `minWater` of open water to the far shore. The deck top
+ * is level with the island ground (`lip` 0: a scaffold laid from the shore or off the pier sits flush on it; the
+ * client lifts the boards a few cm so they never z-fight the coping). Explosions break sections: `blast` per
+ * explosion kind = [damage at the section's surface, reach (m)], linear falloff to 0 at the reach. Bullets,
+ * fists, fire and the storm never hurt a pier; the island core and bunkers are never touched.
+ */
+export const DOCK = {
+  width: 3, chunk: 2, maxLen: 6, minLen: 4, minWater: 6, deck: 0.3, lip: 0, hp: 300,
+  blast: {
+    rocket: [420, 2.5], grenade: [320, 2.5], charge: [900, 1.4], barrel: [320, 3], propane: [280, 3],
+  } as Record<string, [number, number]>,
+};
+
 /** Neutral center island stations (anyone may use them). */
 export const CENTER = {
   /** Stations sit this far from the island middle. */

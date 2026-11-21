@@ -178,7 +178,9 @@ export type MatchEventType =
   /** Emote / quick-chat wheel use: data { by, id } (emotes.ts). */
   | 'wheel' | 'hazard'
   /** Spike trap: data { what: 'placed' | 'fired' | 'broken', id, pos, by / owner } (sim/traps.ts). */
-  | 'trap';
+  | 'trap'
+  /** A wooden pier section broke (docks.ts): data { id, island, row, pos, rotY, by, kind }. */
+  | 'dockBroken';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -203,6 +205,10 @@ export type Snapshot = {
   hz?: HazardNet[];
   /** Spike traps placed (absent when there are none). */
   traps?: TrapNet[];
+  /** Ids of broken pier sections (MapDef.docks), in the order they broke; absent while every one stands. */
+  docks?: number[];
+  /** Ids of damaged (scorched) pier sections still standing; absent when none. */
+  dockHurt?: number[];
   /** Generator level (1-4) of each island, by island index. */
   genLevels: number[];
   sealed: boolean[];

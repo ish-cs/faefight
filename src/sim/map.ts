@@ -1,5 +1,5 @@
 import * as dm from './dmath';
-import { CENTER, MAP } from './constants';
+import { CENTER, DOCK, MAP } from './constants';
 import type { Vec3 } from './types';
 import type { GameSettings } from './settings';
 import { add, forward, right, rotateY, scale, v3, yawOf } from './vec';
@@ -70,6 +70,13 @@ export const COSMETIC: Record<CosmeticKind, { r: number; h: number; hp: number }
 export type HazardKind = 'barrel' | 'propane' | 'crate';
 export type HazardDef = { id: number; kind: HazardKind; pos: Vec3; rotY: number; island: number };
 
+/**
+ * One breakable section of a wooden pier (constants DOCK, sim/docks.ts): a solid deck box while it stands, open
+ * water once an explosion breaks it. `island` = the player island it runs out from; `row` 0 is the section at the
+ * island rim, counting outward. Box local X = across the pier, local Z = along it (like StaticBox).
+ */
+export type DockDef = Box & { id: number; island: number; row: number };
+
 /** Neutral island at the middle of the ring: anyone may use its stations. */
 export type CenterIsland = {
   center: Vec3;
@@ -96,6 +103,8 @@ export type MapDef = {
   statics: StaticBox[];
   cosmetics: CosmeticDef[];
   hazards: HazardDef[];
+  /** Wooden pier sections (breakable); absent on hand-made maps (practice range, tests). */
+  docks?: DockDef[];
   /** Set by the match: the rules in force (clamped) and the palette colour per island (index = island). */
   settings?: GameSettings;
   colors?: number[];
@@ -251,7 +260,42 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
     template, name: MAP_NAMES[template], seed,
     waterY: MAP.waterY,
     islands, center, statics, cosmetics, hazards,
+    docks: buildDocks(islands, center),
   };
+}
+
+/** Lateral offset of the bots' bridge lanes (bots/nav.ts LANE_OFFSET): each pier runs along one. */
+const PIER_SIDE = 3;
+
+/**
+ * A pier per player island, out from the front rim along the lane the bots bridge on toward the island in front
+ * (the center island; with 2 players the rival), so a pier is a head start on that bridge and a broken section is
+ * a gap the bridge has to span. Its length leaves at least DOCK.minWater to the far shore (no pier when that
+ * leaves less than DOCK.minLen).
+ */
+function buildDocks(islands: IslandLayout[], center: CenterIsland): DockDef[] {
+  const out: DockDef[] = [];
+  const two = islands.length === 2;
+  for (const isl of islands) {
+    const target = two ? islands[1 - isl.index] : { center: center.center, radius: center.radius };
+    const r = isl.radius, yaw = isl.bunker.facingYaw;
+    const inward = forward(yaw), lat = right(yaw);
+    // Where the far shore starts along the lane, and where the pier starts (just inside the rim at its outer edge).
+    const edge = PIER_SIDE + DOCK.width / 2;
+    const farShore = Math.hypot(target.center.x - isl.center.x, target.center.z - isl.center.z) - Math.sqrt(target.radius * target.radius - PIER_SIDE * PIER_SIDE);
+    const start = Math.sqrt(r * r - edge * edge) - 0.05;
+    const len = Math.min(DOCK.maxLen, Math.floor((farShore - DOCK.minWater - start) / DOCK.chunk) * DOCK.chunk);
+    if (len < DOCK.minLen) continue;
+    for (let row = 0; row < len / DOCK.chunk; row++) {
+      const c = add(add(isl.center, scale(inward, start + (row + 0.5) * DOCK.chunk)), scale(lat, PIER_SIDE));
+      out.push({
+        id: out.length + 1, island: isl.index, row,
+        center: v3(c.x, isl.groundY + DOCK.lip - DOCK.deck / 2, c.z),
+        half: v3(DOCK.width / 2, DOCK.deck / 2, DOCK.chunk / 2), rotY: yaw,
+      });
+    }
+  }
+  return out;
 }
 
 /**

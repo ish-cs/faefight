@@ -79,4 +79,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 19;
+export const NET_VERSION = 20;
