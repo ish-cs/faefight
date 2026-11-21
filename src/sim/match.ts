@@ -10,7 +10,7 @@ import { Cosmetics } from './cosmetics';
 import { Hazards, isExplosive, type HazardHost } from './hazards';
 import { HAZARD } from './constants';
 import { Fire, fireZones, type FireCtx } from './fire';
-import { Traps, trapCenter } from './traps';
+import { Traps, validateTrap } from './traps';
 import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
@@ -787,6 +787,8 @@ export class Match implements MatchApi {
       potionShops: this.potionShops.map((sh) => clone(sh.pos)),
       groundAt: (x, z) => this.physics.isGroundAt(x, z),
       canPlace: (kind, pos, rotY) => validatePlacement(this.physics, kind, pos, rotY, self.pos),
+      traps: this.traps.list.filter((t) => dist(t.pos, eye) <= SIGHT_RANGE).map(({ on: _on, ...t }) => ({ ...t, pos: clone(t.pos) })),
+      canTrap: (req, from) => validateTrap(this.physics, req, from ?? self.pos, this.traps.list),
     };
   }
 

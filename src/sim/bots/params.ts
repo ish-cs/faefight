@@ -117,7 +117,16 @@ export type BuildTuning = {
   coverScore: number; fortifyScore: number;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning };
+/**
+ * Spike traps (sim/traps.ts).
+ * - carry: traps to own (standing + carried) by skill, once `rich` cash (carried + banked) is in hand.
+ * - setScore: goal score for setting one at home (doorways first, then the wall beside the front door) in calm times.
+ * - avoidPad: keep this far (m) beyond an enemy trap's reach when walking.
+ * - shootRange: an enemy trap this close in my way (or at where I'm going), with nobody in sight: shoot it first.
+ */
+export type TrapTuning = { carry: Record<Difficulty, number>; rich: number; setScore: number; avoidPad: number; shootRange: number };
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; trap: TrapTuning };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -175,7 +184,9 @@ export const BUILD_TUNING: BuildTuning = {
   coverScore: 1.05, fortifyScore: 0.5,
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING });
+export const TRAP_TUNING: TrapTuning = { carry: D(0, 1, 2, 3), rich: 350, setScore: 0.45, avoidPad: 0.35, shootRange: 9 };
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, trap: TRAP_TUNING });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -230,6 +241,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['buildTuning.slotBackoffSec', [10, 90]], ['buildTuning.pushLead', [0, 80]], ['buildTuning.bridgeRetrySec', [0.2, 2]],
   ['buildTuning.bridgeStuckSec', [1, 10]], ['buildTuning.bridgeHoldSec', [5, 60]], ['buildTuning.freeSlots', [1, 4]],
   ['buildTuning.coverScore', [0.5, 1.5]], ['buildTuning.fortifyScore', [0.1, 1]],
+  ['trap.carry.*', [0, 3]], ['trap.rich', [100, 1200]], ['trap.setScore', [0.1, 1]], ['trap.avoidPad', [0, 1.5]], ['trap.shootRange', [3, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {
   const a = pattern.split('.'), b = key.split('.');

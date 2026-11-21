@@ -3,7 +3,7 @@ import * as THREE from 'three/webgpu';
 import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
-import type { MatchEvent, PieceKind, PieceState, Snapshot, Vec3, WeaponKind } from '../sim/types';
+import type { MatchEvent, PieceKind, PieceState, Snapshot, TrapRequest, Vec3, WeaponKind } from '../sim/types';
 import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import { CharacterSystem, type Motion } from './characters/avatar';
 import { NpcSystem } from './characters/npcs';
@@ -14,6 +14,7 @@ import { preloadPbr } from './world/pbr';
 import { PotionSellers, stall } from './world/potionSeller';
 import { loadQuality } from './world/sky';
 import { StormFx } from './world/storm';
+import { TrapLayer } from './world/traps';
 import { LootView, lootWarmObjects } from './lootView';
 export { lods } from './world/lod';
 export { pbrStats } from './world/pbr';
@@ -58,6 +59,8 @@ export class Renderer {
   /** Loot on the ground drawn as its items, with labels nearby (lootView.ts). */
   readonly lootView = new LootView(this.scene);
   private potionSellers = new PotionSellers(this.scene);
+  /** Spike traps (world/traps.ts) and their placement ghost. */
+  readonly traps = new TrapLayer();
   /** Animated shop keepers (characters/npcs.ts). */
   readonly npcs = new NpcSystem(this.scene);
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
@@ -118,6 +121,7 @@ export class Renderer {
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
+    r.scene.add(r.traps.root);
     r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
     r.resize();
     return r;
@@ -219,6 +223,7 @@ export class Renderer {
         this.replaySnap = r.snap;
         this.world.syncPieces(r.snap.pieces, r.snap.fires);
         this.gunFx.syncProjectiles(r.snap.projectiles ?? []);
+        this.traps.sync(r.snap.traps);
         this.snapArrived = performance.now();
       }
       this.replay = r;
@@ -228,7 +233,7 @@ export class Renderer {
     this.replay = null;
     this.replaySnap = null;
     const c = this.curr;
-    if (c) { this.world.syncPieces(this.predicted.length ? c.pieces.concat(this.predicted) : c.pieces, c.fires); this.gunFx.syncProjectiles(c.projectiles ?? []); }
+    if (c) { this.world.syncPieces(this.predicted.length ? c.pieces.concat(this.predicted) : c.pieces, c.fires); this.gunFx.syncProjectiles(c.projectiles ?? []); this.traps.sync(c.traps); }
   }
 
   get replaying() { return this.replay !== null; }
@@ -250,6 +255,7 @@ export class Renderer {
     this.world.syncPieces(this.predicted.length ? snap.pieces.concat(this.predicted) : snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
     this.world.syncHazards(snap.hz);
+    this.traps.sync(snap.traps);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
     this.snapArrived = performance.now();
@@ -280,6 +286,8 @@ export class Renderer {
       this.world.cosmeticEvent(e);
     } else if (e.type === 'hazard') {
       this.world.hazardEvent(e);
+    } else if (e.type === 'trap') {
+      this.traps.onEvent(e, this.world.pieceFx.particles);
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
       const k = e.data.kind;
@@ -410,6 +418,11 @@ export class Renderer {
     this.ghostLink.scale.set(0.035, 0.035, len);
   }
 
+  /** Spike trap placement ghost: where the request would put it (null hides it). */
+  setTrapGhost(req: TrapRequest | null, ok = false) {
+    this.traps.setGhost(req?.pos ?? null, req?.rotY ?? 0, req?.wall ?? false, ok);
+  }
+
   /** Brief flash/pop on the ghost when a piece is placed from it. */
   pulseGhost() {
     this.ghostPulse = 1;
@@ -490,6 +503,7 @@ export class Renderer {
     if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
     this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
     this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
+    this.traps.frame(this.playT ?? snap?.time ?? 0);
     const feet = this.feet.slice(0, nf);
     this.npcs.frame(dt, this.camera, feet);
     this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw

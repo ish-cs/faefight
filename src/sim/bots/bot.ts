@@ -1,11 +1,12 @@
 import * as dm from '../dmath';
-import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, SEAL, STORM, WEAPONS } from '../constants';
+import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
+import { friendly, trapCenter } from '../traps';
 import type { Doorway, IslandLayout } from '../map';
 import { NO_INPUT } from '../types';
 import type {
-  BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, VaultAction, Vec3, WeaponKind,
+  BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
 } from '../types';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
@@ -25,10 +26,10 @@ import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, 
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'storm' | 'heal' | 'cover' | 'fortify' | 'contest';
+  | 'fight' | 'disengage' | 'storm' | 'heal' | 'cover' | 'fortify' | 'contest' | 'trap';
 const GOALS: Goal[] = [
   'storm', 'defend', 'disengage', 'cover', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'fortify', 'shop', 'heal', 'contest', 'collect',
+  'fortify', 'trap', 'shop', 'heal', 'contest', 'collect',
 ];
 /** Center gold worth a trip, and how far a bot will go out of its way for it. */
 const CONTEST_AT = 150;
@@ -105,7 +106,7 @@ const BUNKER_OUT = SEAL.exitRadius + 0.8;
 
 export { DRIVE } from './params';
 /** Goals the watchdog keeps an eye on (DriveParams.stallSec; attack gets longer: it waits at doors). */
-const STALLABLE = new Set<Goal>(['seal', 'attack', 'bridge', 'contest', 'raid', 'loot', 'shop', 'bank', 'fortify', 'cut']);
+const STALLABLE = new Set<Goal>(['seal', 'attack', 'bridge', 'contest', 'raid', 'loot', 'shop', 'bank', 'fortify', 'cut', 'trap']);
 /** Doorways per bunker. */
 const MAP_DOORS = 3;
 const TARGETED = new Set<Goal>(['seal', 'attack', 'bridge']);
@@ -122,6 +123,8 @@ type Act = {
   shop?: ShopItem;
   vault?: VaultAction;
   placeCharge?: boolean;
+  /** Set a spike trap here (sim/traps.ts). */
+  trap?: TrapRequest;
   sprint?: boolean;
   jump?: boolean;
   /** Sprint even with an enemy in sight (closing the distance). */
@@ -188,6 +191,10 @@ export class Bot {
   private slots: Slot[] | null = null;
   private buildMemo: { at: number; total: number; b: Partial<Record<PieceKind, number>> | undefined } | null = null;
   private slotBackoff = new Map<number, number>();
+  /** Spike-trap spots (trapSpots index) that wouldn't take one: left alone until then. */
+  private trapBackoff = new Map<number, number>();
+  /** Last trap I tried to set: spot index and when (a spot still empty a moment later gets backed off). */
+  private trapTry: { i: number; at: number } | null = null;
   /** Bridges: furthest deck reached per lane, islands I'm bridging to on the mirror lane (main one got cut), wall spacing. */
   private laneBest = new Map<string, number>();
   private alt = new Set<number>();
@@ -306,6 +313,11 @@ export class Bot {
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
+    // An enemy spike trap in my way with nobody in sight: shoot it out before walking on.
+    if (!ctx.enemy && !act.shootAt && !act.build && !act.trap) {
+      const spikes = this.trapInWay(ctx, act.dir);
+      if (spikes) act = { ...act, shootAt: spikes };
+    }
     // Never hang around inside my own bunker (one plug per door and I'm sealed in): step out.
     if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) act = { ...act, ...this.escape(ctx) };
 
@@ -385,7 +397,7 @@ export class Bot {
     if (dir && !dodge) dir = this.stormFence(me, view, dir);
     if (dir) dir = this.nav.safeDir(dir);
     // Never walk into (or stand in) fire: slide around burning pieces and ground fires (a lightning dodge wins).
-    const zones = view.fires ?? [];
+    const zones = this.avoidZones(view, me);
     if (zones.length && !dodge) {
       const away = steerFromFire(me.pos, dir, zones);
       if (away !== dir) dir = away && this.nav.safeDir(away);
@@ -417,7 +429,7 @@ export class Bot {
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
       (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
-    if (act.shop || act.build || act.vault || act.placeCharge || fire || throwGrenade) this.lastDidAt = now;
+    if (act.shop || act.build || act.vault || act.placeCharge || act.trap || fire || throwGrenade) this.lastDidAt = now;
     if (act.build) {
       this.lastPieceAt = now;
     }
@@ -426,7 +438,7 @@ export class Bot {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
-      vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
+      vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
@@ -642,6 +654,7 @@ export class Bot {
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
+      traps: total >= this.P.trap.rich ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
@@ -981,6 +994,11 @@ export class Bot {
         const next = this.nextSlot(c);
         return next ? this.P.buildTuning.fortifyScore + 0.3 * t.builder : 0;
       }
+      case 'trap': {
+        if (view.suddenDeath || c.on !== home.index || c.danger || me.inv.traps <= 0) return 0;
+        if (this.myTraps(view).length >= TRAP.maxPerPlayer || !this.nextTrapSpot(c)) return 0;
+        return this.P.trap.setScore + 0.2 * t.builder + 0.1 * t.caution;
+      }
       case 'raid': {
         if (view.suddenDeath || !gun) return 0;
         const isl = this.raidIsland(c);
@@ -1068,6 +1086,7 @@ export class Bot {
       // The center island is where the fights are: worth going for when it pays.
       case 'contest': return s > 0 ? s + this.P.drive.push[this.difficulty] * 0.5 : s;
       case 'fortify': return this.t.builder >= this.P.buildTuning.fortEarlyBuilder ? s * 0.5 : 0;
+      case 'trap': return s * 0.6;
       case 'cut': return this.crossing(c) ? s : s * 0.4;
       // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
       case 'bank': return this.insuranceDue(me) > 0 || c.danger ? s : s * 0.5;
@@ -1094,6 +1113,7 @@ export class Bot {
       case 'disengage': return this.doDisengage(c);
       case 'cover': return this.doCover(c);
       case 'fortify': return this.doFortify(c);
+      case 'trap': return this.doTrap(c);
       case 'storm': return this.doStorm(c);
       case 'contest': return this.doContest(c);
     }
@@ -1784,6 +1804,111 @@ export class Bot {
     if (!act) return null;
     this.perch = { ramp: v3(pos.x, me.pos.y, pos.z), pos: add(pos, scale(to, 1.0)), until: now + this.P.buildTuning.perchSec };
     return act;
+  }
+
+  /** My own spike traps standing (in sight: home is where they go, so that's all of them while I'm there). */
+  private myTraps(view: BotView): TrapNet[] {
+    return (view.traps ?? []).filter((t) => t.owner === view.self.id);
+  }
+
+  /**
+   * Where I set spike traps at home, best first: just outside each doorway (the choke points anyone sealing or
+   * raiding me must stand in), then the bunker wall either side of the front door (spikes out at whoever hugs it).
+   */
+  private trapSpots(c: Ctx): TrapRequest[] {
+    const b = c.home.bunker, out: TrapRequest[] = [];
+    for (const d of b.doorways) {
+      const p = add(d.center, scale(forward(d.yaw), 1.6));
+      const y = c.view.groundAt(p.x, p.z);
+      if (y !== null) out.push({ pos: v3(p.x, y, p.z), rotY: d.yaw, wall: false });
+    }
+    const fd = b.doorways[0];
+    if (fd) for (const side of [1, -1]) {
+      const p = add(fd.center, scale(right(fd.yaw), side * (fd.width / 2 + 0.9)));
+      out.push({ pos: v3(p.x, c.home.groundY + 1.0, p.z), rotY: fd.yaw, wall: true });
+    }
+    return out;
+  }
+
+  /** The next free trap spot that takes one (validated as placed), or null. */
+  private nextTrapSpot(c: Ctx): { req: TrapRequest; i: number } | null {
+    if (!c.view.canTrap) return null;
+    const spots = this.trapSpots(c), taken = c.view.traps ?? [];
+    for (const [i, s] of spots.entries()) {
+      if ((this.trapBackoff.get(i) ?? -Infinity) > c.view.now) continue;
+      if (taken.some((t) => dist2D(t.pos, s.pos) < TRAP.minGap + 0.4)) continue;
+      // Validated from where I'll stand to set it, not from where I am now.
+      if (c.view.canTrap(s, this.trapStand(c, s)).ok) return { req: s, i };
+    }
+    return null;
+  }
+
+  /** Where I stand to set a trap: a little out in front of it (outside the doorway / off the wall). */
+  private trapStand(c: Ctx, req: TrapRequest): Vec3 {
+    const p = add(req.pos, scale(forward(req.rotY), req.wall ? 1.6 : 1.4));
+    return v3(p.x, c.home.groundY, p.z);
+  }
+
+  /** Walk to the next trap spot and set one there. */
+  private doTrap(c: Ctx): Act {
+    const next = this.nextTrapSpot(c);
+    if (!next) { this.nextScoreAt = c.view.now; return IDLE; }
+    const { req, i } = next, now = c.view.now;
+    const stand = this.trapStand(c, req);
+    const face = req.wall ? req.pos : v3(req.pos.x, req.pos.y + 0.2, req.pos.z);
+    const walk = this.goTo(stand, 0.6);
+    if (walk.dir) return walk;
+    if (c.me.busyUntil > now) return { dir: null, face };
+    if (this.trapTry?.i === i && now - this.trapTry.at > 1) {
+      // (backoff lives here, not in nextTrapSpot: scoring and introspection must not change state)
+      // Tried a while ago and the spot is still empty: something's in the way.
+      this.trapBackoff.set(i, now + this.P.buildTuning.slotBackoffSec);
+      this.trapTry = null;
+      this.nextScoreAt = now;
+      return { dir: null, face };
+    }
+    if (this.trapTry?.i !== i) this.trapTry = { i, at: now };
+    return { dir: null, face, trap: req };
+  }
+
+  /** Fires plus every enemy spike trap I can see, as circles to keep out of. */
+  private avoidZones(view: BotView, me: PlayerState): { pos: Vec3; r: number }[] {
+    const fires = view.fires ?? [];
+    const traps = view.traps;
+    if (!traps?.length) return fires;
+    const r = TRAP.half + PLAYER.radius + this.P.trap.avoidPad;
+    const out = [...fires];
+    for (const t of traps) if (!friendly(t.owner, me)) {
+      const c = trapCenter(t);
+      out.push({ pos: t.wall ? add(c, scale(forward(t.rotY), TRAP.zone / 2)) : v3(c.x, t.pos.y, c.z), r: t.wall ? r + TRAP.zone / 2 : r });
+    }
+    return out;
+  }
+
+  /**
+   * An enemy trap within shootRange that lies along where I'm walking (or right by me when I've stopped), with a
+   * clear shot: where to aim. Destroying it beats walking the long way round a doorway.
+   */
+  private trapInWay(c: Ctx, dir: Vec3 | null): Vec3 | null {
+    const traps = c.view.traps;
+    if (!traps?.length) return null;
+    const me = c.me, R = this.P.trap.shootRange;
+    let best: Vec3 | null = null, bestD = Infinity;
+    for (const t of traps) {
+      if (friendly(t.owner, me)) continue;
+      const at = trapCenter(t);
+      const d = dist2D(at, me.pos);
+      if (d > R || d >= bestD || Math.abs(at.y - me.pos.y) > 3) continue;
+      if (dir) {
+        const rel = v3(at.x - me.pos.x, 0, at.z - me.pos.z);
+        const along = rel.x * dir.x + rel.z * dir.z;
+        const off = Math.abs(rel.x * dir.z - rel.z * dir.x);
+        if (along < 0 || off > 1.6) continue;
+      } else if (d > 3) continue;
+      if (c.view.clearShot && !c.view.clearShot(at)) continue;
+      best = at; bestD = d;
+    }
+    return best;
   }
 
   /** Walk to the next fortification slot and build it (also rebuilds pieces that got shot out). */

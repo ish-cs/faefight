@@ -85,6 +85,7 @@ type Ctx = {
 type Act = {
   dir: Vec3 | null; face?: Vec3; shootAt?: Vec3; build?: { kind: PieceKind; pos: Vec3; rotY: number };
   shop?: ShopItem; vault?: { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> }; placeCharge?: boolean;
+  trap?: { pos: Vec3; rotY: number; wall: boolean };
 };
 type Planned = { node: number; goal: Vec3; at: number; pts: Vec3[] } | null;
 type Internals = {
@@ -373,6 +374,20 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (!J.nextSlot(c)) return zero('fort finished');
       return { f: [['base', BT.fortifyScore], ['builder', 0.3 * t.builder]], why: 'Quiet at home: building up my bunker defences' };
     }
+    case 'trap': {
+      if (view.suddenDeath) return zero('sudden death');
+      if (c.on !== home.index) return zero('not home');
+      if (c.danger) return zero('danger nearby');
+      if (me.inv.traps <= 0) return zero('no spike traps carried');
+      const J = I as unknown as { myTraps(v: BotView): unknown[]; nextTrapSpot(c: Ctx): { req: { wall: boolean } } | null; P: { trap: { setScore: number } } };
+      if (J.myTraps(view).length >= TRAP.maxPerPlayer) return zero(`${TRAP.maxPerPlayer} traps already out`);
+      const spot = J.nextTrapSpot(c);
+      if (!spot) return zero('no free trap spot');
+      return {
+        f: [['base', J.P.trap.setScore], ['builder', 0.2 * t.builder], ['caution', 0.1 * t.caution]],
+        why: `Quiet at home: setting a spike trap ${spot.req.wall ? 'on the wall by my front door' : 'outside a doorway'}`,
+      };
+    }
     case 'raid': {
       if (view.suddenDeath) return zero('sudden death');
       if (!gun) return zero('no gun');
@@ -400,6 +415,7 @@ function needsWhy(n: Needs): string {
   if (n.charge) p.push('a charge for my plugged door');
   if (n.grenades) p.push(`${n.grenades} grenades`);
   if (n.medkits) p.push(`${n.medkits} medkits`);
+  if (n.traps) p.push(`${n.traps} spike trap${n.traps === 1 ? '' : 's'} for my doors`);
   return p.length ? `needs ${p.join(', ')}` : 'upgrades';
 }
 
@@ -524,6 +540,7 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
     case 'storm': return { steps: ['Get inside the ring', 'Hold position'], at: moving ? 0 : 1 };
     case 'cover': return { steps: ['Get to the cover spot', 'Place a wall', 'Fight from behind it'], at: a?.build ? 1 : moving ? 0 : 2 };
     case 'fortify': return { steps: ['Walk to the next fort slot', 'Build it', 'Next slot'], at: a?.build ? 1 : moving ? 0 : 1 };
+    case 'trap': return { steps: ['Walk to a doorway', 'Set a spike trap', 'Next spot'], at: a?.trap ? 1 : moving ? 0 : 1 };
     case 'fight': return { steps: ['Hold my preferred range', 'Strafe and shoot', 'Take cover if hurt'], at: p.fire ? 1 : 0 };
     case 'disengage': return { steps: ['Break away from the shooter', 'Get behind my bunker'], at: moving ? 0 : 1 };
     case 'defend': return { steps: ['Get to the plugged doorway', 'Clear the plug', 'Walk out'], at: a?.placeCharge || a?.shootAt ? 1 : moving ? 0 : 1 };

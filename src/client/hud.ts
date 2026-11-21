@@ -117,6 +117,8 @@ export type HudContext = {
   ghostOk: boolean | null;
   /** Why the ghost is red ("too far", "needs support", "blocked") or what it snapped to; shown after the build hint. */
   buildNote?: string | null;
+  /** Holding a spike trap: the hint line (count, where, why not); null/absent otherwise. */
+  trapHint?: string | null;
   free: boolean;
   /** I (inventory) mode: pointer released so slots can be dragged. */
   inventory: boolean;
@@ -569,7 +571,7 @@ export class Hud {
       this.tickFeed();
       return;
     }
-    if (watching) ctx = { ...ctx, selected: me.selected, ghostOk: null, buildNote: null, inventory: false };
+    if (watching) ctx = { ...ctx, selected: me.selected, ghostOk: null, buildNote: null, trapHint: null, inventory: false };
     // Sealed / break-out banner: the viewed player's bunker and countdown.
     this.updateSealed(snap, me);
     if (this.mirroring) { if (this.panelKind === 'vault') this.refreshVault(); else this.renderShop(); }
@@ -678,10 +680,14 @@ export class Hud {
       setText(this.center, `Build: ${LABEL[buildKind]} (${have})  ·  Z/X rotate  ·  ${ctx.free ? 'free place' : 'Alt free place'}${ctx.buildNote ? `  ·  ${ctx.buildNote}` : ''}`);
       this.center.style.display = 'block';
       this.center.classList.add('small');
+    } else if (ctx.trapHint) {
+      setText(this.center, ctx.trapHint);
+      this.center.style.display = 'block';
+      this.center.classList.add('small');
     } else {
       this.center.style.display = 'none';
     }
-    if (!buildKind) this.center.classList.remove('small');
+    if (!buildKind && !ctx.trapHint) this.center.classList.remove('small');
 
     const end = endState(snap.winner, this.humanId, me.eliminated, snap.players);
     if (end) this.showEnd(snap, end);
