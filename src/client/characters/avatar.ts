@@ -78,6 +78,8 @@ const VEL_SMOOTH_RATE = 12;
 export type RagdollEnv = {
   floorAt(x: number, z: number, feetY: number): number;
   blastNear(pos: THREE.Vector3, now: number): THREE.Vector3 | null;
+  /** The body hit the floor at `speed` m/s (a thud sound). */
+  thud(pos: Vec3, speed: number): void;
 };
 
 export type AvatarFrame = {
@@ -550,6 +552,11 @@ export class Avatar {
     if (!this.mixer) return;
     if (this.ragdoll) {
       if (this.ragdollAwake && !this.ragdoll.step(dt)) { this.ragdollAwake = false; ragdollBudget.release(); }
+      const hit = this.ragdoll.sim.takeImpact();
+      if (hit > 0 && this.ragdollEnv) {
+        const P = this.ragdoll.sim.pos;
+        this.ragdollEnv.thud({ x: P[RP.pelvis * 3], y: P[RP.pelvis * 3 + 1], z: P[RP.pelvis * 3 + 2] }, hit);
+      }
       return;
     }
     // Animation LOD: nothing to see off screen; far away, half rate. Skipped time is caught up on the next update.
@@ -734,8 +741,11 @@ export class CharacterSystem {
   private blastAt = 0;
   /** Floor under a ragdoll that died airborne (render.ts sets it from the map); default: where the feet were. */
   floorAt: ((x: number, z: number) => number | null) | null = null;
+  /** A ragdoll landed (render.ts plays the thud). */
+  onThud: ((pos: Vec3, speed: number) => void) | null = null;
   private readonly ragdollEnv: RagdollEnv = {
     floorAt: (x, z, feetY) => this.floorAt?.(x, z) ?? feetY,
+    thud: (pos, speed) => this.onThud?.(pos, speed),
     blastNear: (pos, now) => {
       let best: THREE.Vector3 | null = null, bd = BLAST_M;
       for (const b of this.blasts) {

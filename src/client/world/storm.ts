@@ -150,7 +150,7 @@ export class StormFx {
     this.wet += (this.target - this.wet) * Math.min(1, dt / 2.5);
     if (this.target === 0 && this.wet < 0.003) this.wet = 0;
     const w = this.wet;
-    this.soak = stepWetness(this.soak, Math.max(w, WET.dew), dt);
+    this.soak = stepWetness(this.soak, Math.max(w, this.base.night * WET.nightDew), dt);
     wetness.value = this.wetPin ?? this.soak;
 
     // Flash: a bright pulse with a second flicker ~150 ms later.

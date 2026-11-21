@@ -9,7 +9,7 @@ type V3 = THREE.Node<'vec3'>;
  * Wet ground: one global uniform (0 dry … 1 soaked) that the shared world materials read, so rain costs a few ALU
  * ops per pixel and no new materials. Wet = darker albedo (water fills the pores), much lower roughness (a film of
  * water), most on up-facing surfaces; on flat ground standing puddles open up as it gets wetter (mirror-smooth,
- * flat normal). StormFx drives it from the rain; `WET.dew` lets a night cycle add morning damp.
+ * flat normal). StormFx drives it from the rain, and night dew (day/night) keeps the ground damp after dark.
  */
 // shared render-group uniform: uploaded once per render, not per object drawn (it is in most world materials)
 export const wetness = uniform(0).setGroup(renderGroup);
@@ -18,8 +18,8 @@ export const WET = {
   /** s to soak through once rain starts / to dry out after it stops (time constants) */
   riseS: 14,
   dryS: 75,
-  /** extra wetness floor (night dew); max'd with the rain */
-  dew: 0,
+  /** night dew: wetness at full night (max'd with the rain), a damp sheen on the ground */
+  nightDew: 0.3,
 };
 
 /** One frame of soaking / drying toward `target` (0..1). */

@@ -28,6 +28,9 @@ export const RAGDOLL = {
   sleepSpeed: 0.08,
   sleepHold: 0.35,
   maxAge: 4.5,
+  /** a landing this hard (m/s) is a thud; at most one per body per thudGap s */
+  thudSpeed: 1.2,
+  thudGap: 0.3,
 };
 
 /** Collision radius per point (m). */
@@ -42,6 +45,9 @@ export class RagdollSim {
   private links: Link[] = [];
   /** Torso points in the torso's own frame at the start (it is moved as one rigid body). */
   private torsoRest = new Float32Array(TORSO.length * 3);
+  /** Hardest landing (m/s into the floor) since the last takeImpact(), and when the last one was reported. */
+  private impact = 0;
+  private impactAt = -1e9;
   /** Sign that turns cross(up, side) into the body's forward (set from the facing at start). */
   private fwdSign = 1;
   age = 0;
@@ -192,11 +198,25 @@ export class RagdollSim {
     for (let i = 0; i < RP_COUNT; i++) {
       const o = i * 3, lo = this.floorY + RADIUS[i];
       if (p[o + 1] >= lo) continue;
+      const vy = (q[o + 1] - p[o + 1]) / RAGDOLL.step;
+      if (vy > this.impact) this.impact = vy;
       p[o + 1] = lo;
       q[o + 1] = lo; // inelastic: no bounce
       q[o] += (p[o] - q[o]) * fr;
       q[o + 2] += (p[o + 2] - q[o + 2]) * fr;
     }
+  }
+
+  /**
+   * Speed (m/s) the body hit the floor with since the last call, for a thud: 0 when nothing landed harder than
+   * RAGDOLL.thudSpeed, or within RAGDOLL.thudGap s of the last reported one.
+   */
+  takeImpact(): number {
+    const v = this.impact;
+    this.impact = 0;
+    if (v < RAGDOLL.thudSpeed || this.age - this.impactAt < RAGDOLL.thudGap) return 0;
+    this.impactAt = this.age;
+    return v;
   }
 
   /** cross(up, side) of the torso (unnormalised; times fwdSign it points the way the body faced). */

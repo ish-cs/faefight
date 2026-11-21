@@ -86,6 +86,18 @@ describe('ragdoll sim', () => {
     expect(ragdollBudget.acquire()).toBe(true);
   });
 
+  test('reports the landing as thuds: a hard one first, never two within thudGap', () => {
+    const r = new RagdollSim(points(), { x: 0, z: 1 }, FLOOR);
+    r.kick(RP.chest, 0, 0, -2);
+    const thuds: { t: number; v: number }[] = [];
+    for (let t = 0; t < 4; t += 1 / 60) { r.update(1 / 60); const v = r.takeImpact(); if (v) thuds.push({ t: r.age, v }); }
+    expect(thuds.length).toBeGreaterThan(0);
+    expect(thuds.length).toBeLessThan(8);
+    expect(Math.max(...thuds.map((x) => x.v))).toBeGreaterThan(1.5); // the body slams down
+    for (let i = 1; i < thuds.length; i++) expect(thuds[i].t - thuds[i - 1].t).toBeGreaterThanOrEqual(RAGDOLL.thudGap - 1e-6);
+    for (const x of thuds) expect(x.v).toBeGreaterThanOrEqual(RAGDOLL.thudSpeed);
+  });
+
   test('rejects a short point list', () => {
     expect(() => new RagdollSim([0, 0, 0], { x: 0, z: 1 }, 0)).toThrow(/ragdoll/);
   });
