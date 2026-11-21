@@ -209,7 +209,9 @@ export class Hud {
       const lock = el('span', 'hb-lock');
       lock.innerHTML = LOCK_ICON;
       lock.title = 'Locked: you respawn with it';
-      s.append(el('span', 'hb-key', String(i + 1)), el('span', 'hb-icon'), el('span', 'hb-name'), el('span', 'hb-count'), lock);
+      const ammo = el('span', 'hb-ammo');
+      ammo.append(el('i'));
+      s.append(el('span', 'hb-prog'), el('span', 'hb-key', String(i + 1)), el('span', 'hb-icon'), el('span', 'hb-name'), el('span', 'hb-count'), ammo, lock);
       return s;
     });
     this.hotbar.replaceChildren(...slots);
@@ -246,9 +248,10 @@ export class Hud {
     });
   }
 
-  private updateHotbar(me: PlayerState, ctx: HudContext) {
+  private updateHotbar(me: PlayerState, ctx: HudContext, now: number) {
     const inv = me.inv;
     const reloading = me.reloadUntil > 0;
+    this.updateHotbarProgress(me, ctx.selected, now);
     const sig = JSON.stringify([me.hotbar, { ...inv, cash: 0 }, ctx.selected, reloading, me.locked]);
     this.hotbar.classList.toggle('editing', ctx.inventory);
     this.hotbar.dataset.ghost = ctx.ghostOk === null ? 'none' : ctx.ghostOk ? 'ok' : 'blocked';
@@ -266,12 +269,47 @@ export class Hud {
       s.classList.toggle('locked', isGunItem(k) && me.locked.includes(k));
       setText(s.querySelector('.hb-name') as HTMLElement, k ? SHORT[k] : '');
       let count = '';
+      const bar = (s.querySelector('.hb-ammo i') as HTMLElement);
       if (k && isGunItem(k)) {
         const a = inv.weapons[k];
         count = a ? `${a.mag}/${a.spare}` : '';
+        // Magazine gauge: how full the mag is; amber when low, red when empty.
+        const frac = a ? Math.max(0, Math.min(1, a.mag / WEAPONS[k].mag)) : 0;
+        bar.style.width = `${Math.round(frac * 100)}%`;
+        s.dataset.ammo = !a || a.mag === 0 ? 'empty' : frac <= 0.25 ? 'low' : 'ok';
         s.classList.toggle('reloading', reloading && i === ctx.selected);
-      } else if (k) count = String(countOf(inv, k));
+      } else {
+        if (k) count = String(countOf(inv, k));
+        s.classList.remove('reloading');
+        delete s.dataset.ammo;
+      }
+      s.classList.toggle('stack', !!k && !isGunItem(k));
       setText(s.querySelector('.hb-count') as HTMLElement, count);
+    });
+  }
+
+  /**
+   * Live progress overlays (fill rising from the bottom of the slot): reload on the gun in hand,
+   * medkit use, potion drinking.
+   */
+  private updateHotbarProgress(me: PlayerState, selected: number, now: number) {
+    let slot = -1, p = 0;
+    if (me.alive && me.reloadUntil > 0 && me.reloadSec > 0) {
+      slot = selected; p = 1 - (me.reloadUntil - now) / me.reloadSec;
+    } else if (me.alive && me.healAt != null) {
+      slot = me.hotbar.indexOf('medkit'); p = 1 - (me.healAt - now) / MEDKIT.useSec;
+    } else if (me.alive && me.drinking) {
+      slot = me.hotbar.indexOf(me.drinking.kind); if (slot < 0) slot = selected;
+      p = 1 - (me.drinking.doneAt - now) / POTIONS[me.drinking.kind].useSec;
+    }
+    p = Math.max(0, Math.min(1, p));
+    Array.from(this.hotbar.children).forEach((node, i) => {
+      const s = node as HTMLElement;
+      const on = i === slot;
+      s.classList.toggle('busy', on);
+      const bar = s.firstChild as HTMLElement;
+      const h = on ? `${Math.round(p * 100)}%` : '0%';
+      if (bar.style.height !== h) bar.style.height = h;
     });
   }
 
@@ -439,7 +477,7 @@ export class Hud {
     setText(this.extras, reloading ? 'Reloading…' : '');
     this.extras.style.display = reloading ? '' : 'none';
 
-    this.updateHotbar(me, ctx);
+    this.updateHotbar(me, ctx, snap.time);
     const healing = me.alive && me.healAt != null;
     this.heal.style.display = healing ? '' : 'none';
     if (healing) this.healFill.style.width = `${Math.round(100 * Math.min(1, Math.max(0, 1 - (me.healAt! - snap.time) / MEDKIT.useSec)))}%`;
