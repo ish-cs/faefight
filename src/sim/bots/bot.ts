@@ -14,7 +14,7 @@ import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from '
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
-  TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
+  GUNS, TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
   shoppingPlan,
   type Needs, type ShopStyle,
 } from './plans';
@@ -925,7 +925,11 @@ export class Bot {
   private offensive(c: Ctx): boolean {
     const me = c.me;
     if (c.view.suddenDeath || !ownsGun(me.inv)) return false;
-    return c.view.now >= DRIVE.offenseAt[this.difficulty] || me.inv.cash + me.vault.cash >= DRIVE.offenseCash[this.difficulty];
+    // First life on just the free spawn pistol: count it as the pistol I'd otherwise have bought, so the push
+    // waits for the same money it did before everyone spawned armed (not a rush with the starting cash).
+    const spawnKitOnly = me.deaths === 0 && GUNS.every((g) => g === 'pistol' || !me.inv.weapons[g]);
+    const need = DRIVE.offenseCash[this.difficulty] + (spawnKitOnly ? WEAPONS.pistol.price : 0);
+    return c.view.now >= DRIVE.offenseAt[this.difficulty] || me.inv.cash + me.vault.cash >= need;
   }
 
   /**
