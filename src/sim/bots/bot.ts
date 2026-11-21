@@ -853,6 +853,8 @@ export class Bot {
         return onIsland ? s : 0;
       }
       case 'disengage': case 'heal': {
+        // Retreat only when losing: still ahead of the one in front of me, keep fighting.
+        if (g === 'disengage' && c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield) return 0;
         const long = this.retreatSince !== null && now - this.retreatSince > DRIVE.reengageSec;
         const stillHit = now - this.mem.lastHurtAt < 3;
         return long && !stillHit && me.hp / 100 > DRIVE.reengageHp ? 0 : s;
