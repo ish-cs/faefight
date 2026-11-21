@@ -49,7 +49,7 @@ describe('kill feed entries', () => {
     expect(e.weapon).toBe('smg');
   });
 
-  it('explosions, falls, water and the storm (drowning in sudden death)', () => {
+  it('explosions, falls, water, and storm / lightning by kill cause', () => {
     expect(feedEntries([ev(1, 'kill', { victim: B, killer: A }), ev(1, 'hit', { target: B, by: A, weapon: 'grenade' })], ctx)[0].markers).toEqual(['explosion']);
     const fall = feedEntries([ev(1, 'kill', { victim: B, killer: null }), ev(1, 'hit', { target: B, by: null, weapon: 'fall' })], ctx)[0];
     expect(fall).toMatchObject({ weapon: null, markers: ['fall'], killer: null });
@@ -57,7 +57,10 @@ describe('kill feed entries', () => {
     const water = feedEntries([ev(1, 'kill', { victim: ME, killer: null, inWater: true })], ctx)[0];
     expect(water).toMatchObject({ markers: ['water'], me: true });
     expect(feedText(water, name)).toBe('You drowned');
-    expect(feedEntries([ev(1, 'kill', { victim: B, killer: null, inWater: true })], { ...ctx, suddenDeath: true })[0].markers).toEqual(['storm']);
+    // Sudden death: the sim tags storm / lightning deaths with `cause`; a plain drowning stays water.
+    expect(feedEntries([ev(1, 'kill', { victim: B, killer: null, inWater: true })], { ...ctx, suddenDeath: true })[0].markers).toEqual(['water']);
+    expect(feedEntries([ev(1, 'kill', { victim: B, killer: null, cause: 'storm' })], { ...ctx, suddenDeath: true })[0].markers).toEqual(['storm']);
+    expect(feedEntries([ev(1, 'kill', { victim: B, killer: null, cause: 'lightning' })], { ...ctx, suddenDeath: true })[0].markers).toEqual(['lightning']);
   });
 
   it('your kills are flagged mine, your deaths me; a suicide has no killer', () => {
