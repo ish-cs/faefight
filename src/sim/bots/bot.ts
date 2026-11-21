@@ -139,6 +139,9 @@ export class Bot {
   private lastNadeAt = -Infinity;
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
+  /** Low on stamina: walk (save it for escapes) until it's back up. */
+  private winded = false;
+  private lastScores: { goal: string; score: number }[] = [];
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
   private view!: BotView;
 
@@ -161,6 +164,8 @@ export class Bot {
   get currentGoal(): Goal { return this.goal; }
   /** Rival this bot is currently going after (player id), if any. */
   get currentTarget(): number | null { return this.targetId; }
+  /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
+  get planScores(): { goal: string; score: number }[] { return this.lastScores; }
 
   think(view: BotView): PlayerInput {
     const me = view.self;
@@ -262,11 +267,13 @@ export class Bot {
         (!enemy || ctx.enemyDist > 30) && now - this.mem.lastHurtAt > 0.5) {
       select = kit; useMedkit = true; fire = false;
     }
+    // Stamina (movement.ts): like a human, stop sprinting around when winded and keep the rest for getting away.
+    if (me.stamina < 30) this.winded = true; else if (me.stamina > 70) this.winded = false;
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE);
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
-      sprint: !!act.sprint && (!enemy || this.goal === 'disengage'),
+      sprint: !!act.sprint && (!enemy || this.goal === 'disengage') && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
       // Same spread rules as players: aim down sights for anything past close range.
@@ -642,12 +649,15 @@ export class Bot {
   private pick(c: Ctx): Goal {
     if (this.trapped(c)) return 'defend';
     let best: Goal = c.homeReach || !c.reach ? 'collect' : 'attack', bestScore = -Infinity;
+    const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
       const base = this.score(g, c);
       if (base <= 0 && g !== best) continue;
       const s = base + (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
+      scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
     }
+    this.lastScores = scored.sort((a, b) => b.score - a.score).slice(0, 4);
     return best;
   }
 

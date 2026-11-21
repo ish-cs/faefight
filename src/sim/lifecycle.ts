@@ -3,6 +3,7 @@ import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
 import { addKind, countOf, emptyHotbar, heldKinds, takeOut } from './hotbar';
 import type { IslandLayout } from './map';
 import type { Physics } from './physics';
+import { refillStamina, STAMINA } from './movement';
 import { isSealed } from './seal';
 import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState, Vec3 } from './types';
 import { clone, dist, dist2D, rotateY, v3 } from './vec';
@@ -191,6 +192,8 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
     p.hp = PLAYER.hp;
     p.shield = 0;
     p.alive = true;
+    if (p.mv) refillStamina(p.mv);
+    p.stamina = STAMINA.max;
     grantLockedGuns(p);
     // Come back with a pistol + one spare mag so a camper with a rifle isn't a guaranteed kill.
     if (!p.inv.weapons.pistol && addKind(p.hotbar, 'pistol') >= 0) p.inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag };
