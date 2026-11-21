@@ -2,7 +2,7 @@ import { PIECES, WEAPONS } from '../constants';
 import type { WeaponKind } from '../types';
 import type { Goal } from './bot';
 import { rivalScore, type RivalFacts } from './mind';
-import type { BotParams } from './params';
+import type { BrainParams } from './params';
 
 /**
  * The bot's brain: a human-like decision layer above the tick-level actions.
@@ -164,7 +164,7 @@ export class Brain {
   }
 
   /** Re-evaluate (at the bot's rescore rate). `noise`: decision mistakes of this skill level. */
-  update(inp: BrainInput, p: BotParams, noise: number): BrainGoal {
+  update(inp: BrainInput, p: BrainParams, noise: number): BrainGoal {
     this.detectEvents(inp, p);
     const forced = this.pending.length > 0;
     this.pending = [];
@@ -185,7 +185,7 @@ export class Brain {
     return chosen;
   }
 
-  private snapshot(inp: BrainInput, t: number | null, p: BotParams) {
+  private snapshot(inp: BrainInput, t: number | null, p: BrainParams) {
     const r = t === null ? null : inp.rivals.find((x) => x.id === t) ?? null;
     return {
       target: t, sealed: !!r?.sealed, reach: !!r?.reach, busy: !!r?.busy,
@@ -193,7 +193,7 @@ export class Brain {
     };
   }
 
-  private detectEvents(inp: BrainInput, p: BotParams) {
+  private detectEvents(inp: BrainInput, p: BrainParams) {
     const was = this.last;
     if (!was) return;
     const t = was.target;
@@ -210,7 +210,7 @@ export class Brain {
     if (now.losing && !was.losing) this.notify('losingFight', inp.now);
   }
 
-  private candidates(inp: BrainInput, p: BotParams): BrainGoal[] {
+  private candidates(inp: BrainInput, p: BrainParams): BrainGoal[] {
     const out: BrainGoal[] = [];
     const add = (kind: GoalKind, utility: number, reason: string, steps: StepInfo[], target: number | null = null) => {
       const b = this.banned;

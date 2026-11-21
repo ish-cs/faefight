@@ -220,11 +220,11 @@ describe('8 bots and the storm', () => {
   // end with 2-4 bots idling there (an empty mag never got reloaded with an enemy in sight; out of ammo they
   // wouldn't punch). Seed 7 exercises the bridge-to-center path.
   // Seed sweep: STORM_SEEDS=1-20 (medium) widens it, e.g. for a series.
-  const range = (env.STORM_SEEDS ?? '1-7,9').split(',').flatMap((r) => {
+  const range = (env.STORM_SEEDS ?? '1-9').split(',').flatMap((r) => {
     const [a, b] = r.split('-').map(Number);
     return Array.from({ length: (b ?? a) - a + 1 }, (_, i) => a + i);
   });
-  test.each([...range.map((s) => ['medium', s]), ['hard', 5]] as [Difficulty, number][])('%s: the survivor ends inside the ring, nobody lost to the storm on the shore', async (difficulty, seed) => {
+  test.each([...range.map((s) => ['medium', s]), ['hard', 5]] as [Difficulty, number][])('%s seed %i: the survivor ends inside the ring, nobody lost to the storm on the shore', async (difficulty, seed) => {
     const m = await Match.create({ players: Array.from({ length: 8 }, (_, i) => ({ name: `b${i}`, isBot: true, difficulty })), seed });
     run(m, 1);
     for (let id = 1; id <= 8; id++) m.debugGive(id, { cash: 800 }); // what they'd have earned by 12:30

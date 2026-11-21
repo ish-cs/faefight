@@ -65,6 +65,8 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
  * `steel`: rich enough that the seal kit should be steel. `genLevel`: my generator's level (unknown = no upgrades).
  */
 export type Needs = {
+  /** A rival's base is wooden: worth a rocket launcher to set it on fire (medium+ bots, when rich). */
+  rocket?: boolean;
   scaffolds: number; kit: number; charge: boolean; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
   /** Pieces wanted for building (fortifications, combat cover, bridge walls) on top of the seal kit. */
   build?: Partial<Record<PieceKind, number>>;
@@ -163,6 +165,7 @@ function choosePurchase(p: PlayerState, needs: Needs, difficulty: Difficulty, st
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
   if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
+  if (needs.rocket && !inv.weapons.rocket && canAdd(p.hotbar, 'rocket') && cash >= WEAPONS.rocket.price + 200) return 'rocket';
   if (inv.grenades < (needs.grenades ?? 0)) return cash >= GRENADE.price ? 'grenade' : null;
   if (inv.medkits < (needs.medkits ?? 0)) return cash >= MEDKIT.price ? 'medkit' : null;
   if (style.closeGun && !inv.weapons.shotgun && cash >= WEAPONS.shotgun.price) return 'shotgun';

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { AIM, Aim } from '../../src/sim/bots/aim';
 import { Bot } from '../../src/sim/bots/bot';
-import { HAND_PARAMS, PARAM_KEYS, PARAM_SPEC, decode, encode, withTraits } from '../../src/sim/bots/params';
+import { BRAIN_KEYS, BRAIN_SPEC, HAND_BRAIN, HAND_PARAMS, PARAM_KEYS, PARAM_RANGES, decode, encode, withTraits } from '../../src/sim/bots/params';
 import { fits, junkSlot, nextPurchase, plugSpot, shoppingPlan } from '../../src/sim/bots/plans';
 import { PRESETS } from '../../src/sim/bots/personality';
 import { Brain, fightOdds, type BrainInput } from '../../src/sim/bots/brain';
@@ -99,7 +99,7 @@ describe('brain: goals for a reason, steps, re-planning', () => {
     homePlugged: false, incomingBridge: false, killedBy: null, seller: false, wantShields: false, endgame: false,
     enemy: null, armedNear: 0, underFire: false, ...over,
   });
-  const P = { ...HAND_PARAMS, turtleUntil: 60 };
+  const P = { ...HAND_BRAIN, turtleUntil: 60 };
   const stepLabel = (b: Brain) => b.goal!.steps[b.goal!.step]?.label ?? 'done';
 
   test('commits to a goal (hysteresis) despite noisy, near-equal options', () => {
@@ -218,18 +218,22 @@ describe('brain: goals for a reason, steps, re-planning', () => {
 
 describe('params', () => {
   test('ranges are sane, hand defaults inside them, encode/decode round-trips', () => {
-    for (const k of PARAM_KEYS) {
-      const [lo, hi, def] = PARAM_SPEC[k];
+    for (const k of BRAIN_KEYS) {
+      const [lo, hi, def] = BRAIN_SPEC[k];
       expect(lo).toBeLessThan(hi);
       expect(def).toBeGreaterThanOrEqual(lo);
       expect(def).toBeLessThanOrEqual(hi);
+      expect(PARAM_RANGES[`brain.${k}`]).toEqual([lo, hi]);
     }
+    // The trainer searches brain weights and the drive/build params together.
+    expect(PARAM_KEYS.some((k) => k.startsWith('drive.'))).toBe(true);
+    expect(PARAM_KEYS.some((k) => k.startsWith('buildTuning.'))).toBe(true);
     const back = decode(encode(HAND_PARAMS));
     for (const k of PARAM_KEYS) expect(back[k]).toBeCloseTo(HAND_PARAMS[k], 9);
   });
 
   test('personalities are offsets on the params (a Rusher is more aggressive than a Turtle)', () => {
-    const rusher = withTraits(HAND_PARAMS, PRESETS.Rusher), turtle = withTraits(HAND_PARAMS, PRESETS.Turtle);
+    const rusher = withTraits(HAND_BRAIN, PRESETS.Rusher), turtle = withTraits(HAND_BRAIN, PRESETS.Turtle);
     expect(rusher.biasAttack).toBeGreaterThan(turtle.biasAttack);
     expect(turtle.planTurtle).toBeGreaterThan(rusher.planTurtle);
     expect(turtle.lowHp).toBeGreaterThan(rusher.lowHp);
@@ -239,7 +243,7 @@ describe('params', () => {
 describe('no cheating: bots only see BotView', () => {
   test('bot modules import nothing that holds match state', () => {
     const dir = path.resolve(__dirname, '../../src/sim/bots');
-    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building', '../seal']);
+    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building', '../seal', '../fire']);
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts'))) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8');
       for (const m of src.matchAll(/from '([^']+)'/g)) {
@@ -250,6 +254,9 @@ describe('no cheating: bots only see BotView', () => {
       // combat is only used for pure geometry (eye position, aim direction), never to act on the world.
       const combat = src.match(/import \{([^}]*)\} from '\.\.\/combat'/);
       if (combat) for (const name of combat[1].split(',').map((x) => x.trim()).filter(Boolean)) expect(['eyePos', 'aimDir']).toContain(name);
+      // fire: only the pure helpers (is a piece flammable, steer around visible fire zones), never the burn step.
+      const fire = src.match(/import \{([^}]*)\} from '\.\.\/fire'/);
+      if (fire) for (const name of fire[1].split(',').map((x) => x.trim()).filter(Boolean)) expect(['isFlammable', 'steerFromFire']).toContain(name);
     }
   });
 

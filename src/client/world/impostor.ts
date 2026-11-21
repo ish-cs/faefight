@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { atan, attribute, cameraPosition, float, floor, mod, normalize, positionLocal, PI2, smoothstep, texture, uniform, vec2, vec3 } from 'three/tsl';
+import { atan, attribute, cameraPosition, float, floor, max, mod, normalize, positionLocal, PI2, smoothstep, texture, uniform, vec2, vec3 } from 'three/tsl';
 import { lodScale } from './lod';
 import type { LodPart } from './chunked';
 
@@ -55,7 +55,9 @@ function impostorMaterial(atlas: ImpostorAtlas): THREE.MeshBasicNodeMaterial {
   const cell = mod(floor(az.div(PI2).mul(N).add(0.5)), N);
   const u = q.x.mul(0.5).add(0.5), v = q.y.mul(0.5).add(0.5);
   const tex = texture(atlas.texture ?? new THREE.Texture(), vec2(cell.add(u).div(N), v));
-  m.colorNode = tex.rgb.mul(T.rgb);
+  // the atlas is cleared to transparent black, so mip levels / filtering blend black into silhouette edges:
+  // un-premultiply, or far impostors get dark halos
+  m.colorNode = tex.rgb.div(max(tex.a, 0.02)).mul(T.rgb);
   m.opacityNode = tex.a;
   return m;
 }
@@ -76,6 +78,16 @@ export class ImpostorBaker {
   }
 
   get pending() { return this.queue.length; }
+
+  /**
+   * Bake everything queued now (map build, behind the loading screen): the impostor materials then exist before
+   * the shader warm-up, so no impostor pipeline compiles mid-match.
+   */
+  flush(gpu: THREE.WebGPURenderer, environment: THREE.Texture | null) {
+    const t0 = performance.now(), n = this.queue.length;
+    while (this.queue.length) this.step(gpu, environment);
+    if (n) console.info(`[world/impostor] baked ${n} impostor atlases in ${Math.round(performance.now() - t0)} ms`);
+  }
 
   /** Bake at most one queued model (call once per frame). */
   step(gpu: THREE.WebGPURenderer, environment: THREE.Texture | null) {

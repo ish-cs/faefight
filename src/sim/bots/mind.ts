@@ -1,7 +1,7 @@
 import type { Vec3 } from '../types';
 import { clone, v3 } from '../vec';
 import { islandAt } from './nav';
-import type { BotParams } from './params';
+import type { BrainParams } from './params';
 import type { BotView } from './view';
 
 /** Where a rival was last seen and how they looked. */
@@ -119,10 +119,12 @@ export type RivalFacts = {
   onMyIsland: boolean;
   /** Seen away from their own island recently (home unguarded). */
   away: boolean;
+  /** I carry a full seal kit. */
+  kit?: boolean;
 };
 
 /** Desirability of going after this rival; higher is better. Personality is folded into the params. */
-export function rivalScore(f: RivalFacts, p: BotParams): number {
+export function rivalScore(f: RivalFacts, p: BrainParams, sealAwayTarget = 0.6): number {
   let s = 1;
   s -= f.reach ? 0 : Math.min(2, f.scaffolds * p.rsUnbridged);
   s -= (f.dist / 100) * p.rsDist;
@@ -135,8 +137,10 @@ export function rivalScore(f: RivalFacts, p: BotParams): number {
   if (f.kills > 0 && f.kills >= f.leaderKills) s += p.rsLeader;
   if (f.onMyIsland) s += p.rsIntruder;
   if (f.away && !f.sealed) s += p.rsAway;
+  // Kit in hand, owner out and their island in walking reach: seal the empty bunker.
+  if (f.kit && f.away && f.reach && !f.sealed) s += sealAwayTarget;
   return s;
 }
 
 /** Bonus the current target keeps over challengers, so the bot does not flip-flop. */
-export const commitment = (p: BotParams) => p.rsCommit;
+export const commitment = (p: BrainParams) => p.rsCommit;

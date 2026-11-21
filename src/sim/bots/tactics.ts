@@ -1,7 +1,7 @@
 import type { Difficulty, PlayerState, Vec3 } from '../types';
 import { add, norm, right, scale, v3, yawOf } from '../vec';
 import type { Memory } from './mind';
-import type { BotParams } from './params';
+import type { BrainParams } from './params';
 
 /**
  * How well a player executes evasive movement (part of skill, like aim): how much of the juke they put in,
@@ -16,7 +16,7 @@ export const DODGE_SKILL: Record<Difficulty, { amount: number; notice: number; j
 export type DodgeSkill = (typeof DODGE_SKILL)[Difficulty];
 
 /** Where fire is coming from (hits and near-miss tracers only: what a human feels and sees), or null. */
-export function incomingFire(mem: Memory, now: number, p: BotParams): Vec3 | null {
+export function incomingFire(mem: Memory, now: number, p: BrainParams): Vec3 | null {
   let from: Vec3 | null = null, t = -Infinity;
   if (mem.shotAtMe && now - mem.shotAtMe.t <= p.underFireSec) { from = mem.shotAtMe.from; t = mem.shotAtMe.t; }
   if (now - mem.lastHurtAt <= p.underFireSec && mem.lastHurtBy !== null && mem.lastHurtAt >= t) {
@@ -42,14 +42,14 @@ export class Dodger {
   constructor(private readonly rng: () => number, readonly skill: DodgeSkill) {}
 
   /** Under fire long enough to have noticed it: the shooter's position, else null. */
-  threat(mem: Memory, now: number, p: BotParams): Vec3 | null {
+  threat(mem: Memory, now: number, p: BrainParams): Vec3 | null {
     const from = incomingFire(mem, now, p);
     if (!from) { this.fireSince = null; return null; }
     this.fireSince ??= now;
     return now - this.fireSince >= this.skill.notice ? from : null;
   }
 
-  juke(dir: Vec3 | null, me: PlayerState, from: Vec3, now: number, p: BotParams): { dir: Vec3; jump: boolean } {
+  juke(dir: Vec3 | null, me: PlayerState, from: Vec3, now: number, p: BrainParams): { dir: Vec3; jump: boolean } {
     if (now >= this.flipAt) {
       // Mostly alternate (a human rhythm), sometimes double back the same way.
       if (this.rng() >= 0.25 * this.skill.jitter) this.sign = -this.sign;

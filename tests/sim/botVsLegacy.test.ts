@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Bot } from '../../src/sim/bots/bot';
-import { DEFAULT_PARAMS, HAND_PARAMS } from '../../src/sim/bots/params';
+import { DEFAULT_BOT_PARAMS, HAND_BOT_PARAMS } from '../../src/sim/bots/params';
 import { LIFECYCLE } from '../../src/sim/constants';
 import { Match } from '../../src/sim/match';
 import type { Snapshot } from '../../src/sim/types';
@@ -39,7 +39,7 @@ describe.runIf(env.SHIP_CHECK)('trained champion wins by sealing', () => {
     for (let seed = 1; seed <= 20; seed++) {
       const champSeat = seed % 2 ? 1 : 2;
       const m = await Match.create({ players: [{ name: '', isBot: true, difficulty: 'pro' }, { name: '', isBot: true, difficulty: 'pro' }], seed }, {
-        makeBot: (id, d, rng) => new Bot(id, d, rng, undefined, id === champSeat ? DEFAULT_PARAMS : HAND_PARAMS),
+        makeBot: (id, d, rng) => new Bot(id, d, rng, undefined, id === champSeat ? DEFAULT_BOT_PARAMS : HAND_BOT_PARAMS),
       });
       let snap: Snapshot = m.tick(new Map());
       let sealedByChamp = false;

@@ -8,12 +8,12 @@ import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import type { Placement } from '../sim/building';
 import { BuildAim, type AimOutcome } from './buildAim';
-import { DT, HEAD, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
+import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
-import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { errors, installErrorReporting } from './telemetry/errors';
@@ -27,6 +27,9 @@ import { InputController } from './input';
 import { ACTIONS, activeKeymap, bindingLabel, isAction, type Action } from './keymap';
 import { loadingScreen as loadingOverlay } from './loading';
 import { LobbyUi, MapPicker } from './lobbyUi';
+import { GameSettingsPanel } from './gameSettingsUi';
+import { sanitizeSettings } from '../net/sanitize';
+import type { GameSettings } from '../sim/settings';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom, type SpectateResult } from './session';
 import { HELP_TEXT, HOST_ONLY, MONEY_HOST_ONLY, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven, parseCommand, unknownCommand } from './commands';
@@ -141,6 +144,10 @@ type Backend = {
     /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
     time(t: number): void; strike(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
+    /** Place one piece (rules skipped) on the ground at (x, z) + `up` m, owned by `owner` (default: nobody). */
+    place(kind: PieceKind, x: number, z: number, rotY: number, up?: number, owner?: number): void;
+    /** Detonate a rocket / grenade / charge at (x, ground + up, z). */
+    explode(kind: 'rocket' | 'grenade' | 'charge', x: number, z: number, up?: number): void;
     plugDoor(door: number, owner: number): void; removePiece(id: number): void; genStored(stored: number): void;
   };
 };
@@ -209,6 +216,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       time: (t) => send({ type: 'debug', cmd: 'time', t }),
       strike: (x, z) => send({ type: 'debug', cmd: 'strike', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
+      place: (kind, x, z, rotY, up = 0, owner = 0) => send({ type: 'debug', cmd: 'place', kind, x, z, rotY, up, owner }),
+      explode: (kind, x, z, up = 0) => send({ type: 'debug', cmd: 'explode', kind, x, z, up }),
       plugDoor: (door, owner) => send({ type: 'debug', cmd: 'plugDoor', door, owner }),
       removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
       genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
@@ -347,6 +356,20 @@ function showMenu() {
   const mapRow = document.createElement('div');
   mapRow.className = 'map-row';
   mapRow.append('Map', mapSel.root);
+  // Game settings for vs-bot matches (same panel and remembered values as the host's lobby). Hidden behind a toggle.
+  const soloSettings = new GameSettingsPanel(loadPrefs().settings, (st) => savePrefs({ settings: st }), 'menu-settings');
+  soloSettings.root.hidden = true;
+  const settingsToggle = document.createElement('button');
+  settingsToggle.type = 'button';
+  settingsToggle.className = 'btn small toggle gs-toggle';
+  settingsToggle.textContent = 'Game settings';
+  settingsToggle.dataset.testid = 'menu-settings-toggle';
+  settingsToggle.setAttribute('aria-pressed', 'false');
+  settingsToggle.onclick = () => {
+    soloSettings.root.hidden = !soloSettings.root.hidden;
+    settingsToggle.classList.toggle('selected', !soloSettings.root.hidden);
+    settingsToggle.setAttribute('aria-pressed', String(!soloSettings.root.hidden));
+  };
   for (const d of ['easy', 'medium', 'hard', 'pro'] as Difficulty[]) {
     const b = document.createElement('button');
     b.className = `btn${d === 'medium' ? ' primary' : ''}`;
@@ -356,7 +379,7 @@ function showMenu() {
       lockMenu();
       const choice = mapSel.value as MapChoice;
       status.textContent = choice === 'random' ? 'Loading…' : `Loading ${MAP_NAMES[choice]}…`;
-      playSolo(d, choice, menu, bots.count()).catch((err) => {
+      playSolo(d, choice, menu, bots.count(), soloSettings.value).catch((err) => {
         console.error('[main] failed to start', err);
         status.textContent = `Failed to start: ${err?.message ?? err}`;
       });
@@ -448,7 +471,7 @@ function showMenu() {
   replaysBtn.onclick = () => { menu.remove(); openReplays(); };
   menuBtns.append(howBtn, settingsButton(), replaysBtn);
   rememberDifficulty(play);
-  card.append(mapRow, play, bots.root, online, status, menuBtns, keys);
+  card.append(mapRow, play, bots.root, settingsToggle, soloSettings.root, online, status, menuBtns, keys);
   menu.append(card);
   app.append(menu);
   if (!currentIsChromium()) menu.append(chromeBanner());
@@ -500,14 +523,14 @@ function loadingScreen(text: string): HTMLElement {
 }
 
 /** Vs `bots` opponents (1-7) on the chosen map (Random: a different map than the last one played). Play again keeps difficulty, map choice and bot count. */
-async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bots = 1) {
+async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bots = 1, settings: GameSettings = loadPrefs().settings) {
   const map = resolveMapChoice(choice, lastBotMap);
   lastBotMap = map;
   const urlBots = DEBUG ? Number(new URLSearchParams(location.search).get('bots')) : 0;
   const backend = workerBackend(() => ({
     // ?debug=1&bots=N (1-7) overrides the menu's bot count (perf testing)
     setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: Math.min(7, Math.max(1, urlBots || bots)) },
-      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map },
+      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map, settings: sanitizeSettings(settings) },
     humanId: 1,
   }), null);
   let game: Game | null = null;
@@ -534,7 +557,7 @@ async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bot
       kind: 'solo',
       playAgain: () => {
         game?.destroy();
-        playSolo(d, choice, loadingScreen('Starting a new match…'), bots).catch((err) => {
+        playSolo(d, choice, loadingScreen('Starting a new match…'), bots, settings).catch((err) => {
           console.error('[main] play again failed', err);
           toast(`Could not restart: ${err?.message ?? err}`);
         });
@@ -552,7 +575,7 @@ function showJoinError(menu: HTMLElement, message: string) {
 async function hostLobby(name: string, menu: HTMLElement) {
   let ui: LobbyUi | null = null;
   const session = await HostSession.create(pickTransport(location.search), name, {
-    lobby: (slots, map) => ui?.render(slots, 0, map),
+    lobby: (slots, map, settings) => ui?.render(slots, 0, map, settings),
     chat: (from, text) => { chat?.add(from, text); ui?.addChat(from, text); },
     net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; },
   });
@@ -595,6 +618,8 @@ async function hostLobby(name: string, menu: HTMLElement) {
     removeSeat: (i) => session.removeSeat(i),
     kick: (i) => session.kick(i),
     setMap: (c) => { session.setMap(c); localStorage.setItem(MAP_KEY, c); },
+    setColor: (c) => { session.setColor(0, c); savePrefs({ color: c }); },
+    setSettings: (st) => { session.setSettings(st); savePrefs({ settings: session.settings }); },
     start: () => { savePrefs({ seats: seatPrefsOf(session.lobby.slots()) }); launch((w) => session.start(w), ui!.root); },
     back: () => location.reload(),
   }, () => location.reload(), (text) => {
@@ -605,6 +630,8 @@ async function hostLobby(name: string, menu: HTMLElement) {
     else ui!.addChat('', c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
   });
   session.setMap(storedMapChoice());
+  // The host's last game settings and colour.
+  { const p = loadPrefs(); session.setSettings(p.settings); if (p.color !== null) session.setColor(0, p.color); }
   addInviteButton(ui.root, session.code);
   console.info(`[host] room ${session.code} open`);
 }
@@ -619,8 +646,13 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     const c = parseCommand(text);
     if (!c) link.send({ t: 'chat', text });
     else ui.addChat('', c.kind === 'spectate' ? HOST_ONLY : c.kind === 'money' ? MONEY_HOST_ONLY : c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
+  }, {
+    setReady: (ready) => link.send({ t: 'ready', ready }),
+    setColor: (color) => { link.send({ t: 'color', color }); savePrefs({ color }); },
   });
-  ui.render(lobby.slots, lobby.you, lobby.map);
+  ui.render(lobby.slots, lobby.you, lobby.map, sanitizeSettings(lobby.settings));
+  // Ask for the colour this player picked last time (the host refuses it if someone else has it).
+  { const c = loadPrefs().color; if (c !== null) link.send({ t: 'color', color: c }); }
   addInviteButton(ui.root, code);
   let slots = lobby.slots;
   let phase: 'lobby' | 'starting' | 'game' | 'over' = 'lobby';
@@ -651,10 +683,10 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     if (phase === 'game') {
       // The game's backend handles everything else; the host restarting or returning to the lobby is ours.
       if (m.t === 'start') { game?.destroy(); game = null; launch(m, loadingScreen('Host started a rematch…')); }
-      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; app.append(ui.root); ui.render(m.slots, m.you, m.map); }
+      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; app.append(ui.root); ui.render(m.slots, m.you, m.map, sanitizeSettings(m.settings)); }
       return;
     }
-    if (m.t === 'lobby') { slots = m.slots; ui.render(m.slots, m.you, m.map); }
+    if (m.t === 'lobby') { slots = m.slots; ui.render(m.slots, m.you, m.map, sanitizeSettings(m.settings)); }
     else if (m.t === 'chat') ui.addChat(m.from, m.text);
     else if (m.t === 'ended') { phase = 'over'; ui.error(m.reason === 'host-left' ? 'The host closed the lobby.' : `Removed from lobby (${m.reason}).`); }
     else if (m.t === 'start') { ui.loading(m.map.name); launch(m, ui.root); }
@@ -1179,6 +1211,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       import('./predict').then(({ Predictor: P }) => P.create(def, id)).then((p) => { predictor = p; },
         (err) => console.error('[predict] could not start; falling back to server positions', err));
       hud.setMap(map, humanId, island, def.center);
+      hud.suddenDeathAt = def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt;
+      hud.genMult = def.settings?.genMult ?? 1;
       qol.setMap(map, humanId, island);
       audio.setMap(map, humanId);
     },
@@ -1246,6 +1280,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         selfVisible: renderer.characters.hiddenId !== humanId &&
           !!(renderer.characters as unknown as { avatars: Map<number, { group: Object3D }> }).avatars.get(humanId)?.group.visible,
       }),
+      /** Free-fly camera position while spectating (offline map thumbnails: tests/visual/mapThumbs.mjs). */
+      spectateAt: (x: number, y: number, z: number) => { spectator.pos.set(x, y, z); },
       scoreboard: () => scoreboard.visible,
       /** Loot on the ground as drawn: label lines, label shown, model count. */
       loot: () => renderer.lootView.info(),
@@ -1259,6 +1295,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       gpuMs: () => renderer.gpuStats(),
       renderScale: () => ({ dyn: governor.knobs.res, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: governor.smoothedMs }),
       pbr: () => pbrStats,
+      /** Input→render latency probe: synthetic look events (no pointer lock needed), then stats. */
+      latency: () => latency.stats(),
+      resetLatency: () => { latency.cpu.length = 0; latency.gpu.length = 0; },
+      lookProbe: (on: boolean) => { input.debugLocked = on; },
       governor: () => ({ level: governor.level, knobs: governor.knobs, enabled: governor.enabled, lodTargets: lods.count, lodScale: lods.scale }),
       interpDelay: () => renderer.interpDelay,
       shotPredict: () => ({ ...shots.stats, inFlight: shots.inFlight, times: shotTimes }),
@@ -1337,6 +1377,24 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     };
   };
   const workMs: number[] = [];
+  /**
+   * Input → render latency (mouse look): from the oldest undrawn look event to (a) the frame's draw submission
+   * (CPU) and (b) the GPU finishing that frame (queue.onSubmittedWorkDone). Display scan-out comes on top.
+   */
+  const latency = {
+    cpu: [] as number[], gpu: [] as number[],
+    drawn(t0: number) {
+      const cpu = performance.now() - t0;
+      this.cpu.push(cpu); if (this.cpu.length > 300) this.cpu.shift();
+      const dev = (renderer.gpu.backend as { device?: { queue: { onSubmittedWorkDone(): Promise<void> } } }).device;
+      dev?.queue.onSubmittedWorkDone().then(() => { this.gpu.push(performance.now() - t0); if (this.gpu.length > 300) this.gpu.shift(); }, () => {});
+    },
+    stats() {
+      const q = (xs: number[], k: number) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * k))] ?? 0; };
+      const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
+      return { n: this.cpu.length, cpuAvg: avg(this.cpu), cpuP95: q(this.cpu, 0.95), gpuAvg: avg(this.gpu), gpuP95: q(this.gpu, 0.95) };
+    },
+  };
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
   const frame = () => {
@@ -1491,10 +1549,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       warmLoop.before?.();
       renderer.render(input.yaw);
       fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+      renderer.captureInfo();
+      if (input.lookEventT !== null) { latency.drawn(input.lookEventT); input.lookEventT = null; }
       if (warmLoop.left > 0 && --warmLoop.left === 0) { warmLoop.before = null; warmLoop.done?.(); }
     }
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());
+    audio.fires(renderer.world.fire.burning());
     if (warmed && !revealed) {
       framesAfterWarm++;
       loading.progress('frames', framesAfterWarm / WARM_FRAMES);

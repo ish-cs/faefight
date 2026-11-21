@@ -4,13 +4,13 @@
  */
 import { LIFECYCLE, TICK_HZ } from '../../src/sim/constants';
 import { Bot } from '../../src/sim/bots/bot';
-import { sanitize, type BotParams } from '../../src/sim/bots/params';
+import { sanitize, toBotParams, type FlatParams } from '../../src/sim/bots/params';
 import { Match, type BotBrain } from '../../src/sim/match';
 import type { Difficulty, Snapshot } from '../../src/sim/types';
 import { Bot as LegacyBot } from '../../tests/fixtures/legacyBots/bot';
 
 /** A seat: the current bot with some params, or the frozen pre-training bot. */
-export type SeatSpec = { kind: 'new'; params: BotParams; difficulty: Difficulty } | { kind: 'legacy'; difficulty: Difficulty };
+export type SeatSpec = { kind: 'new'; params: FlatParams; difficulty: Difficulty } | { kind: 'legacy'; difficulty: Difficulty };
 export type MatchSpec = {
   seed: number; seats: SeatSpec[]; maxSec: number;
   /** Start from a mined scenario (replay pipeline) instead of a fresh match; see hooks.ts. */
@@ -68,7 +68,7 @@ export type MatchResult = {
 
 export function makeBrain(spec: SeatSpec, id: number, rng: () => number): BotBrain {
   if (spec.kind === 'legacy') return new LegacyBot(id, spec.difficulty, rng);
-  return new Bot(id, spec.difficulty, rng, undefined, sanitize(spec.params));
+  return new Bot(id, spec.difficulty, rng, undefined, toBotParams(sanitize(spec.params)));
 }
 
 export async function runMatch(spec: MatchSpec): Promise<MatchResult> {

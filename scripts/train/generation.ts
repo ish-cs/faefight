@@ -3,7 +3,7 @@
  * earlier champions from the hall of fame, and the frozen pre-training bot), score, and step the optimizer.
  * Everyone plays at PRO skill so fitness measures strategy, not aim luck.
  */
-import { decode, encode, type BotParams } from '../../src/sim/bots/params';
+import { decode, encode, type FlatParams } from '../../src/sim/bots/params';
 import { mulberry32, sample, update, type EsConfig, type EsState } from './es';
 import { imitationPenalty, seatStats, type HumanTarget } from './hooks';
 import { seatFitness, type MatchResult, type MatchSpec, type SeatSpec } from './runMatch';
@@ -54,8 +54,8 @@ function shuffle<T>(a: T[], rng: () => number): T[] {
 }
 
 export async function runGeneration(
-  st: EsState, champion: BotParams, hall: BotParams[], cfg: TrainConfig, run: Runner,
-): Promise<{ next: EsState; stats: GenStats; candidates: BotParams[]; fitness: number[] }> {
+  st: EsState, champion: FlatParams, hall: FlatParams[], cfg: TrainConfig, run: Runner,
+): Promise<{ next: EsState; stats: GenStats; candidates: FlatParams[]; fitness: number[] }> {
   const rng = mulberry32(cfg.seed * 7919 + st.gen * 104729);
   const xs = sample(st, rng, cfg.es);
   const cands = xs.map(decode);

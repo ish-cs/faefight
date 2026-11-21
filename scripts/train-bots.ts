@@ -1,6 +1,6 @@
 /// <reference types="node" />
 /**
- * Self-play training for the bots' strategy/tactics weights (BotParams).
+ * Self-play training for the bots' strategy/tactics weights (FlatParams).
  *
  *   npx tsx scripts/train-bots.ts [--minutes 60] [--workers N] [--lambda 14] [--games 5] [--max-sec 1080]
  *                                 [--seed 1] [--duels 2] [--duel-weight 1.5] [--eval-every 5] [--eval-games 28] [--resume] [--dir .train]
@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_PARAMS, HAND_PARAMS, PARAM_KEYS, decode, encode, sanitize, type BotParams } from '../src/sim/bots/params';
+import { DEFAULT_PARAMS, HAND_PARAMS, PARAM_KEYS, decode, encode, sanitize, type FlatParams } from '../src/sim/bots/params';
 import { DEFAULT_ES, initEs, type EsState } from './train/es';
 import { headToHead, runGeneration, type TrainConfig } from './train/generation';
 import { loadHumanTarget, loadRecorder } from './train/hooks';
@@ -69,7 +69,7 @@ if (flag('resume') && fs.existsSync(statePath)) {
   fs.writeFileSync(logPath, '');
 }
 
-function writeChampion(p: BotParams, note: string) {
+function writeChampion(p: FlatParams, note: string) {
   const out = { note, trainedAt: new Date().toISOString(), generations: saved.es.gen, games: saved.games, evals: saved.evals.slice(-12), params: p };
   fs.writeFileSync(TRAINED, JSON.stringify(out, null, 2) + '\n');
 }
