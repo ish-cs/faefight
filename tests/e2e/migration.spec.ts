@@ -59,8 +59,10 @@ test('host leaves mid-match: a guest takes over, the other follows; seats, posit
   await a.getByTestId('seat-slider-3').locator('.stop-easy').click();
   await a.getByTestId('start-match').click();
   for (const p of [a, b, c]) await expect.poll(async () => (await snapOf(p))?.players.length ?? 0, { timeout: 45_000 }).toBe(4);
-  const bId = await dbg<number>(b, 'humanId'), cId = await dbg<number>(c, 'humanId');
-  expect([bId, cId]).toEqual([2, 3]);
+  // The debug API can lag the first snapshot by a frame: poll for each guest's player id.
+  await expect.poll(() => dbg<number | null>(b, 'humanId'), { timeout: 10_000 }).toBe(2);
+  await expect.poll(() => dbg<number | null>(c, 'humanId'), { timeout: 10_000 }).toBe(3);
+  const bId = 2, cId = 3;
 
   // Cash for both guests via the host's debug channel, then wait for a checkpoint that includes it.
   await dbg(a, 'give', { cash: 777 }, bId);
