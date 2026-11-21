@@ -9,18 +9,22 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-const LOCK = '/tmp/faefight-heavy.lock';
 const here = dirname(fileURLToPath(import.meta.url));
 const [out, ...specs] = process.argv.slice(2);
 if (!out || !specs.length) { console.error('usage: perfAB.mjs <out> "<label>|<dir>|<port>|<args>" …'); process.exit(2); }
 writeFileSync(out, '');
 const log = (s) => appendFileSync(out, s + '\n');
 
-for (;;) {
-  try { mkdirSync(LOCK); break; } catch {
-    try { if (Date.now() - statSync(LOCK).mtimeMs > 25 * 60_000) { console.warn('stale lock removed'); rmdirSync(LOCK); continue; } } catch { /* gone */ }
-    await sleep(20_000);
+// two machine-wide heavy slots (scratchpad heavy.sh): take whichever is free; 15-min-old slots are stale
+const SLOTS = ['/tmp/faefight-heavy.lock', '/tmp/faefight-heavy2.lock'];
+let LOCK = '';
+while (!LOCK) {
+  for (const s of SLOTS) {
+    try { mkdirSync(s); LOCK = s; break; } catch {
+      try { if (Date.now() - statSync(s).mtimeMs > 15 * 60_000 && spawnSync('pgrep', ['-f', 'playwright test|vitest|chrome-headless']).status !== 0) { console.warn(`stale slot ${s} removed`); rmdirSync(s); } } catch { /* gone */ }
+    }
   }
+  if (!LOCK) await sleep(15_000);
 }
 log(`lock ${new Date().toISOString()}`);
 const servers = new Map();

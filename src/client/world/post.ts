@@ -34,7 +34,7 @@ export const grade = {
  */
 export function buildPipeline(
   gpu: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera, o: PostOptions, ambientOcclusion?: THREE.Node<'float'>,
-): { pipe: THREE.RenderPipeline; scenePass: THREE.PassNode } {
+): { pipe: THREE.RenderPipeline; scenePass: THREE.PassNode; aoPass: { resolutionScale: number } | null } {
   const pipe = new THREE.RenderPipeline(gpu);
   pipe.outputColorTransform = false; // tone map + sRGB ourselves so the grade runs in display space
 
@@ -47,9 +47,10 @@ export function buildPipeline(
   if (Object.keys(targets).length > 1) scenePass.setMRT(mrt(targets));
   const col = scenePass.getTextureNode('output');
 
+  let aoPass: ReturnType<typeof ao> | null = null;
   let hdr = col.rgb;
   if (o.ao) {
-    const aoPass = ao(scenePass.getTextureNode('depth'), scenePass.getTextureNode('normal'), camera);
+    aoPass = ao(scenePass.getTextureNode('depth'), scenePass.getTextureNode('normal'), camera);
     aoPass.resolutionScale = o.ao.resolution;
     aoPass.samples.value = o.ao.samples;
     // ~1.1 m reach: crate/drum/container feet, wall bases and characters get a contact shadow; a lower thickness
@@ -111,5 +112,5 @@ export function buildPipeline(
   c = c.mul(vig);
   if (flare) c = c.add(flare);
   pipe.outputNode = c;
-  return { pipe, scenePass }; // the scene pass: the warm-up compiles world materials for its exact target/MRT
+  return { pipe, scenePass, aoPass }; // the scene pass: the warm-up compiles world materials for its exact target/MRT
 }

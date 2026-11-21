@@ -150,31 +150,29 @@ export class SkyLighting {
     }
 
     this.pipeline?.dispose();
-    const built = buildPipeline(this.gpu, this.scene, this.camera, this.postOptions(), this.interiorAO);
+    const built = buildPipeline(this.gpu, this.scene, this.camera, PRESETS[this.quality].post, this.interiorAO);
     this.pipeline = built.pipe;
     this.scenePass = built.scenePass;
+    this.aoPass = built.aoPass;
+    this.applyAoBudget();
+  }
+  private aoPass: { resolutionScale: number } | null = null;
+  /** GTAO budget: the governor's cheap mode renders AO at 60 % of the preset's resolution (live, no recompile). */
+  private applyAoBudget() {
+    const ao = PRESETS[this.quality].post.ao;
+    if (this.aoPass && ao) this.aoPass.resolutionScale = ao.resolution * (this.govAo ? 1 : 0.6);
   }
 
-  /** The preset's post chain minus whatever the frame-time governor has switched off. */
-  private postOptions(): PostOptions {
-    const p = PRESETS[this.quality].post;
-    return this.govAo ? p : { ...p, ao: false };
-  }
   private govAo = true;
   private govShadow = 1;
 
   /**
-   * Frame-time governor knobs (governor.ts): GTAO on/off (rebuilds the post pipeline) and a shadow-map size
-   * multiplier (applied live to every cascade).
+   * Frame-time governor knobs (governor.ts): GTAO full / cheap (resolution, live) and a shadow-map size multiplier
+   * (applied live to every cascade). Neither recompiles a shader.
    */
   setGovernor(k: { ao: boolean; shadowScale: number }) {
-    if (k.ao !== this.govAo) {
-      this.govAo = k.ao;
-      this.pipeline?.dispose();
-      const built = buildPipeline(this.gpu, this.scene, this.camera, this.postOptions(), this.interiorAO);
-      this.pipeline = built.pipe;
-      this.scenePass = built.scenePass;
-    }
+    // never rebuild the post chain here (a mid-match shader compile is a 100+ ms hitch): AO only gets cheaper
+    if (k.ao !== this.govAo) { this.govAo = k.ao; this.applyAoBudget(); }
     if (k.shadowScale !== this.govShadow) {
       this.govShadow = k.shadowScale;
       const size = Math.round(PRESETS[this.quality].shadow.mapSize * k.shadowScale);
@@ -219,7 +217,15 @@ export class SkyLighting {
   readonly shadowCacheStats = { skipped: 0, rendered: 0 };
   private cacheFarCascades(lights: { shadow?: THREE.LightShadow | null }[], near: number) {
     if (!this.shadowCacheEnabled) { for (const l of lights) l.shadow!.autoUpdate = true; return; }
-    if (!this.shadowCache || this.shadowCache.age.length !== lights.length) this.shadowCache = newCacheState(lights.length);
+    if (!this.shadowCache || this.shadowCache.age.length !== lights.length) {
+      // new / resized cascades: their maps hold nothing yet, so draw every one now (never sample an empty map)
+      this.shadowCache = newCacheState(lights.length);
+      for (const l of lights) { l.shadow!.autoUpdate = true; }
+      for (let i = near; i < lights.length; i++) this.shadowCache.age[i] = 0, this.shadowCache.dirty[i] = false;
+      this.cacheAnchor.pos.copy(this.camera.position);
+      this.camera.getWorldDirection(this.cacheAnchor.dir);
+      return;
+    }
     const a = this.cacheAnchor, cam = this.camera;
     cam.getWorldDirection(a.tmp);
     const moved = cam.position.distanceTo(a.pos) > SHADOW_CACHE.moveM || a.tmp.angleTo(a.dir) > SHADOW_CACHE.turnRad;
