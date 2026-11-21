@@ -9,6 +9,10 @@ name: bot-measure
 # copied into the checkout of `ref`, so any ref can be measured, including ones older than this workflow.
 
 on:
+  # Registration only: GitHub can dispatch a workflow by --ref only once it has run at least once. A push that
+  # edits this file creates a no-op run (every job is skipped on push), which registers it from a feature branch.
+  push:
+    paths: [.github/workflows/bot-measure.yml]
   workflow_dispatch:
     inputs:
       ref:
@@ -52,6 +56,7 @@ permissions:
 
 jobs:
   plan:
+    if: ${{ github.event_name != 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
