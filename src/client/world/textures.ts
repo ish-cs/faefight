@@ -256,11 +256,11 @@ export function islandSurface(R: number, d: IslandDecor) {
         g.filter = 'blur(6px)';
         g.strokeStyle = 'rgba(52,70,30,0.55)'; g.lineWidth = 0.35 * s;
         g.strokeRect(P(-half), P(cz - half), 2 * half * s, 2 * half * s);
-        g.filter = 'blur(2px)';
+        g.filter = 'none'; // per-draw blur on a 2048² canvas is very slow (260 blurred dots cost seconds at upload)
         for (let k = 0; k < 260; k++) {
           const side = Math.floor(rnd() * 4), t = rr(-half, half), o = half + rr(0, 0.28);
           const [x, z] = side === 0 ? [t, cz - o] : side === 1 ? [t, cz + o] : side === 2 ? [-o, cz + t] : [o, cz + t];
-          g.fillStyle = `rgba(${rr(40, 70) | 0},${rr(70, 95) | 0},${rr(24, 40) | 0},${rr(0.3, 0.7)})`;
+          g.fillStyle = `rgba(${rr(40, 70) | 0},${rr(70, 95) | 0},${rr(24, 40) | 0},${rr(0.15, 0.4)})`;
           g.beginPath(); g.arc(P(x), P(z), rr(1, 4), 0, 7); g.fill();
         }
         g.restore();

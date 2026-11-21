@@ -57,15 +57,11 @@ export class Scatter {
         const n = geo.getAttribute('position').count;
         geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(n * 3).fill(1), 3));
       }
-      const centers = new Float32Array(k.items.length * 3);
-      k.items.forEach((it, i) => centers.set([it.p.x, it.p.y, it.p.z], i * 3));
-      geo.setAttribute('scCenter', new THREE.InstancedBufferAttribute(centers, 3));
-      const mat = k.material.clone() as THREE.MeshStandardNodeMaterial;
-      mat.name = `scatter:${key}`;
-      const c = attribute('scCenter', 'vec3');
-      const d = c.xz.sub(cameraPosition.xz).length();
-      const keep = float(1).sub(smoothstep(k.far * 0.7, k.far, d));
-      mat.positionNode = c.add(positionLocal.sub(c).mul(keep));
+      // centre + cull distance per instance, so every kind on the same base material shares one pipeline
+      const centers = new Float32Array(k.items.length * 4);
+      k.items.forEach((it, i) => centers.set([it.p.x, it.p.y, it.p.z, k.far], i * 4));
+      geo.setAttribute('scCenter', new THREE.InstancedBufferAttribute(centers, 4));
+      const mat = this.materialFor(k.material);
       const mesh = new THREE.InstancedMesh(geo, mat, k.items.length);
       k.items.forEach((it, i) => { mesh.setMatrixAt(i, it.m); mesh.setColorAt(i, it.c); });
       mesh.instanceMatrix.needsUpdate = true;
@@ -80,6 +76,22 @@ export class Scatter {
     }
     this.applyQuality();
     console.info(`[world/scatter] ${total} instances in ${this.root.children.length} kinds`);
+  }
+
+  private shared = new Map<THREE.Material, THREE.MeshStandardNodeMaterial>();
+  /** One distance-shrinking clone per base material. */
+  private materialFor(base: THREE.MeshStandardNodeMaterial) {
+    let m = this.shared.get(base);
+    if (m) return m;
+    m = base.clone() as THREE.MeshStandardNodeMaterial;
+    m.name = `scatter:${base.name}`;
+    const c4 = attribute('scCenter', 'vec4');
+    const c = c4.xyz;
+    const d = c.xz.sub(cameraPosition.xz).length();
+    const keep = float(1).sub(smoothstep(c4.w.mul(0.7), c4.w, d));
+    m.positionNode = c.add(positionLocal.sub(c).mul(keep));
+    this.shared.set(base, m);
+    return m;
   }
 
   setQuality(q: Quality) {

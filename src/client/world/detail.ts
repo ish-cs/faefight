@@ -50,6 +50,10 @@ function jitterGeo(g: THREE.BufferGeometry, amt: number, seed: number) {
 
 export function defineDetailKinds(sc: Scatter) {
   const M = mats();
+  // few base materials → few pipelines (instance colours tint them)
+  const matte = std('scatterMatte', { roughness: 0.92, color: 0xffffff, polygonOffset: true, polygonOffsetFactor: -1 });
+  const matte2 = std('scatterMatte2', { roughness: 0.5, color: 0xffffff, side: THREE.DoubleSide });
+  const shiny = std('scatterShiny', { roughness: 0.12, metalness: 0.35, color: 0xffffff });
   const all = (low: number, high: number, ultra = 1) => ({ low, high, ultra });
   const pebble = jitterGeo(new THREE.IcosahedronGeometry(1, 0), 0.25, 3);
   pebble.scale(1, 0.55, 1);
@@ -57,27 +61,27 @@ export function defineDetailKinds(sc: Scatter) {
   sc.define('rubble', { geo: jitterGeo(new THREE.BoxGeometry(1, 0.7, 0.8, 1, 1, 1).toNonIndexed(), 0.18, 7), material: M.concrete, far: 45, density: all(0.35, 0.8), cast: true });
   // bottle: body + shoulder + neck (lathe), lying or standing
   const bottle = new THREE.LatheGeometry([0, 0.033, 0.035, 0.035, 0.03, 0.014, 0.013, 0.015, 0].map((r, i) => new THREE.Vector2(r, [0, 0, 0.005, 0.15, 0.18, 0.21, 0.26, 0.265, 0.265][i])), 8);
-  sc.define('bottle', { geo: bottle, material: std('glass', { roughness: 0.06, metalness: 0.1, color: 0xffffff }), far: 22, density: all(0, 0.7) });
-  sc.define('can', { geo: new THREE.CylinderGeometry(0.033, 0.033, 0.12, 10).translate(0, 0.06, 0), material: std('can', { roughness: 0.3, metalness: 0.8 }), far: 20, density: all(0, 0.7) });
+  sc.define('bottle', { geo: bottle, material: shiny, far: 22, density: all(0, 0.7) });
+  sc.define('can', { geo: new THREE.CylinderGeometry(0.033, 0.033, 0.12, 10).translate(0, 0.06, 0), material: shiny, far: 20, density: all(0, 0.7) });
   const card = new THREE.BoxGeometry(0.6, 0.015, 0.45, 3, 1, 3).translate(0, 0.008, 0);
   {
     const p = card.getAttribute('position');
     for (let i = 0; i < p.count; i++) p.setY(i, p.getY(i) + Math.sin(p.getX(i) * 7) * 0.012 + Math.cos(p.getZ(i) * 9) * 0.008);
     card.computeVertexNormals();
   }
-  sc.define('cardboard', { geo: card, material: std('cardboard', { roughness: 0.95, color: 0xffffff }), far: 35, density: all(0.2, 0.8) });
-  sc.define('box', { geo: new THREE.BoxGeometry(0.45, 0.35, 0.4).translate(0, 0.175, 0), material: std('cardbox', { roughness: 0.92, color: 0xffffff }), far: 45, density: all(0.3, 0.9), cast: true });
+  sc.define('cardboard', { geo: card, material: matte, far: 35, density: all(0.2, 0.8) });
+  sc.define('box', { geo: new THREE.BoxGeometry(0.45, 0.35, 0.4).translate(0, 0.175, 0), material: matte, far: 45, density: all(0.3, 0.9), cast: true });
   const shell = new THREE.SphereGeometry(1, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.4, 1.25);
-  sc.define('shell', { geo: shell, material: std('shell', { roughness: 0.45, color: 0xffffff }), far: 16, density: all(0, 0.6) });
+  sc.define('shell', { geo: shell, material: matte, far: 16, density: all(0, 0.6) });
   const weed = new THREE.PlaneGeometry(0.08, 0.6, 1, 4).rotateX(-Math.PI / 2).translate(0, 0.012, 0);
   {
     const p = weed.getAttribute('position');
     for (let i = 0; i < p.count; i++) p.setX(i, p.getX(i) + Math.sin(p.getZ(i) * 9) * 0.05);
   }
-  sc.define('seaweed', { geo: weed, material: std('seaweed', { roughness: 0.35, color: 0xffffff, side: THREE.DoubleSide }), far: 30, density: all(0.3, 0.8) });
-  sc.define('footprint', { geo: new THREE.CircleGeometry(1, 10).rotateX(-Math.PI / 2).scale(0.055, 1, 0.13).translate(0, 0.006, 0), material: std('footprint', { roughness: 0.9, color: 0xffffff, polygonOffset: true, polygonOffsetFactor: -1 }), far: 25, density: all(0, 1) });
+  sc.define('seaweed', { geo: weed, material: matte2, far: 30, density: all(0.3, 0.8) });
+  sc.define('footprint', { geo: new THREE.CircleGeometry(1, 10).rotateX(-Math.PI / 2).scale(0.055, 1, 0.13).translate(0, 0.006, 0), material: matte, far: 25, density: all(0, 1) });
   const leaf = new THREE.PlaneGeometry(0.07, 0.04).rotateX(-Math.PI / 2).translate(0, 0.004, 0);
-  sc.define('leaf', { geo: leaf, material: std('leafLitter', { roughness: 0.9, color: 0xffffff, side: THREE.DoubleSide }), far: 18, density: all(0, 0.7) });
+  sc.define('leaf', { geo: leaf, material: matte2, far: 18, density: all(0, 0.7) });
 }
 
 // ---------------------------------------------------------------- island litter / rubble
@@ -253,13 +257,13 @@ export function dressHarbor(b: StaticBatch, atF: (x: number, y: number, z: numbe
       const a = Math.atan2(p.getZ(i), p.getX(i)), r = 1 + 0.25 * Math.sin(a * 3 + ph) + 0.1 * Math.sin(a * 5 + ph * 2);
       p.setXYZ(i, p.getX(i) * r, 0, p.getZ(i) * r);
     }
-    b.add(puddleMaterial(), g, atF(rng.rr(-hw + 4, hw - 4), top + 0.004, z0 + rng.rr(3, 12), rng.rr(0, 6)).multiply(mat(0, 0, 0, 0, 0, 0, rng.rr(0.6, 1.6), 1, rng.rr(0.4, 0.9))), 0xffffff, false, true);
+    b.add(puddleMaterial(), g, atF(rng.rr(-hw + 4, hw - 4), top + 0.004, z0 + rng.rr(3, 12), rng.rr(0, 6)).multiply(mat(0, 0, 0, 0, 0, 0, rng.rr(0.6, 1.6), 1, rng.rr(0.4, 0.9))), 0x3a3c3e, false, true);
   }
 }
 
 let puddleMat: THREE.MeshStandardNodeMaterial | null = null;
 function puddleMaterial() {
-  if (!puddleMat) puddleMat = std('puddle', { color: 0x15181a, roughness: 0.03, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2 });
+  if (!puddleMat) puddleMat = std('puddle', { color: 0x4a5258, vertexColors: true, roughness: 0.03, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2 });
   return puddleMat;
 }
 
@@ -307,15 +311,6 @@ function beachMaterial() {
   return m;
 }
 
-let poolMat: THREE.MeshStandardNodeMaterial | null = null;
-function tidePoolMaterial() {
-  if (poolMat) return poolMat;
-  const m = new THREE.MeshStandardNodeMaterial({ color: 0x0d2a2a, roughness: 0.02, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2 });
-  m.name = 'tidePool';
-  poolMat = m;
-  return m;
-}
-
 export function buildBeach(b: StaticBatch, sc: Scatter, atF: (x: number, y: number, z: number, ry?: number) => THREE.Matrix4, f: Frame, rng: Rng) {
   const { hw, z0 } = f;
   for (const [u0, u1] of BACKDROP_DECOR.beaches) {
@@ -344,7 +339,7 @@ export function buildBeach(b: StaticBatch, sc: Scatter, atF: (x: number, y: numb
       const x = rng.rr(-len / 2 + 3, len / 2 - 3), z = -depth / 2 + rng.rr(2.4, 3.4);
       const y = heightAt(x, z);
       const r = rng.rr(0.5, 0.9);
-      b.add(tidePoolMaterial(), new THREE.CircleGeometry(r, 16).rotateX(-Math.PI / 2).scale(1.3, 1, 1), at(B, mat(x, y + 0.03, z)), 0xffffff, false, true);
+      b.add(puddleMaterial(), new THREE.CircleGeometry(r, 16).rotateX(-Math.PI / 2).scale(1.3, 1, 1), at(B, mat(x, y + 0.03, z)), 0x2a6a66, false, true);
       for (let j = 0; j < 7; j++) {
         const a = (j / 7) * Math.PI * 2 + rng.rr(-0.3, 0.3), s = rng.rr(0.15, 0.35);
         b.add(M.rock, new THREE.IcosahedronGeometry(1, 1), at(B, mat(x + Math.cos(a) * r * 1.35, y + s * 0.2, z + Math.sin(a) * r, 0, rng.rr(0, 6), 0, s, s * 0.6, s)), new THREE.Color().setHSL(0.08, 0.1, rng.rr(0.6, 0.9)), true, true);
