@@ -64,6 +64,7 @@ export type DayLook = {
   twilight: number;
 };
 
+const lerp = (x: number, y: number, t: number) => x + (y - x) * t;
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 const smooth = (a: number, b: number, x: number) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
 const hexRgb = (h: number, out: Rgb): Rgb => { out[0] = ((h >> 16) & 255) / 255; out[1] = ((h >> 8) & 255) / 255; out[2] = (h & 255) / 255; return out; };
@@ -100,18 +101,17 @@ export function dayLook(phase: number, competitive = false, out: DayLook = newDa
   while (i < KEYS.length - 2 && p > KEYS[i + 1].p) i++;
   const a = KEYS[i], b = KEYS[i + 1];
   const t = clamp01((p - a.p) / (b.p - a.p));
-  const L = (x: number, y: number) => x + (y - x) * t;
-  out.sunElev = L(a.elev, b.elev);
-  out.sunAz = L(a.az, b.az);
-  out.light = L(a.light, b.light);
+  out.sunElev = lerp(a.elev, b.elev, t);
+  out.sunAz = lerp(a.az, b.az, t);
+  out.light = lerp(a.light, b.light, t);
   lerpHex(a.lightC, b.lightC, t, out.lightC);
-  out.skyGain = L(a.skyGain, b.skyGain);
-  out.skySat = L(a.skySat, b.skySat);
+  out.skyGain = lerp(a.skyGain, b.skyGain, t);
+  out.skySat = lerp(a.skySat, b.skySat, t);
   lerpHex(a.haze, b.haze, t, out.haze);
   lerpHex(a.hazeSun, b.hazeSun, t, out.hazeSun);
-  out.density = L(a.density, b.density);
-  out.env = L(a.env, b.env);
-  out.exposure = L(a.exposure, b.exposure);
+  out.density = lerp(a.density, b.density, t);
+  out.env = lerp(a.env, b.env, t);
+  out.exposure = lerp(a.exposure, b.exposure, t);
   out.lamps = smooth(DAY_CYCLE.lampsOn[0], DAY_CYCLE.lampsOn[1], p);
   out.night = smooth(DAY_CYCLE.nightIn[0], DAY_CYCLE.nightIn[1], p);
   out.twilight = smooth(DAY_CYCLE.twilightIn[0], DAY_CYCLE.twilightIn[1], p) * (1 - smooth(DAY_CYCLE.twilightOut[0], DAY_CYCLE.twilightOut[1], p));

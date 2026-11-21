@@ -15,7 +15,7 @@ const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e)));
 await page.addInitScript((q) => {
-  try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q.q, dynamicResolution: false, competitive: q.c } })); } catch { /* fresh profile */ }
+  try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q.q, dynamicResolution: false, competitive: q.c }, onboarding: { howToSeen: true } })); } catch { /* fresh profile */ }
 }, { q: quality, c: competitive });
 await page.goto(`${url}/?debug=1&bots=1`);
 await page.getByTestId('play-easy').click();
