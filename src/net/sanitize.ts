@@ -2,6 +2,7 @@ import type { MoveCmd } from '../sim/movement';
 import { PIECES, WEAPONS } from '../sim/constants';
 import { POTION_KINDS, validSlot } from '../sim/hotbar';
 import type { BuildRequest, GunKind, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
+import { clampSettings, isColor, type GameSettings } from '../sim/settings';
 import { CHAT_MAX_LEN, type ClientMsg } from './protocol';
 
 // Everything from a remote peer is untrusted: rebuild each message field by field from known shapes.
@@ -182,10 +183,22 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
       const req = buildReq(x.req);
       return req && Number.isInteger(x.key) ? { t: 'preview', req, key: x.key as number } : null;
     }
+    case 'ready':
+      return typeof x.ready === 'boolean' ? { t: 'ready', ready: x.ready } : null;
+    case 'color':
+      return isColor(x.color) ? { t: 'color', color: x.color } : null;
     case 'chat':
       // Generous bound here; cleanChat trims to CHAT_MAX_LEN after stripping junk.
       return typeof x.text === 'string' && x.text.length <= CHAT_MAX_LEN * 4 ? { t: 'chat', text: x.text } : null;
     default:
       return null;
   }
+}
+
+/**
+ * Game settings from anywhere untrusted (the host's lobby message on a guest, localStorage, an old
+ * recording): every field clamped to its slider range and step; missing / junk fields take the defaults.
+ */
+export function sanitizeSettings(x: unknown): GameSettings {
+  return clampSettings(x);
 }

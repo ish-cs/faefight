@@ -10,7 +10,7 @@ import { pieceGeometry, World } from './world';
 import { PotionSellers } from './world/potionSeller';
 
 export { pieceGeometry };
-import { ISLAND_COLORS } from './colors';
+import { islandColor, setIslandPalette } from './colors';
 export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 
 /** WebGPURenderer tone-maps everything on output (per-material toneMapped is ignored), so unlit
@@ -43,7 +43,7 @@ export class Renderer {
   private motion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
   private lastFrame = performance.now();
   /** Animated player avatars (src/client/characters). */
-  readonly characters = new CharacterSystem(this.scene, (island) => ISLAND_COLORS[island % 8]);
+  readonly characters = new CharacterSystem(this.scene, (island) => islandColor(island));
   private loot = new Map<number, THREE.Mesh>();
   private potionSellers = new PotionSellers(this.scene);
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
@@ -125,7 +125,8 @@ export class Renderer {
   setMap(def: MapDef, humanId: number) {
     this.map = def.islands;
     this.humanId = humanId;
-    this.world.setMap(def, ISLAND_COLORS);
+    setIslandPalette(def.colors);
+    this.world.setMap(def, def.islands.map((isl) => islandColor(isl.index)));
     const map = def.islands;
     this.gunFx.warmUp([this.boomMat]);
     for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);

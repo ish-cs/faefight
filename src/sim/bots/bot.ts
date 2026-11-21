@@ -410,7 +410,7 @@ export class Bot {
       // A hard plug in my own doorway: only a charge gets through.
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       // Every 1 m of tower buys 20 s against the tide: the richer, the taller.
-      tower: c.view.now >= LIFECYCLE.suddenDeathAt - TOWER_PREP_SEC ? TOWER_BAGS + Math.min(4, Math.floor(total / 250)) : 0,
+      tower: c.view.now >= (c.view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) - TOWER_PREP_SEC ? TOWER_BAGS + Math.min(4, Math.floor(total / 250)) : 0,
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       steel: skilled && total >= STEEL_RICH,
@@ -516,7 +516,7 @@ export class Bot {
         const up = c.on >= 0 && g0 - view.map[c.on].groundY > 0.6;
         if (!view.suddenDeath) {
           // Snipers take the high ground before sudden death and shoot from up there.
-          if (t.range <= 0.7 || view.now < LIFECYCLE.suddenDeathAt - HIGH_GROUND_SEC) return 0;
+          if (t.range <= 0.7 || view.now < (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) - HIGH_GROUND_SEC) return 0;
           return up ? 1.6 : (me.inv.pieces.sandbags ?? 0) >= 4 && c.on >= 0 ? 1.0 : 0;
         }
         // Up on a tower: stay there (stepping off means a fall, then the tide).

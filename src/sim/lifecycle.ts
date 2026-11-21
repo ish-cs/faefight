@@ -148,10 +148,11 @@ export function freeSpawnSpot(physics: Physics, isl: IslandLayout): Vec3 {
 
 export function tickLifecycle(
   s: MatchStateCore, physics: Physics, map: IslandLayout[], now: number, dt: number, tideRate: number = LIFECYCLE.tideRate,
+  suddenDeathAt: number = LIFECYCLE.suddenDeathAt,
 ): MatchEvent[] {
   const out: MatchEvent[] = [];
 
-  if (!s.suddenDeath && now >= LIFECYCLE.suddenDeathAt) {
+  if (!s.suddenDeath && now >= suddenDeathAt) {
     s.suddenDeath = true;
     s.forcedSeal = true;
     out.push(ev(now, 'suddenDeath', {}));

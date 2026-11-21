@@ -47,6 +47,8 @@ export type BotView = {
   loot: Vec3[];
   waterY: number;
   suddenDeath: boolean;
+  /** Match time sudden death begins (host setting; default LIFECYCLE.suddenDeathAt). */
+  suddenDeathAt?: number;
   /** Potion seller positions (anyone may buy there). */
   potionShops?: Vec3[];
   /** Top surface y under (x, z) (land, piece or scaffold), or null over open water. */

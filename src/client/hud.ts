@@ -5,7 +5,7 @@ import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, is
 import type { GunKind, HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
 import { dist2D } from '../sim/vec';
 import { PIECE_ORDER } from './input';
-import { ISLAND_COLORS, ISLAND_NAMES } from './render';
+import { islandColor, islandName } from './colors';
 import { endState } from './endState';
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
@@ -99,6 +99,10 @@ export class Hud {
   readonly root = el('div', 'hud');
   private map: IslandLayout[] = [];
   private centerIsland: CenterIsland | null = null;
+  /** When sudden death starts this match (the host's setting, from MapDef.settings). */
+  suddenDeathAt: number = LIFECYCLE.suddenDeathAt;
+  /** Host's generator speed multiplier (shop label shows the real rate). */
+  genMult = 1;
   private humanId = 0;
   private me: PlayerState | null = null;
   private snap: Snapshot | null = null;
@@ -186,8 +190,8 @@ export class Hud {
     this.seals.replaceChildren(...map.map((isl) => {
       const chip = el('div', 'seal-chip');
       const dot = el('span', 'dot');
-      dot.style.background = hex(ISLAND_COLORS[isl.index % 8]);
-      chip.append(dot, el('span', 'name', isl.index === humanIsland ? 'You' : ISLAND_NAMES[isl.index % 8]), el('span', 'state', 'OPEN'));
+      dot.style.background = hex(islandColor(isl.index));
+      chip.append(dot, el('span', 'name', isl.index === humanIsland ? 'You' : islandName(isl.index)), el('span', 'state', 'OPEN'));
       return chip;
     }));
   }
@@ -339,7 +343,7 @@ export class Hud {
     if (cg && !near) setText(this.gen, `Gold generator  $${Math.floor(cg.gold)}`);
     else if (near) {
       const lv = snap.genLevels?.[near.g.island] ?? 1;
-      setText(this.gen, `${near.g.island === me.island ? 'Your generator' : `${ISLAND_NAMES[near.g.island % 8]} generator`}  $${Math.floor(near.g.stored)} · Lv${lv}`);
+      setText(this.gen, `${near.g.island === me.island ? 'Your generator' : `${islandName(near.g.island)} generator`}  $${Math.floor(near.g.stored)} · Lv${lv}`);
     }
 
     const station = this.nearStation();
@@ -412,7 +416,7 @@ export class Hud {
 
   /** Timer, tide banner and the island chips (myIsland -1 = none of them is yours). */
   private updateMatchInfo(snap: Snapshot, myIsland: number) {
-    const left = LIFECYCLE.suddenDeathAt - snap.time;
+    const left = this.suddenDeathAt - snap.time;
     setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
     this.timer.classList.toggle('sd', snap.suddenDeath);
     setText(this.banner, snap.suddenDeath ? `Tide rising · water ${snap.waterY.toFixed(1)} m` : left < 60 ? 'Sudden death soon' : '');
@@ -467,7 +471,7 @@ export class Hud {
         this.addFeed(killer && killer !== victim ? `${killer}  ✕  ${victim}` : `${victim} died`);
       } else if (e.type === 'sealed' || e.type === 'unsealed') {
         const isl = e.data.island as number | undefined;
-        this.addFeed(`${isl === this.me?.island ? 'Your' : `${ISLAND_NAMES[(isl ?? 0) % 8]}'s`} bunker ${e.type === 'sealed' ? 'SEALED' : 'reopened'}`, e.type === 'sealed');
+        this.addFeed(`${isl === this.me?.island ? 'Your' : `${islandName(isl ?? 0)}'s`} bunker ${e.type === 'sealed' ? 'SEALED' : 'reopened'}`, e.type === 'sealed');
       } else if (e.type === 'eliminated') {
         this.addFeed(`${name(e.data.player ?? e.data.id) ?? 'Someone'} eliminated`, true);
       } else if (e.type === 'suddenDeath') {
@@ -606,7 +610,7 @@ export class Hud {
       b.classList.toggle('show-lock', !!lockGun || ((GUNS as readonly string[]).includes(item) && me.locked.includes(item as GunKind)));
       if (item === 'genUpgrade') {
         const next = Math.min(GENERATOR_MAX_LEVEL, genLevel + 1), spec = generatorSpec(next);
-        b.dataset.name = genLevel >= GENERATOR_MAX_LEVEL ? `Generator Lv${genLevel} (max)` : `Generator ↑ Lv${next}: $${spec.rate}/s, holds $${spec.cap}`;
+        b.dataset.name = genLevel >= GENERATOR_MAX_LEVEL ? `Generator Lv${genLevel} (max)` : `Generator ↑ Lv${next}: $${+(spec.rate * this.genMult).toFixed(2)}/s, holds $${spec.cap}`;
         if (genLevel >= GENERATOR_MAX_LEVEL) status = 'Max';
         else badge = `Lv${next}`;
       } else if (lockGun) {
