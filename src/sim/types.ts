@@ -129,12 +129,21 @@ export type PlayerState = {
 };
 
 export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number };
-/** `noPickup`: a dropped bag its dropper can't grab back until `until`. */
-export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number } };
+/**
+ * `noPickup`: a dropped bag its dropper can't grab back until `until`. `ammoOnly`: the guns in it are just
+ * ammo (a supply crate drop): only someone who owns that gun can take it, as spare rounds.
+ */
+export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number }; ammoOnly?: true };
+
+/**
+ * A hazard (MapDef.hazards) that isn't intact and at full health, as the snapshot carries it. st: 0 damaged,
+ * 1 fusing (about to blow), 2 gone (waiting to respawn). Intact ones are left out, so a quiet map costs nothing.
+ */
+export type HazardNet = { id: number; st: 0 | 1 | 2; hp: number };
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'hazard';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -153,6 +162,8 @@ export type Snapshot = {
   center?: { gold: number; bags: number; steel: number };
   /** Ids of broken cosmetic props (MapDef.cosmetics), in the order they broke. */
   broken?: number[];
+  /** Hazards (barrels, tanks, crates) that are damaged, fusing or gone; absent when every one is intact. */
+  hz?: HazardNet[];
   /** Generator level (1-4) of each island, by island index. */
   genLevels: number[];
   sealed: boolean[];

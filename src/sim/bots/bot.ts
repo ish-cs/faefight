@@ -54,6 +54,15 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
+/**
+ * Explosive props. Hard/pro bots sometimes shoot a barrel standing next to an enemy instead of the enemy (a
+ * roll every BARREL_ROLL_SEC while such a shot is on, so it's a choice, not a reflex); everyone keeps out of
+ * blast range of live barrels while fighting and runs from a fusing one.
+ */
+const BARREL_CHANCE: Record<Difficulty, number> = { easy: 0, medium: 0, hard: 0.3, pro: 0.5 };
+const BARREL_ROLL_SEC = 1.2, BARREL_AIM_SEC = 1.5;
+/** Supply crates: only when this close and nothing better is going on. */
+const CRATE_RANGE = 14;
 const RAID_AT = 60;
 /** Sandbags carried into sudden death to climb above the tide, bought in the last minutes before it. */
 const TOWER_BAGS = 10, TOWER_PREP_SEC = 150;
@@ -145,6 +154,8 @@ export class Bot {
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
+  private barrelPlan: { id: number; until: number } | null = null;
+  private nextBarrelRollAt = 0;
   private view!: BotView;
   /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
   private readonly centerMinded: boolean;
@@ -186,6 +197,7 @@ export class Bot {
       this.pendingBuy = null;
       this.nadePlan = null;
       this.hideFrom = null;
+      this.barrelPlan = null;
       this.nextScoreAt = -Infinity;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
@@ -221,7 +233,12 @@ export class Bot {
     };
     let throwGrenade = false;
     const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
-    if (act.shootAt && act.shootFirst) {
+    const barrel = enemy ? this.barrelShot(ctx) : null;
+    if (barrel) {
+      // Set the barrel next to them off: aim at its middle like any other shot.
+      look = turnToward(cur, lookAt(eye, barrel), TURN_RATE * 1.2, dt);
+      fire = angleBetween(look, lookAt(eye, barrel)) < 0.04 && gunReady(dist2D(me.pos, barrel));
+    } else if (act.shootAt && act.shootFirst) {
       look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
     } else if (enemy) {
@@ -258,6 +275,7 @@ export class Bot {
       dir = scale(right(look.yaw), this.unstickSide);
       jump = true;
     }
+    dir = this.hazardAvoid(ctx, dir);
     if (dir && !act.raw) dir = this.nav.safeDir(dir);
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
@@ -648,8 +666,11 @@ export class Bot {
       }
       case 'loot': {
         const bag = this.nearestLoot(c);
-        if (!bag) return 0;
-        return 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70;
+        const crate = this.nearestCrate(c);
+        const bagScore = bag ? 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70 : 0;
+        // A crate is a small, uncertain prize: worth a short detour, never a trip.
+        const crateScore = crate ? 0.2 + 0.3 * t.greed - dist2D(crate.pos, me.pos) / 30 : 0;
+        return Math.max(bagScore, crateScore);
       }
       case 'raid': {
         if (view.suddenDeath || !gun) return 0;
@@ -1016,8 +1037,75 @@ export class Bot {
 
   private doLoot(c: Ctx): Act {
     const bag = this.nearestLoot(c);
+    const crate = this.nearestCrate(c);
+    if (crate && (!bag || dist2D(crate.pos, c.me.pos) + 4 < dist2D(bag, c.me.pos))) {
+      // Walk up and break it (a punch or two shots), the loot bag lands where it stood.
+      const d = dist2D(crate.pos, c.me.pos);
+      const fists = c.me.equipped === 'fists';
+      if (d > (fists ? 1.3 : 4)) return { ...this.goTo(crate.pos, fists ? 1.1 : 3.5), shootAt: undefined };
+      return { dir: null, shootAt: crate.center };
+    }
     if (!bag) { this.nextScoreAt = c.view.now; return IDLE; }
     return this.goTo(bag, 0.3);
+  }
+
+  /** A standing supply crate close by on ground I can walk to (only when it's cheap: near and quiet). */
+  private nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null {
+    if (c.enemy || c.danger) return null;
+    let best: { pos: Vec3; center: Vec3 } | null = null, bestD = CRATE_RANGE;
+    for (const h of c.view.hazards ?? []) {
+      if (h.kind !== 'crate') continue;
+      const d = dist2D(h.pos, c.me.pos);
+      if (d >= bestD || Math.abs(h.pos.y - c.me.pos.y) > 1.5) continue;
+      if (islandAt(c.view.map, h.pos) !== c.on) continue;
+      best = h; bestD = d;
+    }
+    return best;
+  }
+
+  /**
+   * Hard/pro: a live barrel or tank right next to the enemy, out of my own blast range, in clear view: now
+   * and then shoot it instead of them. Returns the point to shoot, or null.
+   */
+  private barrelShot(c: Ctx): Vec3 | null {
+    const e = c.enemy, view = c.view, me = c.me;
+    if (!e || BARREL_CHANCE[this.difficulty] <= 0 || me.equipped === 'fists') return null;
+    const live = (id: number) => (view.hazards ?? []).find((h) => h.id === id && !h.fusing);
+    if (this.barrelPlan) {
+      const h = live(this.barrelPlan.id);
+      if (h && view.now < this.barrelPlan.until && dist2D(h.pos, e.pos) < h.radius * 0.7) return h.center;
+      this.barrelPlan = null;
+    }
+    if (view.now < this.nextBarrelRollAt) return null;
+    let pick: { id: number; center: Vec3 } | null = null, bestD = Infinity;
+    for (const h of view.hazards ?? []) {
+      if (h.radius <= 0 || h.fusing) continue;
+      const toEnemy = dist2D(h.pos, e.pos);
+      const mine = dist2D(h.pos, me.pos);
+      if (toEnemy >= h.radius * 0.6 || mine < h.radius + 1.5 || mine > WEAPONS[me.equipped].range * 0.8 || toEnemy >= bestD) continue;
+      pick = h; bestD = toEnemy;
+    }
+    if (!pick) return null;
+    this.nextBarrelRollAt = view.now + BARREL_ROLL_SEC;
+    if (this.rng() >= BARREL_CHANCE[this.difficulty] || !view.clearShot?.(pick.center)) return null;
+    this.barrelPlan = { id: pick.id, until: view.now + BARREL_AIM_SEC };
+    return pick.center;
+  }
+
+  /** Run from a fusing barrel; in a fight, also step out of blast range of live ones (they could be shot). */
+  private hazardAvoid(c: Ctx, dir: Vec3 | null): Vec3 | null {
+    const me = c.me;
+    let push: Vec3 | null = null;
+    for (const h of c.view.hazards ?? []) {
+      if (h.radius <= 0 || (!h.fusing && !c.enemy)) continue;
+      const d = dist2D(h.pos, me.pos);
+      const R = h.fusing ? h.radius + 1 : h.radius * 0.8;
+      if (d >= R) continue;
+      const away = d < 0.05 ? right(me.yaw) : norm(flat(sub(me.pos, h.pos)));
+      push = add(push ?? v3(), scale(away, (h.fusing ? 3 : 2) * (1 - d / R) + 0.4));
+    }
+    if (!push) return dir;
+    return norm(add(dir ?? v3(), push));
   }
 
   private doRaid(c: Ctx): Act {

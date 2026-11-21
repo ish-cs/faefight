@@ -112,7 +112,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         break;
       case 'debug':
         if (!match) throw new Error('debug before start');
-        if (msg.cmd === 'teleport') match.debugTeleport(humanId, { x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z });
+        if (msg.cmd === 'teleport') match.debugTeleport(msg.id ?? humanId, { x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z });
+        else if (msg.cmd === 'hazard') match.debugDamageHazard(msg.id, msg.amount, humanId, msg.source ?? 'bullet');
         else if (msg.cmd === 'hp') match.debugSetHp(humanId, msg.hp);
         else if (msg.cmd === 'shield') match.debugSetShield(msg.id ?? humanId, msg.shield);
         else if (msg.cmd === 'potionShop') match.debugSetPotionShops([{ x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z }]);

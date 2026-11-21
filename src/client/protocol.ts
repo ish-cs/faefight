@@ -19,7 +19,8 @@ export type ToWorker =
   /** Vs bot only: stop / restart ticking (pause card). */
   | { type: 'pause'; paused: boolean }
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
-  | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
+  | { type: 'debug'; cmd: 'teleport'; x: number; z: number; id?: number }
+  | { type: 'debug'; cmd: 'hazard'; id: number; amount: number; source?: 'bullet' | 'explosive' }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
   | { type: 'debug'; cmd: 'hp'; hp: number }
   | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }

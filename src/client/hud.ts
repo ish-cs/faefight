@@ -464,7 +464,8 @@ export class Hud {
     for (const e of events) {
       if (e.type === 'kill') {
         const victim = name(e.data.victim ?? e.data.target), killer = name(e.data.killer ?? e.data.by);
-        this.addFeed(killer && killer !== victim ? `${killer}  ✕  ${victim}` : `${victim} died`);
+        const via = typeof e.data.via === 'string' ? ` via ${e.data.via}` : '';
+        this.addFeed(killer && killer !== victim ? `${killer}${via}  ✕  ${victim}` : via ? `${victim} blown up${via}` : `${victim} died`);
       } else if (e.type === 'sealed' || e.type === 'unsealed') {
         const isl = e.data.island as number | undefined;
         this.addFeed(`${isl === this.me?.island ? 'Your' : `${ISLAND_NAMES[(isl ?? 0) % 8]}'s`} bunker ${e.type === 'sealed' ? 'SEALED' : 'reopened'}`, e.type === 'sealed');

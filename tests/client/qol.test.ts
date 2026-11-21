@@ -155,6 +155,16 @@ describe('death recap', () => {
     expect(f.bySource).toEqual([{ source: 'fall', amount: 120 }]);
     expect(sourceOf(undefined, 3)).toBe('explosion'); // old grenade hits carried no weapon
   });
+
+  test('a barrel someone shot: "Killed by Rex via barrel", an explosion', () => {
+    const r = new RecapTracker();
+    const k = r.onSnapshot(snap(5, [hit(5, { by: 2, amount: 100, weapon: 'barrel' }), { t: 5, type: 'kill', data: { victim: 1, killer: 2, via: 'barrel' } }]), 1)!;
+    expect(k.title).toBe('Killed by Rex via barrel');
+    expect(k.weapon).toBe('barrel');
+    expect(k.bySource).toEqual([{ source: 'explosion', amount: 100 }]);
+    const self = new RecapTracker().onSnapshot(snap(6, [hit(6, { by: 1, amount: 90, weapon: 'propane' }), { t: 6, type: 'kill', data: { victim: 1, killer: 1, via: 'propane' } }]), 1)!;
+    expect(self.title).toBe('You blew yourself up via propane');
+  });
 });
 
 describe('match summary', () => {

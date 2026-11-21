@@ -7,6 +7,8 @@ import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchState
 import { buildMapDef, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
+import { Hazards, isExplosive, type HazardHost } from './hazards';
+import { HAZARD } from './constants';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
@@ -31,6 +33,8 @@ const SIGHT_RANGE = 120;
 /** How long hits/tracers stay in a bot's short-term memory, and how long the kill feed is. */
 const RECENT_SEC = 4;
 const FEED_SEC = 30;
+
+const add3 = (o: Vec3, d: Vec3, t: number): Vec3 => v3(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t);
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -66,6 +70,9 @@ export class Match implements MatchApi {
   readonly map: IslandLayout[];
   private center: CenterState = newCenterState();
   private cosmetics: Cosmetics;
+  /** Explosive barrels / propane tanks and lootable crates (hazards.ts). */
+  private hazards: Hazards;
+  private hazardHost: HazardHost;
   /** Potion sellers: the NPC on the center island. */
   potionShops: PotionShop[];
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
@@ -83,6 +90,7 @@ export class Match implements MatchApi {
     const map = def.islands;
     this.map = map;
     this.cosmetics = new Cosmetics(def.cosmetics);
+    this.hazards = new Hazards(def.hazards);
     this.potionShops = potionShopsAt([def.center.potionShop]);
     this.s = newMatchState(map);
     this.s.waterY = def.waterY;
@@ -128,11 +136,15 @@ export class Match implements MatchApi {
         if (dv.y > 0 && p.mv) { p.mv.grounded = false; p.mv.airTime = 1; }
       },
       castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, true) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
-      onKill: (victim, killer) => {
+      onKill: (victim, killer, weapon) => {
         this.kills.push({ victim, killer });
-        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer));
+        const via = weapon === 'barrel' || weapon === 'propane' ? weapon : undefined;
+        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, via));
       },
+      castHazard: (o, d, max) => this.hazards.ray(o, d, max),
+      hitHazard: (id, amount, source, by, now, at) => this.hazards.damage(this.hazardHost, id, amount, source, by, now, at),
     };
+    this.hazardHost = { ctx: this.ctx, loot: this.s.loot, seed: setup.seed ?? 1 };
   }
 
   static async create(
@@ -172,6 +184,8 @@ export class Match implements MatchApi {
     }
 
     this.events.push(...tickExplosives(this.ctx, now));
+    this.events.push(...this.hazards.onExplosions(this.hazardHost, this.events, now));
+    this.events.push(...this.hazards.tick(this.hazardHost, now));
     this.collapseUnsupported(now);
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
     tickCenter(this.center, DT, !this.s.suddenDeath);
@@ -225,6 +239,16 @@ export class Match implements MatchApi {
 
   debugDamagePlayer(playerId: number, amount: number): void {
     this.events.push(...applyPlayerDamage(this.ctx, this.mustPlayer(playerId), amount, null, this.s.time));
+  }
+
+  /** Hazard state (tests/debug/e2e). */
+  debugHazards() {
+    return this.hazards.list.map((h) => ({ id: h.def.id, kind: h.def.kind, pos: clone(h.pos), hp: h.hp, st: h.st, by: h.by }));
+  }
+
+  /** Damage a hazard as if `by` shot it (tests/e2e). */
+  debugDamageHazard(id: number, amount: number, by: number | null = null, source: 'bullet' | 'explosive' = 'bullet'): void {
+    this.events.push(...this.hazards.damage(this.hazardHost, id, amount, source, by, this.s.time, undefined));
   }
 
   /** Every kill so far (tests/debug). */
@@ -522,7 +546,19 @@ export class Match implements MatchApi {
       hurt: this.hits.filter((h) => h.target === self.id).map(({ t, by, amount }) => ({ t, by, amount })),
       shots: this.shots.filter((s) => s.by !== self.id && dist(s.from, eye) <= SIGHT_RANGE),
       feed: [...this.feed],
-      loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE).map((b) => clone(b.pos)),
+      // Crate ammo is only worth walking to for someone with that gun.
+      loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE && (!b.ammoOnly || Object.keys(b.inv.weapons).some((g) => !!self.inv.weapons[g as WeaponKind])))
+        .map((b) => clone(b.pos)),
+      hazards: this.hazards.list.filter((h) => h.st !== 2 && dist(h.pos, eye) <= SIGHT_RANGE).map((h) => ({
+        id: h.def.id, kind: h.def.kind, pos: clone(h.pos), center: this.hazards.center(h), radius: isExplosive(h.def.kind) ? HAZARD[h.def.kind].radius : 0, fusing: h.st === 1,
+      })),
+      clearShot: (to) => {
+        const d = dist(eye, to);
+        const dir = norm(sub(to, eye));
+        if (this.physics.raycast(eye, dir, d, self.id, true)) return false;
+        const hz = this.hazards.ray(eye, dir, d + 0.5);
+        return !hz || dist(add3(eye, dir, hz.dist), to) < 1;
+      },
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
       potionShops: this.potionShops.map((sh) => clone(sh.pos)),
@@ -532,6 +568,7 @@ export class Match implements MatchApi {
   }
 
   private snapshot(): Snapshot {
+    const hz = this.hazards.net();
     const s: Snapshot = {
       time: this.s.time,
       tick: this.tickNo,
@@ -542,6 +579,7 @@ export class Match implements MatchApi {
       generators: this.s.generators,
       center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       broken: this.cosmetics.broken,
+      ...(hz ? { hz } : {}),
       genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,

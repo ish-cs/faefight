@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
-import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
+import type { HazardNet, MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { CosmeticLayer } from './cosmetics';
+import { HazardLayer } from './hazards';
 import { Boats, gullPerches, Gulls } from './dressing';
 import { defineDetailKinds } from './detail';
 import { Grass } from './grass';
@@ -29,6 +30,8 @@ export class World {
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
   private cosmetics: CosmeticLayer | null = null;
+  /** Explosive barrels / propane tanks / supply crates. */
+  private hazards: HazardLayer | null = null;
   /** instanced grass beds (high/ultra) */
   readonly grass = new Grass();
   /** instanced small detail (litter, rubble, shells, seaweed…) */
@@ -77,7 +80,9 @@ export class World {
     setBuiltInPotionStalls([def.center.potionShop]); // center.ts draws this seller; PotionSellers must not double it
     this.cosmetics = new CosmeticLayer(def.cosmetics);
     this.scene.add(this.cosmetics.root);
-    console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
+    this.hazards = new HazardLayer(def.hazards ?? []);
+    this.scene.add(this.hazards.root);
+    console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics, ${(def.hazards ?? []).length} hazards in ${Math.round(performance.now() - t0)} ms`);
   }
 
   /** Drop a previous map (setMap twice in one session). Shared materials/textures stay cached. */
@@ -99,6 +104,8 @@ export class World {
     this.gulls = null;
     this.cosmetics?.dispose();
     this.cosmetics = null;
+    this.hazards?.dispose();
+    this.hazards = null;
   }
 
   /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
@@ -109,6 +116,12 @@ export class World {
     if (e.type !== 'cosmeticBroken') return;
     this.cosmetics?.onBroken(e.data, this.pieceFx.particles);
   }
+
+  /** Barrels / tanks / crates: snapshot state (gone, fusing). */
+  syncHazards(hz: HazardNet[] | undefined) { this.hazards?.sync(hz); }
+
+  /** `hazard` events and hazard explosions → fuse fx, fireball debris, scorch, crate splinters. */
+  hazardEvent(e: MatchEvent) { this.hazards?.onEvent(e, this.pieceFx.particles); }
 
   syncPieces(pieces: PieceState[]) { this.pieces.sync(pieces); this.pieceFx.sync(pieces); }
 
@@ -125,6 +138,7 @@ export class World {
     this.scatter.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
     this.pieceFx.update(performance.now());
+    this.hazards?.update(performance.now(), this.pieceFx.particles);
     this.sky.render(); // cascaded shadows follow the camera themselves
   }
 }

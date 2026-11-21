@@ -16,7 +16,9 @@ export type SoundId =
   | 'kill' | 'death' | 'eliminated' | 'win' | 'lose' | 'draw'
   | 'alarm' | 'tick' | 'escaped' | 'horn' | 'footstep'
   | 'shieldHit' | 'shieldBreak' | 'drink' | 'potionDone'
-  | 'reload' | 'dry' | 'ads';
+  | 'reload' | 'dry' | 'ads'
+  /** Barrels / tanks / crates: kind 'hiss' (fuse), 'clang' (bullet on a drum), 'crateHit', 'crate' (breaks). */
+  | 'hazard';
 
 export type Cue = {
   sound: SoundId;
@@ -152,8 +154,17 @@ export class SoundDirector {
           break;
         }
         case 'explosion':
-          out.push({ sound: 'explosion', kind: String(d.kind), pos: d.pos as Vec3, gain: 1.4 });
+          out.push({ sound: 'explosion', kind: String(d.kind), pos: d.pos as Vec3, gain: d.kind === 'barrel' || d.kind === 'propane' ? 1.6 : 1.4 });
           break;
+        case 'hazard': {
+          const at = d.pos as Vec3 | undefined;
+          if (!at) break;
+          const crate = d.kind === 'crate';
+          if (d.what === 'fuse') out.push({ sound: 'hazard', kind: 'hiss', pos: at, gain: 1.1 });
+          else if (d.what === 'hit') out.push({ sound: 'hazard', kind: crate ? 'crateHit' : 'clang', pos: at, gain: 0.7 });
+          else if (d.what === 'break') out.push({ sound: 'hazard', kind: 'crate', pos: at, gain: 1 });
+          break;
+        }
         case 'placed': {
           const pc = s.pieces.find((p) => p.id === d.piece);
           const at = pc?.pos ?? chest(d.by);

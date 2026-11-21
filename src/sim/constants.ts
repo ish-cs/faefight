@@ -215,3 +215,36 @@ export const CENTER = {
   wellPerSec: 4,
   wellCap: 50,
 };
+
+/**
+ * Explosive barrels / propane tanks and lootable supply crates (hazards.ts). Hit shape = upright cylinder
+ * (r, h) standing on the map position. Bullets hurt barrels and tanks (fists don't); explosions set them
+ * off at once. A shot-out one fuses for `fuseSec` (leaking, hissing, flashing) before it blows; one set off
+ * by another hazard waits `chainSec` per link. The blast is grenade-like (GRENADE: 100 dmg, 4 m) with a
+ * bigger radius; it respects shields, a solid wall in the way lets a quarter through.
+ */
+export const HAZARD = {
+  barrel: { r: 0.32, h: 0.92, hp: 50, radius: 5, dmg: 100, pieceDmg: 160, respawnSec: 90 },
+  propane: { r: 0.2, h: 1.15, hp: 35, radius: 4.6, dmg: 90, pieceDmg: 120, respawnSec: 90 },
+  crate: { r: 0.5, h: 0.78, hp: 40, radius: 0, dmg: 0, pieceDmg: 0, respawnSec: 120 },
+  fuseSec: 1,
+  chainSec: 0.25,
+  /** Nothing respawns while a live player is this close. */
+  respawnClearM: 15,
+  /** Blast push (m/s) at the centre, like a weaker rocket. */
+  knock: 6, knockUp: 2.5,
+} as const;
+
+/**
+ * Supply crate drop table (weights sum to 100). Expected value ≈ $39 per crate (ammo ≈ $10 a mag at the
+ * ammo-box price, medkit $75, cash $50 mean, grenade $100, 2 sandbags $20): about 8 s of a level-1
+ * generator, so a few crates per island respawning every 2 min add ~10-15% income for whoever farms them.
+ * `ammo` falls back to cash when the breaker owns no gun.
+ */
+export const CRATE_LOOT = {
+  weights: { ammo: 40, medkit: 15, cash: 30, grenade: 7, sandbags: 8 },
+  cash: { min: 20, max: 80, step: 5 },
+  sandbags: 2,
+  /** Rockets per ammo drop (a magazine for every other gun). */
+  rockets: 1,
+} as const;

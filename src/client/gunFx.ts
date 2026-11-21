@@ -192,7 +192,7 @@ export class GunFx {
     const p = d.pos as Vec3 | undefined;
     if (!p) return;
     const rocket = d.kind === 'rocket';
-    const big = rocket ? 1.25 : d.kind === 'charge' ? 1.1 : 1;
+    const big = rocket ? 1.25 : d.kind === 'barrel' ? 1.35 : d.kind === 'propane' ? 1.2 : d.kind === 'charge' ? 1.1 : 1;
     this.boomLight.position.set(p.x, p.y + 0.5, p.z);
     this.boomPeak = 260 * big;
     this.boomAt = performance.now();

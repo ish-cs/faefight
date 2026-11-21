@@ -43,6 +43,13 @@ export type BotView = {
   shots: ShotSeen[];
   /** Kill feed, last ~30 s. */
   feed: FeedLine[];
+  /**
+   * Standing barrels / propane tanks / supply crates (map props, public: everyone sees them). `fusing`: about to
+   * blow. `radius`: blast radius (0 for crates). Absent in hand-made test views.
+   */
+  hazards?: { id: number; kind: 'barrel' | 'propane' | 'crate'; pos: Vec3; center: Vec3; radius: number; fusing: boolean }[];
+  /** Clear line of fire from my eye to this point (bullets pass firing slits)? */
+  clearShot?(to: Vec3): boolean;
   /** Positions of loot bags within sight range. */
   loot: Vec3[];
   waterY: number;
