@@ -20,7 +20,9 @@ export default defineConfig({
   timeout: CI ? 180_000 : 90_000,
   // CI: one retry, so a one-off runner hiccup doesn't block a merge; Playwright still reports it as "flaky".
   retries: CI ? 1 : 0,
-  ...(CI ? { workers: 1, reporter: [['list'], ['html', { open: 'never' }]] as const } : {}),
+  // Each worker runs a 3D game in its own browser: at most 2 locally (many agents share one Mac), 1 on CI (software GL).
+  workers: CI ? 1 : 2,
+  ...(CI ? { reporter: [['list'], ['html', { open: 'never' }]] as const } : {}),
   // Every test starts as a returning player (How to play already seen) so the first-launch card doesn't
   // cover the menu; tests/e2e/menuExtras.spec.ts clears this to test the first launch itself.
   use: {
