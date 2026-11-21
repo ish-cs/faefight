@@ -65,9 +65,8 @@ export type MapDef = {
   template: MapTemplate;
   name: string;
   seed: number;
-  /** Kill plane (sea) and its sudden-death rise rate (m/s). */
+  /** Kill plane (sea); constant all match (sudden death brings the storm, not a tide). */
   waterY: number;
-  tideRate: number;
   islands: IslandLayout[];
   center: CenterIsland;
   statics: StaticBox[];
@@ -209,7 +208,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
 
   return {
     template, name: MAP_NAMES[template], seed,
-    waterY: MAP.waterY, tideRate: MAP.tideRate,
+    waterY: MAP.waterY,
     islands, center, statics, cosmetics,
     // when MapDef.hazards lands: pass `avoid: hazards.map((h) => h.pos)` so props keep 1.5 m from them
     props: placeProps({ islands, center, statics, cosmetics, seed }),
@@ -278,4 +277,48 @@ function bunkerParts(b: Bunker, withSlits: boolean): { walls: Box[]; slits: Box[
   }
   push(walls, v3(0, height + 0.1, 0), v3(outer / 2, 0.1, outer / 2));
   return { walls, slits };
+}
+
+/** Water between each playable disc and its harbor backdrop quay (local +Z behind the island). */
+export const HARBOR_CHANNEL = 14;
+
+/** Harbor backdrop frame in the island's local space (client scenery and the sim's crane share it). */
+export function harborBackdropFrame(isl: IslandLayout, n: number) {
+  const ring = Math.hypot(isl.center.x, isl.center.z);
+  const z0 = isl.radius + HARBOR_CHANNEL;
+  const hw = Math.max(25, Math.min(60, (ring + z0) * Math.sin(Math.PI / n) - 8));
+  return { z0, hw, top: isl.groundY + 0.2 };
+}
+
+/** Ship-to-shore crane frame (client `crane()` in props.ts): legs at (±gx, ±gz), beams at lowBeamY and legH. */
+export const CRANE = { legH: 28, gx: 8, gz: 8, lowBeamY: 10 };
+
+/**
+ * Solid parts of a crane players can build against and climb onto: the four legs, the low side beams
+ * and the top girder frame (the boom, struts and machinery up top stay scenery). `base` = leg feet.
+ */
+export function craneBoxes(base: Vec3, yaw: number): Box[] {
+  const { legH: LH, gx, gz, lowBeamY } = CRANE;
+  const out: Box[] = [];
+  const push = (x: number, y: number, z: number, half: Vec3) => {
+    const c = add(base, rotateY(v3(x, 0, z), yaw));
+    out.push({ center: v3(c.x, base.y + y, c.z), half, rotY: yaw });
+  };
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) push(sx * gx, LH / 2, sz * gz, v3(0.55, LH / 2, 0.55));
+  for (const sx of [-1, 1]) {
+    push(sx * gx, lowBeamY, 0, v3(0.5, 0.5, gz));
+    push(sx * gx, LH, 0, v3(0.6, 0.7, gz + 0.6));
+  }
+  for (const sz of [-1, 1]) push(0, LH, sz * gz, v3(gx + 0.5, 0.7, 0.55));
+  return out;
+}
+
+/** The harbor crane behind each island (client: `crane(b, at(hw * 0.55, top, z0 + 9))` in islands.ts). */
+export function harborCraneBoxes(islands: readonly IslandLayout[]): Box[] {
+  return islands.flatMap((isl) => {
+    const { z0, hw, top } = harborBackdropFrame(isl, islands.length);
+    const yaw = isl.bunker.facingYaw;
+    const c = add(isl.center, rotateY(v3(hw * 0.55, 0, z0 + 9), yaw));
+    return craneBoxes(v3(c.x, top, c.z), yaw);
+  });
 }

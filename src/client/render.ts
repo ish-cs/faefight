@@ -1,13 +1,16 @@
 import * as THREE from 'three/webgpu';
-import { GENERATOR_MAX_LEVEL, PLAYER } from '../sim/constants';
+import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
-import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
+import type { MatchEvent, PieceKind, Snapshot, Vec3, WeaponKind } from '../sim/types';
+import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import { CharacterSystem, type Motion } from './characters/avatar';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
-import { PotionSellers } from './world/potionSeller';
+import { PotionSellers, stall } from './world/potionSeller';
+import { StormFx } from './world/storm';
+import { LootView, lootWarmObjects } from './lootView';
 
 export { pieceGeometry };
 import { ISLAND_COLORS } from './colors';
@@ -44,7 +47,8 @@ export class Renderer {
   private lastFrame = performance.now();
   /** Animated player avatars (src/client/characters). */
   readonly characters = new CharacterSystem(this.scene, (island) => ISLAND_COLORS[island % 8]);
-  private loot = new Map<number, THREE.Mesh>();
+  /** Loot on the ground drawn as its items, with labels nearby (lootView.ts). */
+  readonly lootView = new LootView(this.scene);
   private potionSellers = new PotionSellers(this.scene);
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
   private fx: Fx[] = [];
@@ -59,14 +63,14 @@ export class Renderer {
   private ghostTmp2 = new THREE.Vector3();
   private ghostWhite = new THREE.Color(0xffffff);
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
-  private lootGeo = new THREE.SphereGeometry(0.28, 16, 10).scale(1, 0.8, 1);
-  private lootMat = new THREE.MeshStandardNodeMaterial({ color: 0x8b5a2b, roughness: 0.9 });
   /** Level pips above each island's generator (lit = reached), by island. */
   private genPips: THREE.Mesh[][] = [];
   private pipGeo = new THREE.BoxGeometry(0.18, 0.18, 0.18);
   private pipOn = new THREE.MeshBasicNodeMaterial({ color: boosted(0xffd23d) });
   private pipOff = new THREE.MeshBasicNodeMaterial({ color: 0x4a525c });
 
+  /** Sudden-death weather: storm wall, rain, telegraph markers, lightning (world/storm.ts). */
+  storm!: StormFx;
   /** Tracers, muzzle light/smoke, shell casings, hit sparks, projectiles, explosion flashes. */
   gunFx!: GunFx;
   private snapArrived = performance.now();
@@ -100,6 +104,7 @@ export class Renderer {
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
+    r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
     r.resize();
     return r;
   }
@@ -127,6 +132,7 @@ export class Renderer {
     this.humanId = humanId;
     this.world.setMap(def, ISLAND_COLORS);
     const map = def.islands;
+    this.storm.setMap(map, def.center);
     this.gunFx.warmUp([this.boomMat]);
     for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);
     const h = PROP_HALF.generator;
@@ -192,6 +198,7 @@ export class Renderer {
       pips.forEach((m, i) => { m.material = i < level ? this.pipOn : this.pipOff; });
     });
     this.potionSellers.sync(snap.potionShops);
+    this.storm.sync(snap.storm, snap.suddenDeath);
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
   }
@@ -212,6 +219,9 @@ export class Renderer {
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : e.data.kind === 'rocket' ? 3.6 : 4);
+    } else if (e.type === 'lightning') {
+      const pos = e.data.pos as Vec3 | undefined;
+      if (pos) this.storm.strike(pos, this.camera);
     }
   }
 
@@ -227,6 +237,29 @@ export class Renderer {
     this.fx.push({ mesh: m, mat, born: performance.now(), life: 450, grow: radius });
   }
 
+  /**
+   * Loading warm-up (warmup.ts): one of each thing that only appears mid-match — every gun model and the muzzle
+   * flash (third person), an explosion fireball, a loot bag, the build ghost material, a potion stall — in a row.
+   */
+  warmProps(): THREE.Group {
+    const g = new THREE.Group();
+    g.name = 'warmProps';
+    const add = (o: THREE.Object3D) => { o.position.x = g.children.length * 0.8; g.add(o); };
+    for (const kind of Object.keys(WEAPONS) as WeaponKind[]) {
+      const w = buildWeapon(kind);
+      if (w) add(w);
+    }
+    const flash = buildMuzzleFlash();
+    flash.visible = true;
+    add(flash);
+    add(new THREE.Mesh(this.boomGeo, this.boomMat));
+    for (const o of lootWarmObjects()) add(o);
+    add(new THREE.Mesh(this.ghostLinkGeo, this.ghostMat));
+    add(stall());
+    g.traverse((o) => { o.frustumCulled = false; });
+    return g;
+  }
+
   geometryFor(kind: PieceKind) {
     let g = this.pieceGeo.get(kind);
     if (!g) { g = pieceGeometry(kind); this.pieceGeo.set(kind, g); }
@@ -234,19 +267,7 @@ export class Renderer {
   }
 
   private syncLoot(snap: Snapshot) {
-    const seen = new Set<number>();
-    for (const l of snap.loot) {
-      seen.add(l.id);
-      let m = this.loot.get(l.id);
-      if (!m) {
-        m = new THREE.Mesh(this.lootGeo, this.lootMat);
-        m.castShadow = true;
-        this.scene.add(m);
-        this.loot.set(l.id, m);
-      }
-      m.position.set(l.pos.x, l.pos.y + 0.3, l.pos.z);
-    }
-    for (const [id, m] of this.loot) if (!seen.has(id)) { this.scene.remove(m); this.loot.delete(id); }
+    this.lootView.sync(snap.loot);
   }
 
   /** Display-rate motion of a player: predicted for the local player, else interpolated at the render clock. */
@@ -347,7 +368,8 @@ export class Renderer {
     const snap = this.curr;
     if (snap) {
       this.characters.sync(snap.players, this.humanId, localYaw, snap.time, this.motionOf, snap.hidden);
-      for (const m of this.loot.values()) m.rotation.y += 1.2 * dt;
+      // Labels within reach of the player (predicted feet when playing, else the camera).
+      this.lootView.frame(dt, now / 1000, this.local?.pos ?? this.camera.position, this.camera);
     }
 
     for (let i = this.fx.length - 1; i >= 0; i--) {
@@ -364,6 +386,7 @@ export class Renderer {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
+    this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }

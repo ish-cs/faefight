@@ -24,7 +24,9 @@ export type ClientMsg =
   /** `ack`: newest snapshot seq decoded (wire.ts delta baseline). */
   | { t: 'input'; input: PlayerInput; cmds: MoveCmd[]; ack?: number }
   | { t: 'preview'; req: BuildRequest; key: number }
-  | { t: 'chat'; text: string };
+  | { t: 'chat'; text: string }
+  /** Spectating (dead/eliminated): the player followed, null = free fly. The host only honours it while you're dead. */
+  | { t: 'follow'; id: number | null };
 
 /** Host → remote client. */
 export type HostMsg =
@@ -42,4 +44,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 7;
+export const NET_VERSION = 10; // 10: gameplay props (snapshot `pr`, wire keys pr/p/q)

@@ -50,6 +50,9 @@ export class Predictor {
 
   get pending() { return this.history.length; }
 
+  /** Predicted stamina (movement.ts), so the HUD bar reacts to sprint on the very next frame. */
+  get stamina(): number | null { return this.state && this.alive ? this.state.mv.stamina : null; }
+
   /** The local collision world (map + snapshot pieces + players); build aiming validates against it. */
   get world(): Physics { return this.physics; }
 

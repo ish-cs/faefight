@@ -128,7 +128,7 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   }).toPass({ timeout: 10_000 });
   await expect(page.getByTestId('healing')).toBeVisible();
   await expect(page.locator('[data-testid="hotbar-slot-1"] .hb-count')).toHaveText('1');
-  await expect.poll(async () => (await me()).hp, { timeout: 5000 }).toBe(90);
+  await expect.poll(async () => (await me()).hp, { timeout: 5000 }).toBeGreaterThanOrEqual(90); // +50, plus any passive regen during the 2 s heal
   await expect(page.getByTestId('healing')).toBeHidden();
 
   expect(errors, errors.join('\n')).toEqual([]);

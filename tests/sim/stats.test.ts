@@ -56,7 +56,7 @@ describe('kills / deaths', () => {
     expect([...s.players.values()].reduce((n, x) => n + x.kills, 0)).toBe(0);
   });
 
-  test('drowning in the tide counts a death with no killer', async () => {
+  test('drowning counts a death with no killer', async () => {
     const { s, physics, p } = await core();
     s.waterY = p(2).pos.y + 1;
     const evs = tickLifecycle(s, physics, map, 1, 1 / 30);
