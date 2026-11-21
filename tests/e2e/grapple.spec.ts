@@ -67,9 +67,11 @@ test('buy a grappling hook, hook a wall, get reeled in', async ({ page }) => {
   await page.mouse.click(640, 360); // pointer lock
   await page.keyboard.press(`Digit${slot + 1}`);
   await expect(page.getByTestId('weapon')).toHaveText(/hook/i);
-  await page.waitForTimeout(300);
-  await page.mouse.click(640, 360);
-  await expect.poll(async () => (await me()).hook?.st ?? -1, { timeout: 3000, intervals: [16] }).toBe(1);
+  // A click while the pointer isn't locked only re-locks it: click until the hook is out.
+  await expect(async () => {
+    if (!(await me()).hook) await page.mouse.click(640, 360);
+    await expect.poll(async () => (await me()).hook?.st ?? -1, { timeout: 1500, intervals: [16] }).toBe(1);
+  }).toPass({ timeout: 10_000 });
   await page.screenshot({ path: test.info().outputPath('grapple-rope.png') });
   await expect.poll(async () => Math.hypot((await me()).pos.x - wx, (await me()).pos.z - wz), { timeout: 4000 }).toBeLessThan(3);
   expect(Math.hypot(start.x - wx, start.z - wz)).toBeGreaterThan(14);
