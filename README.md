@@ -9,7 +9,17 @@ pnpm i
 pnpm dev        # http://localhost:5173
 ```
 
-Pick a bot difficulty on the menu, then click the game to capture the mouse.
+Pick a map and a bot difficulty on the menu, then click the game to capture the mouse.
+
+## Maps
+
+- **Harbor**: the original ring of harbor islands, 36 m apart.
+- **Container Yard**: smaller islands 26 m apart, with fixed container stacks as cover and high ground.
+- **Random**: a different map than the last one, every match.
+
+Every map has a neutral **center island**, reachable only by bridging to it. Anyone can use its stations: a gold generator (twice the normal rate, up to $1000, first come first served), a supply generator (free sandbags, and now and then a steel plate), a shield well (stand in it to refill shield up to 50) and the potion seller. Built-in cover (containers, concrete barriers) can't be destroyed; barrels, crates, fences, palms, lamps and bollards break when shot or blown up.
+
+Every bunker wall has narrow firing slits at chest height: you can shoot and see through them, but nobody (and no grenade or rocket) gets through, and they never count as a way out for sealing.
 
 ## Controls
 
@@ -63,6 +73,18 @@ While you're dead (waiting to respawn, or eliminated) you're an invisible specta
 When the match ends (or you're eliminated) the end screen offers **Spectate** (Esc brings the end screen back). Vs bot: **Play again** restarts with the same difficulty. Online: the host gets **Rematch** (fresh match, same seats and lobby code; a friend who left becomes a bot) and **Back to lobby**; friends see *Waiting for host…* and follow along without rejoining.
 
 ![Scoreboard](docs/screens/scoreboard.png) ![Spectating](docs/screens/spectate.png) ![End screen with Rematch](docs/screens/end-rematch-host.png)
+
+### Quality of life
+
+- **Invite link**: the lobby's *Copy invite link* gives `…/?join=CODE`; opening it fills the code and focuses your name (a remembered name makes it one click).
+- **Reconnect**: if a friend's connection drops (or their tab reloads) mid-match, a bot plays their seat for 20 s; joining the same code from the same tab takes it back (the menu offers it).
+- **Death recap**: who killed you, with what, from how far, headshot or not, the damage you took in the last 10 s by source, and what your killer had left.
+- **Match summary** on the end screen: kills, deaths, damage, seals, pieces built, cash collected and longest life per player, plus MVP / Builder / Sealer / Sharpshooter.
+- **Compass** over the timer: every island (owner's name, SEALED / OUT), your home bunker, the potion seller and the direction you were just shot from.
+- **Connection**: online, the scoreboard has a Ping column and the host's tick health; a small warning shows when your link stalls.
+- **Pause**: vs bots, Esc stops the simulation (online it only opens the menu).
+- **Combat**: low-ammo warning under the crosshair, ammo counts on every gun slot (amber: no spare mags, red: empty), an empty gun reloads by itself; in the shop Shift+click buys 5 of a building piece and **B** / *↻* re-buys the last item.
+- **Remembered**: vs-bot difficulty and bot count (1–7), the host's lobby seat layout, the last shop item; camera mode lives in Settings.
 
 ## Develop
 

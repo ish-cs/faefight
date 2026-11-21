@@ -1,7 +1,7 @@
 import { speedMult } from '../sim/potions';
 import { adsMoveCmd, adsSpeed } from '../sim/gunplay';
 import { DT } from '../sim/constants';
-import type { IslandLayout } from '../sim/map';
+import type { MapDef } from '../sim/map';
 import { newMoveState, stepMove, type MoveCmd, type MoveState, type Mover } from '../sim/movement';
 import { Physics } from '../sim/physics';
 import type { PlayerState, Snapshot, Vec3 } from '../sim/types';
@@ -38,7 +38,7 @@ export class Predictor {
 
   private constructor(private physics: Physics, readonly humanId: number) {}
 
-  static async create(map: IslandLayout[], humanId: number): Promise<Predictor> {
+  static async create(map: MapDef, humanId: number): Promise<Predictor> {
     return new Predictor(await Physics.create(map), humanId);
   }
 
@@ -49,6 +49,9 @@ export class Predictor {
   get current(): Readonly<Mover> | null { return this.state; }
 
   get pending() { return this.history.length; }
+
+  /** Predicted stamina (movement.ts), so the HUD bar reacts to sprint on the very next frame. */
+  get stamina(): number | null { return this.state && this.alive ? this.state.mv.stamina : null; }
 
   /** The local collision world (map + snapshot pieces + players); build aiming validates against it. */
   get world(): Physics { return this.physics; }

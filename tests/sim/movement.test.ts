@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { DT, PLAYER } from '../../src/sim/constants';
-import { accelerate, MOVE, newMoveState, stepMove, type MoveBody, type MoveCmd, type Mover } from '../../src/sim/movement';
+import { accelerate, MOVE, newMoveState, STAMINA, stepMove, stressFromDamage, type MoveBody, type MoveCmd, type Mover } from '../../src/sim/movement';
 import { v3 } from '../../src/sim/vec';
 
 /** Flat floor at y = 0 with an optional ledge: beyond x > ledgeX the floor drops away. */
@@ -172,5 +172,84 @@ describe('stepMove', () => {
       return m;
     };
     expect(run()).toEqual(run());
+  });
+});
+
+describe('stamina (sprint stress)', () => {
+  const run = (m: Mover, c: MoveCmd, sec: number) => { for (let i = 0; i < Math.round(sec / DT); i++) stepMove(m, c, DT, flatBody(m)); };
+  const sprintFwd = cmd({ moveZ: 1, sprint: true });
+
+  test('sprinting drains ~18/s and is faster than walking', () => {
+    const m = mover();
+    run(m, sprintFwd, 1);
+    expect(m.mv.stamina).toBeCloseTo(100 - STAMINA.drainPerSec, 0);
+    expect(speed(m)).toBeCloseTo(PLAYER.sprint, 2);
+  });
+
+  test('sprint stops at 0 (exhausted) and only comes back over 30', () => {
+    const m = mover();
+    run(m, sprintFwd, 6);
+    expect(m.mv.stamina).toBe(0);
+    expect(m.mv.exhausted).toBe(true);
+    run(m, sprintFwd, 0.5);
+    expect(speed(m)).toBeCloseTo(PLAYER.walk, 2); // held sprint but exhausted → walk
+    // Walking regenerates: past startMin but under recoverAt it's still exhausted.
+    for (let i = 0; i < 300 && m.mv.stamina < 20; i++) stepMove(m, cmd({ moveZ: 1 }), DT, flatBody(m));
+    expect(m.mv.stamina).toBeGreaterThan(STAMINA.startMin);
+    expect(m.mv.stamina).toBeLessThan(STAMINA.recoverAt);
+    run(m, sprintFwd, 0.2);
+    expect(speed(m)).toBeCloseTo(PLAYER.walk, 2);
+    run(m, cmd({ moveZ: 1 }), 1.5);
+    expect(m.mv.stamina).toBeGreaterThan(STAMINA.recoverAt);
+    run(m, sprintFwd, 0.3);
+    expect(speed(m)).toBeCloseTo(PLAYER.sprint, 2);
+  });
+
+  test("can't start a sprint below 15, but a running sprint continues", () => {
+    const m = mover();
+    m.mv.stamina = 14;
+    m.mv.rest = 0;
+    run(m, sprintFwd, 0.3);
+    expect(speed(m)).toBeCloseTo(PLAYER.walk, 2);
+    const k = mover();
+    k.mv.stamina = 20;
+    run(k, sprintFwd, 0.4); // started at 20, dips under 15 and keeps going
+    expect(k.mv.stamina).toBeLessThan(STAMINA.startMin);
+    expect(k.mv.sprinting).toBe(true);
+    expect(speed(k)).toBeCloseTo(PLAYER.sprint, 2);
+  });
+
+  test('regen waits 0.8 s, then 12/s walking and faster standing still', () => {
+    const walk = mover(), still = mover();
+    walk.mv.stamina = still.mv.stamina = 10;
+    walk.mv.rest = still.mv.rest = 0;
+    run(walk, cmd({ moveZ: 1 }), 0.7);
+    expect(walk.mv.stamina).toBe(10);
+    run(walk, cmd({ moveZ: 1 }), 1.3);
+    run(still, cmd(), 2);
+    expect(walk.mv.stamina).toBeGreaterThan(10 + 12 * 1.1);
+    expect(walk.mv.stamina).toBeLessThan(10 + 12 * 1.3);
+    expect(still.mv.stamina).toBeGreaterThan(walk.mv.stamina + 5);
+  });
+
+  test('damage stress: immediate drain proportional to damage and slower regen for 3 s', () => {
+    const calm = mover(), hurt = mover();
+    calm.mv.stamina = hurt.mv.stamina = 40;
+    stressFromDamage(hurt.mv, 25);
+    expect(hurt.mv.stamina).toBeCloseTo(40 - 25 * STAMINA.damagePerHp, 6);
+    hurt.mv.stamina = 40;
+    run(calm, cmd(), 2);
+    run(hurt, cmd(), 2);
+    expect(hurt.mv.stamina - 40).toBeLessThan((calm.mv.stamina - 40) * 0.5);
+    run(hurt, cmd(), 1.1);
+    expect(hurt.mv.stress).toBe(0);
+  });
+
+  test('jumping costs a little stamina', () => {
+    const m = mover();
+    m.mv.stamina = 50;
+    m.mv.rest = 0;
+    stepMove(m, cmd({ jump: true }), DT, flatBody(m));
+    expect(m.mv.stamina).toBeCloseTo(50 - STAMINA.jumpCost, 6);
   });
 });

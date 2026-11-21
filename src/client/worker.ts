@@ -15,6 +15,8 @@ const TAKEOVER_DIFFICULTY: Difficulty = 'medium';
 
 let match: Match | null = null;
 let humanId = 0;
+/** Vs-bot pause: the loop keeps running but takes no steps. */
+let paused = false;
 let groundYFor: (x: number, z: number) => number = () => 0;
 
 // One accumulator per human-controlled player (local + remote). Botified players are dropped.
@@ -48,6 +50,7 @@ function startLoop() {
   const loop = () => {
     const now = performance.now();
     let n = 0;
+    if (paused) { next = now + stepMs; setTimeout(loop, 50); return; } // no backlog to catch up on resume
     while (now >= next && n < 5) { step(); next += stepMs; n++; }
     if (now - next > stepMs * 5) next = now; // fell far behind (tab throttled): drop the backlog
     setTimeout(loop, Math.max(0, next - performance.now()));
@@ -70,7 +73,7 @@ async function start(setup: MatchSetup, localId: number) {
   const me = snap0.players.find((p) => p.id === humanId);
   if (humanId !== 0 && !me) throw new Error(`worker: human ${humanId} missing from snapshot`);
   const islands = setup.players.map((_, i) => snap0.players.find((p) => p.id === i + 1)?.island ?? i);
-  post({ type: 'map', map: m.map, humanId, humanIsland: me?.island ?? -1, islands });
+  post({ type: 'map', map: m.def, humanId, humanIsland: me?.island ?? -1, islands });
   startLoop();
 }
 
@@ -92,6 +95,17 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         if (!inputs.delete(msg.playerId)) break; // already a bot
         moveQueues.delete(msg.playerId);
         match.setBot(msg.playerId, TAKEOVER_DIFFICULTY);
+        break;
+      case 'humanize':
+        if (!match) throw new Error('humanize before start');
+        if (inputs.has(msg.playerId)) break; // already human
+        inputs.set(msg.playerId, new InputAccumulator());
+        moveQueues.set(msg.playerId, new MoveQueue());
+        match.setHuman(msg.playerId);
+        break;
+      case 'pause':
+        paused = msg.paused;
+        console.info(`[worker] ${paused ? 'paused' : 'resumed'}`);
         break;
       case 'preview':
         if (match) post({ type: 'preview', playerId: msg.playerId, result: match.previewBuild(msg.playerId, msg.req), key: msg.key });

@@ -48,7 +48,7 @@ export class BunkerGrid {
     this.z0 = bunker.center.z - SEAL.half;
     const r = PLAYER.radius;
     const boxes: Box[] = [];
-    for (const b of bunkerWallBoxes(bunker)) {
+    for (const b of bunkerWallBoxes(bunker, false)) {
       if (b.center.y - b.half.y >= bunker.center.y + BODY_TOP) continue;
       boxes.push({ center: b.center, hx: b.half.x + r, hz: b.half.z + r, rotY: b.rotY, piece: null });
     }

@@ -10,7 +10,7 @@ import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } fr
 import { BUILD_SKILL, BUILD_TUNING as BT, flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
-import { Nav, insideBunker, islandAt, lane, laneAt, laneS, type Lane } from './nav';
+import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
   TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
@@ -21,11 +21,13 @@ import type { BotView, OtherStatus } from './view';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'fleeTide' | 'heal' | 'cover' | 'fortify';
+  | 'fight' | 'disengage' | 'fleeTide' | 'heal' | 'cover' | 'fortify' | 'contest';
 const GOALS: Goal[] = [
   'fleeTide', 'defend', 'disengage', 'cover', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'fortify', 'shop', 'heal', 'collect',
+  'fortify', 'shop', 'heal', 'contest', 'collect',
 ];
+/** Center gold worth a trip, and how far a bot will go out of its way for it. */
+const CONTEST_AT = 150;
 
 /** How often a bot reconsiders what to do, and how long it hesitates after changing plans (human thinking time). */
 const RESCORE_SEC: Record<Difficulty, number> = { easy: 1.6, medium: 1.0, hard: 0.5, pro: 0.3 };
@@ -138,6 +140,9 @@ type Ctx = {
   reach: boolean;
   homeReach: boolean;
   openDoors: Doorway[];
+  /** Node (island, or the center island) the next bridge goes to, and whether I can already walk to the center. */
+  bridgeTo: number | null;
+  centerReach: boolean;
   /** Someone is shooting at me or close to me right now. */
   danger: boolean;
 };
@@ -191,8 +196,13 @@ export class Bot {
   private lastNadeAt = -Infinity;
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
+  /** Low on stamina: walk (save it for escapes) until it's back up. */
+  private winded = false;
+  private lastScores: { goal: string; score: number }[] = [];
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
   private view!: BotView;
+  /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
+  private readonly centerMinded: boolean;
 
   constructor(readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality) {
     this.personality = personality ?? rollPersonality(rng);
@@ -210,11 +220,14 @@ export class Bot {
     };
     this.aim = new Aim(AIM[difficulty], rng);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
+    this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
 
   get currentGoal(): Goal { return this.goal; }
   /** Rival this bot is currently going after (player id), if any. */
   get currentTarget(): number | null { return this.targetId; }
+  /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
+  get planScores(): { goal: string; score: number }[] { return this.lastScores; }
 
   think(view: BotView): PlayerInput {
     const me = view.self;
@@ -324,14 +337,18 @@ export class Bot {
         (!enemy || ctx.enemyDist > 30) && now - this.mem.lastHurtAt > 0.5) {
       select = kit; useMedkit = true; fire = false;
     }
-    const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE);
+    // Stamina (movement.ts): like a human, stop sprinting around when winded and keep the rest for getting away.
+    if (me.stamina < 30) this.winded = true; else if (me.stamina > 70) this.winded = false;
+    const cv = view.center;
+    const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
+      (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
     if (act.build) {
       this.lastPieceAt = now;
     }
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
-      sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach),
+      sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
       // Same spread rules as players: aim down sights for anything past close range.
@@ -369,14 +386,11 @@ export class Bot {
   // ---------------------------------------------------------------- target choice
 
   private scaffoldsTo(from: number, to: number): number {
-    const map = this.view.map;
-    if (this.alt.has(to) && from === this.view.self.island) {
+    if (this.alt.has(to) && from === this.view.self.island && to < this.view.map.length) {
       const f = this.mirrorFrontier(to);
-      return Math.max(1, Math.ceil((f.s - Math.sqrt(map[to].radius ** 2 - 9)) / SCAFFOLD_STEP));
+      return Math.max(1, Math.ceil((f.s - Math.sqrt(this.view.map[to].radius ** 2 - 9)) / SCAFFOLD_STEP));
     }
-    const l = lane(map, from, to);
-    const left = l.length - Math.sqrt(map[to].radius ** 2 - 9) - this.nav.frontier(l).s;
-    return Math.max(1, Math.ceil(left / SCAFFOLD_STEP));
+    return this.nav.scaffoldsTo(from, to, SCAFFOLD_STEP);
   }
 
   /**
@@ -405,8 +419,8 @@ export class Bot {
   private rivalFacts(view: BotView): RivalFacts[] {
     const me = view.self, now = view.now;
     const home = me.island;
-    const on = islandAt(view.map, me.pos);
-    const src = on >= 0 ? on : home;
+    const node = this.nav.nodeAt(me.pos);
+    const src = node >= 0 ? node : home;
     const alive = view.others.filter((o) => !o.eliminated && o.island !== home);
     const leaderKills = Math.max(0, ...view.others.map((o) => o.kills));
     return alive.map((o) => {
@@ -453,7 +467,8 @@ export class Bot {
     const home = view.map[me.island];
     if (!home) throw new Error(`Bot ${this.id}: island ${me.island} is not on the map`);
     const on = islandAt(view.map, me.pos);
-    const src = on >= 0 ? on : home.index;
+    const node = this.nav.nodeAt(me.pos);
+    const src = node >= 0 ? node : home.index;
     let rival = this.targetId === null ? null : view.others.find((o) => o.id === this.targetId && !o.eliminated) ?? null;
     if (!rival) {
       this.targetId = null;
@@ -468,15 +483,21 @@ export class Bot {
       if (e.alive && d < enemyDist) { enemy = e; enemyDist = d; }
     }
     const reach = !!rivalIsl && (on === rivalIsl.index || this.nav.hop(src, rivalIsl.index) !== null);
-    const homeReach = on === home.index || on < 0 || this.nav.hop(on, home.index) !== null;
+    const homeReach = node === home.index || node < 0 || this.nav.hop(node, home.index) !== null;
     const openDoors = rivalIsl ? rivalIsl.bunker.doorways.filter((d) => !doorBlocked(view.pieces, d)) : [];
     const danger = view.now - this.mem.lastHurtAt < 3 || (!!enemy && enemyDist < 40);
-    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, homeReach, openDoors, danger };
+    const C = this.nav.centerNode;
+    const centerReach = C >= 0 && (node === C || this.nav.hop(src, C) !== null);
+    let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
+    // Center-minded: bridge to the center island first when it isn't much further than the rival.
+    if (C >= 0 && this.centerMinded && !centerReach && !view.suddenDeath &&
+        (bridgeTo === null || this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + 2)) bridgeTo = C;
+    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, homeReach, openDoors, bridgeTo, centerReach, danger };
   }
 
   private scaffoldsNeeded(c: Ctx): number {
-    if (c.reach || !c.rivalIsl) return 0;
-    return this.scaffoldsTo(c.home.index, c.rivalIsl.index);
+    if (c.bridgeTo === null) return 0;
+    return this.scaffoldsTo(c.home.index, c.bridgeTo);
   }
 
   private needs(c: Ctx): Needs {
@@ -646,7 +667,7 @@ export class Bot {
       for (const p of c.view.pieces) {
         if (p.kind !== 'scaffold' || p.owner === c.me.id || laneOff(l, p.pos) > 1.5) continue;
         const s = laneS(l, p.pos);
-        if (s > bestS && s < l.length - Math.sqrt(map[home].radius ** 2 - 9) + 2) { bestS = s; best = p; }
+        if (s > bestS && s < l.length - landEdge(map[home]) + 2) { bestS = s; best = p; }
       }
       if (best) return best;
     }
@@ -751,11 +772,23 @@ export class Bot {
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
-        if (c.reach || !c.rivalIsl || have === 0 || view.now < this.bridgeHoldUntil) return 0;
-        // Bridges are one-way (see Nav.bridge): don't finish one before carrying a full seal kit.
+        if (c.bridgeTo === null || have === 0 || view.now < this.bridgeHoldUntil) return 0;
+        // Bridges are one-way (see Nav.bridge): don't finish one to a rival before carrying a full seal kit.
         const need = this.scaffoldsNeeded(c);
-        if (need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
-        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0);
+        const toRival = c.bridgeTo !== this.nav.centerNode;
+        if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
+        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed);
+      }
+      case 'contest': {
+        const cv = view.center;
+        if (!cv || !c.centerReach || view.suddenDeath) return 0;
+        const room = me.hotbar.includes(null) || me.hotbar.includes('sandbags');
+        const supplies = cv.bags + cv.steel > 0 && room ? 0.12 + 0.05 * cv.steel : 0;
+        if (cv.gold < (this.centerMinded ? CONTEST_AT : 2.5 * CONTEST_AT) && !supplies) return 0;
+        const far = dist2D(me.pos, cv.island.center) / 150;
+        // Rich bots have better things to do than farm the middle.
+        const rich = Math.min(0.3, (me.inv.cash + me.vault.cash) / 3000);
+        return 0.1 + 0.25 * t.greed + 0.1 * t.opportunism + Math.min(cv.gold, 1000) / 2000 + supplies - far - rich - (c.danger ? 0.2 : 0);
       }
       case 'attack': {
         if (!c.reach || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
@@ -821,12 +854,15 @@ export class Bot {
   private pick(c: Ctx): Goal {
     if (this.trapped(c)) return 'defend';
     let best: Goal = (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
+    const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
       const base = this.drive(g, c, this.score(g, c));
       if (base <= 0 && g !== best) continue;
       const s = base + (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
+      scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
     }
+    this.lastScores = scored.sort((a, b) => b.score - a.score).slice(0, 4);
     return best;
   }
 
@@ -907,6 +943,7 @@ export class Bot {
       case 'cover': return this.doCover(c);
       case 'fortify': return this.doFortify(c);
       case 'fleeTide': return this.doFleeTide(c);
+      case 'contest': return this.doContest(c);
     }
   }
 
@@ -960,23 +997,35 @@ export class Bot {
     return { ...walk, vault: { deposit: { cash } } };
   }
 
+  /** Grab the center island's gold (and free pieces, when they fit). */
+  private doContest(c: Ctx): Act {
+    const cv = c.view.center;
+    if (!cv) return IDLE;
+    const room = c.me.hotbar.includes(null) || c.me.hotbar.includes('sandbags');
+    const supplyFirst = cv.bags + cv.steel > 0 && room && (cv.gold < CONTEST_AT ||
+      dist2D(c.me.pos, cv.island.supplyGen) < dist2D(c.me.pos, cv.island.goldGen));
+    if (cv.gold < 1 && !supplyFirst) { this.nextScoreAt = c.view.now; return IDLE; }
+    return this.goTo(supplyFirst ? cv.island.supplyGen : cv.island.goldGen, 1.6);
+  }
+
   private doBridge(c: Ctx): Act {
-    if (!c.rivalIsl) return IDLE;
-    const to = c.rivalIsl.index, now = c.view.now;
-    const mirror = this.alt.has(to);
-    // Main lane runs from my side (s grows toward them); the mirror lane is measured from their side.
+    if (c.bridgeTo === null) return IDLE;
+    const to = c.bridgeTo, now = c.view.now;
+    const toRival = to !== this.nav.centerNode;
+    // Main lane runs from my side (s grows toward them); the mirror lane (rivals only) is measured from their side.
+    const mirror = toRival && this.alt.has(to);
     const m = mirror ? this.mirrorFrontier(to) : null;
-    const l = m ? m.l : lane(c.view.map, c.home.index, to);
+    const l = m ? m.l : this.nav.lane(c.home.index, to);
     const f = m ?? this.nav.frontier(l);
     const sign = mirror ? -1 : 1;
     const at = (k: number) => laneAt(l, f.s + sign * k);
     if (f.complete) { this.nextScoreAt = now; return IDLE; }
-    if (this.scaffoldsNeeded(c) <= 1 && sealKit(c.me.inv) < c.openDoors.length) { this.nextScoreAt = now; return IDLE; }
+    if (toRival && this.scaffoldsNeeded(c) <= 1 && sealKit(c.me.inv) < c.openDoors.length) { this.nextScoreAt = now; return IDLE; }
     const key = `${l.from}>${l.to}`;
     // My bridge got shot out (a gap where decks were): skilled players lay an alternate one on the other lane
     // instead of feeding the same spot to whoever is covering it.
     const best = this.laneBest.get(key) ?? -Infinity;
-    if (!mirror && f.s < best - 3) {
+    if (toRival && !mirror && f.s < best - 3) {
       this.laneBest.set(key, f.s);
       if (BUILD_SKILL[this.difficulty].altRoute) { this.alt.add(to); this.nextScoreAt = now; return IDLE; }
     }
@@ -991,7 +1040,7 @@ export class Bot {
     const out = mirror ? l.length - shore - f.s : f.s - shore;
     const lastWall = this.lastWallS.get(key) ?? -Infinity;
     const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
-    if (wall && BUILD_SKILL[this.difficulty].bridgeCover && this.wallsOnBridge && out > BT.bridgeWallFrom && Math.abs(f.s - lastWall) >= BT.bridgeWallEvery) {
+    if (wall && toRival && BUILD_SKILL[this.difficulty].bridgeCover && this.wallsOnBridge && out > BT.bridgeWallFrom && Math.abs(f.s - lastWall) >= BT.bridgeWallEvery) {
       this.lastWallS.set(key, f.s);
       const side = flankSide(c.view.map, c.home.index, to) * (mirror ? -1 : 1);
       const p = add(at(-1.6), scale(right(yawOf(l.dir)), side * 0.85));
@@ -1017,7 +1066,7 @@ export class Bot {
       // Stuck a while: skilled players go round on the other lane; anyone else leaves it for now.
       if (now - st.since > BT.bridgeStuckSec) {
         this.bridgeStuck = null;
-        if (!mirror && BUILD_SKILL[this.difficulty].altRoute) this.alt.add(to);
+        if (toRival && !mirror && BUILD_SKILL[this.difficulty].altRoute) this.alt.add(to);
         else { this.alt.delete(to); this.bridgeHoldUntil = now + BT.bridgeHoldSec; }
         this.nextScoreAt = now;
       }

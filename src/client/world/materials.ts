@@ -1,8 +1,8 @@
 import * as THREE from 'three/webgpu';
-import { float, mix, positionLocal, positionWorld, smoothstep, sin, cos, texture, time, uv, vec2, vec3 } from 'three/tsl';
+import { color, cos, float, mix, positionLocal, positionWorld, sin, smoothstep, step, texture, time, uv, vec2, vec3, vertexColor } from 'three/tsl';
 import { MAP } from '../../sim/constants';
 import { applyPbr, pbrMaterial, pbrSample, worldNoise } from './pbr';
-import { awningTex, barkTex, frondTex, leafBlobTex, seawallTex } from './textures';
+import { awningTex, barkTex, chainTex, frondTex, leafBlobTex, seawallTex } from './textures';
 
 type Opts = ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0];
 const std = (name: string, o: Opts) => {
@@ -44,7 +44,7 @@ let M: ReturnType<typeof make> | null = null;
 function make() {
   return {
     /** bunker walls, coping, cast concrete */
-    concrete: pbrMaterial('concrete', 'concrete_wall', { lum: 0.237, tint: 0xb4b0a8, macro: 0.15, untile: 'shift' }),
+    concrete: mossyBase(pbrMaterial('concrete', 'concrete_wall', { lum: 0.237, tint: 0xb4b0a8, macro: 0.15, untile: 'shift' })),
     /** flat paving (quay slab) */
     slab: pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1 }),
     asphalt: pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1 }),
@@ -69,7 +69,38 @@ function make() {
     /** loose gravel patches (world-space xz) */
     gravel: pbrMaterial('gravel', 'gravel', { uvNode: positionWorld.xz.div(1.6), tint: 0xe2ddd5, macro: 0.15 }),
     glow: std('glow', { color: 0x0c2a10, emissive: 0x2bff5a, emissiveIntensity: 2.2, roughness: 0.4 }),
+    chain: std('chain', { map: chainTex(), alphaTest: 0.4, side: THREE.DoubleSide, metalness: 0.6, roughness: 0.5 }),
+    /** Self-lit parts whose light colour is the vertex colour (gold bars, potions, lamp heads, LEDs). */
+    lit: (() => {
+      const m = std('lit', { roughness: 0.35 });
+      m.emissiveNode = vertexColor().mul(1.6);
+      return m;
+    })(),
+    /** Shield well ring: cyan, slowly pulsing. */
+    shield: (() => {
+      const m = std('shield', { color: 0x0a2a33, roughness: 0.3 });
+      m.emissiveNode = color(0x46d8ff).mul(sin(time.mul(2.2)).mul(0.35).add(1.6)).mul(vertexColor());
+      return m;
+    })(),
+    /** Faint additive light column over the shield well (v=0 bottom → fades out at the top). */
+    beam: (() => {
+      const m = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+      m.name = 'beam';
+      const fade = float(1).sub(uv().y);
+      m.colorNode = color(0x46c8ff).mul(float(0.22).add(sin(time.mul(2.2)).mul(0.05))).mul(fade.mul(fade));
+      return m;
+    })(),
   };
+}
+
+/** Moss + damp grime creeping up the first ~30 cm of cast concrete from the quay deck (bunkers, kerbs). */
+function mossyBase(m: THREE.MeshStandardNodeMaterial) {
+  const h = positionWorld.y.sub(MAP.groundY);
+  const n = worldNoise(0.9, 'g');
+  const moss = float(1).sub(smoothstep(0.02, n.mul(0.35).add(0.08), h)).mul(step(-0.05, h)).mul(smoothstep(0.25, 0.6, worldNoise(0.35)).mul(0.6).add(0.4));
+  m.colorNode = mix(m.colorNode as THREE.Node<'vec3'>, vec3(0.07, 0.1, 0.035).mul(n.mul(0.6).add(0.7)), moss.mul(0.85));
+  m.roughnessNode = mix(m.roughnessNode as THREE.Node<'float'>, float(0.95), moss);
+  return m;
 }
 
 /** Riprap / boulders: triplanar rock, dark + glossy below the tide line, a touch of algae green near the water. */

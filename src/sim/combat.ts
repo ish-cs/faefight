@@ -2,6 +2,7 @@ import {
   CHARGE, DT, GRENADE, HEAD, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
 } from './constants';
 import { damagePiece } from './building';
+import { stressFromDamage } from './movement';
 import { bloomAfterShot, coneOffset, DEG, falloff, hash01, magCap, nextBurst, recoilKick, reloadTime, shellsLoadedBy, spreadDeg } from './gunplay';
 import type { Physics, RayHit } from './physics';
 import type { MatchEvent, PieceState, PlayerState, Projectile, Vec3 } from './types';
@@ -69,6 +70,8 @@ export function applyPlayerDamage(
   target.shield = had - shieldAmount;
   target.hp -= amount - shieldAmount;
   target.lastDamagedAt = now;
+  // Getting hurt is stressful: less stamina now and slower recovery for a while (movement.ts).
+  if (target.mv) { stressFromDamage(target.mv, amount); target.stamina = target.mv.stamina; }
   const broke = had > 0 && target.shield <= 0;
   const { bypassShield: _bypass, ...info } = opts;
   const out = [ev(now, 'hit', { target: target.id, by: attackerId, amount, shieldAmount, broke, ...info })];
@@ -144,7 +147,8 @@ export function tryFire(ctx: CombatCtx, p: PlayerState, now: number): MatchEvent
     const hits: MatchEvent[] = [];
     for (let i = 0; i < spec.pellets; i++) {
       const dir = pelletDir(p.yaw, p.pitch, cone, seed, i, spec.pellets, ring);
-      const hit = ctx.castShot ? ctx.castShot(eye, dir, spec.range, p.id) : ctx.physics.raycast(eye, dir, spec.range, p.id);
+      // Bullets pass bunker firing slits.
+      const hit = ctx.castShot ? ctx.castShot(eye, dir, spec.range, p.id) : ctx.physics.raycast(eye, dir, spec.range, p.id, true);
       const to = hit ? hit.point : add(eye, scale(dir, spec.range));
       if (i === 0) shot.to = to; else tos.push(rv(to));
       if (!hit) continue;
@@ -298,7 +302,7 @@ function explode(ctx: CombatCtx, e: Explosive, now: number): MatchEvent[] {
   } else if (e.kind === 'grenade') {
     for (const pl of ctx.players.values()) {
       const d = dist(bodyCenter(pl), e.pos);
-      if (d < GRENADE.radius) out.push(...applyPlayerDamage(ctx, pl, GRENADE.dmg * (1 - d / GRENADE.radius), e.owner, now));
+      if (d < GRENADE.radius) out.push(...applyPlayerDamage(ctx, pl, GRENADE.dmg * (1 - d / GRENADE.radius), e.owner, now, { weapon: 'grenade' }));
     }
     for (const pc of [...ctx.pieces.values()]) {
       const d = dist(pieceCenter(pc), e.pos);
@@ -306,7 +310,7 @@ function explode(ctx: CombatCtx, e: Explosive, now: number): MatchEvent[] {
     }
   } else {
     for (const pl of ctx.players.values())
-      if (dist(bodyCenter(pl), e.pos) < CHARGE.playerRadius) out.push(...applyPlayerDamage(ctx, pl, CHARGE.playerDmg, e.owner, now));
+      if (dist(bodyCenter(pl), e.pos) < CHARGE.playerRadius) out.push(...applyPlayerDamage(ctx, pl, CHARGE.playerDmg, e.owner, now, { weapon: 'charge' }));
     for (const pc of [...ctx.pieces.values()])
       if (dist(pieceCenter(pc), e.pos) < CHARGE.radius) out.push(...hitPiece(ctx, pc.id, CHARGE.pieceDmg, 'explosive', now, e.owner, pieceCenter(pc)));
   }

@@ -24,7 +24,7 @@ export function isSealed(bunker: Bunker, pieces: PieceState[], pieceMargin = 0):
   const g = bunker.center.y;
   const r = PLAYER.radius;
   const blockers: Footprint[] = [];
-  for (const b of bunkerWallBoxes(bunker)) {
+  for (const b of bunkerWallBoxes(bunker, false)) { // slits never count: whole walls
     if (b.center.y - b.half.y >= g + BODY_TOP) continue;
     blockers.push({ center: b.center, hx: b.half.x + r, hz: b.half.z + r, rotY: b.rotY });
   }

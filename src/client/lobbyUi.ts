@@ -1,6 +1,7 @@
 import type { Slot } from '../net/protocol';
 import { CHAT_MAX_LEN, MAX_PLAYERS } from '../net/protocol';
 import type { Difficulty } from '../sim/types';
+import { MAP_NAMES, MAP_TEMPLATES, type MapChoice } from '../sim/map';
 import { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 import { seatSlider, slotToStop, stopToSlot } from './seatSlider';
 
@@ -9,6 +10,7 @@ export type LobbyActions = {
   addSeat(): void;
   removeSeat(i: number): void;
   kick(i: number): void;
+  setMap(choice: MapChoice): void;
   start(): void;
   back(): void;
 };
@@ -17,6 +19,44 @@ const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
 const LOBBY_CHAT_LINES = 3;
 /** Lobby tag: "easy", "medium", "hard", "PRO". */
 const diffTag = (d: Difficulty) => (d === 'pro' ? 'PRO' : d);
+
+const choiceName = (c: MapChoice) => (c === 'random' ? 'Random' : MAP_NAMES[c]);
+
+/**
+ * Map picker: a segmented control [Harbor] [Container Yard] [Random], the chosen one highlighted (no dropdowns).
+ * Random plays a different map than last time, each match. Buttons are `${testid}-${choice}`.
+ */
+export class MapPicker {
+  readonly root = el('div', 'map-picker');
+  private buttons = new Map<MapChoice, HTMLButtonElement>();
+  private current: MapChoice;
+
+  constructor(value: MapChoice, testid: string, private onChange: (c: MapChoice) => void) {
+    this.current = value;
+    this.root.setAttribute('role', 'radiogroup');
+    this.root.setAttribute('aria-label', 'Map');
+    this.root.dataset.testid = testid;
+    for (const c of [...MAP_TEMPLATES, 'random'] as MapChoice[]) {
+      const b = el('button', 'map-opt', choiceName(c));
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.dataset.testid = `${testid}-${c}`;
+      b.dataset.value = c;
+      b.onclick = () => { if (c !== this.current) { this.value = c; this.onChange(c); } };
+      this.buttons.set(c, b);
+      this.root.append(b);
+    }
+    this.value = value;
+  }
+
+  get value(): MapChoice { return this.current; }
+  set value(c: MapChoice) {
+    this.current = c;
+    this.root.dataset.value = c;
+    for (const [k, b] of this.buttons) { b.classList.toggle('selected', k === c); b.setAttribute('aria-checked', String(k === c)); }
+  }
+  set disabled(d: boolean) { for (const b of this.buttons.values()) b.disabled = d; }
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -36,6 +76,9 @@ export class LobbyUi {
   private footer = el('div', 'lobby-footer');
   private status = el('div', 'lobby-status');
   private startBtn: HTMLButtonElement | null = null;
+  private mapRow = el('div', 'lobby-map');
+  private mapSel: MapPicker | null = null;
+  private mapText = el('span', 'lobby-map-name');
   private feed = el('div', 'lobby-feed');
   /** Slider stop per seat at the last render, so a re-render slides the thumb from where it was. */
   private stops = new Map<number, number>();
@@ -68,7 +111,15 @@ export class LobbyUi {
       this.status.textContent = 'Waiting for host…';
       this.footer.append(backBtn);
     }
-    this.card.append(el('h1', '', 'Lobby'), title, codeRow, hint, this.list, this.status, this.footer);
+    this.mapRow.append(el('span', 'label', 'Map'));
+    if (actions) {
+      this.mapSel = new MapPicker('harbor', 'lobby-map', (c) => actions.setMap(c));
+      this.mapRow.append(this.mapSel.root);
+    } else {
+      this.mapText.dataset.testid = 'lobby-map-name';
+      this.mapRow.append(this.mapText);
+    }
+    this.card.append(el('h1', '', 'Lobby'), title, codeRow, hint, this.mapRow, this.list, this.status, this.footer);
     if (send) {
       // Below the buttons, fixed height: lines arriving never move anything.
       const box = el('div', 'lobby-chat');
@@ -90,8 +141,11 @@ export class LobbyUi {
     parent.append(this.root);
   }
 
-  render(slots: Slot[], you: number) {
+  render(slots: Slot[], you: number, map: MapChoice = 'harbor') {
     const a = this.actions;
+    if (this.mapSel) { this.mapSel.value = map; this.mapSel.disabled = false; }
+    this.mapText.textContent = choiceName(map);
+    if (!this.startBtn) { this.status.textContent = 'Waiting for host…'; delete this.status.dataset.testid; }
     // Seats are rebuilt on every change: keep keyboard focus on the same control.
     const focused = this.list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.testid : undefined;
     const prevStops = this.stops;
@@ -154,6 +208,14 @@ export class LobbyUi {
         : players < 2 ? 'Add a seat: you are spectating, so at least 2 other players are needed'
         : `${players} players ready${players < slots.length ? ' · you are spectating' : ''}`;
     }
+  }
+
+  /** The host started: show which map is loading. */
+  loading(mapName: string) {
+    this.status.textContent = `Loading ${mapName}…`;
+    this.status.dataset.testid = 'lobby-loading';
+    if (this.mapSel) this.mapSel.disabled = true;
+    this.mapText.textContent = mapName;
   }
 
   /** A chat line in the lobby's chat box (from = '' → system line). Text only, never HTML. */

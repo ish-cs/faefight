@@ -1,6 +1,6 @@
 # FAEFight — Map variety (design note, not scheduled)
 
-Date: 2026-11-20 · Status: thinking ahead, not for build yet ("We don't have to worry about map variety for now. But later, yes.")
+Date: 2026-11-20 · Status: **phase 1 built** (see §8); later phases still design only.
 Scope when built: `src/sim/map.ts`, `src/sim/physics.ts`, `src/sim/bots/{nav,bot}.ts`, `src/client/world/*`, `src/net/protocol.ts`, lobby UI.
 
 ## 1. Where we are today
@@ -179,3 +179,41 @@ Recommended order: 0 → 1b → 1a → 2 → 3 → 4 (1a can run in parallel wit
 - ❓ Map statics (container stacks, catwalks): indestructible (proposed, keeps nav simple), or breakable like pieces?
 - ❓ Who picks the map: host in lobby (proposed), random each match, or both?
 - ❓ Lightning hitting the tallest piece: fun counter to towers, or too random?
+
+## 8. Phase 1 as built (2026-11-20)
+
+Decisions (Ishaan): built-in cover unbreakable, cosmetic props breakable · host picks the map or Random · center island on
+every map with bonus generators · potions sold by an NPC on the center island.
+
+- [x] `MapDef` (`src/sim/map.ts`): `template`, `name`, `seed`, `waterY`, `tideRate`, `islands`, `center`, `statics`,
+  `cosmetics`. `buildMapDef(n, template, seed)`; `buildMap(n)` = harbor islands, golden-tested against the original code.
+  Host sends the MapDef in `start` (NET_VERSION 4); lobby message carries the map choice.
+- [x] Neutral **center island** on every map, equally far from every island, no pre-built walkways. 3+ players: at the
+  ring centre (radius 10–14, gap ≥ 8 m). 2 players: off to the side on the bisector, island→center gap = half the island
+  gap, so it is a detour, not a cheap stepping stone on the direct route (on the axis it halved 1v1 bridging and
+  flattened the bot skill ladder: PRO beat hard 11/20 instead of 15/20). Stations: **gold generator** (2× home rate, cap $1000, anyone collects, first come first served),
+  **supply generator** (a free sandbag every 8 s up to 10, a steel plate every 60 s up to 2; collected with E; a new kind
+  needs a free hotbar slot, what doesn't fit stays), **shield well** (stand in it: +4 shield/s up to 50), **potion seller
+  NPC** (`match.potionShops` = `[center.potionShop]`). Three low concrete barriers as cover. All stop in sudden death.
+- [x] **Cover vs cosmetics**: `statics` are solid `world` colliders (bullets/explosives can't touch them, pieces rest on
+  them, camera/anti-ESP occluders, bot obstacles). `cosmetics` (barrels, crates, fences, palms, lamps, bollards) have
+  sim-authoritative hp but **no colliders**: bullets pass through and damage them, explosions break them, the snapshot
+  lists `broken` ids, `cosmeticBroken` events drive debris. They can never affect movement, seals or support.
+- [x] **Container Yard** template: r 19 islands, 26 m gaps (the ring grows a few cm at n = 3 to keep the center gap), three
+  container statics per island (1-high and 2-high flank stacks, a 1-high front wall), all ≥ 9 m from the bunker.
+- [x] Map picking: lobby segmented control [Harbor] [Container Yard] [Random] for the host, read-only for joiners; the
+  same control on the vs-bot menu (remembered). No dropdowns. Random never repeats the previous map of that host session (rematches included).
+- [x] Bots: nav nodes = islands + center; Dijkstra over finished bridges; per-node 0.5 m walk grid + A* around cover
+  (straight line when clear); walk to a bridge's start around cover first; `contest` goal (gold/supplies);
+  greedy/opportunist bots bridge to the center first when it's not much further than their rival.
+- [x] Tests: harbor golden, fairness per template × 2..8 players, 9 m bunker clearance, ground probes, walk-grid
+  reachability, center stations, cover indestructible, cosmetics breakable, Random no-repeat, yard bot soaks.
+
+- [x] **Bunker firing slits** (approved later the same day): a 0.6 × 0.18 m slit at 1.35–1.53 m in each door-wall
+  segment and two in the back wall (8 per bunker). `bunkerWallBoxes(b)` splits the walls around them; slit plugs
+  (`bunkerSlitBoxes`) block players, grenades and rockets, while bullets and bot/anti-ESP sight pass
+  (`Physics.raycast(..., throughSlits)`). `isSealed` and the bot escape grid use whole walls (`bunkerWallBoxes(b, false)`),
+  so seals are unchanged.
+
+Left for later phases: more templates (Caldera, Rig, Stilts), themes (dusk/storm/fog), pre-built walkways/links,
+seeded variation knobs, hazards.
