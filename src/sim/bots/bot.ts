@@ -8,6 +8,7 @@ import type {
   BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, VaultAction, Vec3, WeaponKind,
 } from '../types';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
+import { isRng, mulberry32 } from '../rng';
 import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
 import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
@@ -246,7 +247,10 @@ export class Bot {
       invest: t.patience > 0.75,
       buildFirst: t.builder > 0.7,
     };
-    this.aim = new Aim(AIM[difficulty], rng, P.aim.feel[difficulty]);
+    // Aim noise draws every tick while tracking: its own stream (seeded from the match rng's state without
+    // drawing from it), so how a bot's hand wobbles never shifts the match's other random rolls.
+    const aimSeed = ((isRng(rng) ? rng.state.a : 0x51ed270b) ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
+    this.aim = new Aim(AIM[difficulty], mulberry32(aimSeed), P.aim.feel[difficulty]);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
