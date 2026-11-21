@@ -709,6 +709,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const renderer = await Renderer.create(canvas);
   const prevLost = renderer.gpu.onDeviceLost.bind(renderer.gpu);
   renderer.gpu.onDeviceLost = (info) => { errors?.report('gpu', `device lost: ${info.message} (${info.reason ?? 'unknown'})`); prevLost(info); };
+  renderer.world.onCritterSound = (s) => audio.critter(s);
   loading.progress('gpu', 1, 'Starting the simulation');
   loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
   loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
@@ -1225,6 +1226,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       mapDef: () => mapDef,
       humanId: () => humanId,
       renderInfo: () => renderer.info(),
+      /** Wildlife: drawn instances per species / swarm, and live agents (incl. hidden + off-screen) per species. */
+      critters: () => {
+        const c = renderer.world.critters;
+        if (!c) return null;
+        const live: Record<string, number> = {};
+        for (const a of c.sim.agents) live[a.def.name] = (live[a.def.name] ?? 0) + 1;
+        return { drawn: c.stats(), live };
+      },
       renderer,
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
       input,
