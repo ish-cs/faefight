@@ -1,5 +1,5 @@
 import type * as THREE from 'three/webgpu';
-import { float, max, min, mix, normalViewGeometry, normalWorldGeometry, smoothstep, uniform, vec4 } from 'three/tsl';
+import { float, max, min, mix, normalViewGeometry, normalWorldGeometry, renderGroup, smoothstep, uniform, vec4 } from 'three/tsl';
 import { worldNoise } from './pbr';
 
 type F = THREE.Node<'float'>;
@@ -11,7 +11,8 @@ type V3 = THREE.Node<'vec3'>;
  * water), most on up-facing surfaces; on flat ground standing puddles open up as it gets wetter (mirror-smooth,
  * flat normal). StormFx drives it from the rain; `WET.dew` lets a night cycle add morning damp.
  */
-export const wetness = uniform(0);
+// shared render-group uniform: uploaded once per render, not per object drawn (it is in most world materials)
+export const wetness = uniform(0).setGroup(renderGroup);
 
 export const WET = {
   /** s to soak through once rain starts / to dry out after it stops (time constants) */

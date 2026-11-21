@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { attribute, float, mix, smoothstep, texture, uniform, uv, vec3 } from 'three/tsl';
+import { attribute, float, mix, renderGroup, smoothstep, texture, uniform, uv, vec3 } from 'three/tsl';
 import type { SurfaceMap, WorldSurface } from './surfaces';
 import { wetness } from './wetness';
 
@@ -83,7 +83,7 @@ export class Footprints {
   private next = 0;
   private high = 0;
   private readonly t0 = performance.now();
-  private readonly clock = uniform(0);
+  private readonly clock = uniform(0).setGroup(renderGroup);
   surfaces: SurfaceMap | null = null;
 
   constructor() {
@@ -105,6 +105,7 @@ export class Footprints {
     mat.opacityNode = a.mul(fp.z).mul(fade);
     this.mesh = new THREE.InstancedMesh(geo, mat, FOOTPRINT_CAP);
     this.mesh.count = 0;
+    this.mesh.visible = false; // no draw until the first print
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 2;
     this.mesh.receiveShadow = true;
@@ -127,6 +128,7 @@ export class Footprints {
     this.mesh.setMatrixAt(i, _m);
     this.attr.setXYZ(i, this.now(), how.life, how.strength);
     this.mesh.count = this.high;
+    this.mesh.visible = true;
     this.mesh.instanceMatrix.addUpdateRange(i * 16, 16);
     this.mesh.instanceMatrix.needsUpdate = true;
     this.attr.addUpdateRange(i * 3, 3);
@@ -139,7 +141,7 @@ export class Footprints {
   update() { this.clock.value = this.now(); }
 
   /** Drop every print (new map). */
-  clear() { this.mesh.count = this.high = this.next = 0; }
+  clear() { this.mesh.count = this.high = this.next = 0; this.mesh.visible = false; }
 
   private now() { return (performance.now() - this.t0) / 1000; }
 }
