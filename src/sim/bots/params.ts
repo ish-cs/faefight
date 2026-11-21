@@ -142,7 +142,7 @@ export const DRIVE: DriveParams = {
   stallSec: 10,
   stallDist: 2.5,
   stallBanSec: 20,
-  fireRangeMult: 1,
+  fireRangeMult: 2,
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
