@@ -76,8 +76,8 @@ const NADE_MIN = 6.5, NADE_MAX = 22, NADE_GAP = 3, NADE_SEEN_SEC = 2.5;
 /** Cash (carried + banked) at which a bot stocks up on grenades / a steel seal kit. */
 const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, hard: 450, pro: 400 };
 const STEEL_RICH = 800;
-/** Rebuy money for after a death: pistol + a box of ammo. */
-const INSURANCE = WEAPONS.pistol.price + 25;
+/** Rebuy money for after a death: a box of ammo (every spawn already hands out a pistol). */
+const INSURANCE = 25;
 /** HP at or below which a bot uses a medkit it carries. */
 const MEDKIT_AT: Record<Difficulty, number> = { easy: 35, medium: 45, hard: 55, pro: 55 };
 /**
