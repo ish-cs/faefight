@@ -10,7 +10,8 @@ const CI = !!env.CI;
 // Local (macOS): channel 'chromium' = full Chromium in new headless mode, which keeps a real GPU (WebGPU);
 // the default headless shell loses its WebGPU device right after init.
 // CI (GitHub Linux runners, no GPU): no WebGPU adapter, so three/webgpu's WebGPURenderer falls back to
-// WebGL2, rendered in software by SwiftShader through ANGLE. Slower, so CI gets a longer test timeout.
+// WebGL2, rendered in software by SwiftShader through ANGLE at ~1 fps. Specs that play a match in real time
+// are skipped on CI (tests/e2e/gpu.ts); the rest get longer timeouts.
 const launchArgs = CI
   ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
   : ['--enable-unsafe-webgpu'];
