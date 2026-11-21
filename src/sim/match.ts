@@ -1,12 +1,13 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, SEAL } from './constants';
+import { DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
+import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
@@ -14,6 +15,7 @@ import { HitboxHistory, LAG_COMP, rayPlayer } from './lagComp';
 import { newMoveState, stepMove, type MoveCmd } from './movement';
 import { adsMoveCmd, adsSpeed } from './gunplay';
 import { unsupportedPieces } from './support';
+import { addStrike, stormCenterOf, stormRate, stormSnap, tickStorm } from './storm';
 import { newPlayer } from './player';
 import { MatchStats } from './stats';
 import { isPlaceholderBotName, nickname } from './names';
@@ -56,6 +58,7 @@ export class Match implements MatchApi {
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
   private sealDirty = true;
+  private doors: DoorwayTracker;
   private supportDirty = false;
   private kills: { victim: number; killer: number | null }[] = [];
   private ctx: CombatCtx;
@@ -84,9 +87,11 @@ export class Match implements MatchApi {
     this.map = map;
     this.cosmetics = new Cosmetics(def.cosmetics);
     this.potionShops = potionShopsAt([def.center.potionShop]);
-    this.s = newMatchState(map);
+    this.s = newMatchState(map, setup.seed ?? 1);
     this.s.waterY = def.waterY;
+    this.s.stormCenter = stormCenterOf(def.center);
     this.sealed = map.map(() => false);
+    this.doors = new DoorwayTracker(map.map((isl) => isl.bunker));
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
     this.makeBot = opts.makeBot;
@@ -128,9 +133,11 @@ export class Match implements MatchApi {
         if (dv.y > 0 && p.mv) { p.mv.grounded = false; p.mv.airTime = 1; }
       },
       castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, true) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
-      onKill: (victim, killer) => {
+      onKill: (victim, killer, cause) => {
         this.kills.push({ victim, killer });
-        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer));
+        // Only environment causes go on the kill event (death recap / feed); weapon kills are told by the killer.
+        const env = killer === null && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
+        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env));
       },
     };
   }
@@ -173,11 +180,12 @@ export class Match implements MatchApi {
 
     this.events.push(...tickExplosives(this.ctx, now));
     this.collapseUnsupported(now);
+    if (this.s.storm) this.events.push(...tickStorm(this.ctx, this.s.storm, now));
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
     tickCenter(this.center, DT, !this.s.suddenDeath);
     for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
     this.events.push(...this.cosmetics.onEvents(this.events, now));
-    this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT, this.def.tideRate));
+    this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
     this.updateSeals(now);
@@ -248,6 +256,40 @@ export class Match implements MatchApi {
     return id;
   }
 
+  /** Jump the match clock (tests/e2e: e.g. straight to sudden death). Nothing in between is simulated. */
+  debugSetTime(t: number): void {
+    if (!Number.isFinite(t) || t < 0) throw new Error(`debugSetTime: bad time ${t}`);
+    this.s.time = t;
+  }
+
+  /** Announce a lightning strike at (x, z), landing STORM.telegraphSec from now (needs the storm running). */
+  debugStrike(x: number, z: number): void {
+    if (!this.s.storm) throw new Error('debugStrike: no storm before sudden death');
+    addStrike(this.s.storm, x, z, this.s.time + STORM.telegraphSec);
+  }
+
+  /** A steel plate standing just outside doorway `door` of `island`'s bunker, placed by `owner`. Returns its id. */
+  debugPlugDoor(island: number, door: number, owner: number): number {
+    const d = this.map[island]?.bunker.doorways[door];
+    if (!d) throw new Error(`debugPlugDoor: no doorway ${door} on island ${island}`);
+    const out = forward(d.yaw), off = MAP.bunker.wall / 2 + PIECES.steel.d / 2 + 0.05;
+    const x = d.center.x + out.x * off, z = d.center.z + out.z * off;
+    // Sunk 1 cm so the support probe meets the ground before the plate's own bottom face (exact ties are float noise).
+    const y = (this.physics.surfaceBelow(x, d.center.y + 1, z, 2) ?? d.center.y) - 0.01;
+    return this.debugPlacePiece('steel', v3(x, y, z), d.yaw, owner);
+  }
+
+  debugRemovePiece(id: number): void {
+    if (!this.s.pieces.has(id)) throw new Error(`debugRemovePiece: no piece ${id}`);
+    this.ctx.onPieceDestroyed(id);
+  }
+
+  debugSetGenerator(island: number, stored: number): void {
+    const g = this.s.generators.find((x) => x.island === island);
+    if (!g || !Number.isFinite(stored) || stored < 0) throw new Error(`debugSetGenerator: bad island ${island} / amount ${stored}`);
+    g.stored = stored;
+  }
+
   debugTeleport(playerId: number, pos: Vec3): void {
     const p = this.mustPlayer(playerId);
     p.pos = clone(pos);
@@ -275,6 +317,7 @@ export class Match implements MatchApi {
   /** Move the potion sellers (tests/e2e, and until the map places the real one). */
   debugSetPotionShops(positions: Vec3[]): void {
     this.potionShops = potionShopsAt(positions);
+    this.physics.setPotionShops(positions);
   }
 
   debugKill(playerId: number): void {
@@ -478,6 +521,11 @@ export class Match implements MatchApi {
       }
       this.sealed[i] = sealed;
     });
+    // Per-doorway threat for each owner's HUD: cached per bunker, recomputed only when blockers near it change.
+    // Sealed always reads 3/3 (sudden death's forced seal too); short of that at most 2/3.
+    const doors = this.doors.update(this.s.pieces.values());
+    for (const p of this.s.players.values())
+      p.doorsBlocked = this.sealed[p.island] ? 3 : Math.min(2, doors[p.island] ?? 0);
   }
 
   private remember(now: number) {
@@ -526,6 +574,7 @@ export class Match implements MatchApi {
       loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE).map((b) => clone(b.pos)),
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
+      storm: this.s.storm ? { ...stormSnap(this.s.storm, this.s.time), rate: stormRate(this.s.storm, this.s.time) } : null,
       potionShops: this.potionShops.map((sh) => clone(sh.pos)),
       groundAt: (x, z) => this.physics.isGroundAt(x, z),
       canPlace: (kind, pos, rotY) => validatePlacement(this.physics, kind, pos, rotY, self.pos),
@@ -547,6 +596,7 @@ export class Match implements MatchApi {
       sealed: this.sealed,
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
+      storm: this.s.storm ? stormSnap(this.s.storm, this.s.time) : null,
       winner: this.s.winner,
       potionShops: this.potionShops,
       brains: this.brainInfos(),

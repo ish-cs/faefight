@@ -175,6 +175,15 @@ describe('SoundDirector: events → cues', () => {
     expect(sounds(d.update(snap(1.7, ps, [['escaped', { player: BOT }], ['escaped', { player: ME }]])))).toEqual(['escaped']);
   });
 
+  it('lightning → thunder at the strike; sudden death turns on the storm ambience', () => {
+    const d = director();
+    const ps = [player(ME, at(0))];
+    expect(d.update(snap(1, ps, [['lightning', { pos: { x: 30, y: 2, z: 5 } }]]))).toEqual([{ sound: 'thunder', pos: { x: 30, y: 2, z: 5 }, gain: 1.2 }]);
+    expect(d.env.storm).toBe(false);
+    d.update({ ...snap(1.1, ps, []), suddenDeath: true });
+    expect(d.env.storm).toBe(true);
+  });
+
   it('explosion, placed (by piece kind), destroyed (position from previous snapshot)', () => {
     const d = director();
     const ps = [player(ME, at(0))];

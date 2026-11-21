@@ -127,7 +127,10 @@ type Backend = {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
+    /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
+    time(t: number): void; strike(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
+    plugDoor(door: number, owner: number): void; removePiece(id: number): void; genStored(stored: number): void;
   };
 };
 
@@ -173,7 +176,12 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
       potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
+      time: (t) => send({ type: 'debug', cmd: 'time', t }),
+      strike: (x, z) => send({ type: 'debug', cmd: 'strike', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
+      plugDoor: (door, owner) => send({ type: 'debug', cmd: 'plugDoor', door, owner }),
+      removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
+      genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
     },
@@ -604,6 +612,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   loading.progress('gpu', 0, 'Starting WebGPU');
   const renderer = await Renderer.create(canvas);
   loading.progress('gpu', 1, 'Starting the simulation');
+  loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
+  loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
   console.info(`[render] backend: ${renderer.backend}`);
   scope.begin(); // window/document listeners from here on are removed by destroy()
   let running = true;
@@ -628,12 +638,20 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     maybeWarm();
   });
   const revealTimer = setTimeout(() => { console.warn('[loading] warm-up took too long; showing the game anyway'); reveal(); }, REVEAL_TIMEOUT_MS);
+  /** Frame-loop hooks for the warm-up (warmup.ts): pause drawing, count drawn frames, run a hook before each. */
+  const warmLoop = { paused: false, left: 0, before: null as (() => void) | null, done: null as (() => void) | null };
   function maybeWarm() {
     if (warmStarted || !snap || !map.length || !charsReady) return;
     warmStarted = true;
     // One normal frame first so the camera already sits behind the player.
     requestAnimationFrame(() => {
-      mods.warmup.warmUp(renderer, () => snap?.pieces ?? [], input.yaw, (f, label) => loading.progress('shaders', f, label))
+      const loop = {
+        setPaused: (on: boolean) => { warmLoop.paused = on; },
+        frames: (n: number, before?: () => void) => new Promise<void>((done) => {
+          warmLoop.before = before ?? null; warmLoop.left = n; warmLoop.done = done;
+        }),
+      };
+      mods.warmup.warmUp(renderer, loop, fpv, (f, label) => loading.progress('shaders', f, label))
         .catch((err) => console.warn('[loading] shader warm-up failed; continuing', err))
         .finally(() => { warmed = true; });
     });
@@ -725,7 +743,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     dropSlot: (slot, amount) => { input.select(slot); input.queue({ drop: amount }); },
   });
   const online = backend.buffered || !!onChat;
-  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item) }, { online, isHost: !!onChat });
+  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
   let rejoinTouchedAt = 0;
 
@@ -1286,8 +1304,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     fpv.applyShake(dt); // visual only: the aim ray above was taken without it
-    renderer.render(input.yaw);
-    fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+    if (!warmLoop.paused) {
+      warmLoop.before?.();
+      renderer.render(input.yaw);
+      fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+      if (warmLoop.left > 0 && --warmLoop.left === 0) { warmLoop.before = null; warmLoop.done?.(); }
+    }
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());
     if (warmed && !revealed) {

@@ -61,12 +61,12 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
 }
 
 /**
- * `tower`: sandbags wanted for climbing above the sudden-death tide. `grenades`/`medkits`: how many to carry.
+ * `grenades`/`medkits`: how many to carry.
  * `steel`: rich enough that the seal kit should be steel. `genLevel`: my generator's level (unknown = no upgrades).
  */
 export type Needs = {
-  scaffolds: number; kit: number; charge: boolean; tower?: number; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
-  /** Pieces wanted for building (fortifications, combat cover, bridge walls) on top of the seal kit and tower. */
+  scaffolds: number; kit: number; charge: boolean; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
+  /** Pieces wanted for building (fortifications, combat cover, bridge walls) on top of the seal kit. */
   build?: Partial<Record<PieceKind, number>>;
 };
 
@@ -100,7 +100,6 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     return cash >= WEAPONS.pistol.price ? 'pistol' : null;
   }
   if (needs.charge && inv.charges === 0) return cash >= CHARGE.price ? 'charge' : null;
-  if ((inv.pieces.sandbags ?? 0) < (needs.tower ?? 0)) return cash >= PIECES.sandbags.price ? 'sandbags' : null;
   const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
   const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
@@ -134,10 +133,10 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   return null;
 }
 
-/** Sandbags held for building/tower that the seal-kit count must not lean on. */
+/** Sandbags held for building that the seal-kit count must not lean on. */
 function reservedBagPlugs(inv: Inventory, needs: Needs): number {
   const bags = inv.pieces.sandbags ?? 0;
-  const reserved = Math.min(bags, (needs.tower ?? 0) + (needs.build?.sandbags ?? 0));
+  const reserved = Math.min(bags, (needs.build?.sandbags ?? 0));
   return Math.floor(bags / 2) - Math.floor((bags - reserved) / 2);
 }
 
@@ -145,7 +144,7 @@ function reservedBagPlugs(inv: Inventory, needs: Needs): number {
 function buildPurchase(inv: Inventory, needs: Needs, room: (k: PieceKind) => boolean): PieceKind | null {
   const b = needs.build;
   if (!b) return null;
-  if ((inv.pieces.sandbags ?? 0) < (needs.tower ?? 0) + (b.sandbags ?? 0) && room('sandbags')) return 'sandbags';
+  if ((inv.pieces.sandbags ?? 0) < (b.sandbags ?? 0) && room('sandbags')) return 'sandbags';
   if ((inv.pieces.ramp ?? 0) < (b.ramp ?? 0) && room('ramp')) return 'ramp';
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (b.scaffold ?? 0)) return 'scaffold';
   // Tall pieces: the seal kit comes out of them first.
