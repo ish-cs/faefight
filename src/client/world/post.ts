@@ -6,16 +6,19 @@ import {
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { taau } from 'three/addons/tsl/display/TAAUNode.js';
+import { fsr1 } from 'three/addons/tsl/display/FSR1Node.js';
 
 export type PostOptions = {
   samples: number; bloom: boolean; ao: false | { resolution: number; samples: number }; flare?: boolean;
   /**
-   * Temporal anti-aliasing upscaling (TAAU, Karis 2014 / FSR2-style): the scene renders jittered at `scale` × the
-   * output resolution with no MSAA, and the resolve reconstructs the output from the jittered history using
-   * per-pixel motion vectors (an extra velocity MRT target). Same-frame resolve: no added latency. `sharpen` is a
-   * 5-tap contrast-adaptive sharpen applied in the final pass (0 = off).
+   * Render the scene at `scale` × the output resolution and upscale. Same-frame: no added latency.
+   * - 'fsr': keeps MSAA; spatial FSR 1 (EASU edge-adaptive upscale + RCAS sharpen, `sharpen` = RCAS stops, 0 =
+   *   sharpest). No history, so no ghosting; thin wires and alpha-to-coverage foliage survive.
+   * - 'taau': temporal (Karis 2014 / FSR2-style): jittered, no MSAA, motion vectors (velocity MRT), history
+   *   reconstruction + a 5-tap contrast-adaptive sharpen (`sharpen` 0–1). Cheaper but softer; loses sub-pixel
+   *   wires and dithers foliage that relies on MSAA alpha-to-coverage.
    */
-  taau?: { scale: number; sharpen: number };
+  upscale?: { mode: 'fsr' | 'taau'; scale: number; sharpen: number };
 };
 
 /**
@@ -58,23 +61,25 @@ export function buildPipeline(
   const pipe = new THREE.RenderPipeline(gpu);
   pipe.outputColorTransform = false; // tone map + sRGB ourselves so the grade runs in display space
 
+  const taauOn = o.upscale?.mode === 'taau';
   // TAAU needs MSAA off (the jittered history is the anti-aliasing)
-  const scenePass = pass(scene, camera, { samples: o.taau ? 0 : o.samples });
-  if (o.taau) scenePass.setResolutionScale(o.taau.scale);
+  const scenePass = pass(scene, camera, { samples: taauOn ? 0 : o.samples });
+  if (o.upscale) scenePass.setResolutionScale(o.upscale.scale);
   // analytic ambient-only occlusion (bunker interiors), every preset: sky light must not flood enclosed rooms
   if (ambientOcclusion) scenePass.contextNode = builtinAOContext(ambientOcclusion);
   const targets: Record<string, THREE.Node> = { output };
   if (o.bloom) targets.emissive = emissive;
   if (o.ao) targets.normal = normalView;
-  if (o.taau) targets.velocity = velocity;
+  if (taauOn) targets.velocity = velocity;
   if (Object.keys(targets).length > 1) scenePass.setMRT(mrt(targets));
   const raw = scenePass.getTextureNode('output');
   // TAAU: everything after this runs at output resolution on the reconstructed image; AO and bloom stay at their
   // (input-relative) resolutions and are sampled by screen uv.
   let col: THREE.Node<'vec4'> = raw;
-  if (o.taau) {
+  if (o.upscale?.mode === 'fsr') col = fsr1(raw, o.upscale.sharpen);
+  if (taauOn) {
     const t = taau(raw, scenePass.getTextureNode('depth'), scenePass.getTextureNode('velocity'), camera).getTextureNode();
-    sharpenAmount.value = o.taau.sharpen;
+    sharpenAmount.value = o.upscale!.sharpen;
     // contrast-adaptive 5-tap sharpen (CAS-lite): restores the crispness the reconstruction filter softens,
     // weaker where local contrast is already high so edges don't ring
     const px = vec2(1, 1).div(screenSize); // output pixels (TAAU resolves at drawing-buffer size)
@@ -109,7 +114,7 @@ export function buildPipeline(
     // only emissive output blooms (generator glow, water sun-glints write emissive) — never the bright sky
     bloomPass = bloom(scenePass.getTextureNode('emissive'), 0.75, 0.45, 0);
     // bloom sizes itself off the drawing buffer: keep it at half the *scene* resolution under TAAU
-    if (o.taau) bloomPass.setResolutionScale(0.5 * o.taau.scale);
+    if (o.upscale) bloomPass.setResolutionScale(0.5 * o.upscale.scale);
     hdr = hdr.add(bloomPass.rgb);
   }
 

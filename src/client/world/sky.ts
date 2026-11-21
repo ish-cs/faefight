@@ -31,17 +31,24 @@ type Preset = {
   post: PostOptions;
 };
 /** Competitive mode's post chain overrides (see setCompetitive). */
-const COMPETITIVE_POST: Partial<PostOptions> = { samples: 2, bloom: false, ao: false, flare: false, taau: undefined };
+const COMPETITIVE_POST: Partial<PostOptions> = { samples: 2, bloom: false, ao: false, flare: false, upscale: undefined };
 
-/** TAAU input scale / sharpen for ultra; `?taau=0` turns it off, `?taau=0.7` sets the scale (A/B, debug). */
-const TAAU_PARAM = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('taau') : null;
-const TAAU_ULTRA: PostOptions['taau'] = TAAU_PARAM === '0' ? undefined : { scale: TAAU_PARAM ? Math.min(1, Math.max(0.4, Number(TAAU_PARAM) || 0.6)) : 0.6, sharpen: 0.25 };
+/**
+ * Ultra's upscaler (A/B, debug): `?upscale=0` off (native MSAA), `?upscale=taau` / `?upscale=fsr` picks the mode,
+ * `?upscaleScale=0.7` sets the input scale.
+ */
+const Q = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
+const UP_MODE = Q?.get('upscale') ?? 'fsr';
+const UP_SCALE = Number(Q?.get('upscaleScale')) || (UP_MODE === 'taau' ? 0.6 : 0.7);
+const UPSCALE_ULTRA: PostOptions['upscale'] = UP_MODE === '0' ? undefined
+  : UP_MODE === 'taau' ? { mode: 'taau', scale: Math.min(1, Math.max(0.4, UP_SCALE)), sharpen: 0.25 }
+    : { mode: 'fsr', scale: Math.min(1, Math.max(0.4, UP_SCALE)), sharpen: 0.25 };
 
 const PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, cascades: 2, shadowMap: 1024, shadowFar: 110, post: { samples: 4, bloom: false, ao: false } },
   high: { pixelRatio: 1.25, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true } },
-  // ultra: native Retina output, scene reconstructed by TAAU from 0.6× (≈ DLSS/FSR "quality" ratio), no MSAA
-  ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, taau: TAAU_ULTRA } },
+  // ultra: native Retina output, scene rendered at 0.7× (MSAA ×4) and upscaled with FSR 1 (EASU + RCAS)
+  ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, upscale: UPSCALE_ULTRA } },
 };
 
 /** Far-cascade caster mask: layer 0 only (+ unused bit 31, see cascadeLayers). */
@@ -223,14 +230,14 @@ export class SkyLighting {
     this.apply();
   }
 
-  /** The built post chain's TAAU options (null: MSAA path). */
-  private taau: PostOptions['taau'] | null = null;
+  /** The built post chain's upscaler (null: scene renders at output resolution). */
+  private upscale: PostOptions['upscale'] | null = null;
 
   private applyPixelRatio() {
     const base = Math.min(window.devicePixelRatio, this.competitive ? 1 : PRESETS[this.quality].pixelRatio);
-    const t = this.taau;
-    // TAAU: dynamic resolution scales the scene's input resolution only; the output (and TAAU's history) keep their
-    // size, so a governor step neither reallocates the history nor restarts accumulation (true DRS + TAAU)
+    const t = this.upscale;
+    // upscaling: dynamic resolution scales the scene's input resolution only; the output (and TAAU's history) keep
+    // their size, so a governor step never reallocates output targets or restarts accumulation
     this.gpu.setPixelRatio(Math.min(2, Math.max(0.5, base * this.resScale * (t ? 1 : this.dynScale))));
     if (t && this.scenePass) {
       const s = t.scale * this.dynScale;
@@ -277,7 +284,7 @@ export class SkyLighting {
     const post = this.competitive ? { ...PRESETS[this.quality].post, ...COMPETITIVE_POST } : PRESETS[this.quality].post;
     const opts = { ...post, ...this.postOverride };
     const built = buildPipeline(this.gpu, this.scene, this.camera, opts, this.interiorAO);
-    this.taau = opts.taau ?? null;
+    this.upscale = opts.upscale ?? null;
     this.pipeline = built.pipe;
     this.scenePass = built.scenePass;
     this.aoPass = built.aoPass;
@@ -293,8 +300,8 @@ export class SkyLighting {
   /** GTAO budget: the governor's cheap / minimal levels render AO at 60 % / 30 % of the preset's resolution (live). */
   private applyAoBudget() {
     const ao = this.competitive ? false : PRESETS[this.quality].post.ao;
-    // GTAO sizes itself off the drawing buffer: under TAAU keep it relative to the scene's input resolution
-    const t = this.taau;
+    // GTAO sizes itself off the drawing buffer: when upscaling keep it relative to the scene's input resolution
+    const t = this.upscale;
     if (this.aoPass && ao) this.aoPass.resolutionScale = ao.resolution * [1, 0.6, 0.3][this.govAo] * (t ? t.scale * this.dynScale : 1);
   }
 
