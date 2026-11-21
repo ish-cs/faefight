@@ -122,7 +122,8 @@ describe('migration end to end (loopback)', () => {
     host.migrator.tick();
     for (let i = 0; i < 90; i++) match.tick(new Map());
     const tick = match.tick(new Map()).tick;
-    await host.onCheckpoint(await packMatch(match), tick);
+    const link = { matchId: 'aliceRec', segment: 0, setup: { players: [], seed: 9 } };
+    host.onCheckpoint(await packMatch(match), tick, link);
     await new Promise((r) => setTimeout(r, 50));
 
     const gmBob = new M.GuestMigration(1), gmCarol = new M.GuestMigration(2);
@@ -136,13 +137,13 @@ describe('migration end to end (loopback)', () => {
     await flush();
     expect(bob.got.at(-1)).toEqual({ t: 'ended', reason: 'host-left' });
 
-    const restores: { humanId: number; botify: number[]; toTick: number; restored?: Match }[] = [];
+    const restores: { humanId: number; botify: number[]; toTick: number; recording: unknown; restored?: Match }[] = [];
     const newWorker = fakeWorker();
     const chat: string[] = [];
     const bobTakes = M.takeOver({
       transport: t, gm: gmBob, name: 'Bob', map: def, lastTick: tick, lastTickAt: performance.now(),
-      startWorker: async (bytes, humanId, botify, toTick) => {
-        restores.push({ humanId, botify, toTick, restored: await unpackMatch(bytes) });
+      startWorker: async (bytes, humanId, botify, toTick, recording) => {
+        restores.push({ humanId, botify, toTick, recording, restored: await unpackMatch(bytes) });
         return newWorker;
       },
       events: { lobby: () => {}, chat: (from, text) => chat.push(`${from}: ${text}`) },
@@ -153,6 +154,8 @@ describe('migration end to end (loopback)', () => {
     // Bob's worker got the checkpoint: Bob plays player 2, Alice's player 1 goes to a bot.
     expect(restores).toHaveLength(1);
     expect(restores[0]).toMatchObject({ humanId: 2, botify: [1] });
+    // Alice's recording link came along in the sealed checkpoint: Bob records the next segment of it.
+    expect(restores[0].recording).toEqual(link);
     const r = restores[0].restored!;
     expect(stateHash(r.tick(new Map()))).toBe(stateHash(match.tick(new Map())));
     expect(session.hostPlayer).toBe(2);

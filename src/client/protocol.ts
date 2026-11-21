@@ -5,7 +5,7 @@ import type { MatchSetup } from '../sim/matchApi';
 import type { PracticeCmd } from '../sim/practice';
 import type { BuildRequest, Inventory, PieceKind, PlayerInput, Snapshot } from '../sim/types';
 import type { BrainDigest } from '../sim/bots/introspect';
-import type { ReplayKind, ReplayMeta } from '../sim/replay/format';
+import type { RecordingLink, ReplayKind, ReplayMeta } from '../sim/replay/format';
 import type { WheelId } from '../sim/emotes';
 
 /** main thread → worker */
@@ -21,8 +21,9 @@ export type ToWorker =
   /**
    * Host migration, on the new host: run the gzipped checkpoint `match` instead of a fresh match. `botify`
    * the old host's player, fast-forward to `toTick` (bots act, humans idle), then tick live (answer: 'restored').
+   * `record.link`: the old host's recording (checkpoint meta), continued as its next segment.
    */
-  | { type: 'restore'; match: Uint8Array; humanId: number; botify: number[]; toTick: number }
+  | { type: 'restore'; match: Uint8Array; humanId: number; botify: number[]; toTick: number; record?: { kind: ReplayKind; build: string; link: unknown } | null }
   /** Local player's input. */
   | { type: 'input'; input: PlayerInput; cmds?: MoveCmd[] }
   /** A remote player's (already sanitized) input, forwarded by the host session. */
@@ -46,7 +47,8 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'hp'; hp: number }
   | { type: 'debug'; cmd: 'time'; t: number }
   | { type: 'debug'; cmd: 'strike'; x: number; z: number }
-  | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }
+  | { type: 'debug'; cmd: 'eliminate'; playerId: number }
+  | { type: 'debug'; cmd: 'kill'; playerId: number; killer?: number }
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
   | { type: 'debug'; cmd: 'potionShop'; x: number; z: number }
   /** Alert testing: a steel plate on doorway `door` of the human's bunker (placed by `owner`), removing one, generator cash. */
@@ -70,6 +72,6 @@ export type FromWorker =
   /** A finished recording (match over, or finishRecording). */
   | { type: 'replay'; bytes: Uint8Array; meta: ReplayMeta; partial?: boolean }
   | { type: 'recordingDone' }
-  /** Gzipped match checkpoint (matchCheckpoint.ts) as of `tick`. */
-  | { type: 'checkpoint'; match: Uint8Array; tick: number }
+  /** Gzipped match checkpoint (matchCheckpoint.ts) as of `tick`; `rec`: the running recording, for the next host to continue. */
+  | { type: 'checkpoint'; match: Uint8Array; tick: number; rec?: RecordingLink }
   | { type: 'restored'; tick: number };

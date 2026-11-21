@@ -158,7 +158,7 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 export type HazardNet = { id: number; st: 0 | 1 | 2; hp: number };
 
 export type MatchEventType =
-  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
+  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped' | 'spawn'
   | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning'
   /** Emote / quick-chat wheel use: data { by, id } (emotes.ts). */
   | 'wheel' | 'hazard';

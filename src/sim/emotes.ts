@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import type { MoveCmd } from './movement';
 import type { MatchEvent, PlayerInput, PlayerState } from './types';
 
@@ -66,7 +67,7 @@ export function wheelSlot(dx: number, dy: number, slots = DEFAULT_WHEEL.length, 
   if (!Number.isInteger(slots) || slots < 1) throw new Error(`wheelSlot: bad slot count ${slots}`);
   if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx, dy) < deadzone) return -1;
   const wedge = (Math.PI * 2) / slots;
-  let a = Math.atan2(dx, -dy); // 0 = up, + clockwise
+  let a = dm.atan2(dx, -dy); // 0 = up, + clockwise
   if (a < 0) a += Math.PI * 2;
   return Math.floor((a + wedge / 2) / wedge) % slots;
 }

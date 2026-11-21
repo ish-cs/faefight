@@ -16,8 +16,8 @@ import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { BuildPredictor } from './buildPredict';
 import type { BrainDigest } from '../sim/bots/introspect';
-import { moveForAim } from './aim';
-import { Killcam, SpectatorCamera, viewedPlayer } from './viewed';
+import { adoptSpawnLook, moveForAim } from './aim';
+import { BodyCam, SpectatorCamera, viewedPlayer } from './viewed';
 import { AudioSystem } from './audio/engine';
 import { errors, installErrorReporting } from './telemetry/errors';
 import { telemetryEnabled } from './telemetry/config';
@@ -51,6 +51,7 @@ import { MAX_CMDS_PER_MSG } from '../net/sanitize';
 import { SealAnnouncer } from './announce';
 import { BULK_PIECES, BuyQueue } from './qol/combatQol';
 import { netStatus, QolHud } from './qol/hudExtras';
+import { Killcam } from './qol/killcam';
 import { addInviteButton } from './qol/invite';
 import { botCountControl, prepareJoin, rememberDifficulty } from './qol/menu';
 import { loadPrefs, savePrefs, seatPrefsOf } from './qol/prefs';
@@ -179,7 +180,7 @@ type Backend = {
     teleport(x: number, z: number, id?: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     /** Damage a barrel / tank / crate (as the local player). */
     hazard(id: number, amount: number, source?: 'bullet' | 'explosive'): void;
-    eliminate(playerId: number): void; kill(playerId: number): void;
+    eliminate(playerId: number): void; kill(playerId: number, killer?: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
     /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
     time(t: number): void; strike(x: number, z: number): void;
@@ -192,24 +193,47 @@ type Backend = {
   };
 };
 
+// Every match is recorded by the machine running its sim (vs bot, online host, or the guest that took over
+// after a host migration: the next segment), always: kept locally (Replays screen) and, in deployed builds,
+// uploaded so the bots learn from it. No setting turns this off.
+function gotReplay(m: Extract<FromWorker, { type: 'replay' }>) {
+  if (!m.partial) saveReplay(m.bytes, m.meta);
+  void replayUploader?.share(m.bytes, { id: m.meta.id, unfinished: m.partial || m.meta.unfinished, duration: m.meta.duration });
+}
+
+/** Tab hidden mid-match (often the last chance before it's closed): upload what's recorded so far, once, after 60 s of play. */
+function peekWhenHidden(worker: Worker, simTime: () => number): () => void {
+  let peeked = false;
+  const onHidden = () => {
+    if (document.visibilityState !== 'hidden' || peeked || simTime() < MIN_UNFINISHED_SEC) return;
+    peeked = true;
+    worker.postMessage({ type: 'peekRecording' } satisfies ToWorker);
+  };
+  document.addEventListener('visibilitychange', onHidden);
+  return () => document.removeEventListener('visibilitychange', onHidden);
+}
+
+/** Left before a result: keep what was recorded (the worker sends it, then says it's done), then stop the worker. */
+function finishAndTerminate(worker: Worker) {
+  worker.onerror = null;
+  trackSave(new Promise<void>((resolve) => {
+    const stop = () => { clearTimeout(timer); worker.onmessage = null; worker.terminate(); resolve(); };
+    const timer = setTimeout(() => { console.warn('[replays] recording did not finish in time; dropped'); stop(); }, 5000);
+    worker.onmessage = (e: MessageEvent<FromWorker>) => {
+      if (e.data.type === 'replay') gotReplay(e.data);
+      else if (e.data.type === 'recordingDone') stop();
+    };
+    worker.postMessage({ type: 'finishRecording' } satisfies ToWorker);
+  }));
+}
+
 /** Simulation in a local worker: vs-bot (session = null) or online host. */
 function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: number }, session: HostSession | null): Backend & { handOff(): void } {
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
   const send = (m: ToWorker) => worker.postMessage(m);
   let humanId = 0;
-  // Every match is recorded here (vs bot, or online as host), always: kept locally (Replays screen) and,
-  // in deployed builds, uploaded so the bots learn from it. No setting turns this off.
-  const gotReplay = (m: Extract<FromWorker, { type: 'replay' }>) => {
-    if (!m.partial) saveReplay(m.bytes, m.meta);
-    void replayUploader?.share(m.bytes, { id: m.meta.id, unfinished: m.partial || m.meta.unfinished, duration: m.meta.duration });
-  };
-  // Tab hidden mid-match (often the last chance before it's closed): upload what's recorded so far, once, after 60 s of play.
-  let simTime = 0, peeked = false;
-  const onHidden = () => {
-    if (document.visibilityState !== 'hidden' || peeked || simTime < MIN_UNFINISHED_SEC) return;
-    peeked = true;
-    send({ type: 'peekRecording' });
-  };
+  let simTime = 0;
+  let unpeek = () => {};
   let closed = false;
   // Bots whose brain digests the worker should make: the one our camera follows, plus friends' (host).
   let localWatch: number | null = null, watchSig = '';
@@ -248,14 +272,14 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
         } else if (m.type === 'replay') {
           gotReplay(m);
         } else if (m.type === 'checkpoint') {
-          session?.onCheckpoint(m.match, m.tick);
+          session?.onCheckpoint(m.match, m.tick, m.rec);
         } else if (m.type === 'error') {
           console.error(`[worker] ${m.message}`);
           errors?.report('worker', m.message);
           toast(m.message);
         }
       };
-      document.addEventListener('visibilitychange', onHidden);
+      unpeek = peekWhenHidden(worker, () => simTime);
       const s = setupFor(worker);
       humanId = s.humanId;
       send({ type: 'start', setup: s.setup, humanId: s.humanId, record: { kind: session ? 'host' : 'solo', build: BUILD } });
@@ -287,23 +311,13 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
       genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
-      kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
+      kill: (playerId, killer) => send({ type: 'debug', cmd: 'kill', playerId, killer }),
     },
     close() {
       if (closed) return;
       closed = true;
-      worker.onerror = null;
-      document.removeEventListener('visibilitychange', onHidden);
-      // Left before a result: keep what was recorded. The worker sends it, then says it's done.
-      trackSave(new Promise<void>((resolve) => {
-        const stop = () => { clearTimeout(timer); worker.onmessage = null; worker.terminate(); resolve(); };
-        const timer = setTimeout(() => { console.warn('[replays] recording did not finish in time; dropped'); stop(); }, 5000);
-        worker.onmessage = (e: MessageEvent<FromWorker>) => {
-          if (e.data.type === 'replay') gotReplay(e.data);
-          else if (e.data.type === 'recordingDone') stop();
-        };
-        send({ type: 'finishRecording' });
-      }));
+      unpeek();
+      finishAndTerminate(worker);
     },
   };
 }
@@ -319,6 +333,9 @@ type MigrationCtx = {
   /** This guest now hosts the match. */
   promoted(): void;
 };
+
+/** A guest that took the match over (host migration): its restored worker and session. */
+type Hosting = { worker: Worker; session: HostSession | null; humanId: number; simTime: number; unpeek: () => void };
 
 /**
  * Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived
@@ -337,7 +354,7 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
   /** Newest snapshot tick and when it arrived; whether the match already has a result. */
   let lastTick = 0, lastTickAt = 0, over = false;
   /** Set once this guest has taken over as host. */
-  let hosting: { worker: Worker; session: HostSession | null; humanId: number } | null = null;
+  let hosting: Hosting | null = null;
   return {
     buffered: true,
     inputHz: TICK_HZ,
@@ -393,7 +410,8 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
           const t0 = performance.now();
           if (gm.isBackup) {
             const w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
-            const h: { worker: Worker; session: HostSession | null; humanId: number } = { worker: w, session: null, humanId: start.playerId };
+            const h: Hosting = { worker: w, session: null, humanId: start.playerId, simTime: 0, unpeek: () => {} };
+            h.unpeek = peekWhenHidden(w, () => h.simTime);
             hosting = h;
             const ready = new Promise<HostWorker>((resolve, reject) => {
               w.onerror = (e) => { console.error('[worker] crashed', e.message); reject(new Error(e.message)); };
@@ -402,7 +420,7 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
                 if (disposed) return;
                 if (m.type === 'restored') resolve(w);
                 else if (m.type === 'snapshot') {
-                  sink.snapshot(m.snap); h.session?.onSnapshot(m.snap);
+                  h.simTime = m.snap.time; sink.snapshot(m.snap); h.session?.onSnapshot(m.snap);
                   // Brain digests for the bot we follow and the bots friends follow (as workerBackend does).
                   const ids = [...new Set([...(hostFollow !== null ? [hostFollow] : []), ...(h.session?.brainWants() ?? [])])];
                   const sig = ids.join(',');
@@ -413,14 +431,15 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
                   h.session?.onBrains(m.digests);
                 }
                 else if (m.type === 'preview') { if (m.playerId === h.humanId) sink.preview(m.result, m.key); else h.session?.onPreview(m.playerId, m.result, m.key); }
-                else if (m.type === 'checkpoint') h.session?.onCheckpoint(m.match, m.tick);
+                else if (m.type === 'replay') gotReplay(m);
+                else if (m.type === 'checkpoint') h.session?.onCheckpoint(m.match, m.tick, m.rec);
                 else if (m.type === 'error') { console.error(`[worker] ${m.message}`); reject(new Error(m.message)); toast(m.message); }
               };
             });
             const { session } = await takeOver({
               transport, gm, name, map: start.map, lastTick, lastTickAt,
-              startWorker: (match, humanId, botify, toTick) => {
-                w.postMessage({ type: 'restore', match, humanId, botify, toTick } satisfies ToWorker, [match.buffer]);
+              startWorker: (match, humanId, botify, toTick, link) => {
+                w.postMessage({ type: 'restore', match, humanId, botify, toTick, record: { kind: 'host', build: BUILD, link } } satisfies ToWorker, [match.buffer]);
                 return ready;
               },
               events: { lobby: () => {}, chat: (from, text) => sink.chat(from, text), net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; } },
@@ -450,7 +469,7 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
         };
         run().catch((err) => {
           console.warn('[migrate] failed', err);
-          if (hosting) { hosting.worker.terminate(); hosting = null; }
+          if (hosting) { hosting.unpeek(); hosting.worker.terminate(); hosting = null; }
           sink.fatal('Host left', `Match over: the host left and the match could not move to another player (${err?.message ?? err}).`);
         });
         return true;
@@ -475,7 +494,8 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
     },
     close: () => {
       disposed = true;
-      if (hosting) { hosting.session?.close(); hosting.worker.terminate(); hosting = null; }
+      // The rest of the match was recorded here (the next segment): keep it, like any host leaving early.
+      if (hosting) { hosting.session?.close(); hosting.unpeek(); finishAndTerminate(hosting.worker); hosting = null; }
     },
     // Spectator follow is for a remote host; a guest hosting after a migration has the full snapshot.
     follow: (id) => { hostFollow = id; if (!disposed && !hosting) link.send({ t: 'follow', id }); },
@@ -1108,10 +1128,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (input.enabled) input.requestLock();
   };
 
-  /** Back to the menu (a page reload) once this match's recording is stored. */
+  /** Back to the menu (a page reload) once this match's recording is stored and uploaded (bounded: see both). */
   function leaveToMenu() {
     backend.close();
-    void savesSettled().then(() => location.reload());
+    void savesSettled().then(() => replayUploader?.settled()).then(() => location.reload());
   }
 
   const fxPos = new THREE.Vector3();
@@ -1149,6 +1169,18 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
   let rejoinTouchedAt = 0;
+  // Killcam: replays your death from the killer's view during the respawn wait (Space skips).
+  const killcam = new Killcam(hud.root);
+  let killcamCam: InstanceType<typeof ThirdPersonCamera> | null = null;
+  let killcamWas = false;
+  /** Whose death the killcam is showing (you, or the player you follow). */
+  let killcamFor: number | null = null;
+  window.addEventListener('keydown', (e) => {
+    if (!killcam.active || e.code !== 'Space' || e.repeat || e.target instanceof HTMLInputElement) return;
+    e.preventDefault();
+    e.stopImmediatePropagation(); // not a spectator "fly up"
+    killcam.skip();
+  }, { capture: true });
 
   const input = new InputController(canvas, {
     interact: () => {
@@ -1260,7 +1292,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   });
 
   const spectator = new Spectator(app, renderer.camera, () => renderer.collidables, canvas, () => input.enabled);
-  const killcam = new Killcam();
+  const bodyCam = new BodyCam();
   /** Our own seat, kept after /spectate hands it to a bot (humanId → 0): "you" in bot-brain text. */
   let selfId = 0;
   // Spectating a bot: B opens its brain inspector, Shift+B its in-world overlay (route, aim, target, ghosts, build).
@@ -1515,7 +1547,6 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     reconcileBuilds(s.pieces); // before pushSnapshot: a confirmed prediction hands over to the real piece in the same draw
     hud.pushEvents(renderer.pushSnapshot(s));
     // The player whose view we show: the followed one while spectating, else us (viewed.ts).
-    killcam.onEvents(s.events, spectator.following, performance.now() / 1000);
     const viewer = viewedPlayer(humanId, spectator.following);
     hud.setViewed(viewer);
     audio.setViewed(viewer);
@@ -1528,10 +1559,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const kick = e.data.kick as { pitch: number; yaw: number } | undefined;
       if (e.type === 'shot' && e.data.by === humanId && kick && !first) input.addKick(kick.pitch, kick.yaw);
     }
+    // Respawned: the sim turned me to face out of my bunker's front door. Snap camera + aim to it once.
+    if (adoptSpawnLook(input, s.events, humanId)) console.info(`[main] respawn: facing front door (yaw ${input.yaw.toFixed(2)})`);
     audio.snapshot(s);
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
-      if (me) { input.yaw = me.yaw; input.selected = me.selected; }
+      if (me) { input.yaw = me.yaw; input.pitch = me.pitch; input.selected = me.selected; }
       input.enabled = !dead;
       menu.remove(); // the loading screen still covers the game until warm-up is done
       canvas.focus();
@@ -1551,7 +1584,27 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     brainX.setFollow(viewed?.isBot ? viewId : null, s.players, selfId);
     if (hud.ended && !wasEnded && !replay) spectateChosen = false; // a (new) result popped the end screen up
     scoreboard.update(s, scoreOpts());
-    qol.onSnapshot(s, viewed ? viewed.selected : input.selected);
+    const recap = qol.onSnapshot(s, viewed ? viewed.selected : input.selected);
+    // One killcam, for your own death or for the player you follow while spectating (the recap above
+    // follows the viewed player too): the killer-view replay when enough of the killer is on record,
+    // else (no killer, too little data, replay viewer) the body cam holds on the victim.
+    if (killcam.active && killcamFor !== null) {
+      const v = s.players.find((p) => p.id === killcamFor);
+      if (v?.alive || s.winner !== null) killcam.stop(v?.alive ? 'respawned' : 'match over');
+    }
+    const died = s.events.find((e) => e.type === 'kill' && e.data.victim === viewer);
+    if (died && s.winner === null) {
+      const victim = s.players.find((p) => p.id === viewer);
+      const killer = typeof died.data.killer === 'number' && died.data.killer !== viewer ? died.data.killer : null;
+      const respawnIn = victim && victim.respawnAt !== null && !victim.eliminated ? victim.respawnAt - s.time : null;
+      const k = recap?.killer;
+      const started = !backend.replay && killcam.start(died.t, killer, respawnIn,
+        k ? { killerName: k.name, island: k.island, weapon: recap.weapon, distance: recap.distance, headshot: recap.headshot } : null);
+      if (started) {
+        killcamFor = viewer;
+        if (viewer === humanId) hud.setEndVisible(false); // eliminated: the end screen waits for the killcam
+      } else if (viewer !== humanId) bodyCam.onEvents(s.events, spectator.following, performance.now() / 1000);
+    }
     if (backend.buffered) {
       // Guest: keep the rejoin record fresh while the match runs; a finished match has nothing to rejoin.
       if (s.winner !== null) clearRejoin();
@@ -1596,6 +1649,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     snapshot: (s) => {
       // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
       predictor?.onSnapshot(s);
+      killcam.push(s);
       latest = s;
       if (buffer) qol.onNetSnapshot();
       shots.reconcile(s.events, humanId, performance.now());
@@ -1674,6 +1728,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Loot on the ground as drawn: label lines, label shown, model count. */
       loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
+      killcam: () => killcam.info(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
@@ -1732,6 +1787,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     shots.markHit();
     hud.hitmarker(head);
     audio.predicted('hitmarker');
+    if (head) audio.predicted('headshot');
     renderer.gunFx.onEvent({ t: ev.t, type: 'hit', data: { target: victim, by: humanId, pos: { x: to.x, y: to.y, z: to.z }, part: head ? 'head' : 'body', weapon: w, ...predictedHit(w, hit!.distance, head) } }, humanId);
   };
 
@@ -1852,7 +1908,23 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // No player of our own (spectating host / handed to a bot), dead (respawning or eliminated), or free
     // fly picked on the end screen: invisible spectator camera.
     const spectating = replay ? !!snap : !!snap && (watching || (!!me && (!me.alive || spectateChosen)));
-    if (spectating) {
+    const kc = killcam.active ? killcam.frame(now) : null;
+    if (!kc && killcamWas) {
+      // Killcam over: back to the live world; the normal death flow (free-fly, end screen) carries on.
+      renderer.setReplay(null);
+      if (!spectateChosen) hud.setEndVisible(true);
+    }
+    killcamWas = !!kc;
+    if (kc) {
+      // (A spectator keeps following: the free-fly / follow camera just waits for the replay.)
+      renderer.setReplay({ snap: kc.snap, motion: kc.motion });
+      renderer.replayEvents(kc.events);
+      renderer.characters.hiddenId = -1;
+      renderer.setGhost(null);
+      aim = null;
+      killcamCam ??= new ThirdPersonCamera(renderer.camera, () => renderer.collidables);
+      killcamCam.update(feet.set(kc.feet.x, kc.feet.y, kc.feet.z), kc.yaw, kc.pitch, dt);
+    } else if (spectating) {
       spectator.enter(renderer.camera.position);
       renderer.characters.hiddenId = replay ? -1 : humanId; // a replay shows everyone
       renderer.setGhost(null);
@@ -1860,7 +1932,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       // Their camera mode (bots: over the shoulder), V flips it; their death plays as a short killcam.
       const fid = spectator.mode === 'follow' ? spectator.followId : null;
       const fp = specCam.firstPerson(fid, fid !== null ? snap!.players.find((p) => p.id === fid)?.view : undefined, fpv.mode);
-      const kc = killcam.active(fid, now / 1000) ? { victim: killcam.victim!, killer: killcam.killer } : null;
+      const kc = bodyCam.active(fid, now / 1000) ? { victim: bodyCam.victim!, killer: bodyCam.killer } : null;
       spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId: replay ? 0 : humanId, players: snap!.players,
         posOf: (id, out) => renderer.playerPos(id, out),
         lookOf: (id) => renderer.playerMotion(id, specMotion), firstPerson: fp, killcam: kc });

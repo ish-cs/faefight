@@ -59,7 +59,8 @@ async function load(bytes: Uint8Array) {
   const replay = await decodeReplay(bytes);
   runner?.dispose();
   runner = await ReplayRunner.create(replay);
-  const kills = replay.events.filter((e) => e[1] === 'kill').map(([tick, , d]) => ({ tick, killer: (d.killer as number | null) ?? null, victim: d.victim as number }));
+  // Marker ticks count this recording's ticks (seek's units): a segment after a host migration starts at startTick.
+  const kills = replay.events.filter((e) => e[1] === 'kill').map(([tick, , d]) => ({ tick: tick - runner!.startTick, killer: (d.killer as number | null) ?? null, victim: d.victim as number }));
   post({ type: 'info', header: replay.header, map: runner.match.def, length: runner.length, kills });
   const first = runner.step();
   if (first) post({ type: 'snapshot', snap: first, reset: true });

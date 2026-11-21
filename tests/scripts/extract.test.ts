@@ -49,11 +49,11 @@ function fixture(): Replay {
   }
   return {
     header: {
-      format: 1, id: 'fixture', kind: 'solo', recordedAt: 0, build: 'test', setup: { players: [{ name: 'Ann', isBot: false }, { name: 'Bot (pro)', isBot: true, difficulty: 'pro' }], seed: 1 },
+      format: 2, id: 'fixture', matchId: 'fixture', segment: 0, startTick: 0, kind: 'solo', recordedAt: 0, build: 'test', setup: { players: [{ name: 'Ann', isBot: false }, { name: 'Bot (pro)', isBot: true, difficulty: 'pro' }], seed: 1 },
       localId: 1, players: [{ id: 1, name: 'Ann', isBot: false, island: 0 }, { id: 2, name: 'Zed', isBot: true, difficulty: 'pro', island: 1 }], map,
     },
     footer: { ticks: 450, duration: 15, winner: 1, unfinished: false },
-    ticks, ops: [], hashes: [], events, seconds,
+    ticks, ops: [], hashes: [], events, seconds, checkpoint: null,
   };
 }
 

@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import { MAP, PLAYER, WEAPONS } from './constants';
 import { eyePos } from './combat';
 import { emptyInventory } from './economy';
@@ -289,7 +290,7 @@ export class PracticeRange {
     if (hit?.hit.type !== 'player' || hit.hit.id !== me.id) return;
     const jitter = () => ((this.rng() * 2 - 1) * PRACTICE.shooterJitterDeg * Math.PI) / 180;
     input.yaw = yawOf(sub(chest, eye)) + jitter();
-    input.pitch = Math.atan2(chest.y - eye.y, dist2D(chest, eye)) + jitter();
+    input.pitch = dm.atan2(chest.y - eye.y, dist2D(chest, eye)) + jitter();
     if (now >= d.nextShotAt) { input.fire = true; d.nextShotAt = now + PRACTICE.shooterEverySec; }
   }
 

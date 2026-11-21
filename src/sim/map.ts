@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import { CENTER, MAP } from './constants';
 import type { Vec3 } from './types';
 import type { GameSettings } from './settings';
@@ -5,6 +6,20 @@ import { add, forward, right, rotateY, scale, v3, yawOf } from './vec';
 
 export type Doorway = { center: Vec3; yaw: number; width: number };
 export type Bunker = { center: Vec3; facingYaw: number; doorways: Doorway[] };
+
+/** The front doorway is doorways[0]: it faces along facingYaw (out toward the island front / map center). */
+export const FRONT_DOOR = 0;
+export const frontDoor = (b: Bunker): Doorway => {
+  const d = b.doorways[FRONT_DOOR];
+  if (!d) throw new Error('frontDoor: bunker has no doorways');
+  return d;
+};
+/** Yaw that looks from `from` through the centre of the bunker's front doorway (falls back to facingYaw on top of it). */
+export function spawnYaw(b: Bunker, from: Vec3): number {
+  const d = frontDoor(b).center;
+  const dx = d.x - from.x, dz = d.z - from.z;
+  return Math.hypot(dx, dz) < 1e-6 ? b.facingYaw : yawOf({ x: dx, z: dz });
+}
 export type IslandLayout = {
   index: number;
   center: Vec3;
@@ -118,7 +133,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
   if (!spec) throw new Error(`buildMap: unknown template ${String(template)}`);
   const r = spec.radius;
   const g = MAP.groundY;
-  const base = (r + spec.gap / 2) / Math.sin(Math.PI / playerCount);
+  const base = (r + spec.gap / 2) / dm.sin(Math.PI / playerCount);
   // 3+ players: the center island sits at the ring's centre (the only point equally far from every island), and the
   // ring grows if needed to keep it clear. 2 players: it sits off to the side on the bisector, so it is not a
   // stepping stone on the direct route; island→center is half the island gap, so going via the center costs the
@@ -127,7 +142,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
   const ring = two ? base : Math.max(base, r + spec.centerR[0] + spec.minCenterGap);
   const centerR = two ? spec.centerR[0] : Math.min(spec.centerR[1], Math.max(spec.centerR[0], ring - r - spec.centerGap));
   const centerDist = r + centerR + Math.max(spec.minCenterGap, spec.gap / 2);
-  const c0 = two ? v3(0, 0, Math.sqrt(centerDist ** 2 - ring ** 2)) : v3(0, 0, 0);
+  const c0 = two ? v3(0, 0, Math.sqrt(centerDist * centerDist - ring * ring)) : v3(0, 0, 0);
   const islands: IslandLayout[] = [];
   const statics: StaticBox[] = [];
   const cosmetics: CosmeticDef[] = [];
@@ -137,8 +152,8 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
 
   for (let i = 0; i < playerCount; i++) {
     const a = Math.PI + (2 * Math.PI * i) / playerCount;
-    const center = v3(Math.cos(a) * ring, 0, Math.sin(a) * ring);
-    const inward = v3(-Math.cos(a), 0, -Math.sin(a));
+    const center = v3(dm.cos(a) * ring, 0, dm.sin(a) * ring);
+    const inward = v3(-dm.cos(a), 0, -dm.sin(a));
     const facingYaw = yawOf(inward);
     const lat = right(facingYaw);
     const at = (fwd: number, side: number): Vec3 => {
@@ -188,7 +203,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
       cos('crate', 9, -4.5, 0.4); cos('barrel', 10, 4.2);
       for (let k = 0; k < 10; k++) {
         const t = ((k + 0.5) / 10) * Math.PI * 2;
-        cos('bollard', Math.cos(t) * (r - 0.45), Math.sin(t) * (r - 0.45));
+        cos('bollard', dm.cos(t) * (r - 0.45), dm.sin(t) * (r - 0.45));
       }
       // Hazards: a fuel barrel + propane pair on the front quay (they chain), a lone barrel on the far flank,
       // two supply crates (back corner by the lamp, beside the shop).
@@ -198,7 +213,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
       // Harbor: the mooring bollards along the coping, plus a little yard clutter.
       for (let k = 0; k < 14; k++) {
         const t = ((k + 0.5) / 14) * Math.PI * 2;
-        cos('bollard', Math.cos(t) * (r - 0.45), Math.sin(t) * (r - 0.45));
+        cos('bollard', dm.cos(t) * (r - 0.45), dm.sin(t) * (r - 0.45));
       }
       for (const s of [-1, 1]) { cos('palm', -14, s * 11, s); cos('lamp', 3, s * 15); }
       cos('barrel', -4, 10); cos('barrel', -4.7, 10.6); cos('barrel', -3.9, 10.9);
@@ -212,7 +227,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
   }
 
   // Center island: shield well in the middle, three stations around it, low concrete barriers between them.
-  const polar = (rad: number, deg: number, y = g) => v3(c0.x + Math.cos((deg * Math.PI) / 180) * rad, y, c0.z + Math.sin((deg * Math.PI) / 180) * rad);
+  const polar = (rad: number, deg: number, y = g) => v3(c0.x + dm.cos((deg * Math.PI) / 180) * rad, y, c0.z + dm.sin((deg * Math.PI) / 180) * rad);
   const center: CenterIsland = {
     center: c0, radius: centerR, groundY: g,
     shieldWell: v3(c0.x, g, c0.z),
@@ -310,7 +325,7 @@ export const HARBOR_CHANNEL = 14;
 export function harborBackdropFrame(isl: IslandLayout, n: number) {
   const ring = Math.hypot(isl.center.x, isl.center.z);
   const z0 = isl.radius + HARBOR_CHANNEL;
-  const hw = Math.max(25, Math.min(60, (ring + z0) * Math.sin(Math.PI / n) - 8));
+  const hw = Math.max(25, Math.min(60, (ring + z0) * dm.sin(Math.PI / n) - 8));
   return { z0, hw, top: isl.groundY + 0.2 };
 }
 

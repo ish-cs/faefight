@@ -4,7 +4,7 @@ import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosiv
 import { BUILD, DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
-import { buildMapDef, type IslandLayout, type MapDef } from './map';
+import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
 import { Hazards, isExplosive, type HazardHost } from './hazards';
@@ -131,7 +131,8 @@ export class Match implements MatchApi {
       const id = i + 1;
       const name = cfg.isBot && isPlaceholderBotName(cfg.name) ? nickname(nameRng, taken) : cfg.name;
       const p = newPlayer(id, name, cfg.isBot, i, map[i].spawn, this.settings.startCash);
-      p.yaw = map[i].bunker.facingYaw;
+      p.yaw = spawnYaw(map[i].bunker, p.pos);
+      p.pitch = 0;
       this.s.players.set(id, p);
       physics.addPlayer(id, p.pos);
       if (cfg.isBot && opts.makeBot) {
@@ -212,6 +213,9 @@ export class Match implements MatchApi {
     return new Match(def, await Physics.create(def), setup, opts);
   }
 
+  /** Ticks run so far (the next snapshot's tick is this + 1). */
+  get tickCount(): number { return this.tickNo; }
+
   humanIds(): number[] {
     return [...this.s.players.values()].filter((p) => !p.isBot).map((p) => p.id);
   }
@@ -258,7 +262,9 @@ export class Match implements MatchApi {
         continue;
       }
       const bot = this.bots.get(p.id);
-      let input = bot ? bot.think(this.botView(p)) : this.practice?.isDummy(p.id) ? this.practice.inputFor(p, now) : inputs.get(p.id) ?? NO_INPUT;
+      // No input from a human (none sent yet, e.g. right after spawning): do nothing, but keep looking where
+      // they look (the spawn facing), not at yaw 0.
+      let input = bot ? bot.think(this.botView(p)) : this.practice?.isDummy(p.id) ? this.practice.inputFor(p, now) : inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
       // Bots only emote once the match is decided (Banter): then one stands still for it unless it wants to
       // shoot (which ends the emote, as for anyone). Mid-match bot play is never changed by emotes.
       if (bot && p.emote && this.s.winner !== null && !input.fire) input = { ...input, moveX: 0, moveZ: 0, jump: false, sprint: false, build: null, throwGrenade: false, placeCharge: false };
@@ -476,8 +482,9 @@ export class Match implements MatchApi {
     this.physics.setPotionShops(positions);
   }
 
-  debugKill(playerId: number): void {
-    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
+  /** Debug: kill a player, optionally credited to `killer` (e2e: killcam / kill feed). */
+  debugKill(playerId: number, killer: number | null = null): void {
+    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false, killer));
   }
 
   /** Kill (if alive) and eliminate for good: no respawn. The win check runs on the next tick. */

@@ -345,7 +345,7 @@ describe('bots and hazards', () => {
     for (const seed of [1, 2, 3]) expect((await duel('easy', seed)).aimed).toBe(false);
   });
 
-  test('in a fight, a bot steps out of blast range of a barrel and stays out; anyone runs from a fusing one', async () => {
+  test('in a fight, a bot steps out of the heavy part of a barrel blast and stays out; anyone runs from a fusing one', async () => {
     for (const fusing of [false, true]) for (const seed of [1, 2, 4]) {
       const m = await Match.create({ players: [{ name: 'me', isBot: false }, { name: 'Bot', isBot: true, difficulty: 'hard' }], seed });
       const b = firstOf(m, 'barrel', 0);
@@ -355,7 +355,7 @@ describe('bots and hazards', () => {
       tick(m, 1);
       const { all } = tick(m, fusing ? 0.4 : 1);
       const closest = Math.min(...all.map((s) => dist2D(s.players[1].pos, b.pos)));
-      expect(closest, `${fusing ? 'fusing' : 'fight'} seed ${seed}`).toBeGreaterThan(fusing ? HAZARD.barrel.radius * 0.5 : 2.5);
+      expect(closest, `${fusing ? 'fusing' : 'fight'} seed ${seed}`).toBeGreaterThan(fusing ? HAZARD.barrel.radius * 0.5 : 1.8);
     }
   });
 

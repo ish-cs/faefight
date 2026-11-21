@@ -1,4 +1,5 @@
 import { CHARGE, CRATE_LOOT, GRENADE, HAZARD, MAP, ROCKET, WEAPONS } from './constants';
+import * as dm from './dmath';
 import { applyPlayerDamage, hitPiece, nearestOnBody, nearestOnPiece, type CombatCtx } from './combat';
 import { emptyInventory } from './economy';
 import { hash01 } from './gunplay';
@@ -354,7 +355,7 @@ export function hazardSpotProblem(def: Pick<MapDef, 'islands' | 'center' | 'stat
  */
 export function noBuildZones(isl: MapDef['islands'][number]): { center: Vec3; half: Vec3; rotY: number }[] {
   const b = isl.bunker;
-  const fwd = v3(-Math.sin(b.facingYaw), 0, -Math.cos(b.facingYaw));
+  const fwd = v3(-dm.sin(b.facingYaw), 0, -dm.cos(b.facingYaw));
   return [{ center: v3(b.center.x + fwd.x * 3.7, b.center.y, b.center.z + fwd.z * 3.7), half: v3(1.1, 0.5, 1), rotY: b.facingYaw }];
 }
 
