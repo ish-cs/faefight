@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { addNpcSpot } from '../characters/npcSpots';
 import { boxUV, mat, StaticBatch, strut } from './geo';
 import { CONTAINER_COLORS, mats } from './materials';
 import { makeRng, signTex } from './textures';
@@ -205,39 +206,10 @@ export function vaultProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3) {
   }
 }
 
-export type KeeperLook = { skin: number; shirt: number; pants: number; apron: number; hat: number };
-
-/** Standing NPC (≈0.5 × 1.7 × 0.4), feet at local origin, facing +Z with forearms reaching forward. */
-export function keeper(b: StaticBatch, B: THREE.Matrix4, { skin, shirt, pants, apron, hat }: KeeperLook) {
-  const M = mats();
-  const limb = (a: THREE.Vector3, c: THREE.Vector3, r: number, col: number) => {
-    const d = c.clone().sub(a);
-    const g = new THREE.CapsuleGeometry(r, Math.max(0.01, d.length()), 4, 10);
-    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), d.normalize()));
-    g.translate((a.x + c.x) / 2, (a.y + c.y) / 2, (a.z + c.z) / 2);
-    b.add(M.matte, g, B, col);
-  };
-  for (const s of [-1, 1]) {
-    limb(V(s * 0.1, 0.92, 0), V(s * 0.11, 0.5, 0.01), 0.075, pants);
-    limb(V(s * 0.11, 0.5, 0.01), V(s * 0.11, 0.1, 0), 0.06, pants);
-    b.add(M.dark, box(0.11, 0.09, 0.24), at(B, mat(s * 0.11, 0.045, 0.04)), 0x3a2e26);
-  }
-  b.add(M.matte, new THREE.CapsuleGeometry(0.15, 0.32, 6, 14), at(B, mat(0, 1.2, 0, 0, 0, 0, 1.25, 1, 0.8)), shirt);
-  b.add(M.matte, new THREE.CapsuleGeometry(0.155, 0.36, 6, 14), at(B, mat(0, 1.1, 0.012, 0, 0, 0, 1.22, 1, 0.82)), apron);
-  limb(V(0, 1.42, 0), V(0, 1.5, 0), 0.05, skin);
-  b.add(M.matte, new THREE.SphereGeometry(0.105, 18, 14), at(B, mat(0, 1.6, 0.01, 0, 0, 0, 1, 1.12, 1.06)), skin);
-  b.add(M.matte, new THREE.SphereGeometry(0.115, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), at(B, mat(0, 1.63, 0.01)), hat);
-  b.add(M.matte, box(0.17, 0.015, 0.1), at(B, mat(0, 1.65, 0.13)), hat);
-  for (const s of [-1, 1]) {
-    limb(V(s * 0.2, 1.4, 0), V(s * 0.24, 1.12, 0.06), 0.055, shirt);
-    limb(V(s * 0.24, 1.12, 0.06), V(s * 0.12, 1.05, 0.24), 0.045, skin);
-  }
-}
-
 /** Shopkeeper (0.6 × 1.8 × 0.6 collider) + a cantilevered awning on a pole inside the collider, overhead only. */
 export function shopProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3) {
   const M = mats();
-  keeper(b, B, { skin: 0x8d5a3b, shirt: 0xe9e4d6, pants: 0x3b4252, apron: 0x2f6f73, hat: 0x222222 });
+  addNpcSpot('shop', B); // the keeper himself is an animated body (characters/npcs.ts)
   // pole (inside the collider, behind the keeper) + cantilevered striped awning toward +Z
   const pz = -h.z + 0.05;
   b.add(M.galv, cyl(0.035, 2.75, 8), at(B, mat(0, 1.375, pz)));

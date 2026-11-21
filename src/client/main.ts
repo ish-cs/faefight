@@ -13,7 +13,8 @@ import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
-import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { BuildPredictor } from './buildPredict';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { errors, installErrorReporting } from './telemetry/errors';
@@ -63,6 +64,9 @@ import type { PracticeCmd } from '../sim/practice';
 import { PracticePanel } from './practicePanel';
 import { EmoteWheel } from './emoteWheel';
 import { isWheelId, quipLines, type WheelId } from '../sim/emotes';
+// UI theme last: its tokens and skin win over style.css / qol.css / settings.css (docs/ui-style.md).
+import './ui/theme.css';
+import './ui/skin.css';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -94,6 +98,23 @@ function settingsButton(onClose?: () => void) {
   b.innerHTML = `${GEAR}<span>Settings</span>`;
   b.dataset.testid = 'open-settings';
   b.onclick = () => openSettings({ onClose });
+  return b;
+}
+
+const PAUSE_ICONS = {
+  help: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg>',
+  exit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h5v16h-5"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h10"/></svg>',
+};
+
+/** Pause-card button: icon + label, same shape as the Settings button. */
+function pauseButton(icon: string, label: string, cls: string) {
+  const b = document.createElement('button');
+  b.className = `${cls} pause-btn`;
+  b.innerHTML = icon;
+  const span = document.createElement('span');
+  span.textContent = label;
+  b.append(span);
   return b;
 }
 
@@ -935,7 +956,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
    */
   const governor = new FrameGovernor();
   const sky = renderer.world.sky;
-  const govSkip = () => governor.setSkip((a, b) => !sky.presetHasAo && a.ao !== b.ao && a.shadowScale === b.shadowScale && a.grass === b.grass && a.lodBias === b.lodBias && a.res === b.res);
+  const govSkip = () => governor.setSkip((s) => s === 'ao' && !sky.presetHasAo);
   govSkip();
   governor.enabled = settings.get().video.dynamicResolution;
   const applyGovernor = () => {
@@ -949,6 +970,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const offSettings = settings.subscribe((st) => {
     sky.setQuality(st.video.quality);
     sky.setResolutionScale(st.video.resolutionScale);
+    sky.setCompetitive(st.video.competitive);
     governor.enabled = st.video.dynamicResolution;
     perfDetail = st.video.perfDetail || DEBUG;
     if (sky.quality !== govQuality) { govQuality = sky.quality; governor.reset(); govSkip(); }
@@ -1013,8 +1035,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let aim: AimOutcome | null = null;
   /** Newest snapshot as received (not delayed by the interpolation buffer): busy state, pieces. */
   let latest: Snapshot | null = null;
-  /** A sent build not yet confirmed by a 'placed' event (one at a time, so drag-build can't double-place). */
-  let buildPending: { at: number } | null = null;
+  /** Own placements shown at once and reconciled with the host's pieces (buildPredict.ts); also paces placing. */
+  const builds = new BuildPredictor();
   /** A click that couldn't place yet (busy placing the last piece) still counts for a moment. */
   let placeWantedAt = -Infinity;
   let lastSnapKey = '';
@@ -1249,29 +1271,53 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     input.enabled = false;
     backend.pause?.(true); // vs bot: the world stops (online it can't)
     paused = document.createElement('div');
-    paused.className = 'overlay';
+    paused.className = 'overlay pause-overlay';
+    paused.dataset.testid = 'pause';
     const card = document.createElement('div');
-    card.className = 'card glass';
-    const title = document.createElement('div');
-    title.style.cssText = 'font-size:28px;font-weight:800';
-    title.textContent = 'Paused';
-    const resume = document.createElement('button');
-    resume.className = 'btn';
-    resume.textContent = 'Resume';
+    card.className = 'card glass pause-card';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', 'Paused');
+    const head = document.createElement('div');
+    head.className = 'pause-head';
+    // The kicker says whether the world stopped; no separate note repeating "paused".
+    head.innerHTML = `<div class="pause-kicker${backend.pause ? '' : ' live'}"></div><div class="pause-title">Paused</div>`;
+    head.firstElementChild!.textContent = backend.pause ? 'Match paused · vs bots' : 'Online · the match keeps running';
+    // Compact match info: time left, map, and your own numbers.
+    const me = snap?.players.find((p) => p.id === humanId);
+    const info = document.createElement('div');
+    info.className = 'pause-info';
+    info.dataset.testid = 'pause-info';
+    const stat = (k: string, v: string) => { const d = document.createElement('div'); d.className = 'pause-stat'; d.innerHTML = '<span class="k"></span><span class="v"></span>'; d.children[0].textContent = k; d.children[1].textContent = v; return d; };
+    info.append(
+      stat('Time', document.querySelector('.hud .timer')?.textContent || '–'),
+      stat('Map', mapDef?.name ?? '–'),
+      stat('K / D', me ? `${me.kills} / ${me.deaths}` : '–'),
+      stat('Cash', me ? `$${me.inv.cash}` : '–'),
+    );
+    const resume = pauseButton(PAUSE_ICONS.play, 'Resume', 'btn primary');
     resume.onclick = () => { input.enabled = true; input.requestLock(); hidePause(); };
     resume.dataset.testid = 'resume';
-    paused.dataset.testid = 'pause';
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size:12px;color:var(--muted)';
-    note.textContent = backend.pause ? 'Match paused.' : 'Online matches keep running while this menu is open.';
-    const quit = document.createElement('button');
-    quit.className = 'btn';
-    quit.textContent = online ? 'Leave match' : 'Quit to menu';
+    // Settings / How to play open in place of the card (same backdrop), and the card comes back on close.
+    const under = (open: (onClose: () => void) => void) => () => {
+      paused?.classList.add('under');
+      open(() => paused?.classList.remove('under'));
+    };
+    const set = settingsButton();
+    set.className = 'btn pause-btn';
+    set.onclick = under((onClose) => openSettings({ onClose }));
+    const how = pauseButton(PAUSE_ICONS.help, 'How to play', 'btn');
+    how.dataset.testid = 'pause-how-to';
+    how.onclick = under((onClose) => openHowTo(onClose));
+    const quit = pauseButton(PAUSE_ICONS.exit, online ? 'Leave match' : 'Quit to menu', 'btn danger');
     quit.dataset.testid = 'pause-quit';
     quit.onclick = leave;
-    card.append(title, resume, settingsButton(), quit, note);
+    const btns = document.createElement('div');
+    btns.className = 'pause-btns';
+    btns.append(resume, set, how, quit);
+    card.append(head, info, btns);
     paused.append(card);
     document.body.append(paused);
+    resume.focus({ preventScroll: true });
   }
 
   // ---- practice range panel (practicePanel.ts): O opens the controls, O / Esc / Resume closes them ----
@@ -1354,20 +1400,37 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const ghostState = () => (aim ? aim.ok : null);
   const buildNote = () => (!aim ? null : !aim.ok ? `✕ ${aim.reason}` : SNAP_LABEL[aim.tag] ?? null);
 
-  /** Place from the current ghost if it's valid, we have the piece and aren't still placing the last one. */
+  /** Pieces of this kind we can still place: the newest host count minus our predictions it doesn't show yet. */
+  const piecesLeft = (me: Snapshot['players'][number], kind: PieceKind) =>
+    (me.inv.pieces[kind] ?? 0) - builds.unconfirmed(latest?.pieces ?? [], kind);
+
+  /**
+   * Place from the current ghost if it's valid, we have the piece and the last placement's placeSec has passed
+   * (paced locally; the host enforces the same rate). The piece shows at once as a prediction.
+   */
   function tryPlace(): boolean {
     const now = performance.now();
-    if (buildPending && now - buildPending.at > 1500) buildPending = null; // lost / rejected
-    if (!aim?.ok || !aim.req || buildPending) return false;
-    const me = latest?.players.find((p) => p.id === humanId);
-    if (!me || !me.alive || (me.inv.pieces[aim.req.kind] ?? 0) <= 0) return false;
-    if (me.busyUntil > latest!.time) return false;
+    if (!aim?.ok || !aim.req || !builds.canPlace(now) || !latest) return false;
+    const me = latest.players.find((p) => p.id === humanId);
+    if (!me || !me.alive || piecesLeft(me, aim.req.kind) <= 0) return false;
+    if (me.healAt !== null || me.drinking) return false; // busy with a medkit/potion: the host would refuse it
     input.queue({ build: aim.req });
-    buildPending = { at: now };
+    const afterId = latest.pieces.reduce((m, p) => Math.max(m, p.id), 0);
+    const piece = builds.place(aim.req.kind, aim.ghost, aim.rotY, humanId, now, afterId);
+    predictor?.addLocalPiece(piece);
+    renderer.setPredictedPieces(builds.pieces);
     placeWantedAt = -Infinity;
     renderer.pulseGhost();
     return true;
   }
+
+  /** Host pieces about to be drawn: confirmed predictions give way to the real piece, refused ones fade. */
+  const reconcileBuilds = (pieces: readonly PieceState[]) => {
+    const r = builds.reconcile(pieces, performance.now());
+    if (!r.confirmed.length && !r.rejected.length) return;
+    for (const p of [...r.confirmed, ...r.rejected]) predictor?.removeLocalPiece(p.id);
+    renderer.setPredictedPieces(builds.pieces);
+  };
 
   /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
   const gunHud = (me: Snapshot['players'][number] | undefined, own = true) => {
@@ -1391,6 +1454,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (DEBUG) for (const e of s.events) if (e.type === 'shot' && e.data.by === humanId) shotTimes.applied.push(performance.now());
     snap = s;
     snapTime = s.time; snapAt = performance.now();
+    reconcileBuilds(s.pieces); // before pushSnapshot: a confirmed prediction hands over to the real piece in the same draw
     hud.pushEvents(renderer.pushSnapshot(s));
     const meSnap = s.players.find((p) => p.id === humanId);
     fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
@@ -1469,7 +1533,6 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       latest = s;
       if (buffer) qol.onNetSnapshot();
       shots.reconcile(s.events, humanId, performance.now());
-      if (buildPending && s.events.some((e) => e.type === 'placed' && (e.data as { by?: number }).by === humanId)) buildPending = null;
       renderer.ingest(s);
       if (buffer) buffer.push(s); else applySnapshot(s);
     },
@@ -1556,6 +1619,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       replayState: () => (replay ? replay.last : null),
       /** Current build ghost: snap tag, ghost/rest position, rotation, validity (+ reason) and the exact request a click sends. */
       buildAim: () => aim,
+      /** Build prediction: unconfirmed pieces and placed/confirmed/rejected counts. */
+      buildPredict: () => ({ pending: builds.pieces, ...builds.stats }),
       /** The sim's own verdict for a build request (round trip), to cross-check the local ghost. */
       serverPreview: (req: BuildRequest) => new Promise<Placement>((res) => { const k = ++debugPreviewSeq; debugPreviews.set(k, res); backend.preview(req, k); }),
     };
@@ -1655,7 +1720,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
-      if (governor.frame(now - last, 1000 / (cap || 60))) applyGovernor();
+      // main-thread work of the previous frame tells the governor whether frames are GPU- or CPU-bound
+      if (governor.frame(now - last, 1000 / (cap || 60), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
     }
     frameMs.push(now - last);
     errors?.frame(now - last);
@@ -1671,12 +1737,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         hud.setFpsDetail([
           `${((now - fpsSince) / fpsFrames).toFixed(1)} ms${g !== null ? ` · gpu ${g.toFixed(1)} ms` : ''}`,
           `${ri.drawCalls} draws · ${(ri.triangles / 1e6).toFixed(2)}M tris`,
-          `gov ${governor.level} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
+          `gov ${governor.level}${governor.gpuBound ? ' gpu' : ' cpu'} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
         ]);
       }
       fpsFrames = 0; fpsSince = now;
     }
     if (buffer) for (const r of buffer.advance(dt)) applySnapshot(r.snap);
+    if (snap) reconcileBuilds(snap.pieces); // refusals time out between snapshots too
+    renderer.setPieceFades(builds.fades(now));
     renderer.beginFrame();
 
     // Movement: the raw (camera-frame) move axes become numbered fixed-step commands. The sim and
@@ -1746,9 +1814,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
           physics: predictor.world, kind: buildKind,
           ray: { eye: { x: cam.position.x, y: cam.position.y, z: cam.position.z }, dir: { x: aimDir.x, y: aimDir.y, z: aimDir.z } },
           player: { x: feet.x, y: feet.y, z: feet.z }, yaw: input.yaw, buildRot: input.buildRot, free: input.free,
-          humanId, pieces: (latest ?? snap!).pieces, islands: map, myIsland: me.island,
+          // predicted pieces too: a held place keeps building along the aim instead of re-aiming at the same spot
+          humanId, pieces: (latest ?? snap!).pieces.concat(builds.pieces), islands: map, myIsland: me.island,
         });
-        if (!(me.inv.pieces[buildKind] ?? 0)) { aim.ok = false; aim.reason = 'none left'; aim.req = null; }
+        const meLatest = latest?.players.find((p) => p.id === humanId) ?? me;
+        if (piecesLeft(meLatest, buildKind) <= 0) { aim.ok = false; aim.reason = 'none left'; aim.req = null; }
         const snapKey = aim.tag === 'aim' ? '' : `${aim.tag}${aim.ghost.x.toFixed(1)}${aim.ghost.z.toFixed(1)}`;
         if (snapKey && snapKey !== lastSnapKey && aim.ok) audio.ui('tick', 0.15);
         lastSnapKey = snapKey;
