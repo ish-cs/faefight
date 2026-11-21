@@ -55,6 +55,8 @@ const DICT = [
   'stamina', 'exhausted', 'sprinting', 'rest', 'stress', 'brain', 'personality', 'difficulty',
   'action', 'goal', 'reason', 'steps', 'step', 'fightOdds', 'thought',
   'burning', 'fire',
+  // appended (keep earlier indices stable): gameplay props
+  'pr', 'p', 'q',
 ];
 
 const enc = new TextEncoder();

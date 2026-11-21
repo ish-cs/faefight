@@ -23,6 +23,8 @@ export const grade = {
   vignette: uniform(0.26),
   /** ambient-occlusion strength (high/ultra) */
   ao: uniform(0.9),
+  /** scene-linear luminance where geometry highlights start to bloom (high/ultra) */
+  bloomThreshold: uniform(6),
 };
 
 /**
@@ -51,10 +53,12 @@ export function buildPipeline(
     aoPass = ao(scenePass.getTextureNode('depth'), scenePass.getTextureNode('normal'), camera);
     aoPass.resolutionScale = o.ao.resolution;
     aoPass.samples.value = o.ao.samples;
-    aoPass.radius.value = 0.9;
-    aoPass.thickness.value = 1.2;
-    aoPass.distanceExponent.value = 1.4;
-    aoPass.scale.value = 1.15;
+    // ~1.1 m reach: crate/drum/container feet, wall bases and characters get a contact shadow; a lower thickness
+    // keeps thin poles from smearing a halo onto the wall behind them
+    aoPass.radius.value = 1.1;
+    aoPass.thickness.value = 0.9;
+    aoPass.distanceExponent.value = 1.6;
+    aoPass.scale.value = 1.25;
     // Post-applied AO also hits direct sunlight: full strength in shade, lighter on bright sunlit pixels, so contact
     // shadows ground props and characters without dirtying lit walls.
     const occ = aoPass.getTextureNode().sample(screenUV).r;
@@ -62,8 +66,13 @@ export function buildPipeline(
     hdr = hdr.mul(mix(float(1), occ, mix(grade.ao, grade.ao.mul(0.45), lit)));
   }
   if (o.bloom) {
-    // only emissive output blooms (generator glow, water sun-glints write emissive) — never the bright sky
-    hdr = hdr.add(bloom(scenePass.getTextureNode('emissive'), 0.75, 0.45, 0).rgb);
+    // Emissive output blooms (generator glow, water sun-glints write emissive), plus a subtle bloom of geometry hot
+    // spots: sun specular on wet ground, chrome, galvanised steel. Never the sky (depth ≈ 1) — the sky dome is bright
+    // everywhere and would fog the whole horizon.
+    const lum = luminance(col.rgb);
+    const notSky = step(scenePass.getTextureNode('depth').r, 0.9999);
+    const hot = col.rgb.mul(smoothstep(grade.bloomThreshold, grade.bloomThreshold.mul(2.5), lum)).mul(notSky).mul(0.35);
+    hdr = hdr.add(bloom(vec4(scenePass.getTextureNode('emissive').rgb.add(hot), 1), 0.75, 0.45, 0).rgb);
   }
 
   let flare: THREE.Node<'vec3'> | null = null;

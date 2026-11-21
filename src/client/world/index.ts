@@ -1,19 +1,24 @@
 import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
-import type { FirePatch, MatchEvent, PieceState, PlayerState } from '../../sim/types';
+import type { FirePatch, MatchEvent, PieceState, PlayerState, Snapshot } from '../../sim/types';
 import { FireFx } from './fireFx';
 import { ImpactMarks } from './impacts';
 import { clearNpcSpots } from '../characters/npcSpots';
 import { CosmeticLayer } from './cosmetics';
+import { Debris } from './debris';
 import { Critters } from './critters';
 import type { CritterSound, V3 } from './critterSim';
 import { Boats, gullPerches, Gulls } from './dressing';
 import { defineDetailKinds } from './detail';
+import { GameProps } from './gameProps';
+import { PROP_KINDS } from '../../sim/props';
 import { Grass } from './grass';
+import { buildGroundAO } from './groundAO';
 import { Scatter } from './scatter';
 import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
+import { PropLayer, TIER_LIMIT } from './propLayer';
 import { setBuiltInPotionStalls } from './potionSeller';
 import { installQualityToggle, SkyLighting, SUN_DIR } from './sky';
 import { impostors, SUN_FOR_BAKE } from './impostor';
@@ -41,12 +46,21 @@ export class World {
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
   private cosmetics: CosmeticLayer | null = null;
+  /** Tier A gameplay props (sim-owned rigid bodies), posed from snapshots. */
+  private gameProps: GameProps | null = null;
   /** instanced grass beds (high/ultra) */
   readonly grass = new Grass();
   /** instanced small detail (litter, rubble, shells, seaweed…) */
   readonly scatter = new Scatter();
+  /** client-only physics debris (bottles, cans, cones, boxes…): tumbles, never touches gameplay */
+  readonly debris = new Debris();
+  /** dense dock clusters + quay gear (clusters.ts / propLayer.ts) */
+  readonly props = new PropLayer();
   private boats: Boats | null = null;
   private lastFrame = performance.now();
+  /** soft baked-AO footprints under containers, walls and stations (groundAO.ts) */
+  private groundAO: THREE.Mesh | null = null;
+  private waterEnv: THREE.MeshStandardNodeMaterial | null = null;
   private gulls: Gulls | null = null;
   /** wildlife (rats, birds, crabs, insects, fish …): cosmetic, client-only */
   critters: Critters | null = null;
@@ -71,7 +85,15 @@ export class World {
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
     clearNpcSpots(); // the shop/potion props below register their keepers
-    const { root, collidables } = buildIslands(def, teamColors, this.scatter);
+    this.props.buildTier = TIER_LIMIT[this.sky.quality];
+    // ?noprops (perf A/B): no dock clusters, no physics debris, no gameplay-prop meshes (the sim still has them)
+    const q = typeof location !== 'undefined' ? location.search : '';
+    const noProps = q.includes('noprops');
+    // finer A/B switches: ?noclusters / ?nogameprops / ?nodebris drop one layer each
+    const noClusters = noProps || q.includes('noclusters'), noGameProps = noProps || q.includes('nogameprops'), noDebris = noProps || q.includes('nodebris');
+    const { root, collidables } = buildIslands(def, teamColors, this.scatter, noClusters ? undefined : this.props);
+    this.props.build();
+    this.scene.add(this.props.root);
     this.scatter.build();
     this.scene.add(this.scatter.root);
     this.scene.add(root);
@@ -87,6 +109,9 @@ export class World {
     const wm = this.water.mesh.material as THREE.MeshStandardNodeMaterial;
     wm.envMap = this.scene.environment;
     wm.envMapIntensity = 0.62;
+    this.waterEnv = wm;
+    this.groundAO = buildGroundAO(def);
+    if (this.groundAO) this.scene.add(this.groundAO);
     this.sky.setInteriors(map);
     // grass follows the harbor surface mask (sand/grass beds); the Container Yard is bare asphalt
     if (def.template === 'harbor') this.grass.build(map, (isl) => backdropFrame(isl, map.length), islandMask);
@@ -103,6 +128,17 @@ export class World {
     const cos = STRESS > 1 ? stressOffsets().flatMap(([ox, oz], k) => def.cosmetics.map((c) => k === 0 ? c : { ...c, id: 1e6 * k + c.id, pos: { ...c.pos, x: c.pos.x + ox, z: c.pos.z + oz } })) : def.cosmetics;
     this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
+    this.scene.add(this.debris.root);
+    const gameProps = this.gameProps = new GameProps(noGameProps ? [] : def.props ?? []);
+    this.scene.add(gameProps.root);
+    // debris collides with the gameplay props (kinematic, following their snapshot poses)
+    if (!noDebris) void this.debris.build(def, this.sky.quality).then(() => {
+      const sim = this.debris.sim;
+      if (!sim || this.gameProps !== gameProps) return;
+      for (const s of def.props ?? []) sim.addObstacle(s.id, PROP_KINDS[s.kind].shape, s.pos, s.rot);
+      const cam = this.sky.camera.position;
+      gameProps.onPose = (id, p, q) => sim.moveObstacle(id, p, [q.x, q.y, q.z, q.w], cam);
+    });
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
     // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
     // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
@@ -125,7 +161,8 @@ export class World {
       this.islands = null;
       this.islandHulls = [];
     }
-    if (this.water) { this.water.mesh.geometry.dispose(); this.water.mesh.removeFromParent(); this.water = null; }
+    if (this.water) { this.water.mesh.geometry.dispose(); this.water.mesh.removeFromParent(); this.water = null; this.waterEnv = null; }
+    if (this.groundAO) { this.groundAO.geometry.dispose(); this.groundAO.removeFromParent(); this.groundAO = null; }
     // grass beds are additive per build: drop the previous map's
     for (const c of [...this.grass.root.children]) { if (c instanceof THREE.Mesh) c.geometry.dispose(); c.removeFromParent(); }
     this.boats?.root.removeFromParent();
@@ -136,6 +173,10 @@ export class World {
     this.critters = null;
     this.cosmetics?.dispose();
     this.cosmetics = null;
+    this.debris.clear();
+    this.gameProps?.dispose();
+    this.gameProps = null;
+    this.props.clear();
   }
 
   /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
@@ -147,9 +188,13 @@ export class World {
     this.cosmetics?.onBroken(e.data, this.pieceFx.particles);
   }
 
+  /** Snapshot `props` (displaced gameplay props; the rest are at spawn). */
+  syncProps(poses: Snapshot['props']) { this.gameProps?.sync(poses); }
+
   syncPieces(pieces: PieceState[], fires?: FirePatch[]) {
     this.pieces.sync(pieces);
     this.pieceFx.sync(pieces);
+    this.debris.syncPieces(pieces);
     this.fire.sync(pieces, fires);
     this.water?.syncPieces(pieces, this.sky.camera.position);
     if (this.impacts.active) { const ids = new Set(pieces.map((p) => p.id)); this.impacts.retainPieces((id) => ids.has(id)); }
@@ -169,20 +214,25 @@ export class World {
     const now = performance.now(), dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
     if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY, dt);
+    // water reflections follow the weather (its own envMapIntensity ignores scene.environmentIntensity)
+    if (this.waterEnv) this.waterEnv.envMapIntensity = 0.62 * (1 - 0.65 * this.sky.lighting.weather);
+    const t = now / 1000;
+    this.debris.update(dt, focus ?? this.sky.camera.position, feet, waterY);
     if (this.critters) {
       this.critters.setQuality(this.sky.quality);
       this.critters.update(dt, this.sky.camera as THREE.PerspectiveCamera, feet as V3[], waterY);
     }
-    const t = performance.now() / 1000;
     this.boats?.update(t, waterY);
     this.gulls?.update(t);
     this.grass.setQuality(this.sky.quality);
     this.scatter.setQuality(this.sky.quality);
+    this.props.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
     impostors.step(this.gpu, this.scene.environment); // one queued impostor bake per frame (load/reveal frames)
     lods.setQuality(this.sky.quality);
     lods.update(this.sky.camera.position);
     this.pieceFx.update(now);
+    this.gameProps?.update(dt);
     this.impacts.setQuality(this.sky.quality);
     this.impacts.update();
     this.fire.setQuality(this.sky.quality);

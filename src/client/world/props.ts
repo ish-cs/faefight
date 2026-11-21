@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { addNpcSpot } from '../characters/npcSpots';
 import { boxUV, mat, StaticBatch, strut } from './geo';
+import { cylinderLabel, labelMaterial } from './labels';
 import { CONTAINER_COLORS, mats } from './materials';
 import { makeRng, signTex } from './textures';
 
@@ -31,6 +32,13 @@ export function containerStack(b: StaticBatch, B: THREE.Matrix4, heights: number
     for (let k = 0; k < n; k++) {
       const col = CONTAINER_COLORS[Math.floor(rng.rnd() * CONTAINER_COLORS.length)];
       container(b, at(B, mat(rng.rr(-0.06, 0.06), k * 2.59, i * spacing, 0, rng.rr(-0.012, 0.012), 0)), col);
+      // lashing bars crossing the door end of every upper box, down to the corner castings of the one below
+      if (k > 0) for (const s of [-1, 1]) {
+        const x = 3.03 + 0.06, z = i * spacing;
+        const lo = V(x, k * 2.59 - 1.7, z + s * 1.05), hi = V(x, k * 2.59 + 0.06, z - s * 1.1);
+        b.add(mats().galv, strut(lo, hi, 0.014, 4), B, 0x8a8e90, false);
+        b.add(mats().dark, cyl(0.03, 0.12, 6).translate(0, 0, 0), at(B, mat(lo.x, lo.y + 0.2, lo.z - s * 0.245, -s * Math.atan2(2.15, 1.76))), 0x6a4a2a, false);
+      }
     }
   });
 }
@@ -148,7 +156,11 @@ export function bollard(b: StaticBatch, B: THREE.Matrix4) {
 export function drums(b: StaticBatch, B: THREE.Matrix4, n: number, rng: Rng) {
   const M = mats();
   const cols = [0x1f5fa8, 0xb23a26, 0x2f6b3a];
-  for (let i = 0; i < n; i++) b.add(M.paint, cyl(0.29, 0.88, 14), at(B, mat((i % 2) * 0.62, 0.44, -Math.floor(i / 2) * 0.62)), cols[Math.floor(rng.rnd() * 3)]);
+  for (let i = 0; i < n; i++) {
+    const D = at(B, mat((i % 2) * 0.62, 0.44, -Math.floor(i / 2) * 0.62, 0, rng.rr(0, 6), 0));
+    b.add(M.paint, cyl(0.29, 0.88, 14), D, cols[Math.floor(rng.rnd() * 3)]);
+    b.add(labelMaterial(), cylinderLabel(0.293, 0, 0.27, 1.4, 0), D, 0xffffff, false);
+  }
 }
 
 export function pallet(b: StaticBatch, B: THREE.Matrix4) {

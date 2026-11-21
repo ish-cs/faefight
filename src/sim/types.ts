@@ -1,4 +1,5 @@
 import type { MoveState } from './movement';
+import type { PropPose } from './props';
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -162,6 +163,8 @@ export type Snapshot = {
   center?: { gold: number; bags: number; steel: number };
   /** Ids of broken cosmetic props (MapDef.cosmetics), in the order they broke. */
   broken?: number[];
+  /** Tier A props away from their spawn pose (props.ts), ascending id; absent ids are at their spawn. */
+  props?: PropPose[];
   /** Generator level (1-4) of each island, by island index. */
   genLevels: number[];
   sealed: boolean[];

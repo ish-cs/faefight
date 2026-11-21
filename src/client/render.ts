@@ -211,6 +211,7 @@ export class Renderer {
     this.waterY = snap.waterY;
     this.world.syncPieces(this.predicted.length ? snap.pieces.concat(this.predicted) : snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
+    this.world.syncProps(snap.props);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
     this.snapArrived = performance.now();
@@ -232,6 +233,7 @@ export class Renderer {
   private onEvent(e: MatchEvent) {
     if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
+    if (e.type === 'shot' || e.type === 'explosion') this.world.debris.onEvent(e, this.camera.position);
     if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
     if ((e.type === 'shot' || e.type === 'explosion') && this.curr)
       this.world.impactEvent(e, { pieces: this.curr.pieces, players: this.curr.players, waterY: this.waterY, broken: this.curr.broken ?? [] });

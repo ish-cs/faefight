@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { attribute, cameraPosition, float, positionLocal, smoothstep } from 'three/tsl';
+import { attribute, cameraPosition, float, length, positionLocal, smoothstep, uv, vec3 } from 'three/tsl';
 import type { Quality } from './sky';
 import { STATIC_CHUNKS } from './geo';
 import { lods, type LodTarget, SMALL_CASTER_LAYER } from './lod';
@@ -22,10 +22,18 @@ export type ScatterKind = {
   /** metres from the camera where an instance has fully shrunk away */
   far: number;
   density: Record<Quality, number>;
+  /** real CSM shadow caster; only for kinds big enough to read at distance (tiny casters only cost shadow passes) */
   cast?: boolean;
+  /**
+   * Cheap contact/blob shadow: a soft dark disc under each instance, radius = this × the instance's horizontal scale
+   * (metres in the kind's unit size). One extra instanced draw per kind; shrinks away with the instance.
+   */
+  blob?: number;
+  /** overlay kind: gets a copy of every instance added to that kind (same transform, same thinning order) */
+  follows?: string;
 };
 
-type Item = { m: THREE.Matrix4; c: THREE.Color; p: THREE.Vector3 };
+type Item = { m: THREE.Matrix4; c: THREE.Color; p: THREE.Vector3; yaw: number; sx: number; sz: number };
 
 const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
 
@@ -51,16 +59,19 @@ export class Scatter {
     const sc = typeof s === 'number' ? _s.set(s, s, s) : _s.set(s[0], s[1], s[2]);
     for (const [ox, oz] of stressOffsets()) {
       const m = new THREE.Matrix4().compose(_p.set(x + ox, y, z + oz), _q.setFromEuler(_e.set(tilt[0], yaw, tilt[1], 'YXZ')), sc);
-      k.items.push({ m, c: new THREE.Color(color), p: new THREE.Vector3(x + ox, y, z + oz) });
+      const it = { m, c: new THREE.Color(color), p: new THREE.Vector3(x + ox, y, z + oz), yaw, sx: sc.x, sz: sc.z };
+      k.items.push(it);
+      for (const f of this.kinds.values()) if (f.follows === key) f.items.push({ ...it, c: new THREE.Color(0xffffff) });
     }
   }
 
   build() {
-    const rng = makeRng(8128);
     let total = 0;
     for (const k of this.kinds.values()) { for (const m of k.chunks) { m.removeFromParent(); m.geometry.dispose(); } k.chunks = []; }
     for (const [key, k] of this.kinds) {
       if (k.items.length === 0) continue;
+      // per-kind seed: equal-length kinds (an overlay and the kind it follows) get the same permutation
+      const rng = makeRng(8128 + k.items.length);
       // deterministic shuffle → truncating `count` thins uniformly
       for (let i = k.items.length - 1; i > 0; i--) { const j = Math.floor(rng.rnd() * (i + 1)); [k.items[i], k.items[j]] = [k.items[j], k.items[i]]; }
       const geo = k.geo.clone();
@@ -98,6 +109,13 @@ export class Scatter {
         mesh.userData.far = k.far;
         this.root.add(mesh);
         k.chunks.push(mesh);
+        if (k.blob) { // contact blobs for this chunk: same items, culled and thinned with it
+          const b = this.buildBlobs(key, k.blob, items, centers);
+          b.computeBoundingSphere();
+          b.userData.full = items.length;
+          b.userData.far = k.far;
+          k.chunks.push(b);
+        }
       }
       total += k.items.length;
     }
@@ -105,6 +123,40 @@ export class Scatter {
     this.cull = lods.register(new ScatterCull([...this.kinds.values()].flatMap((k) => k.chunks)));
     this.applyQuality();
     console.info(`[world/scatter] ${total} instances in ${this.root.children.length} kinds`);
+  }
+
+  private blobGeo: THREE.BufferGeometry | null = null;
+  private blobMat: THREE.MeshBasicNodeMaterial | null = null;
+  /** Soft dark discs under one kind's instances, same order (so the quality `count` keeps them paired). */
+  private buildBlobs(key: string, radius: number, items: Item[], centers: Float32Array) {
+    if (!this.blobGeo) {
+      this.blobGeo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2).translate(0, 0.006, 0);
+      const m = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      m.name = 'scatterBlob';
+      const c4 = attribute('scCenter', 'vec4');
+      const d = c4.xyz.xz.sub(cameraPosition.xz).length();
+      const keep = float(1).sub(smoothstep(c4.w.mul(0.7), c4.w, d));
+      m.positionNode = c4.xyz.add(positionLocal.sub(c4.xyz).mul(keep));
+      const r = length(uv().sub(0.5).mul(2));
+      const a = float(1).sub(smoothstep(0.15, 1, r));
+      m.colorNode = vec3(0.02, 0.025, 0.03);
+      m.opacityNode = a.mul(a).mul(0.5);
+      this.blobMat = m;
+    }
+    const geo = this.blobGeo.clone();
+    geo.setAttribute('scCenter', new THREE.InstancedBufferAttribute(centers, 4));
+    const mesh = new THREE.InstancedMesh(geo, this.blobMat!, items.length);
+    const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), sc = new THREE.Vector3(), mm = new THREE.Matrix4();
+    // blob centre at the item's base (the kind's origin sits on the ground), so the shrink centre (item centre) matches
+    items.forEach((it, i) => mesh.setMatrixAt(i, mm.compose(it.p, q.setFromAxisAngle(up, it.yaw), sc.set(radius * it.sx, 1, radius * it.sz))));
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.name = `scatter:${key}:blob`;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 1;
+    this.root.add(mesh);
+    return mesh;
   }
 
   private shared = new Map<THREE.Material, THREE.MeshStandardNodeMaterial>();

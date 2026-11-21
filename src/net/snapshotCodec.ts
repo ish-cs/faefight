@@ -1,5 +1,6 @@
 import { emptyInventory } from '../sim/economy';
 import { emptyHotbar } from '../sim/hotbar';
+import type { PropPose } from '../sim/props';
 import type { BotBrainInfo, MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
 
 /**
@@ -16,11 +17,13 @@ export type NetPlayer = Omit<PlayerState, Private> & Partial<Pick<PlayerState, P
 /** A live projectile on the wire: [id, kind (0 grenade, 1 charge, 2 rocket), x, y, z, vx, vy, vz]. */
 export type NetProjectile = [number, number, number, number, number, number, number, number];
 const PROJ_KINDS = ['grenade', 'charge', 'rocket'] as const;
+/** A displaced gameplay prop on the wire: position in cm, quaternion in 1/1000 (delta-encoded per id by wire.ts). */
+export type NetProp = PropPose;
 /** A ground fire on the wire: [id, kind (0 grass, 1 crate, 2 palm), x, y, z]. */
 export type NetFire = [number, number, number, number, number];
 const FIRE_KINDS = ['grass', 'crate', 'palm'] as const;
-export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players' | 'projectiles' | 'brains' | 'fires'> & {
-  pieces?: PieceState[]; players: NetPlayer[]; proj?: NetProjectile[]; fire?: NetFire[];
+export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players' | 'projectiles' | 'brains' | 'fires' | 'props'> & {
+  pieces?: PieceState[]; players: NetPlayer[]; proj?: NetProjectile[]; fire?: NetFire[]; pr?: NetProp[];
   /** Spectators only: the followed bot's thinking. */
   brain?: BotBrainInfo;
 };
@@ -81,6 +84,10 @@ export class SnapshotEncoder {
     // Ground fires: tiny list, only while something burns.
     delete (out as Partial<Snapshot>).fires;
     if (s.fires?.length) out.fire = s.fires.map((f): NetFire => { const p = rv(f.pos); return [f.id, FIRE_KINDS.indexOf(f.kind), p.x, p.y, p.z]; });
+    // Gameplay props away from their spawn (the sim only lists those), quantized; a resting prop's entry is
+    // unchanged between updates, so the binary wire's per-id delta sends nothing for it.
+    delete (out as Partial<Snapshot>).props;
+    if (s.props?.length) out.pr = s.props.map((x) => ({ id: x.id, p: [r2(x.p[0]), r2(x.p[1]), r2(x.p[2])], q: [r3(x.q[0]), r3(x.q[1]), r3(x.q[2]), r3(x.q[3])] }));
     delete (out as Partial<Snapshot>).pieces;
     if (allPieces || this.sentPiecesKey.get(forPlayerId) !== this.piecesKey) {
       this.sentPiecesKey.set(forPlayerId, this.piecesKey);
@@ -136,11 +143,12 @@ export class SnapshotDecoder {
       reloadUntil: p.reloadUntil ?? 0, reloadSec: p.reloadSec ?? 0, reloadMag: p.reloadMag ?? 0, ads: p.ads ?? false,
       stamina: p.stamina ?? p.mv?.stamina ?? 100,
     }));
-    const { proj, brain, fire, ...rest } = n;
+    const { proj, brain, fire, pr, ...rest } = n;
     const projectiles = (proj ?? []).map(([id, k, x, y, z, vx, vy, vz]) => ({ id, kind: PROJ_KINDS[k] ?? 'grenade', pos: { x, y, z }, vel: { x: vx, y: vy, z: vz } }));
     const out: Snapshot = { ...rest, players, pieces: this.pieces, projectiles };
     if (brain) out.brains = [brain];
     if (fire?.length) out.fires = fire.map(([id, k, x, y, z]) => ({ id, kind: FIRE_KINDS[k] ?? 'grass', pos: { x, y, z } }));
+    if (pr) out.props = pr;
     return out;
   }
 }

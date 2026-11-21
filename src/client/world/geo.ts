@@ -114,6 +114,20 @@ export class StaticBatch {
     for (const T of this.copies) bin.parts.push(part(geo, m ? T.clone().multiply(m) : T, col));
   }
 
+  /** Push a geometry already in merge form (non-indexed; exactly position/normal/uv/color; final space). No copy. */
+  addRaw(material: THREE.Material, geo: THREE.BufferGeometry, cast = true, receive = true) {
+    const key = `${material.uuid}:${+cast}${+receive}`;
+    let bin = this.bins.get(key);
+    if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
+    if (!geo.getAttribute('pc')) { // part centre per vertex (see part()), so raw parts merge with normal ones
+      geo.computeBoundingSphere();
+      const c = geo.boundingSphere!.center, n = geo.getAttribute('position').count, pc = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { pc[i * 3] = c.x; pc[i * 3 + 1] = c.y; pc[i * 3 + 2] = c.z; }
+      geo.setAttribute('pc', new THREE.Float32BufferAttribute(pc, 3));
+    }
+    bin.parts.push(geo);
+  }
+
   build(parent: THREE.Object3D, name: string, opts: { chunked?: boolean } = {}): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
     const emit = (bin: Bin, parts: THREE.BufferGeometry[], suffix: string) => {

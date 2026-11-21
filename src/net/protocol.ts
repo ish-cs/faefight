@@ -58,4 +58,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 12;
+export const NET_VERSION = 13; // 13: gameplay props (snapshot `pr`, wire keys pr/p/q) on top of 12

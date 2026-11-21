@@ -12,6 +12,8 @@ import { ISLAND_DECOR } from './decor';
 import { buildBeach, dressHarbor, dressIslandDetail, scatterHarbor, scatterIsland } from './detail';
 import { dressBackdrop, dressIsland } from './dressing';
 import type { Scatter } from './scatter';
+import { centerPlacements, islandPlacements, quayClusters, quayFrame } from './clusters';
+import type { PropLayer } from './propLayer';
 import { pbrAlbedo, pbrSample, worldNoise } from './pbr';
 import { type Footprint, islandSurface, makeRng, yardTopTex } from './textures';
 
@@ -101,7 +103,7 @@ export function islandMask(isl: IslandLayout) {
   return { data: s.maskData, size: s.maskSize, R: isl.radius };
 }
 
-export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatter): IslandsOut {
+export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatter, dock?: PropLayer): IslandsOut {
   const map = def.islands;
   const yard = def.template === 'yard';
   const root = new THREE.Group();
@@ -211,6 +213,14 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
     }
 
     if (scatter) scatterIsland(scatter, isl);
+    if (dock) {
+      // dense dock clusters (clusters.ts): low clutter on the playable disc, full clusters on the backdrop quay
+      const G = L.clone().multiply(mat(0, groundY, 0));
+      for (const p of islandPlacements(def, isl)) dock.place(p, G, dress);
+      const qf = quayFrame(def, isl);
+      const Q = L.clone().multiply(mat(0, qf.top, 0));
+      for (const p of quayClusters(qf, 31 + isl.index * 7919)) dock.place(p, Q, dress);
+    }
     dressIslandDetail(dress, L, isl);
     if (yard) {
       buildYardBackdrop(dress, L, rng, isl, n);
@@ -239,6 +249,10 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   });
 
   buildCenter(def, root, dress, collidables, wallMat, QUAY_DEPTH, labelSprite);
+  if (dock) {
+    const C = mat(def.center.center.x, def.center.groundY, def.center.center.z);
+    for (const p of centerPlacements(def)) dock.place(p, C, dress);
+  }
   if (yard) gapCranes(dress, map, groundY, def.center);
   distantIslands(dress, map);
 

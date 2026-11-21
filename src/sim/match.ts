@@ -12,6 +12,7 @@ import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
+import { PropSim } from './props';
 import { HitboxHistory, LAG_COMP, rayPlayer } from './lagComp';
 import { newMoveState, stepMove, type MoveCmd } from './movement';
 import { adsMoveCmd, adsSpeed } from './gunplay';
@@ -66,6 +67,8 @@ export class Match implements MatchApi {
   /** Burning pieces and ground fires (sim/fire.ts). */
   private fire: Fire;
   private fireCtx: FireCtx;
+  /** Tier A gameplay props (dynamic bodies); null on a map without any. */
+  private props: PropSim | null;
   /** Potion sellers: the NPC on the center island. */
   potionShops: PotionShop[];
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
@@ -94,6 +97,7 @@ export class Match implements MatchApi {
     def.colors = resolveColors(setup.players.map((p) => p.color));
     this.cosmetics = new Cosmetics(def.cosmetics);
     this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
+    this.props = def.props?.length ? new PropSim(physics, map, def.center, def.props, DT) : null;
     this.potionShops = potionShopsAt([def.center.potionShop]);
     this.s = newMatchState(map, setup.seed ?? 1);
     this.s.waterY = def.waterY;
@@ -198,6 +202,7 @@ export class Match implements MatchApi {
     const physics = this.physics.clone();
     const m = Object.create(Match.prototype) as Match;
     const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
+    if (this.props) memo.set(this.props, this.props.clone(physics));
     const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
     for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
     m.rebind();
@@ -237,6 +242,7 @@ export class Match implements MatchApi {
     this.events.push(...this.fire.tick(now, this.s.waterY, this.fireCtx, !!this.s.storm));
     this.collapseUnsupported(now);
     if (this.s.storm) this.events.push(...tickStorm(this.ctx, this.s.storm, now));
+    this.props?.tick(now, this.s.players.values(), this.s.pieces, this.events, this.s.waterY);
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT * this.settings.genMult, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
     tickCenter(this.center, DT * this.settings.genMult, !this.s.suddenDeath);
     for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
@@ -335,6 +341,9 @@ export class Match implements MatchApi {
     this.sealDirty = true;
     return id;
   }
+
+  /** Tests/debug: the prop simulation (poses, debugPlace). */
+  debugProps(): PropSim | null { return this.props; }
 
   /** Jump the match clock (tests/e2e: e.g. straight to sudden death). Nothing in between is simulated. */
   debugSetTime(t: number): void {
@@ -683,6 +692,7 @@ export class Match implements MatchApi {
       generators: this.s.generators,
       center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       broken: this.cosmetics.broken,
+      ...(this.props ? { props: this.props.poses() } : {}),
       genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,

@@ -15,7 +15,6 @@ const WALL_H = 110;
 const MARKERS = 10;
 const BOLT_MS = 240;
 
-type Weather = { sunI: number; sunC: THREE.Color; skyGain: number; skySat: number; haze: THREE.Color; hazeSun: THREE.Color; density: number; env: number; exposure: number };
 
 /**
  * Sudden-death weather on the client: the storm wall (an animated open cylinder at the ring), dark rainy sky and sun,
@@ -29,7 +28,6 @@ export class StormFx {
   private target = 0;
   private flashAt = -1e9;
   private flashPeak = 0;
-  private base: Weather;
   private storm: StormSnap | null = null;
   /** Land to put strike markers on: player islands and the center island. */
   private land: { center: Vec3; radius: number; groundY: number }[] = [];
@@ -48,11 +46,6 @@ export class StormFx {
   debugHide: 'rain' | 'wall' | null = null;
 
   constructor(private sky: SkyLighting, private gpu: THREE.WebGPURenderer, private scene: THREE.Scene) {
-    this.base = {
-      sunI: sky.sun.intensity, sunC: sky.sun.color.clone(), skyGain: sky.skyGain.value as number, skySat: sky.skySaturation.value as number,
-      haze: (sky.haze.color.value as THREE.Color).clone(), hazeSun: (sky.haze.sunColor.value as THREE.Color).clone(),
-      density: sky.haze.density.value as number, env: scene.environmentIntensity, exposure: gpu.toneMappingExposure,
-    };
     this.root.name = 'storm';
 
     // Storm wall: violet streaks drifting sideways, fading out toward the top.
@@ -199,20 +192,27 @@ export class StormFx {
     }
   }
 
+  /**
+   * Storm lighting = the lighting rig's own weather blend (world/lighting.ts setWeather: sun, sky, env, exposure,
+   * haze) plus this module's extras on top: lightning flashes and the violet haze outside the storm wall.
+   */
   private applyWeather(w: number, flash: number, outside: boolean) {
-    const b = this.base, s = this.sky;
+    const s = this.sky;
     // Clear day: leave the lighting alone (debug tweaks stay), after one exact restore to the baseline.
     if (w === 0 && flash < 0.001) { if (!this.weatherDirty) return; this.weatherDirty = false; } else this.weatherDirty = true;
-    s.sun.intensity = THREE.MathUtils.lerp(b.sunI, 1.4, w) + flash * 16;
-    s.sun.color.copy(b.sunC).lerp(this.tmpC.set(0xaab4c8), w);
-    s.skyGain.value = THREE.MathUtils.lerp(b.skyGain, 0.14, w) + flash * 0.9;
-    s.skySaturation.value = THREE.MathUtils.lerp(b.skySat, 0.3, w);
-    const haze = s.haze.color.value as THREE.Color;
-    haze.copy(b.haze).lerp(outside ? this.stormHazeOut : this.stormHaze, w);
-    if (flash > 0.001) haze.lerp(this.tmpC.set(0xc8d0ff), Math.min(1, flash * 0.6));
-    (s.haze.sunColor.value as THREE.Color).copy(b.hazeSun).lerp(this.stormHaze, w);
-    s.haze.density.value = THREE.MathUtils.lerp(b.density, outside ? 0.009 : 0.0042, w);
-    this.scene.environmentIntensity = THREE.MathUtils.lerp(b.env, 0.32, w) + flash * 0.9;
-    this.gpu.toneMappingExposure = THREE.MathUtils.lerp(b.exposure, 0.44, w) + flash * 0.2;
+    s.setWeather(w);
+    const L = s.lighting;
+    if (outside) {
+      (L.u.hazeColor.value as THREE.Color).lerp(this.stormHazeOut, w);
+      L.u.hazeDensity.value = (L.u.hazeDensity.value as number) * (1 + w);
+    }
+    if (flash > 0.001) {
+      L.sun.intensity += flash * 16;
+      L.u.skyGain.value = (L.u.skyGain.value as number) + flash * 0.9;
+      (L.u.hazeColor.value as THREE.Color).lerp(this.tmpC.set(0xc8d0ff), Math.min(1, flash * 0.6));
+      this.scene.environmentIntensity += flash * 0.9;
+      this.gpu.toneMappingExposure += flash * 0.2;
+    }
   }
+
 }
