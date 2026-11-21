@@ -5,6 +5,8 @@ import type { IslandLayout } from '../../sim/map';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
 import { Lighting, type ShadowPreset, SUN_DIR as LIGHT_SUN_DIR } from './lighting';
+import { SMALL_CASTER_LAYER } from './lod';
+import { cascadeToRefresh, type CascadeCacheState, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen } from './post';
 
 export type Quality = 'low' | 'high' | 'ultra';
@@ -34,6 +36,9 @@ const PRESETS: Record<Quality, Preset> = {
   ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 16 }, flare: true } },
 };
 
+/** Far-cascade caster mask: layer 0 only (+ unused bit 31, see cascadeLayers). */
+const FAR_CASCADE_MASK = 1 | (1 << 31);
+
 /**
  * Sky dome, image-based lighting, warm cascaded-shadow sun, aerial-perspective haze, ACES tone mapping, colour
  * grade, and (high/ultra) GTAO + bloom. Owns the frame's final draw so the post chain follows the quality preset.
@@ -59,6 +64,7 @@ export class SkyLighting {
 
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
+    camera.layers.enable(SMALL_CASTER_LAYER); // small props: drawn by the camera, cast into the near cascades only
     this.lighting = new Lighting(gpu, scene);
     this.sun = this.lighting.sun;
     const u = this.lighting.u;
@@ -134,7 +140,8 @@ export class SkyLighting {
     const p = PRESETS[this.quality];
     this.applyPixelRatio();
 
-    if (this.lighting.applyShadows(p.shadow)) {
+    this.shadowCache = null; // new or resized cascades: render them all fresh
+    if (this.lighting.applyShadows({ ...p.shadow, mapSize: Math.round(p.shadow.mapSize * this.govShadow) })) {
       // the shadow node is baked into every lit material's shader: rebuild them
       this.scene.traverse((o) => {
         const m = (o as THREE.Mesh).material;
@@ -143,10 +150,42 @@ export class SkyLighting {
     }
 
     this.pipeline?.dispose();
-    const built = buildPipeline(this.gpu, this.scene, this.camera, p.post, this.interiorAO);
+    const built = buildPipeline(this.gpu, this.scene, this.camera, this.postOptions(), this.interiorAO);
     this.pipeline = built.pipe;
     this.scenePass = built.scenePass;
   }
+
+  /** The preset's post chain minus whatever the frame-time governor has switched off. */
+  private postOptions(): PostOptions {
+    const p = PRESETS[this.quality].post;
+    return this.govAo ? p : { ...p, ao: false };
+  }
+  private govAo = true;
+  private govShadow = 1;
+
+  /**
+   * Frame-time governor knobs (governor.ts): GTAO on/off (rebuilds the post pipeline) and a shadow-map size
+   * multiplier (applied live to every cascade).
+   */
+  setGovernor(k: { ao: boolean; shadowScale: number }) {
+    if (k.ao !== this.govAo) {
+      this.govAo = k.ao;
+      this.pipeline?.dispose();
+      const built = buildPipeline(this.gpu, this.scene, this.camera, this.postOptions(), this.interiorAO);
+      this.pipeline = built.pipe;
+      this.scenePass = built.scenePass;
+    }
+    if (k.shadowScale !== this.govShadow) {
+      this.govShadow = k.shadowScale;
+      const size = Math.round(PRESETS[this.quality].shadow.mapSize * k.shadowScale);
+      this.sun.shadow.mapSize.set(size, size);
+      for (const l of this.lighting.csm?.lights ?? []) l.shadow!.mapSize.set(size, size);
+      this.shadowCache = null; // cached far maps are the old size: redraw them
+    }
+  }
+
+  /** Whether the current preset has screen-space AO at all (the governor skips the AO rung when not). */
+  get presetHasAo(): boolean { return !!PRESETS[this.quality].post.ao; }
 
   /** Draw the frame (cascades follow the camera on their own). */
   render() {
@@ -156,7 +195,42 @@ export class SkyLighting {
       sunScreen.front.value = v.z < 1 ? 1 : 0;
       sunScreen.aspect.value = this.camera.aspect;
     }
+    this.cascadeLayers();
     this.pipeline!.render();
+  }
+
+  /**
+   * Shadow-caster culling per cascade: the near cascades see every caster (camera's layers); the far ones skip the
+   * SMALL_CASTER_LAYER (an extra unused layer bit keeps ShadowNode from copying the camera's mask over it).
+   */
+  private cascadeLayers() {
+    const lights = this.lighting.csm?.lights;
+    if (!lights?.length) return;
+    const near = lights.length >= 3 ? 2 : 1;
+    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i < near ? this.camera.layers.mask : FAR_CASCADE_MASK;
+    this.cacheFarCascades(lights, near);
+  }
+
+  /** Far cascades re-render only when the camera moved/turned enough or they got old (shadowCache.ts). */
+  shadowCacheEnabled = true;
+  private shadowCache: CascadeCacheState | null = null;
+  private cacheAnchor = { pos: new THREE.Vector3(), dir: new THREE.Vector3(), tmp: new THREE.Vector3() };
+  /** far-cascade renders skipped / done (debug) */
+  readonly shadowCacheStats = { skipped: 0, rendered: 0 };
+  private cacheFarCascades(lights: { shadow?: THREE.LightShadow | null }[], near: number) {
+    if (!this.shadowCacheEnabled) { for (const l of lights) l.shadow!.autoUpdate = true; return; }
+    if (!this.shadowCache || this.shadowCache.age.length !== lights.length) this.shadowCache = newCacheState(lights.length);
+    const a = this.cacheAnchor, cam = this.camera;
+    cam.getWorldDirection(a.tmp);
+    const moved = cam.position.distanceTo(a.pos) > SHADOW_CACHE.moveM || a.tmp.angleTo(a.dir) > SHADOW_CACHE.turnRad;
+    if (moved) { a.pos.copy(cam.position); a.dir.copy(a.tmp); }
+    const pick = cascadeToRefresh(this.shadowCache, near, moved);
+    for (let i = 0; i < lights.length; i++) {
+      const sh = lights[i].shadow!;
+      if (i < near) { sh.autoUpdate = true; continue; }
+      sh.autoUpdate = false;
+      if (i === pick) { sh.needsUpdate = true; this.shadowCacheStats.rendered++; } else this.shadowCacheStats.skipped++;
+    }
   }
 
   dispose() { this.pipeline?.dispose(); this.lighting.dispose(); }

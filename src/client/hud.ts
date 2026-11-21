@@ -152,6 +152,8 @@ export class Hud {
   private damage = el('div', 'damage-flash');
   private endScreen = el('div', 'end-screen');
   private fps = el('div', 'fps');
+  /** Shift+F3 perf detail under the counter (frame/GPU ms, draw calls, triangles, governor rung). */
+  private fpsDetail = el('div', 'fps-detail');
   private stamina = el('div', 'stamina');
   private staminaFill = el('div', 'stamina-fill');
   private staminaText = el('div', 'stamina-text');
@@ -180,7 +182,8 @@ export class Hud {
     this.watchTag.dataset.testid = 'watch-tag';
     this.brain.dataset.testid = 'brain-panel';
     this.brain.style.display = 'none';
-    bl.append(this.watchTag, this.buffs, this.shield, this.hp, this.stamina);
+    // perf detail sits in the bottom-left column above the bars: never under the kill feed / notifications
+    bl.append(this.fpsDetail, this.watchTag, this.buffs, this.shield, this.hp, this.stamina);
     const br = el('div', 'br');
     br.append(this.weapon, this.extras);
     const tc = el('div', 'tc');
@@ -201,6 +204,8 @@ export class Hud {
     this.crosshair.dataset.testid = 'crosshair';
     this.reloadRing.dataset.testid = 'reload-ring';
     this.fps.dataset.testid = 'fps';
+    this.fpsDetail.dataset.testid = 'fps-detail';
+    this.fpsDetail.style.display = 'none';
     this.scope.dataset.testid = 'scope';
     this.stormWarn.dataset.testid = 'storm-warn';
     this.stormWarn.append(el('div', 'storm-warn-sub', 'Sudden death · get inside the ring'));
@@ -443,6 +448,12 @@ export class Hud {
 
   setFps(n: number) {
     setText(this.fps, `${Math.round(n)} fps`);
+  }
+
+  /** Perf detail lines (null hides them). */
+  setFpsDetail(lines: string[] | null) {
+    this.fpsDetail.style.display = lines ? '' : 'none';
+    if (lines) setText(this.fpsDetail, lines.join('\n'));
   }
 
   get panelOpen() {

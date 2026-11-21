@@ -8,7 +8,9 @@ import { CharacterSystem, type Motion } from './characters/avatar';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
+import { preloadPbr } from './world/pbr';
 import { PotionSellers, stall } from './world/potionSeller';
+import { loadQuality } from './world/sky';
 import { StormFx } from './world/storm';
 import { LootView, lootWarmObjects } from './lootView';
 
@@ -99,6 +101,7 @@ export class Renderer {
   static async create(canvas: HTMLCanvasElement): Promise<Renderer> {
     const r = new Renderer(canvas);
     await r.gpu.init();
+    await preloadPbr(r.gpu, loadQuality()); // compressed PBR maps in place before any material samples them
     r.characters.camera = r.camera;
     r.world = new World(r.gpu, r.scene, r.camera, r.collidables); // tone mapping, pixel ratio, shadows, sky
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
@@ -391,8 +394,19 @@ export class Renderer {
     if (GPU_TIMING) this.resolveGpuTime();
   }
 
-  info() {
+  /** This frame's totals (world + post + viewmodel); call after the frame's last render. */
+  captureInfo() {
     const r = this.gpu.info.render as unknown as { drawCalls?: number; calls?: number; triangles: number };
-    return { backend: this.backend, drawCalls: r.drawCalls ?? r.calls ?? 0, triangles: r.triangles };
+    this.lastInfo.drawCalls = r.drawCalls ?? r.calls ?? 0;
+    this.lastInfo.triangles = r.triangles;
+  }
+  private lastInfo = { drawCalls: 0, triangles: 0 };
+
+  /**
+   * Draw calls / triangles of the last complete frame. three resets renderer.info at the start of its own
+   * animation frame (before the game's), so reading it live mid-frame gives 0: main captures it after rendering.
+   */
+  info() {
+    return { backend: this.backend, drawCalls: this.lastInfo.drawCalls, triangles: this.lastInfo.triangles };
   }
 }

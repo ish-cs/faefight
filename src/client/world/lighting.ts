@@ -90,7 +90,8 @@ export class Lighting {
   };
   /** current weather 0 (clear) .. 1 (storm) */
   weather = 0;
-  private csm: CSMShadowNode | null = null;
+  /** the cascaded shadow node (sky.ts culls small casters out of its far cascades and caches them) */
+  csm: CSMShadowNode | null = null;
 
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene) {
     gpu.toneMapping = THREE.ACESFilmicToneMapping; // the display grade (post.ts) is tuned around ACES' shoulder
