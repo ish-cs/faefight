@@ -121,6 +121,7 @@ test('/spectate in the lobby: the host runs a 2-bot match without playing', asyn
 });
 
 test('FPS counter shows by default, F3 toggles it; /spectate vs bot hands your player to a bot', async ({ page }) => {
+  test.skip(ON_CI, NEEDS_GPU);
   const errors = watchErrors(page);
   await page.goto('/?debug=1');
   await page.getByTestId('play-easy').click();
