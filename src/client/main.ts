@@ -657,6 +657,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     }),
     select: (i) => input.select(i),
     moveSlot: (from, to) => input.queue({ moveSlot: { from, to } }),
+    // Same as the drop key: select that slot and drop from it in the same input (the sim selects first).
+    dropSlot: (slot, amount) => { input.select(slot); input.queue({ drop: amount }); },
   });
 
   const input = new InputController(canvas, {

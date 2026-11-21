@@ -501,3 +501,10 @@ canvas.shake { animation: screen-shake 0.55s ease-out; }
 .brain-panel .bb-odds-val, .brain-panel .bb-opt-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11px; }
 .brain-panel .bb-opts { display: flex; flex-direction: column; gap: 3px; }
 .brain-panel .bb-thought { padding-top: 6px; border-top: 1px solid var(--line); color: #e8dcff; line-height: 1.35; }
+
+/* Drag a hotbar slot out over the game view to drop it. */
+.hud .hotbar.drop-out { border-color: rgba(255, 138, 101, 0.6); }
+.hud .hotbar.drop-out .hb-slot.drag-src { opacity: 0.25; transform: scale(0.92); }
+.hud .drag-drop-hint { display: none; position: fixed; left: 0; top: 0; z-index: 50; pointer-events: none; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; letter-spacing: 0.4px; color: #0e1218; background: #ffb070; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); white-space: nowrap; }
+.hud .drag-drop-hint.on { display: block; }
+.hud .hotbar.drop-out ~ * { cursor: no-drop; }

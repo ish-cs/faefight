@@ -10,6 +10,7 @@ import { ISLAND_COLORS, ISLAND_NAMES } from './render';
 import { endState } from './endState';
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
+import { dragOutcome } from './hotbarDrag';
 
 const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
 const LABEL: Record<string, string> = {
@@ -89,6 +90,8 @@ export type HudActions = {
   select(slot: number): void;
   /** Hotbar slot dragged onto another. */
   moveSlot(from: number, to: number): void;
+  /** Hotbar slot dragged out over the game view: drop it (the sim's drop action). */
+  dropSlot?(slot: number, amount: 'one' | 'stack'): void;
   /** End-screen buttons (default: Back to menu). over = the match has a result (not just you eliminated). */
   endButtons?(over: boolean): HTMLElement[];
 };
@@ -121,6 +124,8 @@ export class Hud {
   private heal = el('div', 'heal');
   private healFill = el('div', 'heal-fill');
   private hotbarSig = '';
+  /** Items in the shown hotbar (drag-out drops). */
+  private hotbarItems: (HotbarItem | null)[] = [];
   private dragFrom: number | null = null;
   private timer = el('div', 'timer');
   private seals = el('div', 'seals');
@@ -219,11 +224,34 @@ export class Hud {
       const s = t instanceof Element ? t.closest<HTMLElement>('.hb-slot') : null;
       return s ? Number(s.dataset.slot) : null;
     };
+    // Dragging out of the bar over the game view drops the item (a "Drop" tag follows the pointer).
+    const hint = el('div', 'drag-drop-hint', 'Drop');
+    hint.dataset.testid = 'drag-drop-hint';
+    this.root.append(hint);
+    const where = (x: number, y: number) => {
+      const t = document.elementFromPoint(x, y);
+      const onBar = !!t?.closest('.hotbar');
+      return { slot: slotAt(t), onBar, overGame: !!t && !onBar && !t.closest('.panel, .chat, .chat-ui, button, input, textarea, .overlay, .menu, .end-screen, .brain-panel') };
+    };
     const clearDrag = () => {
       this.dragFrom = null;
-      this.hotbar.classList.remove('dragging');
+      this.hotbar.classList.remove('dragging', 'drop-out');
+      hint.classList.remove('on');
       slots.forEach((s) => s.classList.remove('drag-src', 'drag-over'));
     };
+    window.addEventListener('pointermove', (e) => {
+      if (this.dragFrom === null) return;
+      const w = where(e.clientX, e.clientY);
+      const out = dragOutcome(this.dragFrom, w, e.shiftKey, !this.hotbarItems[this.dragFrom]).kind === 'drop';
+      this.hotbar.classList.toggle('drop-out', out);
+      hint.classList.toggle('on', out);
+      if (out) {
+        const item = this.hotbarItems[this.dragFrom];
+        setText(hint, e.shiftKey || !item || isGunItem(item) ? `Drop ${item ? SHORT[item] : ''}` : `Drop ${SHORT[item]} (all · Shift: 1)`);
+        hint.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 10}px)`;
+      }
+    });
+    window.addEventListener('keydown', (e) => { if (e.code === 'Escape' && this.dragFrom !== null) clearDrag(); });
     this.hotbar.addEventListener('pointerdown', (e) => {
       const i = slotAt(e.target);
       if (i === null || e.button !== 0) return;
@@ -240,11 +268,11 @@ export class Hud {
     window.addEventListener('pointerup', (e) => {
       const from = this.dragFrom;
       if (from === null) return;
-      const to = slotAt(document.elementFromPoint(e.clientX, e.clientY));
+      const r = dragOutcome(from, where(e.clientX, e.clientY), e.shiftKey, !this.hotbarItems[from]);
       clearDrag();
-      if (to === null) return;
-      if (to === from) this.act.select(to);
-      else this.act.moveSlot(from, to);
+      if (r.kind === 'select') this.act.select(r.slot);
+      else if (r.kind === 'move') this.act.moveSlot(r.from, r.to);
+      else if (r.kind === 'drop') this.act.dropSlot?.(r.slot, r.amount);
     });
   }
 
@@ -252,6 +280,7 @@ export class Hud {
     const inv = me.inv;
     const reloading = me.reloadUntil > 0;
     this.updateHotbarProgress(me, ctx.selected, now);
+    this.hotbarItems = me.hotbar;
     const sig = JSON.stringify([me.hotbar, { ...inv, cash: 0 }, ctx.selected, reloading, me.locked]);
     this.hotbar.classList.toggle('editing', ctx.inventory);
     this.hotbar.dataset.ghost = ctx.ghostOk === null ? 'none' : ctx.ghostOk ? 'ok' : 'blocked';
