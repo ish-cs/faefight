@@ -44,6 +44,39 @@ function priceOf(item: ShopItem, genLevel = 1, me?: PlayerState | null): number 
   return CHARGE.price;
 }
 
+/** Tiny name under each shop icon. */
+function shortOf(item: ShopItem): string {
+  if (item === 'genUpgrade') return 'Generator';
+  if (item === 'ammo') return 'Ammo';
+  const g = lockedGunOf(item);
+  return g ? `Lock ${SHORT[g]}` : SHORT[item as HotbarItem] ?? item;
+}
+
+/** Shop info-bar text: what the item is and does, beyond its name. */
+function detailsOf(item: ShopItem, price: number, genLevel: number, me: PlayerState): string {
+  const name = labelOf(item);
+  const gun = lockedGunOf(item);
+  if (gun) return `Lock ${LABEL[gun]}: you respawn with it after dying · ${Math.round(lockPrice(gun) / WEAPONS[gun].price)}× the gun's price · $${price}`;
+  if (item === 'genUpgrade') {
+    if (genLevel >= GENERATOR_MAX_LEVEL) return `Generator Lv${genLevel}: fully upgraded`;
+    const now = generatorSpec(genLevel), next = generatorSpec(genLevel + 1);
+    return `Generator Lv${genLevel} → Lv${genLevel + 1}: $${now.rate}/s → $${next.rate}/s, holds $${next.cap} · $${price}`;
+  }
+  if ((GUNS as readonly string[]).includes(item)) {
+    const w = WEAPONS[item as WeaponKind];
+    return `${name} · ${w.dmg}${w.pellets > 1 ? `×${w.pellets}` : ''} dmg · ${w.rps}/s · mag ${w.mag} · $${price}`;
+  }
+  if (item in PIECES) return `${name} · ${PIECES[item as PieceKind].hp} HP wall · $${price} (Shift+click buys 5)`;
+  if (item === 'ammo') {
+    const g = ammoTarget(me);
+    return g ? `Ammo box · +${ammoPerBox(g)} rounds for your ${LABEL[g]} · $${price}` : 'Ammo box · equip a gun first';
+  }
+  if (item === 'grenade') return `Grenade · ${GRENADE.dmg} dmg in a ${GRENADE.radius} m blast · $${price}`;
+  if (item === 'charge') return `Breach charge · cracks walls and sealed doors · $${price}`;
+  if (item === 'medkit') return `Medkit · heals ${MEDKIT.heal} HP over ${MEDKIT.useSec}s · $${price}`;
+  return `${name} · $${price}`;
+}
+
 function labelOf(item: ShopItem): string {
   if (item === 'genUpgrade') return 'Generator ↑';
   const g = lockedGunOf(item);
@@ -113,6 +146,8 @@ export class Hud {
   /** Host's generator speed multiplier (shop label shows the real rate). */
   genMult = 1;
   private humanId = 0;
+  /** Whose view the HUD shows (viewed.ts): hit markers, damage flash, storm vignette. */
+  private viewId = 0;
   private me: PlayerState | null = null;
   private snap: Snapshot | null = null;
   private feed: { at: number; node: HTMLElement }[] = [];
@@ -124,6 +159,9 @@ export class Hud {
   private shieldFill = el('div', 'shield-fill');
   private shieldText = el('div', 'shield-text');
   private lastShield = 0;
+  private lastCash = 0;
+  /** Shop card under the pointer/focus: its info-bar text refreshes live. */
+  private shopHover: HTMLElement | null = null;
   private buffs = el('div', 'buffs');
   private speedBuff = el('div', 'buff speed');
   private drinkBox = el('div', 'heal drink');
@@ -147,6 +185,13 @@ export class Hud {
   /** Sudden death: a big STORM warning for a few seconds, and a storm-coloured screen edge while outside the ring. */
   private stormWarn = el('div', 'storm-warn', 'STORM');
   private stormVignette = el('div', 'storm-vignette');
+  /** Red edges at low HP (the viewed player's: yours, or whoever you spectate). */
+  private lowHp = el('div', 'lowhp-vignette');
+  /** Whose shop / vault the panel shows: you, or (read-only mirror) the human you spectate. */
+  private panelMe: PlayerState | null = null;
+  private mirroring = false;
+  /** Shop item under the pointer (sent to spectators of you). */
+  private hoverItem: ShopItem | null = null;
   private stormWarnUntil = 0;
   private killfeed = el('div', 'killfeed');
   private center = el('div', 'center-msg');
@@ -214,8 +259,9 @@ export class Hud {
     this.stormWarn.dataset.testid = 'storm-warn';
     this.stormWarn.append(el('div', 'storm-warn-sub', 'Sudden death · get inside the ring'));
     this.stormVignette.dataset.testid = 'storm-vignette';
+    this.lowHp.dataset.testid = 'lowhp-vignette';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
-      this.sealedBanner, this.stormVignette, this.stormWarn, this.damage, this.endScreen, this.fps, this.panel, this.brain);
+      this.sealedBanner, this.stormVignette, this.lowHp, this.stormWarn, this.damage, this.endScreen, this.fps, this.panel, this.brain);
     parent.append(this.root);
   }
 
@@ -327,7 +373,8 @@ export class Hud {
       const bar = (s.querySelector('.hb-ammo i') as HTMLElement);
       if (k && isGunItem(k)) {
         const a = inv.weapons[k];
-        count = a ? `${a.mag}/${a.spare}` : '';
+        // Mag only: the full mag/spare readout is the big ammo box bottom-right.
+        count = a ? `${a.mag}` : '';
         // Magazine gauge: how full the mag is; amber when low, red when empty.
         const frac = a ? Math.max(0, Math.min(1, a.mag / WEAPONS[k].mag)) : 0;
         bar.style.width = `${Math.round(frac * 100)}%`;
@@ -461,7 +508,7 @@ export class Hud {
   }
 
   get panelOpen() {
-    return this.panelKind !== null;
+    return this.panelKind !== null && !this.mirroring;
   }
 
   /** Practice range: no clock, cash shown as ∞, the shop opens anywhere and everything in it is free. */
@@ -498,10 +545,14 @@ export class Hud {
     const me = followed ?? own;
     const watching = !!followed;
     this.root.classList.toggle('watching', watching);
+    this.panelMe = watching ? followed : own;
+    this.lowHp.classList.toggle('on', !!me && me.alive && me.hp <= 30);
     this.updateBrain(watching ? snap.brains?.find((b) => b.id === followed!.id) ?? null : null, snap);
     // No player of our own and nobody followed (spectating host in free fly): player widgets hidden,
     // match info and the end screen still live.
     this.root.classList.toggle('no-player', !me);
+    // Eliminated and free-flying: your own $0 / HP 0 / empty hotbar say nothing; hide them like no-player.
+    this.root.classList.toggle('out', !watching && !!own?.eliminated);
     if (!me) {
       this.center.style.display = 'none';
       this.heal.style.display = 'none';
@@ -514,6 +565,9 @@ export class Hud {
       return;
     }
     if (watching) ctx = { ...ctx, selected: me.selected, ghostOk: null, buildNote: null, inventory: false };
+    // Sealed / break-out banner: the viewed player's bunker and countdown.
+    this.updateSealed(snap, me);
+    if (this.mirroring) { if (this.panelKind === 'vault') this.refreshVault(); else this.renderShop(); }
     const inv = me.inv;
 
     this.hpFill.style.width = `${Math.max(0, me.hp)}%`;
@@ -521,6 +575,9 @@ export class Hud {
     setText(this.hpText, `${Math.ceil(me.hp)}`);
     this.updateShield(me, snap);
     setText(this.cash, this.practice ? '$∞' : `$${inv.cash}`);
+    // Spent at a shop: the top-left cash ticks down visibly (the shop itself no longer repeats it).
+    if (this.panelKind && inv.cash < this.lastCash) this.flash(this.cash, 'spent');
+    this.lastCash = inv.cash;
     this.updateStamina(watching ? me.stamina : ctx.stamina ?? me.stamina, me.alive);
     setText(this.watchTag, watching ? `${me.isBot ? 'BOT · ' : ''}${me.name}` : '');
 
@@ -539,8 +596,8 @@ export class Hud {
     const station = watching ? null : this.nearStation();
     const promptText = watching ? '' : isPieceItem(me.hotbar[ctx.selected]) ? '' :
       station === 'shop' ? 'E  Shop' : station === 'potions' ? 'E  Potion seller' : station === 'vault' ? 'E  Vault' :
-      station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` :
-      station === 'gold' ? `E  Collect $${Math.floor(snap.center?.gold ?? 0)}` :
+      // The amount is already on the generator readout top-left; the prompt is just the action.
+      station === 'generator' || station === 'gold' ? 'E  Collect' :
       station === 'supply' ? supplyPrompt(snap.center) : '';
     setText(this.prompt, promptText);
     this.prompt.style.display = promptText && !this.panelKind ? '' : 'none';
@@ -551,7 +608,12 @@ export class Hud {
     const ammo = isGunItem(held) ? inv.weapons[held] : undefined;
     const reloading = me.reloadUntil > 0;
     const heldText = ammo ? `${ammo.mag}/${ammo.spare}` : held && !isGunItem(held) ? `×${countOf(inv, held)}` : '';
-    this.weapon.replaceChildren(el('span', 'wname', held ? LABEL[held] : 'Fists'), el('span', 'ammo', heldText));
+    // Rebuild only when it changes (this runs every frame).
+    const weaponKey = `${held ? LABEL[held] : 'Fists'}|${heldText}`;
+    if (this.weapon.dataset.key !== weaponKey) {
+      this.weapon.dataset.key = weaponKey;
+      this.weapon.replaceChildren(el('span', 'wname', held ? LABEL[held] : 'Fists'), el('span', 'ammo', heldText));
+    }
     this.weapon.classList.toggle('reloading', reloading);
     setText(this.extras, reloading ? 'Reloading…' : '');
     this.extras.style.display = reloading ? '' : 'none';
@@ -577,9 +639,8 @@ export class Hud {
 
     this.updateMatchInfo(snap, own ? own.island : -1);
     if (!own) {
-      // Spectating host following someone: no player of our own, so no banners/end of our own.
+      // Spectating host following someone: no player of our own, so no end screen of our own.
       this.center.style.display = 'none';
-      this.sealedBanner.style.display = 'none';
       const end = endState(snap.winner, 0, false, snap.players);
       if (end) this.showEnd(snap, end);
       this.tickFeed();
@@ -588,16 +649,21 @@ export class Hud {
     this.updateOwn(snap, own, watching ? null : buildKind, ctx);
   }
 
-  /** Banners and messages about your own player (respawn countdown, sealed bunker, build hint, end screen). */
-  private updateOwn(snap: Snapshot, me: PlayerState, buildKind: PieceKind | null, ctx: HudContext) {
-    const inv = me.inv;
-    const ownSealed = !!snap.sealed[me.island];
+  /** Sealed bunker / break-out countdown banner for `me` (the viewed player). */
+  private updateSealed(snap: Snapshot, me: PlayerState) {
+    const sealed = !!snap.sealed[me.island];
     const trapped = me.alive && me.breakoutUntil != null;
     setText(this.sealedBanner, trapped
       ? `BREAK OUT! ${Math.max(0, me.breakoutUntil! - snap.time).toFixed(1)}s`
       : me.alive ? SEALED_OUTSIDE_TEXT : 'YOUR BUNKER IS SEALED');
     this.sealedBanner.classList.toggle('outside', me.alive && !trapped);
-    this.sealedBanner.style.display = (ownSealed || trapped) && !me.eliminated && snap.winner === null ? 'block' : 'none';
+    this.sealedBanner.style.display = (sealed || trapped) && !me.eliminated && snap.winner === null ? 'block' : 'none';
+  }
+
+  /** Banners and messages about your own player (respawn countdown, sealed bunker, build hint, end screen). */
+  private updateOwn(snap: Snapshot, me: PlayerState, buildKind: PieceKind | null, ctx: HudContext) {
+    const inv = me.inv;
+    const ownSealed = !!snap.sealed[me.island];
 
     if (!me.alive && !me.eliminated && me.respawnAt !== null) {
       setText(this.center, ownSealed ? `Bunker sealed — you'll respawn trapped in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s with 10s to break out` : `Respawning in ${Math.max(0, me.respawnAt - snap.time).toFixed(1)}s`);
@@ -626,8 +692,8 @@ export class Hud {
     setText(this.timer, this.practice ? 'PRACTICE' : snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
     this.timer.classList.toggle('sd', snap.suddenDeath);
     const st = snap.storm;
-    const me = snap.players.find((p) => p.id === this.humanId);
-    // Metres outside the ring (negative = inside), for a living local player.
+    const me = snap.players.find((p) => p.id === (this.viewId || this.humanId));
+    // Metres outside the ring (negative = inside), for the living viewed player.
     const out = st && me?.alive ? Math.hypot(me.pos.x - st.x, me.pos.z - st.z) - st.r : null;
     setText(this.banner, st
       ? out !== null && out > 0 ? `IN THE STORM · ${Math.ceil(out)} m to safety` : out !== null ? `Storm closing · edge ${Math.floor(-out)} m away` : 'Storm closing in'
@@ -674,6 +740,8 @@ export class Hud {
     if (this.endScreen.dataset.key) this.endScreen.style.display = v ? 'flex' : 'none';
   }
 
+  setViewed(id: number) { this.viewId = id; }
+
   pushEvents(events: MatchEvent[]) {
     const snap = this.snap;
     const name = (id: unknown) => {
@@ -682,6 +750,8 @@ export class Hud {
     };
     for (const e of events) {
       if (e.type === 'kill') {
+        const v = this.viewId || this.humanId;
+        if ((e.data.killer ?? e.data.by) === v && (e.data.victim ?? e.data.target) !== v) this.hitmarker(false, true);
         const victim = name(e.data.victim ?? e.data.target), killer = name(e.data.killer ?? e.data.by);
         const via = typeof e.data.via === 'string' ? ` via ${e.data.via}` : '';
         const how = e.data.cause === 'storm' ? 'was caught in the storm' : e.data.cause === 'lightning' ? 'was struck by lightning' : via ? `blown up${via}` : 'died';
@@ -696,15 +766,20 @@ export class Hud {
         this.stormWarnUntil = performance.now() + 4000;
         this.stormWarn.style.display = 'flex';
       } else if (e.type === 'hit') {
-        if (e.data.by === this.humanId && e.data.target !== this.humanId && !e.data.echo) this.hitmarker(e.data.part === 'head');
-        if (e.data.target === this.humanId) this.flash(this.damage, 'on');
+        // The viewed player's hits (their own predicted ones were shown already: echo).
+        const v = this.viewId || this.humanId;
+        if (e.data.by === v && e.data.target !== v && !(e.data.echo && v === this.humanId)) this.hitmarker(e.data.part === 'head');
+        if (e.data.target === v) this.flash(this.damage, 'on');
       }
     }
   }
 
   /** Crosshair hitmarker (also shown straight away for a predicted hit). */
-  hitmarker(head: boolean) {
+  hitmarker(head: boolean, kill = false) {
     this.crosshair.classList.toggle('head', head);
+    this.crosshair.classList.toggle('kill', kill);
+    // Counted for tests / debug (spectating: the viewed player's hits).
+    this.crosshair.dataset.hits = String(Number(this.crosshair.dataset.hits ?? 0) + 1);
     this.flash(this.crosshair, 'hit');
   }
 
@@ -732,6 +807,37 @@ export class Hud {
 
   // ---- panels ---------------------------------------------------------------------------------
 
+  /** What you have open, for friends spectating you (ViewExtras). */
+  viewState(): { panel: 'shop' | 'potions' | 'vault' | null; hover: ShopItem | null } {
+    return this.mirroring || !this.panelKind ? { panel: null, hover: null } : { panel: this.panelKind, hover: this.panelKind === 'vault' ? null : this.hoverItem };
+  }
+
+  /**
+   * Spectating a human: their open shop / vault, read-only (their cash and stock, the item they hover).
+   * null closes the mirror.
+   */
+  setMirror(m: { panel: 'shop' | 'potions' | 'vault' | null; hover: ShopItem | null } | null) {
+    if (!m?.panel) {
+      if (this.mirroring) { this.closePanel(); this.mirroring = false; }
+      return;
+    }
+    if (!this.panelMe) return;
+    if (!this.mirroring || this.panelKind !== m.panel) {
+      this.mirroring = true;
+      if (m.panel === 'vault') this.openVault(); else this.openShop(m.panel);
+      this.panel.classList.add('mirror');
+      this.panel.dataset.testid = 'panel-mirror';
+    }
+    if (m.panel === 'vault') return;
+    const info = this.panel.querySelector<HTMLElement>('.shop-info');
+    for (const b of Array.from(this.panel.querySelectorAll<HTMLElement>('.shop-item'))) {
+      const on = b.dataset.item === m.hover;
+      b.classList.toggle('hover', on);
+      if (on && info) { setText(info, b.dataset.name ?? ''); info.classList.add('on'); }
+    }
+    if (!m.hover) info?.classList.remove('on');
+  }
+
   /** The home shop, or a potion seller's counter (`potions`). */
   openShop(kind: 'shop' | 'potions' = 'shop') {
     this.panelKind = kind;
@@ -749,6 +855,8 @@ export class Hud {
 
   closePanel() {
     this.panelKind = null;
+    this.hoverItem = null;
+    delete this.panel.dataset.testid;
     this.panel.onkeydown = null;
     this.panel.className = 'panel';
     this.panel.replaceChildren();
@@ -763,7 +871,7 @@ export class Hud {
   }
 
   private renderShop(rebuild = false) {
-    const me = this.me;
+    const me = this.panelMe ?? this.me;
     if (!me) return;
     if (rebuild || !this.panel.querySelector('.shop-grid')) {
       const grid = el('div', 'shop-grid');
@@ -788,11 +896,16 @@ export class Hud {
           icon.innerHTML = ICONS[kind];
           const lock = el('span', 'ilock');
           lock.innerHTML = LOCK_ICON;
-          b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
-          b.onclick = (e) => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item, e.shiftKey); };
+          b.append(icon, el('span', 'iname', shortOf(item)), el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
+          b.onclick = (e) => {
+            if (b.getAttribute('aria-disabled') !== 'true') { this.act.buy(item, e.shiftKey); return; }
+            // Can't buy: shake the card; can't afford: also flash the cash readout top-left.
+            this.flash(b, 'deny');
+            if (b.classList.contains('poor')) this.flash(this.cash, 'deny');
+          };
           // The name/details show in the panel's info bar (never clipped by the panel edge).
-          const show = () => { setText(info, b.dataset.name ?? ''); info.classList.add('on'); };
-          const hide = () => info.classList.remove('on');
+          const show = () => { this.shopHover = b; setText(info, b.dataset.name ?? ''); info.classList.add('on'); this.hoverItem = item; };
+          const hide = () => { if (this.shopHover === b) this.shopHover = null; info.classList.remove('on'); if (this.hoverItem === item) this.hoverItem = null; };
           b.onmouseenter = show; b.onfocus = show; b.onmouseleave = hide; b.onblur = hide;
           row.append(b);
         }
@@ -807,13 +920,18 @@ export class Hud {
         // Lock cards only show up once you own (or have locked) that gun.
         section('Upgrades', ['genUpgrade', ...GUNS.map(lockItem)]);
       }
-      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid, info);
+      // No "Carrying $X" line: the cash is always top-left (it flashes on a buy or a can't-afford click).
+      this.shopHover = null;
+      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), grid, info);
       // Focus the panel (not a card, so no tooltip pops up): Tab or an arrow key then walks the cards.
       this.panel.tabIndex = -1;
-      this.panel.onkeydown = (e) => this.shopArrows(e);
-      this.panel.focus({ preventScroll: true });
+      if (!this.mirroring) {
+        this.panel.onkeydown = (e) => this.shopArrows(e);
+        this.panel.focus({ preventScroll: true });
+      }
     }
-    setText(this.panel.querySelector('.panel-cash') as HTMLElement, this.practice ? 'Practice: everything is free' : `Carrying $${me.inv.cash}`);
+    const panelCash = this.panel.querySelector('.panel-cash') as HTMLElement | null;
+    if (panelCash) setText(panelCash, this.practice ? 'Practice: everything is free' : `Carrying $${me.inv.cash}`);
     const genLevel = this.snap?.genLevels?.[me.island] ?? 1;
     // Any island's shop NPC sells to you, but upgrades and locks only at your own.
     const atHome = this.practice || (!!this.map[me.island] && dist2D(this.map[me.island].shop, me.pos) <= ECONOMY.interactRadius);
@@ -834,7 +952,6 @@ export class Hud {
       } else if (lockGun) {
         const locked = me.locked.includes(lockGun);
         b.hidden = !locked && !me.inv.weapons[lockGun];
-        b.dataset.name = `Lock ${LABEL[lockGun]}: respawn with it`;
         if (locked) status = 'Locked';
       } else if ((GUNS as readonly string[]).includes(item) && me.inv.weapons[item as WeaponKind]) status = 'Owned';
       else if (isHotbarItem(item) && countOf(me.inv, item) === 0 && !canAdd(me.hotbar, item)) status = 'Hotbar full';
@@ -855,6 +972,12 @@ export class Hud {
       b.dataset.status = status === 'Hotbar full' ? 'full' : status ? 'other' : '';
       setText(b.querySelector('.istatus') as HTMLElement, status);
       setText(b.querySelector('.ibadge') as HTMLElement, badge);
+      b.dataset.st = status;
+      // Info-bar text: what it does + why it can't be bought right now.
+      const why = status === 'Home shop' ? ' · only at your home shop' : status && status !== 'Max' ? ` · ${status}` : poor ? ` · need $${price - me.inv.cash} more` : '';
+      const details = detailsOf(item, price, genLevel, me) + why;
+      if (b.dataset.name !== details) b.dataset.name = details;
+      if (this.shopHover === b) setText(this.panel.querySelector('.shop-info') as HTMLElement, details);
       const label = `${labelOf(item)}, $${price}${status ? `, ${status}` : poor ? ', not enough cash' : ''}${badge ? `, ${badge}` : ''}`;
       if (b.getAttribute('aria-label') !== label) b.setAttribute('aria-label', label);
     }
@@ -904,7 +1027,7 @@ export class Hud {
   private vaultSig = '';
 
   private refreshVault(force = false) {
-    const me = this.me;
+    const me = this.panelMe ?? this.me;
     if (!me) return;
     const sig = JSON.stringify([me.inv, me.vault]);
     if (!force && sig === this.vaultSig) return;
@@ -934,3 +1057,4 @@ export class Hud {
     col('stored');
   }
 }
+export { BrainInspector } from './brainPanel';

@@ -3,7 +3,8 @@ import { PIECES, WEAPONS } from '../sim/constants';
 import { POTION_KINDS, validSlot } from '../sim/hotbar';
 import type { BuildRequest, GunKind, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
 import { clampSettings, isColor, type GameSettings } from '../sim/settings';
-import { CHAT_MAX_LEN, type ClientMsg } from './protocol';
+import { CHAT_MAX_LEN, type ClientMsg, type ViewExtras } from './protocol';
+import { isWheelId } from '../sim/emotes';
 
 // Everything from a remote peer is untrusted: rebuild each message field by field from known shapes.
 
@@ -132,6 +133,7 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     moveSlot: moveSlot(x.moveSlot),
     useMedkit: bool(x.useMedkit),
     drink: bool(x.drink),
+    ...(x.view === 0 || x.view === 1 ? { view: x.view } : {}),
     ...(typeof x.viewT === 'number' && Number.isFinite(x.viewT) ? { viewT: x.viewT } : {}),
   };
 }
@@ -157,6 +159,23 @@ export function moveCmds(x: unknown): MoveCmd[] | null {
     });
   }
   return out;
+}
+
+const PANELS = ['shop', 'potions', 'vault'] as const;
+const coord = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && Math.abs(x) < 1e4 ? x : null);
+
+/** A player's ghost / open panel for spectators (ViewExtras), or null if malformed. */
+export function sanitizeView(x: unknown): ViewExtras | null {
+  if (!isObj(x)) return null;
+  let ghost: ViewExtras['ghost'] = null;
+  if (x.ghost != null) {
+    const g = x.ghost;
+    if (!isObj(g)) return null;
+    const kind = oneOf(PIECE_KINDS, g.kind), px = coord(g.x), py = coord(g.y), pz = coord(g.z), rotY = coord(g.rotY);
+    if (!kind || px === null || py === null || pz === null || rotY === null) return null;
+    ghost = { kind, x: px, y: py, z: pz, rotY, ok: bool(g.ok) };
+  }
+  return { ghost, panel: oneOf(PANELS, x.panel), hover: oneOf(SHOP_ITEMS, x.hover) };
 }
 
 export function sanitizeClientMsg(x: unknown): ClientMsg | null {
@@ -188,6 +207,10 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
     }
     case 'follow':
       return x.id === null || (Number.isInteger(x.id) && (x.id as number) > 0 && (x.id as number) <= 64) ? { t: 'follow', id: x.id as number | null } : null;
+    case 'view': {
+      const v = sanitizeView(x.v);
+      return v ? { t: 'view', v } : null;
+    }
     case 'ready':
       return typeof x.ready === 'boolean' ? { t: 'ready', ready: x.ready } : null;
     case 'color':
@@ -195,6 +218,9 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
     case 'chat':
       // Generous bound here; cleanChat trims to CHAT_MAX_LEN after stripping junk.
       return typeof x.text === 'string' && x.text.length <= CHAT_MAX_LEN * 4 ? { t: 'chat', text: x.text } : null;
+    case 'wheel':
+      // Only catalog ids (sim/emotes.ts): anything else is malformed.
+      return isWheelId(x.id) ? { t: 'wheel', id: x.id } : null;
     default:
       return null;
   }

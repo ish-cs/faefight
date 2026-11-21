@@ -164,4 +164,56 @@ describe('HostSession', () => {
       last = m;
     }
   });
+
+  test('brain digests go only to a dead friend following that bot (never to a living player)', async () => {
+    const { host, link, got } = await hostWithFriend();
+    (host as any).started = true;
+    (host as any).seatIds = [null, 1];
+    const pl = (id: number, alive: boolean, isBot: boolean) => ({ id, alive, isBot, eliminated: false });
+    const snap = (bobAlive: boolean) => ({ players: [pl(1, bobAlive, false), pl(2, true, true), pl(3, true, true)] }) as any;
+    const digest = (id: number) => ({ id, goal: 'collect' }) as any;
+    link.send({ t: 'follow', id: 2 });
+    await flush(); await flush();
+    (host as any).lastSnap = snap(true);
+    expect(host.brainWants()).toEqual([]); // alive: no spectating, no brain
+    host.onBrains([digest(2), digest(3)]);
+    await flush();
+    expect(got.filter((m) => m.t === 'brain')).toEqual([]);
+    (host as any).lastSnap = snap(false);
+    expect(host.brainWants()).toEqual([2]);
+    host.onBrains([digest(2), digest(3)]);
+    await flush();
+    expect(got.filter((m) => m.t === 'brain').map((m) => m.d.id)).toEqual([2]);
+  });
+
+  test("a human's ghost / open panel goes only to a dead friend following them", async () => {
+    const { host, link, got } = await hostWithFriend();
+    (host as any).started = true;
+    (host as any).seatIds = [3, 1]; // host plays 3, Bob 1
+    (host as any).hostPlayerId = 3;
+    const pl = (id: number, alive: boolean, isBot: boolean) => ({ id, alive, isBot, eliminated: false });
+    const snap = (bobAlive: boolean) => ({ tick: 0, players: [pl(1, bobAlive, false), pl(2, true, true), pl(3, true, false)] }) as any;
+    const v = { ghost: { kind: 'wood', x: 1, y: 2, z: 3, rotY: 0, ok: true }, panel: 'shop', hover: 'smg' } as const;
+    host.setLocalView(v);
+    expect(host.viewOf(3)).toEqual(v);
+    link.send({ t: 'follow', id: 3 });
+    await flush(); await flush();
+    const send = (s: any) => (host as any).sendViews(s);
+    send(snap(true));
+    await flush();
+    expect(got.filter((m) => m.t === 'view')).toEqual([]); // alive: nothing
+    send(snap(false));
+    await flush();
+    expect(got.filter((m) => m.t === 'view')).toEqual([{ t: 'view', id: 3, v }]);
+    // Following a bot: no human view to send.
+    link.send({ t: 'follow', id: 2 });
+    await flush(); await flush();
+    send(snap(false));
+    await flush();
+    expect(got.filter((m) => m.t === 'view')).toHaveLength(1);
+    // A friend's own view message is stored for whoever spectates them.
+    link.send({ t: 'view', v: { ghost: null, panel: 'vault', hover: null } });
+    await flush(); await flush();
+    expect(host.viewOf(1)).toEqual({ ghost: null, panel: 'vault', hover: null });
+  });
 });

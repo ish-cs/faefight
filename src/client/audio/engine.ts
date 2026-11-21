@@ -258,6 +258,9 @@ export class AudioSystem {
     this.nextAmbientAt = ctx.currentTime + 6 + Math.random() * 8;
   }
 
+  /** Whose ears: the followed player while spectating, else the local player (viewed.ts). */
+  setViewed(id: number) { this.director.setViewed(id); }
+
   setMap(map: IslandLayout[], humanId: number) {
     this.director.setMap(map, humanId);
   }

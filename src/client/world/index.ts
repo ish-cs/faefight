@@ -3,6 +3,7 @@ import type { MapDef } from '../../sim/map';
 import type { FirePatch, HazardNet, MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { FireFx } from './fireFx';
 import { ImpactMarks } from './impacts';
+import { clearNpcSpots } from '../characters/npcSpots';
 import { CosmeticLayer } from './cosmetics';
 import { HazardLayer } from './hazards';
 import { Critters } from './critters';
@@ -72,6 +73,7 @@ export class World {
     this.clearMap();
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
+    clearNpcSpots(); // the shop/potion props below register their keepers
     const { root, collidables } = buildIslands(def, teamColors, this.scatter);
     this.scatter.build();
     this.scene.add(this.scatter.root);
@@ -107,6 +109,13 @@ export class World {
     this.hazards = new HazardLayer(def.hazards ?? []);
     this.scene.add(this.hazards.root);
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
+    // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
+    // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
+    for (const r of [this.islands, this.scatter.root, this.cosmetics.root]) {
+      if (!r) continue;
+      r.updateMatrixWorld(true);
+      r.traverse((o) => { o.matrixAutoUpdate = false; o.matrixWorldAutoUpdate = false; });
+    }
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics, ${(def.hazards ?? []).length} hazards in ${Math.round(performance.now() - t0)} ms`);
   }
 

@@ -19,6 +19,7 @@ import {
   type Needs, type ShopStyle,
 } from './plans';
 import type { BotView, OtherStatus } from './view';
+import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, type ScoreRow } from './introspect';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
@@ -57,14 +58,15 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
 /**
- * Explosive props. Hard/pro bots sometimes shoot a barrel standing next to an enemy instead of the enemy (a
+ * Explosive props. PRO bots sometimes shoot a barrel standing next to an enemy instead of the enemy (a
  * roll every BARREL_ROLL_SEC while such a shot is on, so it's a choice, not a reflex); everyone keeps out of
  * blast range of live barrels while fighting and runs from a fusing one.
  */
-const BARREL_CHANCE: Record<Difficulty, number> = { easy: 0, medium: 0, hard: 0.3, pro: 0.5 };
+// PRO only: reading a barrel next to an enemy is a PRO skill (measured: it is part of what keeps PRO ahead of hard).
+const BARREL_CHANCE: Record<Difficulty, number> = { easy: 0, medium: 0, hard: 0, pro: 0.5 };
 const BARREL_ROLL_SEC = 1.2, BARREL_AIM_SEC = 1.5;
-/** Supply crates: only when this close and nothing better is going on. */
-const CRATE_RANGE = 14;
+/** Supply crates: only when this close (a short detour) and nothing else is going on. */
+const CRATE_RANGE = 8;
 const RAID_AT = 60;
 /**
  * Sudden-death storm awareness: how many seconds ahead of the closing ring a bot moves in, the margin it keeps
@@ -225,6 +227,10 @@ export class Bot {
   private view!: BotView;
   /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
   private readonly centerMinded: boolean;
+  /** Spectator introspection (introspect.ts): set only while someone watches this bot; decisions never read it. */
+  probe: BrainProbe | null = null;
+  /** Last goal switches (introspect.ts decision log): one small entry per switch. */
+  readonly switches: GoalSwitch[] = [];
 
   constructor(readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality) {
     this.personality = personality ?? rollPersonality(rng);
@@ -252,6 +258,10 @@ export class Bot {
   get barrelTarget(): number | null { return this.barrelPlan?.id ?? null; }
   /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
   get planScores(): { goal: string; score: number }[] { return this.lastScores; }
+  /** Start / stop recording decisions for a spectator (read-only: never changes what the bot does). */
+  watch(on: boolean) { this.probe = on ? this.probe ?? new BrainProbe(this) : null; }
+  /** What it's thinking, for the brain inspector (starts recording if it wasn't). */
+  debugBrain(): BrainDigest { this.watch(true); return debugBrain(this); }
 
   think(view: BotView): PlayerInput {
     const me = view.self;
@@ -284,7 +294,10 @@ export class Bot {
     this.coverTrigger(ctx);
     if (now >= this.nextScoreAt) {
       const next = this.pick(ctx);
-      if (next !== this.goal) this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
+      if (next !== this.goal) {
+        this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
+        noteSwitch(this.switches, this.probe, this.lastScores, now, this.goal, next);
+      }
       this.goal = next;
       if (next === 'disengage' || next === 'heal') this.retreatSince ??= now;
       else this.retreatSince = null;
@@ -394,6 +407,7 @@ export class Bot {
     if (act.build) {
       this.lastPieceAt = now;
     }
+    this.probe?.acted(act, look, fire);
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
@@ -852,7 +866,10 @@ export class Bot {
         const need = this.scaffoldsNeeded(c);
         const toRival = c.bridgeTo !== this.nav.centerNode;
         if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
-        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed + (this.stormPrep(view) ? 0.45 : 0));
+        // Already out over the water laying it: lay what I carry before turning back (a walk home and out again
+        // costs more than the decks; with fast placing a trip often ends a deck or two short).
+        const outOnIt = this.goal === 'bridge' && c.on !== home.index;
+        return 0.45 + 0.15 * t.aggression + (have >= need || outOnIt ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed + (this.stormPrep(view) ? 0.45 : 0));
       }
       case 'contest': {
         const cv = view.center;
@@ -930,17 +947,22 @@ export class Bot {
   }
 
   private pick(c: Ctx): Goal {
-    if (this.trapped(c)) return 'defend';
+    if (this.trapped(c)) { this.probe?.decided(c, null, 'defend'); return 'defend'; }
+    const rows: ScoreRow[] | null = this.probe ? [] : null;
     let best: Goal = (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
-      const base = this.drive(g, c, this.score(g, c));
-      if (base <= 0 && g !== best) continue;
-      const s = base + (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
+      const raw = this.score(g, c);
+      const base = this.drive(g, c, raw);
+      if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
+      const noise = (this.rng() - 0.5) * NOISE[this.difficulty], sticky = g === this.goal ? STICKY : 0;
+      const s = base + noise + sticky;
+      rows?.push({ goal: g, raw, base, noise, sticky, score: s });
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
     }
     this.lastScores = scored.sort((a, b) => b.score - a.score).slice(0, 4);
+    if (rows) this.probe!.decided(c, rows, best);
     return best;
   }
 
@@ -1031,6 +1053,7 @@ export class Bot {
 
   /** Walk toward dest via the route planner; null dir once within `arrive` m (or when no route exists). */
   private goTo(dest: Vec3, arrive = ARRIVE): Act {
+    if (this.probe) this.probe.dest = dest;
     const self = this.view.self;
     if (dist2D(self.pos, dest) <= arrive) return IDLE;
     const home = this.view.map[self.island];
@@ -1110,6 +1133,12 @@ export class Bot {
       if (BUILD_SKILL[this.difficulty].altRoute) { this.alt.add(to); this.nextScoreAt = now; return IDLE; }
     }
     if (!mirror) this.laneBest.set(key, Math.max(best, f.s));
+    // The alternate lane is laid under pressure: stock up on enough decks (vault cash too) before walking out,
+    // rather than running dry a deck short and walking all the way back.
+    if (mirror && c.on === c.home.index && c.homeReach && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c)) {
+      const buy = this.buyDecks(c);
+      if (buy) return buy;
+    }
     const stand = at(-1.1);
     const walk = this.goTo(stand, ARRIVE);
     if (walk.dir) return walk;
@@ -1402,7 +1431,8 @@ export class Bot {
 
   /** A standing supply crate close by on ground I can walk to (only when it's cheap: near and quiet). */
   private nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null {
-    if (c.enemy || c.danger) return null;
+    // Never a detour while the storm closes in (sudden death): getting inside the ring comes first.
+    if (c.enemy || c.danger || c.view.suddenDeath || c.view.storm) return null;
     let best: { pos: Vec3; center: Vec3 } | null = null, bestD = CRATE_RANGE;
     for (const h of c.view.hazards ?? []) {
       if (h.kind !== 'crate') continue;
@@ -1415,7 +1445,7 @@ export class Bot {
   }
 
   /**
-   * Hard/pro: a live barrel or tank right next to the enemy, out of my own blast range, in clear view: now
+   * PRO: a live barrel or tank right next to the enemy, out of my own blast range, in clear view: now
    * and then shoot it instead of them. Returns the point to shoot, or null.
    */
   private barrelShot(c: Ctx): Vec3 | null {
@@ -1443,12 +1473,13 @@ export class Bot {
     return pick.center;
   }
 
-  /** Run from a fusing barrel; in a fight, also step out of blast range of live ones (they could be shot). */
+  /** Run from a fusing barrel; in a fight (outside the storm), also step out of blast range of live ones (they could be shot). */
   private hazardAvoid(c: Ctx, dir: Vec3 | null): Vec3 | null {
     const me = c.me;
     let push: Vec3 | null = null;
     for (const h of c.view.hazards ?? []) {
-      if (h.radius <= 0 || (!h.fusing && !c.enemy)) continue;
+      // A live barrel is only a maybe; in the storm, staying inside the ring matters more (fusing ones still send everyone running).
+      if (h.radius <= 0 || (!h.fusing && (!c.enemy || c.view.storm))) continue;
       const d = dist2D(h.pos, me.pos);
       const R = h.fusing ? h.radius + 1 : h.radius * 0.8;
       if (d >= R) continue;
