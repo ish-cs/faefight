@@ -832,7 +832,10 @@ export class Bot {
         const need = this.scaffoldsNeeded(c);
         const toRival = c.bridgeTo !== this.nav.centerNode;
         if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
-        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed + (this.stormPrep(view) ? 0.45 : 0));
+        // Already out over the water laying it: lay what I carry before turning back (a walk home and out again
+        // costs more than the decks; with fast placing a trip often ends a deck or two short).
+        const outOnIt = this.goal === 'bridge' && c.on !== home.index;
+        return 0.45 + 0.15 * t.aggression + (have >= need || outOnIt ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed + (this.stormPrep(view) ? 0.45 : 0));
       }
       case 'contest': {
         const cv = view.center;
@@ -1087,6 +1090,12 @@ export class Bot {
       if (BUILD_SKILL[this.difficulty].altRoute) { this.alt.add(to); this.nextScoreAt = now; return IDLE; }
     }
     if (!mirror) this.laneBest.set(key, Math.max(best, f.s));
+    // The alternate lane is laid under pressure: stock up on enough decks (vault cash too) before walking out,
+    // rather than running dry a deck short and walking all the way back.
+    if (mirror && c.on === c.home.index && c.homeReach && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c)) {
+      const buy = this.buyDecks(c);
+      if (buy) return buy;
+    }
     const stand = at(-1.1);
     const walk = this.goTo(stand, ARRIVE);
     if (walk.dir) return walk;

@@ -108,8 +108,12 @@ test('drag-build: holding click lays a straight, flush wall line of 5 exactly wh
     if (placed.length >= 5) break;
     const last = placed.sort((a, b) => b.id - a.id)[0];
     const next = at(last.pos, F, 0, R, 2);
+    // Let go while repositioning: a held click places wherever the ghost is, including mid-turn.
+    await page.mouse.up();
     await dbg(page, 'teleport', ...((p) => [p.x, p.z])(at(next, F, -3.5, R, 0)));
     await aimAt(page, { ...next, y: C.y + 0.3 });
+    await expect.poll(async () => (await aim(page))?.ok || (await mine(page, humanId, 'wood')).length >= 5).toBe(true);
+    await page.mouse.down();
     if (i === 2) await page.screenshot({ path: 'test-results/build-wall-drag.png' });
   }
   await expect.poll(async () => (await mine(page, humanId, 'wood')).length, { timeout: 10_000 }).toBe(5);
