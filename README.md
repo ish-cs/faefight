@@ -130,3 +130,24 @@ pnpm build   # typecheck + production build
 - Lag compensation: the host resolves your hitscan shots against where the targets were on your screen, rewinding at most 0.4 s (`src/sim/lagComp.ts`).
 - Simulated network for testing: add `&rtt=120&jitter=20&loss=0.02` to a `?net=local` URL (`src/net/netSim.ts`).
 - Measurements: `BENCH=1 npx vitest run tests/net --silent=false` (snapshot bytes, host cost, hit registration under latency). For client frame times, run `PERF=1 pnpm e2e tests/e2e/perf.spec.ts`.
+
+## Data capture and auto-improve
+
+Every match played on the deployed site is recorded and uploaded so the bots can learn from it. This is automatic, with no setting to turn it off. The machine running the simulation (the vs-bot player, or the host online) uploads the recording to `/api/replays` when the match ends, or after 60 s if the tab is hidden or the player leaves early. Recordings hold player names and gameplay only: the recorder never logs chat and strips anything chat-like before encoding (`withoutChat`, `src/sim/replay/format.ts`), and no IP or other personal data is stored. Uploads never get in the way of the game: the recording is encoded in the sim worker, the page never decodes it, each upload waits for an idle moment, uploads go one at a time, and anything over 4 MB is dropped. Client errors (uncaught errors, unhandled rejections, worker crashes, WebGPU device loss, sustained long frames) go to `/api/errors`. Both endpoints are Vercel Functions (`api/`) that write to a private Vercel Blob store (`faefight-replays-private`). They are rate limited per IP, capped at 4 MB per replay and 64 KB per error batch, and prune the oldest blobs beyond 800 MB. Local dev and e2e (`localhost`) never upload unless you add `?telemetry=1`.
+
+Recordings use one deterministic recorder (`src/sim/replay/`): the recorder logs exactly what `Match.tick` was given plus out-of-band ops, a binary codec stores it, and `ReplayRunner` re-runs it with state-hash checks and `Match.fork` checkpoints for seeking. The local Replays screen, the uploader and the learning pipeline all read the same `.faereplay` format.
+
+`pnpm auto-improve` runs the nightly loop on this Mac (`scripts/auto-improve.ts`). It never trains bots: training is run separately and reads the dataset this loop writes.
+
+1. Downloads new replays and error reports with the admin key (`REPLAY_ADMIN_KEY` in the untracked `.env.local`).
+2. Rebuilds the learning dataset from every downloaded replay in `.autoimprove/learning/` (`scripts/autoimprove/learning.ts`): `human-target.json` (the trainer's imitation target), `human-stats.json`, `scenarios.json` (states where a bot lost to a human) and `manifest.json`. It also re-simulates new replays with the sim invariant checker (`src/sim/invariants.ts`).
+3. Auto-fix: for up to 3 new bug signatures it writes a failing reproduction test and runs headless Claude Code (`claude -p`) in a fresh git worktree. A fix is merged only if the reproduction test now passes, `pnpm test`, `tsc` and e2e are green, no existing test or auto-improve file is touched, and the diff is under 200 lines. If a fix merged and `main` still passes, it runs `vercel deploy --prod`.
+4. Logs the run to `docs/auto-improve-log.md` and `docs/auto-health.md`. It never pushes to a git remote.
+
+It refuses to run unless `main` is checked out with a clean tree, and holds a lock so runs never overlap. It runs at the lowest priority. Logs are in `.autoimprove/logs/`. Flags: `--dry-run` (download and analyze only, commit nothing), `--no-deploy`, `--no-autofix`, `--api <url>`, and `--source <dir>` (read a local folder laid out like the Blob store instead of the API).
+
+**Schedule.** `scripts/launchd/install.sh` installs `~/Library/LaunchAgents/com.faefight.autoimprove.plist`. The job runs at 03:00, or on wake if the Mac was asleep then.
+
+- Check it: `launchctl print gui/$(id -u)/com.faefight.autoimprove`
+- Run it now: `launchctl kickstart gui/$(id -u)/com.faefight.autoimprove`
+- Disable it: `launchctl bootout gui/$(id -u)/com.faefight.autoimprove && rm ~/Library/LaunchAgents/com.faefight.autoimprove.plist`

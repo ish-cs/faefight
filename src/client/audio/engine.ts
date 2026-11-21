@@ -8,7 +8,7 @@
 import type { IslandLayout } from '../../sim/map';
 import type { Snapshot, Vec3 } from '../../sim/types';
 import { type Cue, type Env, SoundDirector } from './events';
-import { clank, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
+import { clank, critterCall, fireLoop, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
 import {
   audibility, DEFAULT_LIMITS, dist, distanceCutoff, echoSend, heartbeatInterval, MAX_DISTANCE, muffleCutoff,
   REF_DISTANCE, ROLLOFF, VoiceLimiter, waveLevel,
@@ -55,6 +55,7 @@ export class AudioSystem {
   private listeners = new Set<() => void>();
   /** Rocket motor loops, by projectile id, each on its own positional chain. */
   private flights = new Map<number, { ch: Chain; loop: { stop(): void } }>();
+  private blazes = new Map<string, { ch: Chain; loop: { stop(): void } }>();
 
   constructor() {
     this.applySettings(settings.get().audio);
@@ -95,6 +96,23 @@ export class AudioSystem {
       if (this.ambient) this.ambient.bus.gain.setTargetAtTime(this.ambience, t, 0.05);
     }
     this.listeners.forEach((fn) => fn());
+  }
+
+  private critterVoices = 0;
+  /**
+   * Wildlife call at `s` (world/critters.ts): quiet, positional, scaled by the Ambience volume, only within 20 m,
+   * at most 4 at once so a scattering flock doesn't swamp the mix.
+   */
+  critter(s: { kind: string; x: number; y: number; z: number }) {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.kit || this.muted || this.ambience <= 0) return;
+    if (dist(s, this.listener) > 20 || this.critterVoices >= 4) return;
+    this.critterVoices++;
+    this.spatial(s, 0.6 * this.ambience, `critter_${s.kind}`, (out, t) => {
+      const len = critterCall(this.kit!, out, t, s.kind);
+      setTimeout(() => { this.critterVoices--; }, (len + 0.1) * 1000);
+      return len;
+    });
   }
 
   /** Create/resume the AudioContext. Must run inside a user gesture (browser autoplay policy). */
@@ -294,6 +312,34 @@ export class AudioSystem {
       f.loop.stop();
       setTimeout(() => this.releaseChain(f.ch), 400);
       this.flights.delete(id);
+    }
+  }
+
+  /** Per frame: crackle loops on the (up to) three burning things nearest the listener, within earshot. */
+  fires(list: { id: string; pos: Vec3 }[]) {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.kit) return;
+    const near = list.map((f) => ({ f, d: dist(f.pos, this.listener) })).filter((x) => x.d < 45).sort((a, b) => a.d - b.d).slice(0, 3);
+    const seen = new Set<string>();
+    for (const { f, d } of near) {
+      seen.add(f.id);
+      let b = this.blazes.get(f.id);
+      if (!b) {
+        const ch = this.chain(f.pos, d);
+        ch.input.gain.value = 0.8;
+        b = { ch, loop: fireLoop(this.kit, ch.input) };
+        this.blazes.set(f.id, b);
+        this.count('fireLoop');
+      }
+      const p = b.ch.panner;
+      p.positionX.value = f.pos.x; p.positionY.value = f.pos.y; p.positionZ.value = f.pos.z;
+      b.ch.air.frequency.value = distanceCutoff(d);
+    }
+    for (const [id, b] of this.blazes) {
+      if (seen.has(id)) continue;
+      b.loop.stop();
+      setTimeout(() => this.releaseChain(b.ch), 1600);
+      this.blazes.delete(id);
     }
   }
 

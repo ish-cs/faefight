@@ -52,6 +52,8 @@ export class Grass {
   private beds: Bed[] = [];
   private quality: Quality = 'high';
   private far = uniform(30);
+  /** Frame-time governor's multiplier on the preset's blade density (1 = full). */
+  densityScale = 1;
   private material = this.buildMaterial();
 
   constructor() { this.root.name = 'grass'; }
@@ -262,7 +264,7 @@ export class Grass {
     for (const b of this.beds) {
       const d = Math.max(0, Math.hypot(b.center.x - cam.x, b.center.z - cam.z) - b.radius);
       const keep = d >= p.far ? 0 : Math.pow(1 - Math.max(0, (d - p.far * 0.25) / (p.far * 0.75)), 1.4);
-      const n = Math.ceil(b.n * Math.min(p.density, keep + 0.05));
+      const n = Math.ceil(b.n * Math.min(p.density * this.densityScale, keep + 0.05));
       b.mesh.visible = n > 0 && keep > 0;
       b.geo.instanceCount = Math.min(b.n, n);
     }

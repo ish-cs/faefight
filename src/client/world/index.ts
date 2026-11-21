@@ -1,7 +1,11 @@
 import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
-import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
+import type { FirePatch, MatchEvent, PieceState, PlayerState } from '../../sim/types';
+import { FireFx } from './fireFx';
+import { ImpactMarks } from './impacts';
 import { CosmeticLayer } from './cosmetics';
+import { Critters } from './critters';
+import type { CritterSound, V3 } from './critterSim';
 import { Boats, gullPerches, Gulls } from './dressing';
 import { defineDetailKinds } from './detail';
 import { Grass } from './grass';
@@ -10,7 +14,10 @@ import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
 import { setBuiltInPotionStalls } from './potionSeller';
-import { installQualityToggle, SkyLighting } from './sky';
+import { installQualityToggle, SkyLighting, SUN_DIR } from './sky';
+import { impostors, SUN_FOR_BAKE } from './impostor';
+import { lods, releaseLods } from './lod';
+import { STRESS, stressOffsets } from './stress';
 import { buildWater, type Ocean } from './water';
 
 export { pieceGeometry } from './pieces';
@@ -25,6 +32,10 @@ export class World {
   readonly pieces = new PieceLayer();
   /** Bullet holes, impact particles, shake and destruction debris for pieces. */
   readonly pieceFx = new PieceFx(this.pieces);
+  /** Bullet/blast marks and impact bursts on the world itself (ground, quay walls, cover, props). */
+  readonly impacts = new ImpactMarks(this.pieceFx.particles);
+  /** Flames, smoke, embers, charring and the fire light for burning pieces and ground fires. */
+  readonly fire = new FireFx(this.pieceFx.particles, this.pieces);
   private water: Ocean | null = null;
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
@@ -34,13 +45,19 @@ export class World {
   /** instanced small detail (litter, rubble, shells, seaweed…) */
   readonly scatter = new Scatter();
   private boats: Boats | null = null;
+  private lastFrame = performance.now();
   private gulls: Gulls | null = null;
+  /** wildlife (rats, birds, crabs, insects, fish …): cosmetic, client-only */
+  critters: Critters | null = null;
+  /** positional critter sounds (main wires this to the audio system) */
+  onCritterSound: ((s: CritterSound) => void) | null = null;
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
-  constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
+  constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
     this.sky = new SkyLighting(gpu, scene, camera);
+    SUN_FOR_BAKE.dir.copy(SUN_DIR);
     installQualityToggle(this.sky);
-    scene.add(this.pieces.root, this.pieceFx.root);
+    scene.add(this.pieces.root, this.pieceFx.root, this.impacts.mesh, this.fire.light);
     collidables.push(...this.pieces.proxies);
     this.pieces.onProxiesChanged = () => {
       for (let i = collidables.length - 1; i >= 0; i--) if (collidables[i].name.startsWith('pieceHull:')) collidables.splice(i, 1);
@@ -60,6 +77,7 @@ export class World {
     this.islandHulls = collidables;
     this.collidables.push(...collidables);
     const map = def.islands;
+    this.impacts.setMap(def);
     this.water = buildWater(def);
     this.scene.add(this.water.mesh);
     // The ambient env map is deliberately hazy/desaturated (for shading); at grazing angles it turned the far sea
@@ -74,9 +92,16 @@ export class World {
     this.boats = new Boats(map);
     this.gulls = new Gulls(map, gullPerches(map, (isl) => backdropFrame(isl, map.length)));
     this.scene.add(this.boats.root, this.gulls.mesh);
+    const perches = gullPerches(map, (isl) => backdropFrame(isl, map.length)).filter((p) => !p.roof).map((p) => ({ x: p.p.x, y: p.p.y, z: p.p.z, yaw: p.yaw }));
+    this.critters = new Critters(def, perches);
+    this.critters.onSound = (s) => this.onCritterSound?.(s);
+    this.scene.add(this.critters.root);
     setBuiltInPotionStalls([def.center.potionShop]); // center.ts draws this seller; PotionSellers must not double it
-    this.cosmetics = new CosmeticLayer(def.cosmetics);
+    // debug stress scene: visual-only shifted copies with ids the sim never uses
+    const cos = STRESS > 1 ? stressOffsets().flatMap(([ox, oz], k) => def.cosmetics.map((c) => k === 0 ? c : { ...c, id: 1e6 * k + c.id, pos: { ...c.pos, x: c.pos.x + ox, z: c.pos.z + oz } })) : def.cosmetics;
+    this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
+    impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
 
@@ -85,6 +110,7 @@ export class World {
     if (this.islands) {
       const hulls = new Set(this.islandHulls);
       for (let i = this.collidables.length - 1; i >= 0; i--) if (hulls.has(this.collidables[i])) this.collidables.splice(i, 1);
+      releaseLods(this.islands);
       this.islands.traverse((o) => { if (o instanceof THREE.Mesh) o.geometry.dispose(); });
       this.islands.removeFromParent();
       this.islands = null;
@@ -97,6 +123,8 @@ export class World {
     this.boats = null;
     this.gulls?.mesh.removeFromParent();
     this.gulls = null;
+    this.critters?.root.removeFromParent();
+    this.critters = null;
     this.cosmetics?.dispose();
     this.cosmetics = null;
   }
@@ -110,21 +138,45 @@ export class World {
     this.cosmetics?.onBroken(e.data, this.pieceFx.particles);
   }
 
-  syncPieces(pieces: PieceState[]) { this.pieces.sync(pieces); this.pieceFx.sync(pieces); }
+  syncPieces(pieces: PieceState[], fires?: FirePatch[]) {
+    this.pieces.sync(pieces);
+    this.pieceFx.sync(pieces);
+    this.fire.sync(pieces, fires);
+    if (this.impacts.active) { const ids = new Set(pieces.map((p) => p.id)); this.impacts.retainPieces((id) => ids.has(id)); }
+  }
+
+  /** `shot` / `explosion` events → world surface marks and impact bursts. */
+  impactEvent(e: MatchEvent, view: Parameters<ImpactMarks['onEvent']>[1]) { this.impacts.onEvent(e, view); }
+
+  /** Shots / explosions scare the wildlife. */
+  critterEvent(e: MatchEvent) { this.critters?.onEvent(e); }
 
   /** `pieceHit` / `destroyed` events → decals, particles, shake, debris. */
   pieceEvent(e: MatchEvent, players: PlayerState[]) { this.pieceFx.onEvent(e, players); }
 
   /** `feet`: live player feet positions (grass bends away from them). */
   render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
+    const now = performance.now(), dt = Math.min(0.1, (now - this.lastFrame) / 1000);
+    this.lastFrame = now;
     if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
+    if (this.critters) {
+      this.critters.setQuality(this.sky.quality);
+      this.critters.update(dt, this.sky.camera as THREE.PerspectiveCamera, feet as V3[], waterY);
+    }
     const t = performance.now() / 1000;
     this.boats?.update(t, waterY);
     this.gulls?.update(t);
     this.grass.setQuality(this.sky.quality);
     this.scatter.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
-    this.pieceFx.update(performance.now());
+    impostors.step(this.gpu, this.scene.environment); // one queued impostor bake per frame (load/reveal frames)
+    lods.setQuality(this.sky.quality);
+    lods.update(this.sky.camera.position);
+    this.pieceFx.update(now);
+    this.impacts.setQuality(this.sky.quality);
+    this.impacts.update();
+    this.fire.setQuality(this.sky.quality);
+    this.fire.update(Math.min(0.05, dt), this.sky.camera);
     this.sky.render(); // cascaded shadows follow the camera themselves
   }
 }

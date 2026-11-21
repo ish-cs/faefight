@@ -38,7 +38,8 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'camera', label: 'First / third person', group: 'Interface', defaults: ['KeyV'] },
   { id: 'mute', label: 'Mute audio', group: 'Interface', defaults: ['KeyM'] },
   { id: 'quality', label: 'Toggle graphics quality', group: 'Interface', defaults: ['KeyP'] },
-  { id: 'fps', label: 'Show / hide FPS counter', group: 'Interface', defaults: ['F3'] },
+  // ` as well: on a Mac F3 is Mission Control unless fn is held. Shift + this key toggles the perf detail.
+  { id: 'fps', label: 'Show / hide FPS counter (+Shift: perf detail)', group: 'Interface', defaults: ['F3', 'Backquote'] },
 ];
 
 export const ACTION_IDS: readonly Action[] = ACTIONS.map((a) => a.id);
@@ -70,6 +71,8 @@ export function sanitizeKeymap(raw: unknown): Keymap {
     const codes = [...new Set(v.filter((c): c is string => typeof c === 'string' && isBindable(c)))].slice(0, MAX_PER_ACTION);
     km[id] = codes; // an empty list is a deliberate "unbound"
   }
+  // maps saved before ` joined F3 on the FPS key: add it unless the player bound ` elsewhere
+  if (km.fps.length === 1 && km.fps[0] === 'F3' && !ACTION_IDS.some((a) => km[a].includes('Backquote'))) km.fps = ['F3', 'Backquote'];
   return km;
 }
 

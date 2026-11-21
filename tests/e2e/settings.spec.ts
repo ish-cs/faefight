@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 type LoadEvent = { kind: 'show' | 'progress' | 'hide'; phase?: string; frac?: number; total: number; t: number };
 type Snap = { players: { id: number; island: number; alive: boolean; pos: { x: number; y: number; z: number } }[] };

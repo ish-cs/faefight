@@ -96,7 +96,7 @@ describe('SettingsStore', () => {
 
   it('FPS counter is on by default and on F3', () => {
     expect(defaultSettings().video.showFps).toBe(true);
-    expect(defaultKeymap().fps).toEqual(['F3']);
+    expect(defaultKeymap().fps).toEqual(['F3', 'Backquote']); // ` too: F3 is Mission Control on a Mac
   });
 
   it('v1 settings migrate to v2 with the FPS counter on; a v2 choice to hide it sticks', () => {

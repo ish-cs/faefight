@@ -1,4 +1,6 @@
 /// <reference types="node" />
+// @ts-nocheck — imports the ES trainer (scripts/train/*, src/sim/bots/params.ts), which isn't on main yet.
+// Remove this line once the trainer lands so tsc checks this file too.
 /**
  * One step of the ES trainer (scripts/train-bots.ts) split for GitHub Actions (.github/workflows/bot-train.yml):
  * one workflow run = one generation, its games sharded over a job matrix, the state carried in an artifact.

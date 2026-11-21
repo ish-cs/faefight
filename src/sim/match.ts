@@ -7,6 +7,7 @@ import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchState
 import { buildMapDef, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
+import { Fire, fireZones, type FireCtx } from './fire';
 import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
@@ -23,7 +24,10 @@ import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
 import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
+import { clampSettings, resolveColors, type GameSettings } from './settings';
 import { clone, dist, dist2D, forward, norm, sub, v3 } from './vec';
+import { mulberry32, type Rng } from './rng';
+import { deepClone } from './replay/clone';
 
 export type BotBrain = { think(view: BotView): PlayerInput };
 export type MatchOptions = { makeBot?: (id: number, difficulty: Difficulty, rng: () => number) => BotBrain };
@@ -34,17 +38,6 @@ const SIGHT_RANGE = 120;
 const RECENT_SEC = 4;
 const FEED_SEC = 30;
 
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 export class Match implements MatchApi {
   private s: MatchStateCore;
   private tickNo = 0;
@@ -54,7 +47,7 @@ export class Match implements MatchApi {
   private stats = new MatchStats();
 
   private bots = new Map<number, BotBrain>();
-  private rng: () => number;
+  private rng: Rng;
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
   private sealDirty = true;
@@ -69,6 +62,9 @@ export class Match implements MatchApi {
   readonly map: IslandLayout[];
   private center: CenterState = newCenterState();
   private cosmetics: Cosmetics;
+  /** Burning pieces and ground fires (sim/fire.ts). */
+  private fire: Fire;
+  private fireCtx: FireCtx;
   /** Potion sellers: the NPC on the center island. */
   potionShops: PotionShop[];
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
@@ -82,10 +78,17 @@ export class Match implements MatchApi {
   /** Lag-compensated shots resolved so far, and the total rewind (tests/debug). */
   lagStats = { shots: 0, rewindSec: 0 };
 
+  /** Host's rules for this match (clamped; defaults = today's constants). */
+  readonly settings: GameSettings;
+
   private constructor(readonly def: MapDef, private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
     const map = def.islands;
     this.map = map;
+    this.settings = clampSettings(setup.settings);
+    def.settings = { ...this.settings };
+    def.colors = resolveColors(setup.players.map((p) => p.color));
     this.cosmetics = new Cosmetics(def.cosmetics);
+    this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
     this.potionShops = potionShopsAt([def.center.potionShop]);
     this.s = newMatchState(map, setup.seed ?? 1);
     this.s.waterY = def.waterY;
@@ -102,7 +105,7 @@ export class Match implements MatchApi {
     setup.players.forEach((cfg, i) => {
       const id = i + 1;
       const name = cfg.isBot && isPlaceholderBotName(cfg.name) ? nickname(nameRng, taken) : cfg.name;
-      const p = newPlayer(id, name, cfg.isBot, i, map[i].spawn);
+      const p = newPlayer(id, name, cfg.isBot, i, map[i].spawn, this.settings.startCash);
       p.yaw = map[i].bunker.facingYaw;
       this.s.players.set(id, p);
       physics.addPlayer(id, p.pos);
@@ -110,7 +113,14 @@ export class Match implements MatchApi {
         this.bots.set(id, opts.makeBot(id, cfg.difficulty ?? 'medium', rng));
       }
     });
-    this.ctx = {
+    this.ctx = this.makeCtx();
+    this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
+  }
+
+  /** Combat's view of this match (callbacks bound to this instance: rebuilt by fork). */
+  private makeCtx(): CombatCtx {
+    const physics = this.physics;
+    return {
       physics,
       players: this.s.players,
       pieces: this.s.pieces,
@@ -157,6 +167,26 @@ export class Match implements MatchApi {
   }
 
   /**
+   * An independent copy of the whole match as of now (state, bots' minds, rng, collision world): ticking
+   * both with the same inputs gives the same snapshots. Replay checkpoints for fast seeking.
+   */
+  fork(): Match {
+    const physics = this.physics.clone();
+    const m = Object.create(Match.prototype) as Match;
+    const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
+    const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
+    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx') copy[k] = deepClone(self[k], memo);
+    m.ctx = m.makeCtx();
+    m.fireCtx = { ...m.ctx, cosmetics: m.cosmetics };
+    return m;
+  }
+
+  /** Free the native collision world (headless/replay matches; never garbage collected otherwise). */
+  dispose(): void {
+    this.physics.dispose();
+  }
+
+  /**
    * moves: per human player, the movement commands to apply this tick (client-numbered, for
    * prediction/reconciliation). A player without an entry moves one step from its PlayerInput.
    */
@@ -179,13 +209,15 @@ export class Match implements MatchApi {
     }
 
     this.events.push(...tickExplosives(this.ctx, now));
+    this.fire.onEvents(this.events, now, this.fireCtx);
+    this.events.push(...this.fire.tick(now, this.s.waterY, this.fireCtx, !!this.s.storm));
     this.collapseUnsupported(now);
     if (this.s.storm) this.events.push(...tickStorm(this.ctx, this.s.storm, now));
-    for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
-    tickCenter(this.center, DT, !this.s.suddenDeath);
+    for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT * this.settings.genMult, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
+    tickCenter(this.center, DT * this.settings.genMult, !this.s.suddenDeath);
     for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
     this.events.push(...this.cosmetics.onEvents(this.events, now));
-    this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
+    this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT, this.settings.suddenDeathSec));
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
     this.updateSeals(now);
@@ -238,6 +270,23 @@ export class Match implements MatchApi {
   /** Every kill so far (tests/debug). */
   debugKills(): { victim: number; killer: number | null }[] {
     return this.kills;
+  }
+
+  /** Detonate a rocket / grenade / charge right here on the next tick (tests/e2e). */
+  debugExplode(kind: Explosive['kind'], pos: Vec3, owner = 0): void {
+    this.explosives.push({ id: this.s.nextId++, kind, owner, pos: clone(pos), vel: v3(0, -0.01, 0), explodeAt: this.s.time });
+  }
+
+  /** Set a piece on fire as if an explosion had (tests/e2e). Returns false if it can't burn. */
+  debugIgnite(pieceId: number, by: number | null = null): boolean {
+    const p = this.s.pieces.get(pieceId);
+    if (!p) throw new Error(`Match.debugIgnite: no piece ${pieceId}`);
+    return this.fire.ignite(p, this.s.time, by);
+  }
+
+  /** Fire state (tests/debug): ids of burning pieces and the ground fire count. */
+  debugFire(): { burning: number[]; patches: number } {
+    return { burning: [...this.s.pieces.values()].filter((p) => this.fire.isBurning(p.id)).map((p) => p.id), patches: this.fire.patchCount };
   }
 
   debugDamagePiece(pieceId: number, amount: number): void {
@@ -574,7 +623,9 @@ export class Match implements MatchApi {
       loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE).map((b) => clone(b.pos)),
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
+      fires: fireZones(this.s.pieces.values(), this.fire.snapshotFires()),
       storm: this.s.storm ? { ...stormSnap(this.s.storm, this.s.time), rate: stormRate(this.s.storm, this.s.time) } : null,
+      suddenDeathAt: this.settings.suddenDeathSec,
       potionShops: this.potionShops.map((sh) => clone(sh.pos)),
       groundAt: (x, z) => this.physics.isGroundAt(x, z),
       canPlace: (kind, pos, rotY) => validatePlacement(this.physics, kind, pos, rotY, self.pos),
@@ -589,6 +640,7 @@ export class Match implements MatchApi {
       pieces: [...this.s.pieces.values()],
       loot: [...this.s.loot.values()],
       projectiles: projectiles(this.explosives),
+      ...(this.fire.patchCount ? { fires: this.fire.snapshotFires() } : {}),
       generators: this.s.generators,
       center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       broken: this.cosmetics.broken,

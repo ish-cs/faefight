@@ -1,4 +1,4 @@
-import { BURST_RESET_SEC, PLAYER, WEAPONS } from './constants';
+import { BURST_RESET_SEC, HEAD, PLAYER, WEAPONS } from './constants';
 import type { MoveCmd } from './movement';
 import type { PlayerState, WeaponKind } from './types';
 
@@ -77,6 +77,16 @@ export function falloff(kind: WeaponKind, d: number): number {
   if (d <= f.start) return 1;
   if (d >= f.end) return f.minMult;
   return 1 - (1 - f.minMult) * ((d - f.start) / (f.end - f.start));
+}
+
+/**
+ * Damage of one bullet/pellet that hit at `d` metres: base × range falloff × (headshot multiplier).
+ * The sim's tryFire and the client's predicted hit both use this, so they can never disagree.
+ * `mult` is the falloff alone (< 1 means the range cost something; the HUD dims those numbers).
+ */
+export function shotDamage(kind: WeaponKind, d: number, head = false): { amount: number; mult: number } {
+  const mult = falloff(kind, d);
+  return { amount: WEAPONS[kind].dmg * mult * (head ? HEAD.mult : 1), mult };
 }
 
 /** Rounds a full reload leaves in the gun: a tactical reload keeps one in the chamber. */

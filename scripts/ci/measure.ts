@@ -51,7 +51,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   let params: unknown = undefined;
   if (paramsPath) {
     let mod: { sanitize: (p: Record<string, number>) => unknown };
-    try { mod = await import('../../src/sim/bots/params'); } catch (e) {
+    // Variable specifier: params.ts exists only on refs with the trainable bot (tsc must pass on refs without it).
+    const paramsModule = '../../src/sim/bots/params';
+    try { mod = await import(/* @vite-ignore */ paramsModule); } catch (e) {
       throw new Error(`measure: --params given but this ref has no src/sim/bots/params.ts (${(e as Error).message})`);
     }
     const j = JSON.parse(fs.readFileSync(paramsPath, 'utf8')) as { params?: Record<string, number> } & Record<string, number>;
@@ -161,7 +163,7 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
   const seals = games.filter((g) => g.firstSeal !== null).map((g) => g.firstSeal!);
   let proVsHard: ScenarioSummary['proVsHard'] = null;
   if (scenario === '1v1-pro-vs-hard') {
-    const scores = games.map((g) => (g.winner === null ? 0.5 : g.winnerDifficulty === 'pro' ? 1 : 0));
+    const scores: number[] = games.map((g) => (g.winner === null ? 0.5 : g.winnerDifficulty === 'pro' ? 1 : 0));
     proVsHard = { share: scores.reduce((a, b) => a + b, 0) / Math.max(1, scores.length), ci95: ci95(scores), games: scores.length };
   }
   const s: ScenarioSummary = {
