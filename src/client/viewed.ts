@@ -71,3 +71,23 @@ export class BodyCam {
     return this.victim !== null && this.victim === followId && now < this.until;
   }
 }
+
+/**
+ * The spectator camera starts on the next render frame after spectating begins (/spectate, death), so a
+ * follow key (1–9, 0) pressed in that gap would be lost. It is held this long and applied on entering.
+ */
+export const EARLY_KEY_MS = 500;
+
+export class EarlyKey {
+  private key: number | null = null;
+  private at = -Infinity;
+
+  press(digit: number, nowMs: number) { this.key = digit; this.at = nowMs; }
+
+  /** The key pressed just before spectating began (within EARLY_KEY_MS), once; else null. */
+  take(nowMs: number): number | null {
+    const k = this.key !== null && nowMs - this.at <= EARLY_KEY_MS ? this.key : null;
+    this.key = null;
+    return k;
+  }
+}

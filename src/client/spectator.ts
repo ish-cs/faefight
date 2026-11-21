@@ -3,6 +3,7 @@ import type { Vec3 } from '../sim/types';
 import { PLAYER } from '../sim/constants';
 import { type Action, isHeld, slotForCode } from './keymap';
 import { ThirdPersonCamera } from './camera';
+import { EarlyKey } from './viewed';
 
 /** Free-fly speeds (m/s) and height limits for the spectator camera. */
 export const SPECTATE = { speed: 14, fastMul: 3, minY: -20, maxY: 250 };
@@ -73,6 +74,8 @@ export class Spectator {
   private lastAt = new THREE.Vector3();
   private killcamOn = false;
   private banner = document.createElement('div');
+  /** A follow key pressed in the frame before the camera started spectating. */
+  private early = new EarlyKey();
 
   constructor(parent: HTMLElement, cam: THREE.PerspectiveCamera, blockers: () => THREE.Object3D[], canvas: HTMLElement, private enabled: () => boolean) {
     this.follow = new ThirdPersonCamera(cam, blockers);
@@ -82,6 +85,10 @@ export class Spectator {
     parent.append(this.banner);
     const typing = (e: Event) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
     window.addEventListener('keydown', (e) => {
+      if (!this.active && this.enabled() && !typing(e) && !e.repeat) {
+        const s = slotForCode(e.code);
+        if (s >= 0 || e.code === 'Digit0') this.early.press(s >= 0 ? s + 1 : 0, performance.now());
+      }
       if (!this.active || !this.enabled() || typing(e)) return;
       this.keys.add(e.code);
       if (e.code === 'ControlLeft' || e.code === 'ControlRight') e.preventDefault();
@@ -113,6 +120,7 @@ export class Spectator {
     this.followId = null;
     this.pos.copy(from);
     this.banner.style.display = '';
+    this.pendingDigit = this.early.take(performance.now());
   }
 
   exit() {

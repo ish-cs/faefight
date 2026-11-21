@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { BODYCAM_SEC, BodyCam, SpectatorCamera, personalize, viewedPlayer, viewingOther } from '../../src/client/viewed';
+import { BODYCAM_SEC, BodyCam, SpectatorCamera, personalize, viewedPlayer, viewingOther, EARLY_KEY_MS, EarlyKey } from '../../src/client/viewed';
 import { damageNumbers } from '../../src/client/damageFx';
 import { SoundDirector } from '../../src/client/audio/events';
 import { buildMap } from '../../src/sim/map';
@@ -70,5 +70,17 @@ describe('bot-brain text names', () => {
     expect(personalize('Going after @1 (seen 3 s ago)', 1, nameOf)).toBe('Going after you (seen 3 s ago)');
     expect(personalize("Sealing @2's bunker", 1, nameOf)).toBe("Sealing Marco's bunker");
     expect(personalize("no route to @2's island", 0, nameOf)).toBe("no route to Marco's island"); // spectating host: names only
+  });
+});
+
+describe('a follow key pressed just before the spectator camera starts', () => {
+  test('counts if spectating begins within EARLY_KEY_MS, once; a stale one does not', () => {
+    const k = new EarlyKey();
+    k.press(2, 1000);
+    expect(k.take(1000 + EARLY_KEY_MS - 1)).toBe(2);
+    expect(k.take(1001)).toBeNull(); // used up
+    k.press(3, 1000);
+    expect(k.take(1000 + EARLY_KEY_MS + 1)).toBeNull(); // pressed long before (e.g. a hotbar pick while playing)
+    expect(new EarlyKey().take(0)).toBeNull();
   });
 });
