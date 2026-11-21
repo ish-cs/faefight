@@ -25,6 +25,8 @@ import { Bot } from './bots/bot';
 import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { clone, dist, dist2D, forward, norm, sub, v3 } from './vec';
+import { mulberry32, type Rng } from './rng';
+import { deepClone } from './replay/clone';
 
 export type BotBrain = { think(view: BotView): PlayerInput };
 export type MatchOptions = { makeBot?: (id: number, difficulty: Difficulty, rng: () => number) => BotBrain };
@@ -35,17 +37,6 @@ const SIGHT_RANGE = 120;
 const RECENT_SEC = 4;
 const FEED_SEC = 30;
 
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 export class Match implements MatchApi {
   private s: MatchStateCore;
   private tickNo = 0;
@@ -55,7 +46,7 @@ export class Match implements MatchApi {
   private stats = new MatchStats();
 
   private bots = new Map<number, BotBrain>();
-  private rng: () => number;
+  private rng: Rng;
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
   private sealDirty = true;
@@ -114,7 +105,13 @@ export class Match implements MatchApi {
         this.bots.set(id, opts.makeBot(id, cfg.difficulty ?? 'medium', rng));
       }
     });
-    this.ctx = {
+    this.ctx = this.makeCtx();
+  }
+
+  /** Combat's view of this match (callbacks bound to this instance: rebuilt by fork). */
+  private makeCtx(): CombatCtx {
+    const physics = this.physics;
+    return {
       physics,
       players: this.s.players,
       pieces: this.s.pieces,
@@ -158,6 +155,25 @@ export class Match implements MatchApi {
 
   humanIds(): number[] {
     return [...this.s.players.values()].filter((p) => !p.isBot).map((p) => p.id);
+  }
+
+  /**
+   * An independent copy of the whole match as of now (state, bots' minds, rng, collision world): ticking
+   * both with the same inputs gives the same snapshots. Replay checkpoints for fast seeking.
+   */
+  fork(): Match {
+    const physics = this.physics.clone();
+    const m = Object.create(Match.prototype) as Match;
+    const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
+    const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
+    for (const k of Object.keys(self)) if (k !== 'ctx') copy[k] = deepClone(self[k], memo);
+    m.ctx = m.makeCtx();
+    return m;
+  }
+
+  /** Free the native collision world (headless/replay matches; never garbage collected otherwise). */
+  dispose(): void {
+    this.physics.dispose();
   }
 
   /**

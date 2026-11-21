@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Nightly FAEFight auto-improve (scripts/auto-improve.ts). Installed by scripts/launchd/install.sh,
+  which fills in __REPO__, __PATH__ and __PNPM__. Runs at 03:00; if the Mac was asleep then, launchd
+  runs it on wake. Disable: launchctl bootout gui/$(id -u)/com.faefight.autoimprove
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.faefight.autoimprove</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PNPM__</string>
+    <string>auto-improve</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__REPO__/.autoimprove/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/.autoimprove/logs/launchd.err.log</string>
+</dict>
+</plist>

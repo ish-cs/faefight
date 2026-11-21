@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 /**
  * Client frame-cost benchmark (run with PERF=1): 8-player solo match (7 hard bots), ~100 pieces placed
