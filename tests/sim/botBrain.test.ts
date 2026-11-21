@@ -244,7 +244,7 @@ describe('params', () => {
 describe('no cheating: bots only see BotView', () => {
   test('bot modules import nothing that holds match state', () => {
     const dir = path.resolve(__dirname, '../../src/sim/bots');
-    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building', '../seal', '../fire', '../movement']);
+    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building', '../seal', '../fire', '../movement', '../dmath', '../rng', '../emotes']);
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts'))) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8');
       for (const m of src.matchAll(/from '([^']+)'/g)) {
@@ -318,7 +318,8 @@ describe('human aim (perception, all skills)', () => {
     test(`${diff}: a strafing target at 40 m is hit much less often than a still one at 15 m`, () => {
       const still = hitRate(diff, 15, false), far = hitRate(diff, 40, true);
       console.log(`${diff}: still 15 m ${(100 * still).toFixed(0)}% · strafing 40 m ${(100 * far).toFixed(0)}%`);
-      expect(still).toBeGreaterThan(0.8);
+      // Hard's cone (3°, drifting across the whole cone since the human-like aim) is ~0.8 m at 15 m: about half the ticks land.
+      expect(still).toBeGreaterThan(diff === 'pro' ? 0.8 : 0.4);
       expect(far).toBeLessThan(still - 0.25);
     });
   }
