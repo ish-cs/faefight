@@ -11,7 +11,7 @@ export type Action =
   | 'aim' | 'reload' | 'interact' | 'drop'
   | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8' | 'slot9'
   | 'rotateLeft' | 'rotateRight' | 'freePlace'
-  | 'inventory' | 'scoreboard' | 'chat' | 'camera' | 'mute' | 'quality' | 'fps';
+  | 'inventory' | 'scoreboard' | 'chat' | 'camera' | 'mute' | 'quality' | 'fps' | 'brain';
 
 export type ActionGroup = 'Movement' | 'Actions' | 'Hotbar' | 'Building' | 'Interface';
 
@@ -40,6 +40,8 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'quality', label: 'Toggle graphics quality', group: 'Interface', defaults: ['KeyP'] },
   // ` as well: on a Mac F3 is Mission Control unless fn is held. Shift + this key toggles the perf detail.
   { id: 'fps', label: 'Show / hide FPS counter (+Shift: perf detail)', group: 'Interface', defaults: ['F3', 'Backquote'] },
+  // B also re-buys in the shop (main.ts), but the shop never opens while spectating.
+  { id: 'brain', label: 'Spectating a bot: brain inspector (+Shift: in-world overlay)', group: 'Interface', defaults: ['KeyB'] },
 ];
 
 export const ACTION_IDS: readonly Action[] = ACTIONS.map((a) => a.id);

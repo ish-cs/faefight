@@ -109,6 +109,8 @@ export class Hud {
   private map: IslandLayout[] = [];
   private centerIsland: CenterIsland | null = null;
   private humanId = 0;
+  /** Whose view the HUD shows (viewed.ts): hit markers, damage flash, storm vignette. */
+  private viewId = 0;
   private me: PlayerState | null = null;
   private snap: Snapshot | null = null;
   private feed: { at: number; node: HTMLElement }[] = [];
@@ -614,8 +616,8 @@ export class Hud {
     setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
     this.timer.classList.toggle('sd', snap.suddenDeath);
     const st = snap.storm;
-    const me = snap.players.find((p) => p.id === this.humanId);
-    // Metres outside the ring (negative = inside), for a living local player.
+    const me = snap.players.find((p) => p.id === (this.viewId || this.humanId));
+    // Metres outside the ring (negative = inside), for the living viewed player.
     const out = st && me?.alive ? Math.hypot(me.pos.x - st.x, me.pos.z - st.z) - st.r : null;
     setText(this.banner, st
       ? out !== null && out > 0 ? `IN THE STORM · ${Math.ceil(out)} m to safety` : out !== null ? `Storm closing · edge ${Math.floor(-out)} m away` : 'Storm closing in'
@@ -662,6 +664,8 @@ export class Hud {
     if (this.endScreen.dataset.key) this.endScreen.style.display = v ? 'flex' : 'none';
   }
 
+  setViewed(id: number) { this.viewId = id; }
+
   pushEvents(events: MatchEvent[]) {
     const snap = this.snap;
     const name = (id: unknown) => {
@@ -670,6 +674,8 @@ export class Hud {
     };
     for (const e of events) {
       if (e.type === 'kill') {
+        const v = this.viewId || this.humanId;
+        if ((e.data.killer ?? e.data.by) === v && (e.data.victim ?? e.data.target) !== v) this.hitmarker(false, true);
         const victim = name(e.data.victim ?? e.data.target), killer = name(e.data.killer ?? e.data.by);
         const how = e.data.cause === 'storm' ? 'was caught in the storm' : e.data.cause === 'lightning' ? 'was struck by lightning' : 'died';
         this.addFeed(killer && killer !== victim ? `${killer}  ✕  ${victim}` : `${victim} ${how}`);
@@ -683,15 +689,20 @@ export class Hud {
         this.stormWarnUntil = performance.now() + 4000;
         this.stormWarn.style.display = 'flex';
       } else if (e.type === 'hit') {
-        if (e.data.by === this.humanId && e.data.target !== this.humanId && !e.data.echo) this.hitmarker(e.data.part === 'head');
-        if (e.data.target === this.humanId) this.flash(this.damage, 'on');
+        // The viewed player's hits (their own predicted ones were shown already: echo).
+        const v = this.viewId || this.humanId;
+        if (e.data.by === v && e.data.target !== v && !(e.data.echo && v === this.humanId)) this.hitmarker(e.data.part === 'head');
+        if (e.data.target === v) this.flash(this.damage, 'on');
       }
     }
   }
 
   /** Crosshair hitmarker (also shown straight away for a predicted hit). */
-  hitmarker(head: boolean) {
+  hitmarker(head: boolean, kill = false) {
     this.crosshair.classList.toggle('head', head);
+    this.crosshair.classList.toggle('kill', kill);
+    // Counted for tests / debug (spectating: the viewed player's hits).
+    this.crosshair.dataset.hits = String(Number(this.crosshair.dataset.hits ?? 0) + 1);
     this.flash(this.crosshair, 'hit');
   }
 
@@ -922,3 +933,4 @@ export class Hud {
     col('stored');
   }
 }
+export { BrainInspector } from './brainPanel';

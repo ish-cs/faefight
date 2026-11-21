@@ -3,6 +3,7 @@ import type { MapDef } from '../sim/map';
 import type { MoveCmd } from '../sim/movement';
 import type { MatchSetup } from '../sim/matchApi';
 import type { BuildRequest, Inventory, PlayerInput, Snapshot } from '../sim/types';
+import type { BrainDigest } from '../sim/bots/introspect';
 import type { ReplayKind, ReplayMeta } from '../sim/replay/format';
 
 /** main thread → worker */
@@ -23,6 +24,8 @@ export type ToWorker =
   | { type: 'humanize'; playerId: number }
   /** Vs bot only: stop / restart ticking (pause card). */
   | { type: 'pause'; paused: boolean }
+  /** Bots someone is spectating (local camera or a guest): their brain digests come back at BRAIN_HZ. Never recorded. */
+  | { type: 'brainWatch'; ids: number[] }
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
@@ -44,6 +47,8 @@ export type FromWorker =
   /** islands[id - 1] = island index of player id; humanId 0 / humanIsland -1 = no local player. */
   | { type: 'map'; map: MapDef; humanId: number; humanIsland: number; islands: number[] }
   | { type: 'snapshot'; snap: Snapshot }
+  /** Brain digests of the watched bots (brainWatch), BRAIN_HZ. */
+  | { type: 'brains'; digests: BrainDigest[] }
   | { type: 'preview'; playerId: number; result: Placement; key: number }
   | { type: 'error'; message: string }
   /** A finished recording (match over, or finishRecording). */

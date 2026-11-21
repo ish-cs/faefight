@@ -281,6 +281,14 @@ export class QolHud {
     this.alerts.setMap(map, humanId);
   }
 
+  /** Spectating: compass, alerts, hit arcs and death recap follow the viewed player (viewed.ts). */
+  setViewed(id: number, island: number) {
+    if (id === this.humanId) return;
+    this.humanId = id;
+    if (island >= 0) this.myIsland = island;
+    this.alerts.setViewed(id);
+  }
+
   /** Every applied snapshot (after the HUD's own update). */
   onSnapshot(s: Snapshot, selected: number) {
     const now = performance.now();

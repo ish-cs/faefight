@@ -217,6 +217,9 @@ export class Match implements MatchApi {
     return validatePlacement(this.physics, req.kind, snapped.pos, snapped.rotY, p.pos);
   }
 
+  /** A seat's bot brain (null for humans), for read-only spectator introspection (bots/introspect.ts). */
+  botBrain(id: number): BotBrain | null { return this.bots.get(id) ?? null; }
+
   /** Hand a seat to a bot (e.g. a friend disconnected). */
   setBot(playerId: number, difficulty: Difficulty): void {
     const p = this.mustPlayer(playerId);

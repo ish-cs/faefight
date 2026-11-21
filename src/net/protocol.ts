@@ -2,6 +2,7 @@ import type { MoveCmd } from '../sim/movement';
 import type { Placement } from '../sim/building';
 import type { MapChoice, MapDef } from '../sim/map';
 import type { BuildRequest, Difficulty, PlayerInput } from '../sim/types';
+import type { BrainDigest } from '../sim/bots/introspect';
 
 /**
  * A lobby seat. Seat index = island index = player id - 1 once the match starts, except that a spectating
@@ -37,6 +38,8 @@ export type HostMsg =
   | { t: 'preview'; result: Placement; key: number }
   | { t: 'chat'; from: string; text: string }
   | { t: 'ping'; n: number }
+  /** Brain digest of the bot you're spectating (only while you're dead and following it), ~4 Hz. */
+  | { t: 'brain'; d: BrainDigest }
   /** Connection quality: round-trip ms by seat (null = unknown; the host's own seat is 0) and the host's sim health. */
   | { t: 'net'; rtt: (number | null)[]; host: 'ok' | 'strained' }
   /** Your seat's rejoin token: hello with it after a drop to reclaim the seat from the bot (within the grace period). */
@@ -44,4 +47,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 9;
+export const NET_VERSION = 10;

@@ -412,3 +412,4 @@ export class Renderer {
     return { backend: this.backend, drawCalls: r.drawCalls ?? r.calls ?? 0, triangles: r.triangles };
   }
 }
+export { BrainOverlay } from './brainOverlay';

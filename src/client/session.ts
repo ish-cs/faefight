@@ -12,6 +12,7 @@ import type { Placement } from '../sim/building';
 import { resolveMapChoice, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { Snapshot } from '../sim/types';
+import type { BrainDigest } from '../sim/bots/introspect';
 import type { ToWorker } from './protocol';
 import { MONEY_MAX, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven } from './commands';
 import { PING_EVERY_MS, PingTracker, TickMonitor, type HostTick } from './qol/netQuality';
@@ -466,6 +467,7 @@ export class HostSession {
    * newest snapshot they acknowledged (wire.ts).
    */
   onSnapshot(snap: Snapshot) {
+    this.lastSnap = snap;
     this.ticks.onTick(performance.now());
     this.encoder.push(snap);
     const tick = this.tickNo++;
@@ -483,6 +485,37 @@ export class HostSession {
       const b = st.wire.encode(snap.tick, this.interest ? this.interest.apply(id, s, follow) : s);
       st.rate.sent(b.byteLength, wireHeader(b).baseSeq === 0);
       this.send(link, { t: 'snap', b });
+    }
+  }
+
+  private lastSnap: Snapshot | null = null;
+
+  /** Bots that spectating friends follow right now (dead and watching a living bot): the worker digests these. */
+  brainWants(): number[] {
+    const snap = this.lastSnap;
+    if (!snap) return [];
+    const out: number[] = [];
+    for (const [id, f] of this.follows) {
+      const t = spectateTarget(snap, id, f);
+      if (t !== null && snap.players.find((p) => p.id === t)?.isBot && !out.includes(t)) out.push(t);
+    }
+    return out;
+  }
+
+  /**
+   * Brain digests from the worker: each goes only to a friend who is dead and following that very bot (anti-cheat:
+   * never to a living player), outside the snapshot stream and never recorded.
+   */
+  onBrains(digests: BrainDigest[]) {
+    const snap = this.lastSnap;
+    if (!snap) return;
+    for (const [peerId, link] of this.links) {
+      const seat = this.lobby.seatOf(peerId);
+      const id = seat === null ? null : this.idOf(seat);
+      if (id === null) continue;
+      const t = spectateTarget(snap, id, this.follows.get(id));
+      const d = t === null ? undefined : digests.find((x) => x.id === t);
+      if (d) this.send(link, { t: 'brain', d });
     }
   }
 

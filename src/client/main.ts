@@ -14,7 +14,9 @@ import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import type { BrainDigest } from '../sim/bots/introspect';
 import { moveForAim } from './aim';
+import { viewedPlayer } from './viewed';
 import { AudioSystem } from './audio/engine';
 import { errors, installErrorReporting } from './telemetry/errors';
 import { telemetryEnabled } from './telemetry/config';
@@ -112,6 +114,8 @@ type GameSink = {
   fatal(title: string, detail: string): void;
   /** Guest: the link dropped without the host ending the match; try to take the seat back. */
   reconnect?(): void;
+  /** Brain digest of the bot being spectated (~4 Hz): worker directly, or the host for a guest. */
+  brain?(d: BrainDigest): void;
   /** Sim time jumped (replay seek): forget interpolation history before the next snapshot. */
   reset?(): void;
 };
@@ -164,9 +168,17 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     send({ type: 'peekRecording' });
   };
   let closed = false;
+  // Bots whose brain digests the worker should make: the one our camera follows, plus friends' (host).
+  let localWatch: number | null = null, watchSig = '';
+  const syncWatch = () => {
+    const ids = [...new Set([...(localWatch !== null ? [localWatch] : []), ...(session?.brainWants() ?? [])])];
+    const sig = ids.join(',');
+    if (sig !== watchSig) { watchSig = sig; send({ type: 'brainWatch', ids }); }
+  };
   return {
     buffered: false,
     inputHz: null,
+    follow: (id) => { localWatch = id; syncWatch(); },
     connect(sink) {
       worker.onerror = (e) => { console.error('[worker] crashed', e.message); errors?.report('worker', e.message, `at ${e.filename}:${e.lineno}:${e.colno}`); sink.fatal('Simulation crashed', e.message); };
       worker.onmessage = (e: MessageEvent<FromWorker>) => {
@@ -178,6 +190,11 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
           simTime = m.snap.time;
           sink.snapshot(m.snap);
           session?.onSnapshot(m.snap);
+          if (session) syncWatch();
+        } else if (m.type === 'brains') {
+          const mine = localWatch === null ? undefined : m.digests.find((d) => d.id === localWatch);
+          if (mine) sink.brain?.(mine);
+          session?.onBrains(m.digests);
         } else if (m.type === 'preview') {
           if (m.playerId === humanId) sink.preview(m.result, m.key);
           else session?.onPreview(m.playerId, m.result, m.key);
@@ -252,6 +269,7 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
           if (n) sink.snapshot(decoder.decode(n));
         }
         else if (m.t === 'preview') sink.preview(m.result, m.key);
+        else if (m.t === 'brain') sink.brain?.(m.d);
         else if (m.t === 'chat') sink.chat(m.from, m.text);
         else if (m.t === 'ended') { closed = true; if (m.reason === 'host-left') sink.fatal('Host left', 'Match over: the host left the game.'); else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`); }
       };
@@ -949,6 +967,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   });
 
   const spectator = new Spectator(app, renderer.camera, () => renderer.collidables, canvas, () => input.enabled);
+  // Spectating a bot: B opens its brain inspector, Shift+B its in-world overlay (route, aim, target, ghosts, build).
+  const brainX = new mods.hud.BrainInspector(app);
+  const brainFx = new mods.render.BrainOverlay(renderer.scene);
+  const brainTmp = new THREE.Vector3(), brainFeet = new THREE.Vector3();
+  window.addEventListener('keydown', (e) => {
+    const t = e.target as HTMLElement | null;
+    if (e.repeat || !isAction('brain', e.code) || hud.panelOpen || spectator.following === null ||
+      (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))) return;
+    e.preventDefault();
+    if (e.shiftKey) brainX.toggleOverlay(); else brainX.toggle();
+  });
   // Replay viewer: always the spectator camera, playback bar at the bottom, interpolation on the playback clock.
   const replay = backend.replay ?? null;
   let replayUi: ReplayControls | null = null;
@@ -1115,6 +1144,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     snap = s;
     snapTime = s.time; snapAt = performance.now();
     hud.pushEvents(renderer.pushSnapshot(s));
+    // The player whose view we show: the followed one while spectating, else us (viewed.ts).
+    const viewer = viewedPlayer(humanId, spectator.following);
+    hud.setViewed(viewer);
+    audio.setViewed(viewer);
+    qol.setViewed(viewer, s.players.find((p) => p.id === viewer)?.island ?? -1);
     const meSnap = s.players.find((p) => p.id === humanId);
     fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
     // (Own 'shot'/'hit' events flagged echo were already shown when predicted; their effects skip them.)
@@ -1132,8 +1166,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       canvas.focus();
       maybeWarm();
     }
-    damageFx.onSnapshot(s, humanId);
-    sealAnnouncer.onSnapshot(s, humanId);
+    damageFx.onSnapshot(s, viewer);
+    sealAnnouncer.onSnapshot(s, viewer);
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
     const wasEnded = hud.ended;
@@ -1142,9 +1176,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const viewed = viewId !== null ? s.players.find((p) => p.id === viewId) : undefined;
     hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory,
       stamina: predictor?.stamina ?? null, viewId, ...(viewed ? gunHud(viewed, false) : gunHud(meNow)) });
+    brainX.setFollow(viewed?.isBot ? viewId : null, s.players);
     if (hud.ended && !wasEnded && !replay) spectateChosen = false; // a (new) result popped the end screen up
     scoreboard.update(s, scoreOpts());
-    qol.onSnapshot(s, input.selected);
+    qol.onSnapshot(s, viewed ? viewed.selected : input.selected);
     if (backend.buffered) {
       // Guest: keep the rejoin record fresh while the match runs; a finished match has nothing to rejoin.
       if (s.winner !== null) clearRejoin();
@@ -1196,6 +1231,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     preview: (result, key) => { debugPreviews.get(key)?.(result); debugPreviews.delete(key); },
     chat: (from, text) => chat.add(from, text),
     fatal: showFatal,
+    brain: (d) => brainX.setDigest(d),
     reconnect: () => {
       const r = loadRejoin();
       showFatal('Connection lost', 'Reconnecting to the host… a bot plays your seat until you are back.');
@@ -1239,6 +1275,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       cameraMode: () => fpv.mode,
       cameraFov: () => renderer.camera.fov,
       adsK: () => fpv.adsK,
+      brain: () => ({ open: brainX.isOpen, overlay: brainFx.group.visible, digest: brainX.current }),
       spectator: () => ({
         ...spectator.info(),
         camera: { x: renderer.camera.position.x, y: renderer.camera.position.y, z: renderer.camera.position.z },
@@ -1308,6 +1345,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const feet = new THREE.Vector3();
   const aimDir = new THREE.Vector3();
   const specMotion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  const viewMotion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
   let lastFollow: number | null = null;
   const sendAcc = new InputAccumulator();
   let nextSendAt = 0;
@@ -1411,6 +1449,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Online: tell the host who we watch, so it can send that player's HUD state (only while we're dead).
     const following = spectator.following;
     if (following !== lastFollow) { lastFollow = following; backend.follow?.(following); }
+    const bd = brainX.overlayOn ? brainX.current : null;
+    brainFx.update(bd, bd ? renderer.playerPos(bd.id, brainFeet) : null, (id) => renderer.playerPos(id, brainTmp), now / 1000);
     input.applyKick(dt);
     // Sights: right mouse with a gun, not while reloading (the sim agrees). Zoom slows mouse look to match.
     const adsWant = !!me?.alive && !spectating && input.ads && me.equipped !== 'fists' && me.reloadUntil === 0;
@@ -1483,8 +1523,16 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       }
     }
     const cp = renderer.camera.position;
-    qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
-    damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
+    // Following someone: compass and hit arcs from their position and facing.
+    const vId = spectator.following;
+    const vMotion = vId !== null ? renderer.playerMotion(vId, viewMotion) : null;
+    if (vMotion) {
+      qol.frame(vMotion.yaw, { x: vMotion.pos.x, z: vMotion.pos.z }, snap);
+      damageFx.frame(renderer.camera, vMotion.yaw, vMotion.pos, (id) => renderer.playerPos(id, fxPos));
+    } else {
+      qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
+      damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
+    }
     fpv.applyShake(dt); // visual only: the aim ray above was taken without it
     if (!warmLoop.paused) {
       warmLoop.before?.();
@@ -1519,6 +1567,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       if (document.pointerLockElement) document.exitPointerLock();
       backend.close();
       app.classList.remove('replay-mode');
+      document.body.classList.remove('brain-x-open');
       scope.dispose(); // listeners + every element this game added (canvas, HUD, chat, overlays)
       renderer.gpu.dispose();
       console.info('[game] torn down');

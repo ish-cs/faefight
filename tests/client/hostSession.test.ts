@@ -164,4 +164,25 @@ describe('HostSession', () => {
       last = m;
     }
   });
+
+  test('brain digests go only to a dead friend following that bot (never to a living player)', async () => {
+    const { host, link, got } = await hostWithFriend();
+    (host as any).started = true;
+    (host as any).seatIds = [null, 1];
+    const pl = (id: number, alive: boolean, isBot: boolean) => ({ id, alive, isBot, eliminated: false });
+    const snap = (bobAlive: boolean) => ({ players: [pl(1, bobAlive, false), pl(2, true, true), pl(3, true, true)] }) as any;
+    const digest = (id: number) => ({ id, goal: 'collect' }) as any;
+    link.send({ t: 'follow', id: 2 });
+    await flush(); await flush();
+    (host as any).lastSnap = snap(true);
+    expect(host.brainWants()).toEqual([]); // alive: no spectating, no brain
+    host.onBrains([digest(2), digest(3)]);
+    await flush();
+    expect(got.filter((m) => m.t === 'brain')).toEqual([]);
+    (host as any).lastSnap = snap(false);
+    expect(host.brainWants()).toEqual([2]);
+    host.onBrains([digest(2), digest(3)]);
+    await flush();
+    expect(got.filter((m) => m.t === 'brain').map((m) => m.d.id)).toEqual([2]);
+  });
 });

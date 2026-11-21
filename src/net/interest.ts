@@ -167,7 +167,7 @@ export class InterestManager {
     const out: NetSnapshot = {
       ...net,
       players,
-      events: this.filterEvents(net.events, viewerId, eye, revealed),
+      events: this.filterEvents(net.events, viewerId, eye, revealed, target),
       generators: net.generators.map((g) => (g.island === me.island || Math.hypot(this.map[g.island].generator.x - me.pos.x, this.map[g.island].generator.z - me.pos.z) <= INTEREST.generatorRevealM
         ? g : { island: g.island, stored: 0 })),
       // Contents only of bags close enough to see what's lying there (drawn as their items); far ones stay sealed.
@@ -235,7 +235,7 @@ export class InterestManager {
     return Math.hypot(from.x + dx * k - eye.x, from.y + dy * k - eye.y, from.z + dz * k - eye.z) <= INTEREST.nearMissM;
   }
 
-  private filterEvents(events: MatchEvent[], viewerId: number, eye: Vec3, revealed: (id: unknown) => boolean): MatchEvent[] {
+  private filterEvents(events: MatchEvent[], viewerId: number, eye: Vec3, revealed: (id: unknown) => boolean, watched: number | null = null): MatchEvent[] {
     const out: MatchEvent[] = [];
     for (const e of events) {
       const d = e.data;
@@ -245,7 +245,8 @@ export class InterestManager {
         const g = INTEREST.coarseGrid;
         out.push({ t: e.t, type: 'shot', data: { by: null, weapon: d.weapon, from: v3(r(d.from.x, g), r(d.from.y, g), r(d.from.z, g)) } });
       } else if (e.type === 'hit') {
-        if (d.target === viewerId || d.by === viewerId || revealed(d.target)) out.push(e);
+        // A dead spectator sees the hits of the player they follow, and the hits on them (their hit markers / arcs).
+        if (d.target === viewerId || d.by === viewerId || revealed(d.target) || (watched !== null && (d.by === watched || d.target === watched))) out.push(e);
       } else if (e.type === 'dry') {
         if (revealed(d.by)) out.push(e);
       } else if (e.type === 'pieceHit' && !revealed(d.by)) {
