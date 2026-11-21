@@ -310,9 +310,130 @@ function footstep(k: Kit, out: AudioNode, t: number, cue: Cue): number {
       noise(k, out, t, { type: 'lowpass', freq: 400, dur: 0.04, peak: 0.4 * v });
       noise(k, out, t, { type: 'highpass', freq: 4000, dur: 0.02, peak: 0.3 * v });
       return partials(k, out, t, 900 * p, 0.25 * v, [[1, 0.4, 0.12], [2.7, 0.25, 0.08]]);
+    case 'wet': // soaked ground: a soft squelch and a splatter of droplets
+      noise(k, out, t, { type: 'lowpass', freq: 600 * p, dur: 0.06, peak: 0.45 * v, attack: 0.008 });
+      noise(k, out, t + 0.01, { type: 'bandpass', freq: 2600 * p, q: 1.2, dur: 0.11, peak: 0.3 * v, attack: 0.015 });
+      return 0.03 + noise(k, out, t + 0.03, { type: 'highpass', freq: 5000, dur: 0.05, peak: 0.12 * v });
+    case 'gravel': { // crunch: a cluster of tiny stone ticks over a thud
+      noise(k, out, t, { type: 'lowpass', freq: 500 * p, dur: 0.05, peak: 0.35 * v });
+      let len = 0.06;
+      for (let i = 0; i < 5; i++) {
+        const at = t + k.rnd() * 0.06;
+        len = Math.max(len, at - t + noise(k, out, at, { type: 'bandpass', freq: 2200 + k.rnd() * 3000, q: 4, dur: 0.012, peak: (0.15 + k.rnd() * 0.2) * v }));
+      }
+      return len;
+    }
+    case 'water': // wading
+      noise(k, out, t, { type: 'bandpass', freq: 1300 * p, q: 0.8, dur: 0.16, peak: 0.45 * v, attack: 0.02 });
+      return noise(k, out, t, { type: 'lowpass', freq: 450, dur: 0.12, peak: 0.3 * v, attack: 0.01 });
     default:
       return noise(k, out, t, { type: 'lowpass', freq: 900 * p, dur: 0.07, peak: 0.5 * v });
   }
+}
+
+/** A bullet striking `cue.kind`'s surface (no kind = flesh). */
+function impact(k: Kit, out: AudioNode, t: number, cue: Cue): number {
+  const p = jitter(k.rnd(), 0.08);
+  switch (cue.kind) {
+    case 'wood': case 'hollow': // thock + splinters
+      noise(k, out, t, { type: 'bandpass', freq: 2800 * p, q: 1.5, dur: 0.03, peak: 0.6 });
+      woodKnock(k, out, t, 0.7, p * 1.3);
+      return Math.max(0.12, 0.02 + noise(k, out, t + 0.02, { type: 'bandpass', freq: 1600 * p, q: 3, dur: 0.07, peak: 0.25 }));
+    case 'metal': { // a bright ping; sometimes the round whines off
+      noise(k, out, t, { type: 'highpass', freq: 3500, dur: 0.015, peak: 0.7 });
+      let len = partials(k, out, t, 1500 * p, 0.35, [[1, 1, 0.25], [2.4, 0.6, 0.18], [3.9, 0.35, 0.1]]);
+      if (k.rnd() < 0.3) {
+        const at = t + 0.02;
+        len = Math.max(len, 0.02 + tone(k, out, at, { f0: 3400 * p, f1: 1500 * p, dur: 0.32, peak: 0.12, attack: 0.01 }));
+      }
+      return len;
+    }
+    case 'concrete': { // a sharp crack and a puff of grit
+      noise(k, out, t, { type: 'highpass', freq: 2800 * p, dur: 0.02, peak: 0.75 });
+      noise(k, out, t, { type: 'lowpass', freq: 700 * p, dur: 0.05, peak: 0.5 });
+      let len = 0.1;
+      for (let i = 0; i < 3; i++) {
+        const at = t + 0.02 + k.rnd() * 0.12;
+        len = Math.max(len, at - t + noise(k, out, at, { type: 'bandpass', freq: 3000 + k.rnd() * 3000, q: 5, dur: 0.01, peak: 0.12 + k.rnd() * 0.1 }));
+      }
+      return len;
+    }
+    case 'water': // a plop and a spray
+      tone(k, out, t, { f0: 900 * p, f1: 280, dur: 0.07, peak: 0.35, attack: 0.002 });
+      return noise(k, out, t, { type: 'highpass', freq: 1800 * p, dur: 0.22, peak: 0.35, attack: 0.01 });
+    case 'grass': case 'sand': case 'wet': case 'gravel': // dull thud and a spray of dirt
+      noise(k, out, t, { type: 'lowpass', freq: 500 * p, dur: 0.05, peak: 0.6 });
+      return noise(k, out, t + 0.005, { type: 'bandpass', freq: (cue.kind === 'gravel' ? 3000 : 1500) * p, q: 0.9, dur: 0.12, peak: 0.3, attack: 0.01 });
+    default: // flesh
+      noise(k, out, t, { type: 'bandpass', freq: 2500 * p, q: 2, dur: 0.04, peak: 0.8 });
+      noise(k, out, t, { type: 'lowpass', freq: 800 * p, dur: 0.08, peak: 0.6 });
+      return tone(k, out, t, { f0: 260 * p, f1: 110, dur: 0.06, peak: 0.6, attack: 0.001 });
+  }
+}
+
+/** Drawing a weapon: cloth/sling movement, then the gun's own metal. */
+function equip(k: Kit, out: AudioNode, t: number, cue: Cue): number {
+  const p = jitter(k.rnd(), 0.06);
+  noise(k, out, t, { type: 'bandpass', freq: 900 * p, q: 0.8, dur: 0.12, peak: 0.25, attack: 0.04 });
+  const at = t + 0.12;
+  switch (cue.kind) {
+    case 'fists': return 0.12;
+    case 'pistol':
+      noise(k, out, at, { type: 'highpass', freq: 4000, dur: 0.01, peak: 0.45 });
+      return 0.12 + tone(k, out, at, { f0: 2100 * p, dur: 0.02, peak: 0.2, attack: 0.001 });
+    case 'shotgun':
+      noise(k, out, at, { type: 'bandpass', freq: 1200 * p, q: 1.5, dur: 0.05, peak: 0.55 });
+      return 0.12 + tone(k, out, at, { f0: 240 * p, f1: 170, dur: 0.07, peak: 0.45, attack: 0.001 });
+    case 'rocket':
+      tone(k, out, at, { f0: 95 * p, f1: 55, dur: 0.18, peak: 0.6, attack: 0.002 });
+      return 0.12 + partials(k, out, at, 330 * p, 0.25, [[1, 1, 0.25], [2.7, 0.4, 0.15]]);
+    default: // smg / rifle: sling rattle + the bolt's tick
+      for (let i = 0; i < 3; i++) noise(k, out, t + 0.03 + i * 0.03, { type: 'bandpass', freq: 3000 * p, q: 4, dur: 0.01, peak: 0.18 });
+      noise(k, out, at, { type: 'highpass', freq: 3000, dur: 0.02, peak: 0.5 });
+      return 0.12 + tone(k, out, at, { f0: 780 * p, f1: 420, dur: 0.05, peak: 0.35, attack: 0.001 });
+  }
+}
+
+/** Pushing off the ground: a scuff on the surface and the body's whoosh. */
+function jump(k: Kit, out: AudioNode, t: number, cue: Cue): number {
+  const p = jitter(k.rnd(), 0.08);
+  noise(k, out, t, { type: 'bandpass', freq: 700 * p, q: 0.7, dur: 0.16, peak: 0.25, attack: 0.04 });
+  return Math.max(0.18, footstep(k, out, t, { ...cue, gain: 1 }));
+}
+
+/** Brass casings bouncing on `cue.kind` (hard surfaces ring, soft ones barely tick). */
+function shellCasing(k: Kit, out: AudioNode, t: number, cue: Cue): number {
+  const soft = cue.kind === 'grass' || cue.kind === 'sand' || cue.kind === 'wet' || cue.kind === 'water';
+  if (soft) return noise(k, out, t, { type: 'bandpass', freq: 2500, q: 2, dur: 0.02, peak: 0.12 });
+  let len = 0, at = t, amp = 0.22;
+  const p = jitter(k.rnd(), 0.1);
+  for (let i = 0; i < 3; i++) {
+    len = at - t + partials(k, out, at, 3600 * p, amp, [[1, 1, 0.12], [1.52, 0.6, 0.08], [2.3, 0.3, 0.05]]);
+    at += 0.09 - i * 0.025 + k.rnd() * 0.02;
+    amp *= 0.5;
+  }
+  return len;
+}
+
+/** A wooden creak: a slow, rasping resonance. */
+function creak(k: Kit, out: AudioNode, t: number, peak: number): number {
+  const p = jitter(k.rnd(), 0.15);
+  const dur = 0.5 + k.rnd() * 0.5;
+  const o = k.ctx.createOscillator();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(70 * p, t);
+  o.frequency.linearRampToValueAtTime(115 * p, t + dur * 0.6);
+  o.frequency.linearRampToValueAtTime(90 * p, t + dur);
+  const f = k.ctx.createBiquadFilter();
+  f.type = 'bandpass'; f.frequency.value = 650 * p; f.Q.value = 7;
+  const g = k.ctx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(peak, t + 0.08);
+  g.gain.setValueAtTime(peak, t + dur * 0.7);
+  g.gain.exponentialRampToValueAtTime(EPS, t + dur);
+  o.connect(f).connect(g).connect(out);
+  o.start(t); o.stop(t + dur + 0.02);
+  return dur;
 }
 
 /** Touching down after a fall: a low body thud plus the surface's own character. */
@@ -324,7 +445,8 @@ function land(k: Kit, out: AudioNode, t: number, cue: Cue): number {
     case 'metal': return Math.max(0.16, partials(k, out, t, 620 * p, 0.3, [[1, 0.6, 0.25], [2.7, 0.35, 0.15], [4.1, 0.2, 0.1]]));
     case 'wood': case 'hollow': return Math.max(0.16, noise(k, out, t, { type: 'bandpass', freq: 340 * p, q: 4, dur: 0.14, peak: 0.8 }));
     case 'concrete': return Math.max(0.16, noise(k, out, t, { type: 'bandpass', freq: 2200 * p, q: 1, dur: 0.04, peak: 0.5 }));
-    case 'sand': return Math.max(0.16, noise(k, out, t, { type: 'bandpass', freq: 1600 * p, q: 0.7, dur: 0.16, peak: 0.45, attack: 0.01 }));
+    case 'sand': case 'gravel': return Math.max(0.16, noise(k, out, t, { type: 'bandpass', freq: (cue.kind === 'gravel' ? 2600 : 1600) * p, q: 0.7, dur: 0.16, peak: 0.45, attack: 0.01 }));
+    case 'wet': case 'water': return Math.max(0.2, noise(k, out, t, { type: 'bandpass', freq: 1400 * p, q: 0.8, dur: 0.22, peak: 0.5, attack: 0.012 }));
     default: return Math.max(0.16, noise(k, out, t, { type: 'lowpass', freq: 1100 * p, dur: 0.1, peak: 0.45, attack: 0.004 }));
   }
 }
@@ -341,10 +463,57 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
     case 'ads': // cloth + a soft grip shift as the sights come up
       noise(k, out, t, { type: 'bandpass', freq: 900 * p, q: 0.8, dur: 0.1, peak: 0.22, attack: 0.03 });
       return 0.06 + noise(k, out, t + 0.06, { type: 'bandpass', freq: 2600 * p, q: 3, dur: 0.012, peak: 0.12 });
-    case 'impact':
-      noise(k, out, t, { type: 'bandpass', freq: 2500 * p, q: 2, dur: 0.04, peak: 0.8 });
-      noise(k, out, t, { type: 'lowpass', freq: 800 * p, dur: 0.08, peak: 0.6 });
-      return tone(k, out, t, { f0: 260 * p, f1: 110, dur: 0.06, peak: 0.6, attack: 0.001 });
+    case 'impact': return impact(k, out, t, cue);
+    case 'equip': return equip(k, out, t, cue);
+    case 'jump': return jump(k, out, t, cue);
+    case 'click': // interface button
+      noise(k, out, t, { type: 'highpass', freq: 5000, dur: 0.006, peak: 0.35, attack: 0.0005 });
+      return tone(k, out, t, { type: 'triangle', f0: 1750 * p, dur: 0.022, peak: 0.22, attack: 0.001 });
+    // ---- hooks for round-11 features (api.ts playSfx) ----
+    case 'grappleFire': // pneumatic thunk, then the line whizzing out
+      tone(k, out, t, { f0: 180 * p, f1: 60, dur: 0.12, peak: 0.8, attack: 0.002 });
+      noise(k, out, t, { type: 'lowpass', freq: 900, dur: 0.08, peak: 0.6 });
+      return 0.03 + noise(k, out, t + 0.03, { type: 'bandpass', freq: 1800 * p, freqEnd: 5200, q: 2, dur: 0.5, peak: 0.3, attack: 0.02 });
+    case 'grappleAttach': // the hook bites: clank + thud
+      noise(k, out, t, { type: 'highpass', freq: 3000, dur: 0.02, peak: 0.6 });
+      tone(k, out, t, { f0: 140 * p, f1: 70, dur: 0.1, peak: 0.5 });
+      return partials(k, out, t, 720 * p, 0.4, [[1, 1, 0.35], [2.6, 0.5, 0.2], [4.3, 0.3, 0.12]]);
+    case 'grappleReel': { // ratchet winding in (~0.6 s; call again while reeling)
+      let len = 0;
+      for (let i = 0; i < 10; i++) {
+        const at = t + i * 0.06;
+        noise(k, out, at, { type: 'highpass', freq: 4500, dur: 0.006, peak: 0.35 });
+        len = at - t + tone(k, out, at, { f0: 2300 * p, dur: 0.015, peak: 0.12, attack: 0.001 });
+      }
+      return len;
+    }
+    case 'grappleRelease': // latch clack + a short whoosh
+      noise(k, out, t, { type: 'bandpass', freq: 1400 * p, q: 2, dur: 0.04, peak: 0.6 });
+      return noise(k, out, t + 0.02, { type: 'bandpass', freq: 600 * p, freqEnd: 1600, q: 0.8, dur: 0.25, peak: 0.2, attack: 0.04 }) + 0.02;
+    case 'spikeArm': { // three ratchet clicks and the spring setting
+      for (let i = 0; i < 3; i++) noise(k, out, t + i * 0.08, { type: 'bandpass', freq: 2600 * p, q: 3, dur: 0.015, peak: 0.45 });
+      return 0.24 + tone(k, out, t + 0.24, { f0: 420 * p, f1: 300, dur: 0.12, peak: 0.25, attack: 0.002 });
+    }
+    case 'spikeTrigger': // the snap, the spikes' metallic shing, the thud
+      noise(k, out, t, { type: 'highpass', freq: 3000, dur: 0.03, peak: 0.9 });
+      tone(k, out, t, { f0: 120 * p, f1: 50, dur: 0.12, peak: 0.7 });
+      noise(k, out, t + 0.01, { type: 'bandpass', freq: 3500 * p, freqEnd: 6500, q: 3, dur: 0.25, peak: 0.35 });
+      return partials(k, out, t + 0.01, 1800 * p, 0.3, [[1, 1, 0.6], [2.2, 0.6, 0.4], [3.7, 0.3, 0.25]]) + 0.01;
+    case 'shellCasing': return shellCasing(k, out, t, cue);
+    case 'ragdollThud': // a body hitting the ground
+      tone(k, out, t, { f0: 80 * p, f1: 40, dur: 0.2, peak: 0.8, attack: 0.003 });
+      return Math.max(0.25, land(k, out, t, cue));
+    case 'dockCreak': return creak(k, out, t, 0.25);
+    case 'dockBreak': { // planks give way: crack, splinters, timber groaning, the splash
+      noise(k, out, t, { type: 'bandpass', freq: 1200 * p, q: 1.2, dur: 0.08, peak: 1.0 });
+      let len = creak(k, out, t + 0.05, 0.3) + 0.05;
+      for (let i = 0; i < 6; i++) {
+        const at = t + 0.05 + k.rnd() * 0.4;
+        len = Math.max(len, at - t + woodKnock(k, out, at, 0.3 + k.rnd() * 0.4, p * (0.8 + k.rnd() * 0.5)));
+      }
+      noise(k, out, t + 0.45, { type: 'bandpass', freq: 3000, dur: 0.25, peak: 0.25, attack: 0.01 });
+      return Math.max(len, 0.45 + noise(k, out, t + 0.45, { type: 'lowpass', freq: 1500 * p, freqEnd: 400, dur: 0.5, peak: 0.7, attack: 0.01 }));
+    }
     case 'hurt':
       noise(k, out, t, { type: 'bandpass', freq: 3000 * p, q: 1, dur: 0.08, peak: 0.15 });
       noise(k, out, t, { type: 'lowpass', freq: 250, dur: 0.2, peak: 0.6 });
@@ -610,6 +779,16 @@ export function critterCall(k: Kit, out: AudioNode, t: number, kind: string): nu
       return 0.5;
     case 'gull':
       return gull(k, out, t);
+    case 'cricket': { // night: two or three trains of fast chirps
+      const trains = 2 + Math.floor(k.rnd() * 2);
+      for (let j = 0; j < trains; j++) for (let i = 0; i < 4; i++) chirp(k, out, t + j * 0.4 + i * 0.045, 'sine', 4300 * p, 4500 * p, 0.03, 0.05);
+      return trains * 0.4;
+    }
+    case 'owl': // night: hoo … hoo-hoo
+      chirp(k, out, t, 'sine', 390 * p, 360 * p, 0.4, 0.09);
+      chirp(k, out, t + 0.6, 'sine', 400 * p, 370 * p, 0.25, 0.08);
+      chirp(k, out, t + 0.9, 'sine', 400 * p, 350 * p, 0.45, 0.08);
+      return 1.4;
     case 'splash':
       noise(k, out, t, { dur: 0.25, peak: 0.12, type: 'highpass', freq: 1500 });
       return 0.3;
