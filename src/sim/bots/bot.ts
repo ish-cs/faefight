@@ -576,9 +576,12 @@ export class Bot {
     }
     const rivalIsl = rival ? view.map[rival.island] : null;
     let enemy: PlayerState | null = null, enemyDist = Infinity;
+    // Shoot first at whoever's bunker is sealed (their next death eliminates them), unless someone is much closer.
+    let pickD = Infinity;
     for (const e of view.enemies) {
       const d = dist2D(e.pos, me.pos);
-      if (e.alive && d < enemyDist) { enemy = e; enemyDist = d; }
+      const eff = !view.suddenDeath && view.sealed[e.island] ? d / this.P.drive.sealedFocus : d;
+      if (e.alive && eff < pickD) { enemy = e; enemyDist = d; pickD = eff; }
     }
     const reach = !!rivalIsl && (on === rivalIsl.index || this.nav.hop(src, rivalIsl.index) !== null);
     const homeReach = node === home.index || node < 0 || this.nav.hop(node, home.index) !== null;
@@ -830,7 +833,8 @@ export class Bot {
         const sameIsland = islandAt(view.map, c.enemy.pos) === islandAt(view.map, me.pos);
         if (!sameIsland && c.enemyDist > ENGAGE_RANGE) return 0.2;
         // Sudden death with no ammo left anywhere to buy it: fists are all there is.
-        return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression;
+        const sealedFoe = !view.suddenDeath && view.sealed[c.enemy.island] ? this.P.drive.sealedHunt : 0;
+        return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression + (gun ? sealedFoe : 0);
       }
       case 'disengage': {
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
@@ -931,12 +935,14 @@ export class Bot {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
         // Sealed in (or about to respawn into a sealed bunker): be there to finish it.
-        if (this.sieging(c)) return this.P.drive.siegeScore + 0.2 * t.opportunism;
+        if (this.sieging(c)) return this.P.drive.siegeScore + this.P.drive.sealedHunt + 0.2 * t.opportunism;
         // Respawn window with no kit to seal: wait at their door for the unarmed respawn.
         if (rivalDown) return gun && sealKit(me.inv) === 0 ? 0.35 + 0.3 * t.opportunism : 0.3;
         if (!gun) return 0.1;
         const upgraded = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
-        return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution));
+        // Their bunker is sealed: every death of theirs is an elimination, so hunting them is worth the most.
+        const sealedHunt = c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive ? this.P.drive.sealedHunt : 0;
+        return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution)) + sealedHunt;
       }
       case 'seal': {
         const kit = sealKit(me.inv);
@@ -947,7 +953,7 @@ export class Bot {
         // Standing on their island with nobody home (not seen here lately): the door is open, plug it now.
         const empty = c.on === c.rivalIsl.index && !!c.rival && c.rival.alive && !ownerAway &&
           this.mem.recent(c.rival.id, view.now, this.P.drive.emptyHomeSec)?.island !== c.rival.island;
-        return (kit >= c.openDoors.length ? 0.6 : 0.3) + (rivalDown ? 0.5 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
+        return this.P.drive.sealBonus + (kit >= c.openDoors.length ? 0.6 : 0.3) + (rivalDown ? 0.5 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
           (ownerAway || empty ? this.P.drive.sealAway + 0.2 * t.opportunism : 0);
       }
       case 'cut': {

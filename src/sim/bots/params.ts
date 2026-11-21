@@ -29,6 +29,9 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  * - siegeDist: camping a sealed bunker this far out from its weakest doorway; siegeAfterDeath: how long after the
  *   owner's death the camp holds without seeing them; siegeScore: attack score while camping.
  * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
+ * - sealBonus: added to the seal goal (seals win games); sealedHunt: added to attack/fight against a rival whose
+ *   bunker is sealed (each death of theirs eliminates them); sealedFocus: among visible enemies, one with a sealed
+ *   bunker counts as this many times closer when choosing whom to shoot.
  * - stallSec / stallDist / stallBanSec: goal watchdog (a goal with no progress for stallSec is dropped for
  *   stallBanSec; moving stallDist counts as progress).
  */
@@ -56,6 +59,9 @@ export type DriveParams = {
   stallDist: number;
   stallBanSec: number;
   fireRangeMult: number;
+  sealBonus: number;
+  sealedHunt: number;
+  sealedFocus: number;
 };
 
 /**
@@ -143,6 +149,9 @@ export const DRIVE: DriveParams = {
   stallDist: 2.5,
   stallBanSec: 20,
   fireRangeMult: 2,
+  sealBonus: 0.35,
+  sealedHunt: 0.6,
+  sealedFocus: 1.6,
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
@@ -218,6 +227,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sealAway', [0, 0.8]], ['drive.sealAwayTarget', [0, 1.5]], ['drive.emptyHomeSec', [3, 20]],
   ['drive.sealRaceM', [10, 60]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]],
+  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedFocus', [1, 3]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
   ['buildSkill.*.peekOut', [0.3, 3]],
