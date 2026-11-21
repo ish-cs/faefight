@@ -1,4 +1,4 @@
-import { PIECES, WEAPONS } from '../constants';
+import { CHARGE, PIECES, WEAPONS } from '../constants';
 import type { WeaponKind } from '../types';
 import type { Goal } from './bot';
 import { rivalScore, type RivalFacts } from './mind';
@@ -310,7 +310,10 @@ export class Brain {
       // or only one doorway is left open (just finish it).
       const window = r.respawning || r.protectedNow || r.away || !!r.inBunker || (r.openDoors <= 1 && inp.kit >= r.openDoors);
       // Leaving home with a plugged doorway is half a seal on myself: clear it first.
-      const homeClear = { label: 'clear my own doorway first', act: 'defend' as Goal, done: !inp.homePlugged };
+      // A hard plug my gun can't break: buy a charge first (none affordable: go anyway rather than sit at the door).
+      const homeClear = inp.canClearHome
+        ? { label: 'clear my own doorway first', act: 'defend' as Goal, done: !inp.homePlugged }
+        : { label: 'get a charge for the plug in my doorway', act: 'shop' as Goal, done: !inp.homePlugged || total < CHARGE.price };
       const toBridge = (label: string) => [
         { label: 'get a gun', act: 'shop' as Goal, done: inp.gun },
         homeClear,
