@@ -10,6 +10,7 @@ import { Memory } from '../sim/bots/mind';
 import { BunkerGrid } from '../sim/bots/escape';
 import { DoorwayTracker } from '../sim/seal';
 import { Fire } from '../sim/fire';
+import { PropSim, type PropSimSave } from '../sim/props';
 import { mulberry32, isRng, type Rng } from '../sim/rng';
 import { gunzip, gzip } from './checkpoint';
 
@@ -85,6 +86,8 @@ class Encoder {
     }
     if (typeof v !== 'object') throw new Error(`checkpoint: can't save a ${typeof v} at ${path}`);
     if (v === this.physics) return ['p'];
+    // gameplay props: their own Rapier world, saved as a snapshot + plain data (PropSim.save)
+    if (v instanceof PropSim) return ['P', this.id(v), this.value(v.save(), `${path}.save()`)];
     if (Array.isArray(v)) {
       const id = this.id(v);
       const items: J[] = new Array(v.length);
@@ -153,6 +156,11 @@ class Decoder {
       }
       case 'f': return staleViewFn;
       case 'p': return this.physics;
+      case 'P': {
+        const out = PropSim.load(this.physics, this.value(j[2] as J) as PropSimSave);
+        this.refs[j[1] as number] = out;
+        return out;
+      }
       case 'a': {
         const out: unknown[] = [];
         this.refs[j[1] as number] = out;

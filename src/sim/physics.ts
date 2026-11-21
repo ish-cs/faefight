@@ -22,6 +22,10 @@ export type PhysicsSave = {
   players: [number, number][];
   slits: number[];
   dirty: boolean;
+  /** gameplay props' query colliders (props.ts), push recording */
+  props?: [number, number, PropSpawn][];
+  recordPushes?: boolean;
+  pushes?: PropPush[];
 };
 
 /** Distance along a unit ray to a sphere, or null if it misses. */
@@ -117,6 +121,9 @@ export class Physics {
       players: [...this.players].map(([id, c]) => [id, c.handle]),
       slits: [...this.slits],
       dirty: this.dirty,
+      props: [...this.props].map(([id, x]) => [id, x.c.handle, x.spawn]),
+      recordPushes: this.recordPushes,
+      pushes: this.pushes.map((x) => ({ ...x, dir: { ...x.dir } })),
     };
   }
 
@@ -136,6 +143,9 @@ export class Physics {
     for (const [id, k] of s.pieceKinds) ph.pieceKinds.set(id, k);
     for (const [id, h] of s.players) ph.players.set(id, col(h));
     for (const h of s.slits) ph.slits.add(h);
+    for (const [id, h, spawn] of s.props ?? []) ph.props.set(id, { c: col(h), spawn });
+    ph.recordPushes = s.recordPushes ?? false;
+    ph.pushes = (s.pushes ?? []).map((x) => ({ ...x, dir: { ...x.dir } }));
     ph.dirty = s.dirty;
     return ph;
   }
@@ -220,6 +230,10 @@ export class Physics {
   }
 
   /** Pushes recorded since the last call (PropSim drains these every tick). */
+  /** Whether the query world must step before the next query (checkpoint restore puts it back after PropSim replays). */
+  get syncPending(): boolean { return this.dirty; }
+  set syncPending(d: boolean) { this.dirty = d; }
+
   takePushes(): PropPush[] {
     const out = this.pushes;
     this.pushes = [];

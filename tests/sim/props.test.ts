@@ -82,14 +82,18 @@ describe('gameplay props (sim)', () => {
     const m = await Match.create(humans(2));
     const ps = m.debugProps()!;
     const isl = m.map[0];
-    const crate = m.def.props!.find((p) => p.kind === 'crate' && p.island === 0 && p.pos.y < isl.groundY + 0.6)!;
+    // a ground-level crate with nothing stacked on it (teleporting into a stack's upper crate is not standing on one)
+    const all = m.def.props!;
+    const crate = all.find((p) => p.kind === 'crate' && p.island === 0 && p.pos.y < isl.groundY + 0.6
+      && !all.some((q) => q.id !== p.id && Math.hypot(q.pos.x - p.pos.x, q.pos.z - p.pos.z) < 1 && q.pos.y > p.pos.y))!;
     const top = ps.restPose(crate.id)!.pos.y + PROP_KINDS.crate.ext.y;
     m.debugTeleport(1, v3(crate.pos.x, top + 0.05, crate.pos.z));
     let s = run(m, 20);
     const me = () => s.players[0];
     expect(Math.abs(me().pos.y - top)).toBeLessThan(0.1);
     expect(me().mv?.grounded).toBe(true);
-    const yaw = isl.bunker.facingYaw;
+    // jump off toward the island middle (crates sit along the rim now)
+    const yaw = Math.atan2(-(isl.center.x - crate.pos.x), -(isl.center.z - crate.pos.z));
     s = m.tick(inputs(1, { jump: true, moveZ: 1, yaw }));
     for (let i = 0; i < 45; i++) s = m.tick(inputs(1, { moveZ: 1, yaw }));
     expect(Math.abs(me().pos.y - isl.groundY)).toBeLessThan(0.05);

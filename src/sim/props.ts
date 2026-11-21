@@ -1,7 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { CHARGE, GRENADE, MAP, PLAYER, ROCKET, WEAPONS } from './constants';
 import type { CenterIsland, CosmeticDef, IslandLayout, StaticBox } from './map';
-import type { Physics } from './physics';
+import type { Physics, PropPush } from './physics';
 import { boxesOverlap, generatorZone, islandNoBuildZones, type NoBuildZone, potionZone } from './propZones';
 import type { MatchEvent, PieceState, PlayerState, Vec3, WeaponKind } from './types';
 import { add, dist2D, forward, right, rotateY, scale, v3 } from './vec';
@@ -255,6 +255,38 @@ export function placeProps(w: PlacementWorld): PropSpawn[] {
   return out;
 }
 
+/** A placed piece's collider in the props world, as plain data (rebuilt identically on every canonical rebuild). */
+export type PieceShape = { id: number; t: [number, number, number]; r: [number, number, number, number]; cuboid?: [number, number, number]; hull?: number[] };
+
+/**
+ * Everything one PropSim tick consumes, recorded since the last canonical rebuild (see `canonicalize`). Players are
+ * [id, x, y, z] quads (float64: exactly the sim's numbers); `place` = a debugPlace between ticks.
+ */
+type Step =
+  | { now: number; waterY: number; players: Float64Array; pushes: PropPush[]; blasts: [Vec3, number][]; shots: [Vec3, Vec3, WeaponKind][]; addPieces: PieceShape[]; delPieces: number[] }
+  | { place: number; pos: Vec3 };
+
+/**
+ * The props world at a canonical rebuild, as plain data: per live prop 14 float32 (pos 3, rot 4, linvel 3, angvel 3,
+ * asleep 1) and 2 float64 (lastActive, wetSince or NaN); pieces; kinematic player capsules [id, x, y, z].
+ */
+type Canon = { bodies: Float32Array; meta: Float64Array; pieces: PieceShape[]; players: Float64Array };
+
+/**
+ * PropSim.save(): compact and deterministic. The canonical state at the last rebuild plus the steps since; load
+ * rebuilds the world from the map's static colliders + that state and re-runs the steps, so the restored sim is
+ * bit-identical to the original (no Rapier snapshot: its contact graph was ~75 KB gzipped).
+ */
+export type PropSimSave = {
+  islands: IslandLayout[]; zones: NoBuildZone[]; spawns: PropSpawn[]; rest: Float32Array; dt: number;
+  canon: Canon; log: Step[];
+};
+
+/** Canonical rebuild cadence (sim ticks): bounds a checkpoint's step log. */
+export const PROP_CANON_TICKS = 15;
+/** Zero-gravity, held-still steps that let a rebuilt world find its contact pairs. */
+const PRIME_STEPS = 12;
+
 type Live = {
   spawn: PropSpawn;
   body: RAPIER.RigidBody;
@@ -278,6 +310,8 @@ export class PropSim {
   private pieceCols = new Map<number, RAPIER.Collider>();
   private playerBodies = new Map<number, RAPIER.RigidBody>();
   private zones: NoBuildZone[];
+  private canon!: Canon;
+  private log: Step[] = [];
 
   constructor(private readonly physics: Physics, private readonly islands: IslandLayout[], center: CenterIsland, spawns: PropSpawn[], dt: number) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -307,6 +341,7 @@ export class PropSim {
       this.mirror(l);
     }
     physics.recordPushes = true;
+    this.canonicalize();
   }
 
   get count() { return this.live.length; }
@@ -348,6 +383,119 @@ export class PropSim {
     return p;
   }
 
+  /**
+   * Rebuild the props world from plain state: the query world's static colliders, the pieces, the props (pose,
+   * velocities, sleep), the player capsules, always in the same order. The original does this every
+   * PROP_CANON_TICKS ticks and a checkpoint restore does it once, so both continue from an identical Rapier world
+   * (fresh contact cache, same handles).
+   */
+  canonicalize() {
+    const c = this.capture();
+    this.rebuild(c);
+    this.canon = c;
+    this.log = [];
+  }
+
+  private capture(): Canon {
+    const bodies = new Float32Array(this.live.length * 14), meta = new Float64Array(this.live.length * 2);
+    this.live.forEach((l, i) => {
+      const t = l.body.translation(), r = l.body.rotation(), v = l.body.linvel(), w = l.body.angvel();
+      bodies.set([t.x, t.y, t.z, r.x, r.y, r.z, r.w, v.x, v.y, v.z, w.x, w.y, w.z, l.body.isSleeping() ? 1 : 0], i * 14);
+      meta[i * 2] = l.lastActive;
+      meta[i * 2 + 1] = l.wetSince ?? NaN;
+    });
+    const pieces = [...this.pieceCols.keys()].sort((a, b) => a - b).map((id) => shapeOf(id, this.pieceCols.get(id)!));
+    const ids = [...this.playerBodies.keys()].sort((a, b) => a - b);
+    const players = new Float64Array(ids.length * 4);
+    ids.forEach((id, i) => { const t = this.playerBodies.get(id)!.translation(); players.set([id, t.x, t.y, t.z], i * 4); });
+    return { bodies, meta, pieces, players };
+  }
+
+  private rebuild(c: Canon) {
+    const dt = this.world.timestep;
+    this.world.free();
+    const world = this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    world.timestep = dt;
+    this.physics.forEachStaticCollider((shape, pos, rot) => {
+      world.createCollider(new RAPIER.ColliderDesc(shape).setTranslation(pos.x, pos.y, pos.z).setRotation(rot));
+    });
+    this.pieceCols = new Map();
+    for (const ps of c.pieces) this.pieceCols.set(ps.id, world.createCollider(pieceDesc(ps)));
+    this.byHandle = new Map();
+    this.live.forEach((l, i) => {
+      const b = c.bodies.subarray(i * 14, i * 14 + 14);
+      const k = PROP_KINDS[l.spawn.kind];
+      const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(b[0], b[1], b[2]).setRotation({ x: b[3], y: b[4], z: b[5], w: b[6] })
+        .setLinvel(b[7], b[8], b[9]).setAngvel({ x: b[10], y: b[11], z: b[12] })
+        .setLinearDamping(0.05).setAngularDamping(0.3).setCcdEnabled(true));
+      const col = world.createCollider(propColliderDesc(l.spawn.kind).setMass(k.mass).setFriction(0.7).setRestitution(0.1), body);
+      l.body = body;
+      l.lastActive = c.meta[i * 2];
+      l.wetSince = Number.isNaN(c.meta[i * 2 + 1]) ? null : c.meta[i * 2 + 1];
+      this.byHandle.set(col.handle, l);
+    });
+    // Prime the fresh world's broad/narrow phase (a new world finds its contact pairs only during steps): step it with
+    // no gravity and every body held still, then put velocities and sleep back. Same in the original and a restore.
+    world.gravity = { x: 0, y: 0, z: 0 };
+    for (const l of this.live) { l.body.wakeUp(); l.body.setLinvel({ x: 0, y: 0, z: 0 }, false); l.body.setAngvel({ x: 0, y: 0, z: 0 }, false); }
+    for (let k = 0; k < PRIME_STEPS; k++) {
+      world.step();
+      for (const l of this.live) { l.body.setLinvel({ x: 0, y: 0, z: 0 }, false); l.body.setAngvel({ x: 0, y: 0, z: 0 }, false); }
+    }
+    world.gravity = { x: 0, y: -9.81, z: 0 };
+    this.live.forEach((l, i) => {
+      const b = c.bodies.subarray(i * 14, i * 14 + 14);
+      l.body.setLinvel({ x: b[7], y: b[8], z: b[9] }, false);
+      l.body.setAngvel({ x: b[10], y: b[11], z: b[12] }, false);
+      if (b[13]) l.body.sleep(); else l.body.wakeUp();
+    });
+    // player capsules after priming: they must not shove props during the held-still steps
+    this.playerBodies = new Map();
+    for (let i = 0; i < c.players.length; i += 4) {
+      const b = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(c.players[i + 1], c.players[i + 2], c.players[i + 3]));
+      world.createCollider(playerCapsule(), b);
+      this.playerBodies.set(c.players[i], b);
+    }
+  }
+
+  /** Host-migration checkpoint (net/matchCheckpoint.ts): see PropSimSave. `PropSim.load` is the inverse. */
+  save(): PropSimSave {
+    const rest = new Float32Array(this.live.length * 7);
+    this.live.forEach((l, i) => rest.set([l.rest.pos.x, l.rest.pos.y, l.rest.pos.z, ...l.rest.rot], i * 7));
+    return {
+      islands: this.islands, zones: this.zones, spawns: this.live.map((l) => l.spawn), rest, dt: this.world.timestep,
+      canon: this.canon, log: this.log,
+    };
+  }
+
+  /** Inverse of save(), bound to the restored query world. RAPIER must be initialised (Physics.load does it). */
+  static load(physics: Physics, s: PropSimSave): PropSim {
+    const p = Object.create(PropSim.prototype) as PropSim;
+    const q = p as unknown as Record<string, unknown>;
+    q.physics = physics;
+    q.islands = s.islands;
+    q.zones = s.zones;
+    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    world.timestep = s.dt;
+    q.world = world;
+    q.live = s.spawns.map((spawn, i) => {
+      const r = s.rest.subarray(i * 7, i * 7 + 7);
+      return { spawn, body: null, rest: { pos: v3(r[0], r[1], r[2]), rot: [r[3], r[4], r[5], r[6]] as Quat }, lastActive: 0, wetSince: null };
+    });
+    q.byHandle = new Map(); q.pieceCols = new Map(); q.playerBodies = new Map();
+    p.rebuild(s.canon);
+    q.canon = s.canon;
+    // re-run the steps since the canonical rebuild; the query world's mirrors end where the original's are, and its
+    // pending-sync flag is put back (the replayed intermediate poses would otherwise mark it dirty)
+    const pending = physics.syncPending;
+    const steps = s.log;
+    q.log = [];
+    for (const st of steps) p.run(st);
+    physics.syncPending = pending;
+    return p;
+  }
+
   private poseOf(b: RAPIER.RigidBody): { pos: Vec3; rot: Quat } {
     const t = b.translation(), r = b.rotation();
     return { pos: v3(t.x, t.y, t.z), rot: [r.x, r.y, r.z, r.w] };
@@ -360,13 +508,37 @@ export class PropSim {
 
   /** One sim tick, after players moved and explosives went off. `events`: this tick's events (shots, explosions). */
   tick(now: number, players: Iterable<PlayerState>, pieces: Map<number, PieceState>, events: MatchEvent[], waterY: number) {
-    this.syncPieces(pieces);
-    this.syncPlayers(players);
-    for (const push of this.physics.takePushes()) this.push(push.prop, push.dir, push.speed, push.feetY);
+    const pl: number[] = [];
+    for (const x of players) if (x.alive) pl.push(x.id, x.pos.x, x.pos.y, x.pos.z);
+    const blasts: [Vec3, number][] = [], shots: [Vec3, Vec3, WeaponKind][] = [];
     for (const e of events) {
-      if (e.type === 'explosion') this.blast(e.data.pos as Vec3, BLAST_R[e.data.kind as string] ?? 3);
-      else if (e.type === 'shot') this.shot(e.data.from as Vec3 | undefined, e.data.to as Vec3 | undefined, e.data.weapon as WeaponKind);
+      if (e.type === 'explosion' && e.data.pos) blasts.push([{ ...(e.data.pos as Vec3) }, BLAST_R[e.data.kind as string] ?? 3]);
+      else if (e.type === 'shot' && e.data.from && e.data.to && e.data.weapon !== 'fists' && WEAPONS[e.data.weapon as WeaponKind]) {
+        shots.push([{ ...(e.data.from as Vec3) }, { ...(e.data.to as Vec3) }, e.data.weapon as WeaponKind]);
+      }
     }
+    const delPieces = [...this.pieceCols.keys()].filter((id) => !pieces.has(id));
+    const addPieces: PieceShape[] = [];
+    for (const id of pieces.keys()) {
+      if (this.pieceCols.has(id)) continue;
+      const src = this.physics.pieceCollider(id);
+      if (src) addPieces.push(shapeOf(id, src));
+    }
+    this.run({ now, waterY, players: new Float64Array(pl), pushes: this.physics.takePushes(), blasts, shots, addPieces, delPieces });
+    if (this.log.length >= PROP_CANON_TICKS) this.canonicalize();
+  }
+
+  /** Apply one recorded step (live ticks and checkpoint restores go through here alike). */
+  private run(st: Step) {
+    this.log.push(st);
+    if ('place' in st) { this.placeNow(st.place, st.pos); return; }
+    const { now, waterY } = st;
+    for (const id of st.delPieces) { const c = this.pieceCols.get(id); if (c) { this.world.removeCollider(c, true); this.pieceCols.delete(id); } }
+    for (const ps of st.addPieces) this.pieceCols.set(ps.id, this.world.createCollider(pieceDesc(ps)));
+    this.syncPlayers(st.players);
+    for (const push of st.pushes) this.push(push.prop, push.dir, push.speed, push.feetY);
+    for (const [pos, r] of st.blasts) this.blast(pos, r);
+    for (const [from, to, w] of st.shots) this.shot(from, to, w);
     this.water(now, waterY);
     this.world.step();
     const alive = [...this.playerBodies.values()].map((b) => b.translation());
@@ -422,28 +594,17 @@ export class PropSim {
     l.body.setLinvel({ x: dx * 2.5, y: Math.max(v.y, 0.5), z: dz * 2.5 }, true);
   }
 
-  private syncPieces(pieces: Map<number, PieceState>) {
-    for (const [id, c] of this.pieceCols) if (!pieces.has(id)) { this.world.removeCollider(c, true); this.pieceCols.delete(id); }
-    for (const id of pieces.keys()) {
-      if (this.pieceCols.has(id)) continue;
-      const src = this.physics.pieceCollider(id);
-      if (!src) continue;
-      const t = src.translation(), r = src.rotation();
-      this.pieceCols.set(id, this.world.createCollider(new RAPIER.ColliderDesc(src.shape).setTranslation(t.x, t.y, t.z).setRotation(r)));
-    }
-  }
-
-  private syncPlayers(players: Iterable<PlayerState>) {
+  private syncPlayers(quads: Float64Array) {
     const seen = new Set<number>();
-    for (const p of players) {
-      if (!p.alive) continue;
-      seen.add(p.id);
-      const c = { x: p.pos.x, y: p.pos.y + PLAYER.height / 2, z: p.pos.z };
-      let b = this.playerBodies.get(p.id);
+    for (let i = 0; i < quads.length; i += 4) {
+      const id = quads[i];
+      seen.add(id);
+      const c = { x: quads[i + 1], y: quads[i + 2] + PLAYER.height / 2, z: quads[i + 3] };
+      let b = this.playerBodies.get(id);
       if (!b) {
         b = this.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(c.x, c.y, c.z));
-        this.world.createCollider(RAPIER.ColliderDesc.capsule((PLAYER.height - 2 * PLAYER.radius) / 2, PLAYER.radius - 0.03), b);
-        this.playerBodies.set(p.id, b);
+        this.world.createCollider(playerCapsule(), b);
+        this.playerBodies.set(id, b);
         continue;
       }
       const t = b.translation();
@@ -544,12 +705,34 @@ export class PropSim {
 
   /** Debug/tests: put prop `id` at `pos` (awake, still). */
   debugPlace(id: number, pos: Vec3) {
+    if (!this.live[id - 1]) throw new Error(`PropSim.debugPlace: no prop ${id}`);
+    this.run({ place: id, pos: { ...pos } });
+  }
+
+  private placeNow(id: number, pos: Vec3) {
     const l = this.live[id - 1];
-    if (!l) throw new Error(`PropSim.debugPlace: no prop ${id}`);
     l.body.setTranslation(pos, true);
     l.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     l.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     l.lastActive = -Infinity;
     this.mirror(l);
   }
+}
+
+const playerCapsule = () => RAPIER.ColliderDesc.capsule((PLAYER.height - 2 * PLAYER.radius) / 2, PLAYER.radius - 0.03);
+
+/** A piece collider as plain data (cuboid or convex hull, as Physics builds them). */
+function shapeOf(id: number, c: RAPIER.Collider): PieceShape {
+  const t = c.translation(), r = c.rotation(), sh = c.shape;
+  const out: PieceShape = { id, t: [t.x, t.y, t.z], r: [r.x, r.y, r.z, r.w] };
+  if (sh instanceof RAPIER.Cuboid) out.cuboid = [sh.halfExtents.x, sh.halfExtents.y, sh.halfExtents.z];
+  else if (sh instanceof RAPIER.ConvexPolyhedron) out.hull = [...sh.vertices];
+  else throw new Error(`PropSim: piece ${id} has an unsupported collider shape (${sh.type})`);
+  return out;
+}
+
+function pieceDesc(ps: PieceShape): RAPIER.ColliderDesc {
+  const d = ps.cuboid ? RAPIER.ColliderDesc.cuboid(ps.cuboid[0], ps.cuboid[1], ps.cuboid[2]) : RAPIER.ColliderDesc.convexHull(new Float32Array(ps.hull!));
+  if (!d) throw new Error(`PropSim: piece ${ps.id} hull could not be rebuilt`);
+  return d.setTranslation(ps.t[0], ps.t[1], ps.t[2]).setRotation({ x: ps.r[0], y: ps.r[1], z: ps.r[2], w: ps.r[3] });
 }
