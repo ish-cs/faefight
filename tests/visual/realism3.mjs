@@ -106,6 +106,34 @@ if (mode === 'shots' || mode === 'all') {
   await page.screenshot({ path: `${prefix}-tumble.png` });
   console.log('tumble', JSON.stringify(boom));
 }
+if (mode === 'shots' || mode === 'all' || mode === 'close') {
+  // close-ups (~2–3 m) of real objects: gameplay props on the home island, a cover container, a bollard on the rim
+  await setQuality('ultra');
+  await page.waitForTimeout(800);
+  const def = await dbg('mapDef');
+  const look = async (name, target, back, h = 1.6) => {
+    const dx = target.x - home.center.x, dz = target.z - home.center.z, d = Math.hypot(dx, dz) || 1;
+    // stand `back` metres from the target, on the island-centre side
+    const at = { x: target.x - (dx / d) * back, z: target.z - (dz / d) * back };
+    await dbg('hp', 100000);
+    await dbg('teleport', at.x, at.z);
+    const yaw = Math.atan2(-(target.x - at.x), -(target.z - at.z));
+    const pitch = -Math.atan2(h - (target.y - home.groundY), back) * 0.8;
+    await page.evaluate(([y, p]) => { window.__faefight.input.yaw = y; window.__faefight.input.pitch = p; }, [yaw, pitch]);
+    await page.waitForTimeout(1600);
+    await page.screenshot({ path: `${prefix}-close-${name}.png` });
+  };
+  const mine = (def.props ?? []).filter((p) => p.island === home.index);
+  for (const kind of ['crate', 'drum', 'ibc']) {
+    const p = mine.find((q) => q.kind === kind);
+    if (p) await look(kind, p.pos, 2.6);
+  }
+  const cover = def.statics.find((s) => s.island === home.index);
+  if (cover) await look('container', { x: cover.center.x, y: cover.center.y, z: cover.center.z }, 3.5);
+  const a = 0.9, R = home.radius - 0.75;
+  const rim = { x: home.center.x + Math.sin(a + yaw0) * R, y: home.groundY, z: home.center.z + Math.cos(a + yaw0) * R };
+  await look('rim', rim, 2.4);
+}
 console.log('logs', JSON.stringify(logs.slice(0, 20)));
 console.log(JSON.stringify({ errors: errors.slice(0, 10) }));
 await browser.close();

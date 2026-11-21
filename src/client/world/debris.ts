@@ -3,7 +3,9 @@ import type { MapDef } from '../../sim/map';
 import type { MatchEvent, PieceState, Vec3 } from '../../sim/types';
 import { DEBRIS_KINDS, DEBRIS_SPEC, type DebrisKind, placeDebris } from './debrisPlace';
 import { DebrisSim } from './debrisSim';
+import { mats } from './materials';
 import type { Quality } from './sky';
+import { movingVariant, weather } from './weathering';
 
 /**
  * Tier-B cosmetic debris (bottles, cans, small boxes, cones, planks, small buoys): instanced meshes driven by the
@@ -48,10 +50,12 @@ export class Debris {
   private p = new THREE.Vector3();
   private one = new THREE.Vector3(1, 1, 1);
   private zero = new THREE.Vector3(0, 0, 0);
+  /** weathered in object space (they tumble): instance colour tints, instance hash varies wear */
   private mats = {
-    shiny: material('debrisShiny', { roughness: 0.15, metalness: 0.3 }),
-    matte: material('debrisMatte', { roughness: 0.85 }),
-    plastic: material('debrisPlastic', { roughness: 0.45 }),
+    shiny: weather(material('debrisShiny', { roughness: 0.15, metalness: 0.3 }), { objectSpace: true, grime: 0.35, grimeHeight: 0.3, edge: 0.5, chip: 'light', vary: 0.2 }),
+    cardboard: movingVariant(mats().matte),
+    wood: movingVariant(mats().wood),
+    plastic: weather(material('debrisPlastic', { roughness: 0.45 }), { objectSpace: true, grime: 0.55, grimeHeight: 0.4, streaks: 0.3, edge: 0.4, chip: 'light', vary: 0.18 }),
   };
 
   constructor() { this.root.name = 'debris'; }
@@ -71,7 +75,7 @@ export class Debris {
       for (const kind of DEBRIS_KINDS) {
         const ids = byKind.get(kind);
         if (!ids) continue;
-        const mat = kind === 'bottle' || kind === 'can' ? this.mats.shiny : kind === 'box' || kind === 'plank' ? this.mats.matte : this.mats.plastic;
+        const mat = kind === 'bottle' || kind === 'can' ? this.mats.shiny : kind === 'box' ? this.mats.cardboard : kind === 'plank' ? this.mats.wood : this.mats.plastic;
         const mesh = new THREE.InstancedMesh(geometryFor(kind), mat, ids.length);
         mesh.name = `debris:${kind}`;
         mesh.castShadow = kind !== 'bottle' && kind !== 'can';

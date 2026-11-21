@@ -109,9 +109,46 @@ const EXTRAS: { kind: PropKind; spots: [number, number][] }[] = [
   { kind: 'reel', spots: [[-8, 15], [-8, -15]] },
   { kind: 'ibc', spots: [[11, 3], [11, -3]] },
 ];
+/**
+ * Edge/corner set dressing that doubles as light cover: pallet stacks, tyre stacks, a crate on a pallet, drums.
+ * Rim band first (radius ~18–20, harbor), then a tighter fallback for the smaller Container Yard islands (R 19).
+ * Spots are (fwd, side): local x = side, local z = -fwd (the bunker sits at local +Z).
+ */
+const EDGE_CLUSTERS: Cluster[] = [
+  { kinds: ['pallet', 'pallet'], spots: [[12, -15], [12, 15], [5, -19], [9, -12]] },
+  { kinds: ['tire', 'tire'], spots: [[-15, -11], [-16.5, 11], [-12, -9.5]] },
+  { kinds: ['pallet', 'crate'], spots: [[14, 14], [18, -8], [11, 11]] },
+  { kinds: ['drum'], spots: [[6, 18], [8, -18], [5, 14.5]] },
+  { kinds: ['drum'], spots: [[-3, 19], [-4, -19], [-3, 15.5]] },
+  { kinds: ['crate'], spots: [[17, -10], [17, 10], [13.5, -8]] },
+];
 const CENTER_SPOTS: { kind: PropKind; rad: number; deg: number }[] = [
   { kind: 'crate', rad: 4.5, deg: 30 }, { kind: 'drum', rad: 4.5, deg: 150 }, { kind: 'crate', rad: 4.5, deg: 270 },
+  { kind: 'pallet', rad: 7.8, deg: 75 }, { kind: 'tire', rad: 7.8, deg: 200 }, { kind: 'drum', rad: 7.6, deg: 320 }, { kind: 'drum', rad: 8, deg: 330 },
 ];
+
+/**
+ * Main walking lanes (island-local x, z polylines + width): the gravel paths the client draws
+ * (client/world/decor.ts ISLAND_DECOR.gravelPaths; a test keeps the two in sync). Props stay off them.
+ */
+export const ISLAND_LANES: { pts: [number, number][]; w: number }[] = [
+  { pts: [[-2.2, 12.6], [-5, 8], [-9, 5], [-13, 4.2], [-17, 1]], w: 1.1 },
+  { pts: [[2.2, 12.6], [5, 8.5], [9.5, 5.5], [14, 4], [17, -1]], w: 1.1 },
+  { pts: [[0, 12.4], [0, 8], [0.5, 2], [0, -3]], w: 0.9 },
+  { pts: [[-17, -8], [-12, -12], [-6, -14], [0, -15], [6, -14], [12, -12], [17, -8]], w: 0.8 },
+];
+
+/** Distance (m) from an island-local point to the nearest lane centreline minus its half-width. */
+export function laneGap(lx: number, lz: number): number {
+  let best = Infinity;
+  for (const l of ISLAND_LANES) for (let i = 0; i + 1 < l.pts.length; i++) {
+    const [ax, az] = l.pts[i], [bx, bz] = l.pts[i + 1];
+    const dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz;
+    const t = Math.max(0, Math.min(1, ((lx - ax) * dx + (lz - az) * dz) / L2));
+    best = Math.min(best, Math.hypot(lx - ax - dx * t, lz - az - dz * t) - l.w / 2);
+  }
+  return best;
+}
 
 /** `avoid`: other things props keep ≥ PROPS.avoidM from (e.g. MapDef.hazards positions, once that lands). */
 export type PlacementWorld = { islands: IslandLayout[]; center: CenterIsland; statics: StaticBox[]; cosmetics: CosmeticDef[]; seed: number; avoid?: Vec3[] };
@@ -144,6 +181,17 @@ export function propBlockedBy(w: Pick<PlacementWorld, 'islands' | 'center' | 'st
     .find((i) => dist2D(i.c, pos) < i.R);
   if (!islandOf || dist2D(islandOf.c, pos) > islandOf.R - r - 1) return 'edge';
   if (inBunkerArea(w.islands, pos, r)) return 'bunker';
+  for (const isl of w.islands) {
+    if (dist2D(isl.center, pos) >= isl.radius) continue;
+    const l = rotateY(v3(pos.x - isl.center.x, 0, pos.z - isl.center.z), -isl.bunker.facingYaw);
+    if (laneGap(l.x, l.z) < r + 0.3) return 'lane';
+    // bunker doorway approach lanes: 2.5 m clear straight out of every door
+    for (const d of isl.bunker.doorways) {
+      const f = forward(d.yaw), q = v3(pos.x - d.center.x, 0, pos.z - d.center.z);
+      const along = q.x * f.x + q.z * f.z, across = Math.abs(q.x * f.z - q.z * f.x);
+      if (Math.abs(along) < 3.2 + r && across < d.width / 2 + 0.6 + r) return 'doorway';
+    }
+  }
   const half = v3(e.x + PROPS.clear, e.y, e.z + PROPS.clear);
   for (const z of zones) if (boxesOverlap(pos, half, yaw, z)) return `zone:${z.reason}`;
   for (const s of w.statics) if (boxesOverlap(pos, half, yaw, { center: s.center, half: s.half, rotY: s.rotY, reason: 'static' })) return 'static';
@@ -193,6 +241,7 @@ export function placeProps(w: PlacementWorld): PropSpawn[] {
     for (const c of ISLAND_CLUSTERS) tryPlace(isl.index % 2 ? c.kinds.slice(0, 1) : c.kinds, c.spots);
     const ex = EXTRAS[isl.index % EXTRAS.length];
     tryPlace([ex.kind], ex.spots);
+    for (const c of EDGE_CLUSTERS) tryPlace(c.kinds, c.spots);
   }
   const c = w.center;
   for (const s of CENTER_SPOTS) {

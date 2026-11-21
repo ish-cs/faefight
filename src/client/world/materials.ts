@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { color, cos, float, mix, positionLocal, positionWorld, sin, smoothstep, step, texture, time, uv, vec2, vec3, vertexColor } from 'three/tsl';
 import { MAP } from '../../sim/constants';
 import { applyPbr, pbrMaterial, pbrSample, worldNoise } from './pbr';
+import { weather } from './weathering';
 import { awningTex, barkTex, chainTex, frondTex, leafBlobTex, seawallTex } from './textures';
 
 type Opts = ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0];
@@ -44,23 +45,27 @@ let M: ReturnType<typeof make> | null = null;
 function make() {
   return {
     /** bunker walls, coping, cast concrete */
-    concrete: mossyBase(pbrMaterial('concrete', 'concrete_wall', { lum: 0.237, tint: 0xb4b0a8, macro: 0.15, untile: 'shift' })),
+    concrete: weather(mossyBase(pbrMaterial('concrete', 'concrete_wall', { lum: 0.237, tint: 0xb4b0a8, macro: 0.15, untile: 'shift' })), { grime: 0.35, streaks: 0.55, vary: 0.1 }),
     /** flat paving (quay slab) */
-    slab: pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1 }),
-    asphalt: pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1 }),
+    slab: weather(pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1 }), { grime: 0, vary: 0.12 }),
+    asphalt: weather(pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1 }), { grime: 0, vary: 0.12 }),
     seawall: quayWall(),
-    dark: std('dark', { color: 0x222426, roughness: 0.55, metalness: 0.3 }),
-    rubber: std('rubber', { color: 0x262624, roughness: 0.92 }),
-    galv: std('galv', { color: 0xa4abb0, metalness: 0.85, roughness: 0.38 }),
-    wood: pbrMaterial('wood', 'planks', { macro: 0.12, untile: false }),
+    /** dark painted iron (bitts, cleats, chains, frames): repainted paint set + rust, chips, grime */
+    dark: weather(pbrMaterial('dark', 'painted_metal', { lum: 0.069, lumPow: 0.3, tint: 0x2a2c2e, normalScale: 0.5, roughMul: 0.8, metalness: 0.35, untile: false }), { rust: 0.4, edge: 0.6, grime: 0.6, streaks: 0.3 }),
+    /** rubber (fenders, tyres): asphalt grain repainted near-black, dusty + scuffed */
+    rubber: weather(pbrMaterial('rubber', 'asphalt', { lum: 0.35, lumPow: 0.4, tint: 0x2c2c2a, uvScale: 2.5, normalScale: 0.8, roughAdd: 0.15, metalness: 0, untile: false }), { grime: 0.5, edge: 0.35, chip: 'light', vary: 0.12 }),
+    /** galvanised steel (posts, rails, ladders): steel plate repainted grey-silver, dull zinc patches + grime */
+    galv: weather(pbrMaterial('galv', 'steel_plate', { lum: 0.3, lumPow: 0.5, tint: 0xa4abb0, metalness: 0.8, roughMul: 1.1, normalScale: 0.6, untile: false }), { rust: 0.12, grime: 0.55, streaks: 0.4, vary: 0.1 }),
+    wood: weather(pbrMaterial('wood', 'planks', { macro: 0.12, untile: false }), { grime: 0.6, edge: 0.4, chip: 'wood', vary: 0.25, streaks: 0.25 }),
     burlap: pbrMaterial('burlap', 'linen', { lum: 0.4, tint: 0xc4a874, uvScale: 2, normalScale: 1.5, roughAdd: 0.1, metalness: 0, untile: false }),
-    steel: pbrMaterial('steel', 'steel_plate', { tint: 0xe0e4e8, gain: 4, metalness: 0.7, roughMul: 0.9, untile: 'shift' }),
+    steel: weather(pbrMaterial('steel', 'steel_plate', { tint: 0xe0e4e8, gain: 4, metalness: 0.7, roughMul: 0.9, untile: 'shift' }), { rust: 0.22, grime: 0.5, streaks: 0.35 }),
     frond: frondMaterial(),
     bark: std('bark', { map: barkTex(), roughness: 0.95 }),
     /** painted steel (crane, drums, trims): repainted rusty-paint set, triplanar (the plain boxes have 0..1 UVs) */
-    paint: pbrMaterial('paint', 'painted_metal', { lum: 0.069, lumPow: 0.3, triplanar: 0.35, normalScale: 0.1, roughMul: 0.9, metalness: 0.2 }),
-    matte: std('matte', { roughness: 0.9 }),
-    corr: pbrMaterial('corr', 'corrugated', { lum: 0.44, uvScale: [2, 1], normalScale: 1.2, metalness: 0.35, roughMul: 0.95, macro: 0.12, untile: 'shift' }),
+    paint: weather(pbrMaterial('paint', 'painted_metal', { lum: 0.069, lumPow: 0.3, triplanar: 0.35, normalScale: 0.1, roughMul: 0.9, metalness: 0.2 }), { rust: 0.4, edge: 0.55, grime: 0.5, streaks: 0.5 }),
+    /** tarps, plates, generic painted parts: fine canvas weave + grime */
+    matte: weather(pbrMaterial('matte', 'linen', { lum: 0.4, lumPow: 0.35, uvScale: 3, normalScale: 0.45, roughAdd: 0.15, metalness: 0, untile: false }), { grime: 0.45, streaks: 0.3, edge: 0.25, chip: 'light' }),
+    corr: weather(pbrMaterial('corr', 'corrugated', { lum: 0.44, uvScale: [2, 1], normalScale: 1.2, metalness: 0.35, roughMul: 0.95, macro: 0.12, untile: 'shift' }), { rust: 0.35, edge: 0.4, streaks: 0.75, grime: 0.45 }),
     awning: std('awning', { map: awningTex(), roughness: 0.8, side: THREE.DoubleSide }),
     leaf: std('leaf', { map: leafBlobTex(), roughness: 0.95 }),
     /** hills / distant islands: vertex-coloured, grass-ground detail in world xz */

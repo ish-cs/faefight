@@ -3,6 +3,7 @@ import { PROP_KIND_LIST, type PropKind, type PropPose, type PropSpawn } from '..
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrelModel } from './mapProps';
 import { mats } from './materials';
+import { movingVariant } from './weathering';
 
 /**
  * Tier A gameplay props (sim/props.ts), drawn from the snapshot: one InstancedMesh per (kind, material), shared
@@ -77,7 +78,7 @@ export class GameProps {
       const b = new StaticBatch();
       MODELS[kind](b);
       const meshes = b.take().map(({ material, geometry }) => {
-        const m = new THREE.InstancedMesh(geometry, material, list.length);
+        const m = new THREE.InstancedMesh(geometry, movingVariant(material), list.length);
         m.name = `gameProp:${kind}:${material.name || 'mat'}`;
         m.castShadow = true;
         m.receiveShadow = true;
@@ -91,7 +92,7 @@ export class GameProps {
         const it: Item = { meshes, index: i, spawn: s, pos, rot, tPos: pos.clone(), tRot: rot.clone(), moving: false };
         this.items.set(s.id, it);
         for (const m of meshes) {
-          const painted = kind === 'drum' && m.material === mats().paint;
+          const painted = kind === 'drum' && m.material === movingVariant(mats().paint);
           m.setColorAt(i, painted ? c.setHex(DRUM_COLORS[s.id % DRUM_COLORS.length]) : c.setScalar(kind === 'crate' ? 0.82 + ((s.id * 37) % 7) * 0.04 : 1));
         }
         this.write(it);

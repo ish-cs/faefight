@@ -24,7 +24,8 @@ describe('prop placement', () => {
       expect(a.props).toEqual(b.props);
       const props = a.props!;
       expect(props.length).toBeGreaterThanOrEqual(n * 3);
-      if (n === 8) expect(props.length).toBeLessThanOrEqual(42);
+      // dense edge dressing (user request): ≤ 15 bodies per player island + the center set; resting bodies sleep
+      expect(props.length).toBeLessThanOrEqual(n * 15 + 8);
       const zones = propZones(a);
       for (const p of props) {
         const k = PROP_KINDS[p.kind];
