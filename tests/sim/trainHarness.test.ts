@@ -50,6 +50,19 @@ describe('self-play training harness', () => {
     expect(seatFitness(r({ ...base, scaffolds: 10, plugs: 3 }), 0)).toBeGreaterThan(plain + 0.1);
     expect(seatFitness(r({ ...base, longShots: 100, longHits: 5 }), 0)).toBeLessThan(plain - 0.15);
     expect(seatFitness(r({ ...base, idleHome: 400 }), 0)).toBeLessThan(plain - 0.15);
+    // Run 4: attacking pays, and a long geared home-sit costs more than a win by placement could earn.
+    expect(seatFitness(r({ ...base, attackSec: 400 }), 0)).toBeGreaterThan(plain + 0.4);
+    expect(seatFitness(r({ ...base, longestHomeIdle: 240 }), 0)).toBeLessThan(plain - 1);
+    // The seal chain dominates: finishing a sealed player > sealing > the sealer's assist share > a placement win.
+    const fin = seatFitness(r({ ...base, elims: 1, elimScore: 1.5 }), 0), seal = seatFitness(r({ ...base, seals: 1, sealScore: 1.5 }), 0);
+    const assist = seatFitness(r({ ...base, assists: 1, assistScore: 1.5 } as typeof base), 0), top = seatFitness(r({ ...base, place: 1 }), 0);
+    expect(fin).toBeGreaterThan(seal);
+    expect(seal).toBeGreaterThan(assist);
+    expect(assist).toBeGreaterThan(top + 1);
+    expect(seatFitness(r({ ...base, huntSealedSec: 100, kitAtDoorSec: 100 } as typeof base), 0)).toBeGreaterThan(plain + 0.5);
+    const passiveWinner = seatFitness(r({ ...base, place: 1, longestHomeIdle: 300, idleHome: 300 }), 0);
+    const activeLoser = seatFitness(r({ ...base, place: 2, attackSec: 400, closeDmg: 150 }), 0);
+    expect(activeLoser).toBeGreaterThan(passiveWinner);
   });
 
   test('imitation penalty is zero at the human mean and grows away from it', () => {

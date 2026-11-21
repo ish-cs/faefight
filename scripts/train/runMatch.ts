@@ -24,8 +24,18 @@ export type SeatResult = {
   deaths: number;
   /** Bunkers this player sealed (before sudden death). */
   seals: number;
-  /** Rivals eliminated whose bunker I sealed (the seal is what makes a death final). */
+  /**
+   * Seal → death → eliminated chains I finished: the final kill on a player whose bunker had been sealed (by me or
+   * anyone), or, when nobody landed it (storm, water), the elimination of a player I sealed.
+   */
   elims: number;
+  /** Chains I set up by sealing but someone else finished (the sealer's share). */
+  assists?: number;
+  assistScore?: number;
+  /** Seconds near a rival's open bunker carrying a full seal kit (about to plug it). */
+  kitAtDoorSec?: number;
+  /** Seconds hunting (attack/fight) a live rival whose bunker a player has sealed (one kill eliminates them). */
+  huntSealedSec?: number;
   /** Seconds until eliminated (match length if never). */
   survived: number;
   /** Match time I was eliminated at, null if never (survived to the end). */
@@ -81,10 +91,12 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
     { players: spec.seats.map((s) => ({ name: '', isBot: true, difficulty: s.difficulty })), seed: spec.seed },
     { makeBot: (id, _d, rng) => { const b = makeBrain(spec.seats[id - 1], id, rng); brains[id - 1] = b; return b; } },
   );
-  const seats: SeatResult[] = spec.seats.map(() => ({ place: 0, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 0, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0, sealScore: 0, elimScore: 0, raidSec: 0, hoardSec: 0, wasted: 0, hitDists: [] as number[], longestHomeIdle: 0, aliveSec: 0, attackSec: 0 }));
+  const seats: SeatResult[] = spec.seats.map(() => ({ place: 0, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 0, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0, sealScore: 0, elimScore: 0, raidSec: 0, hoardSec: 0, wasted: 0, hitDists: [] as number[], longestHomeIdle: 0, aliveSec: 0, attackSec: 0, assists: 0, assistScore: 0, kitAtDoorSec: 0, huntSealedSec: 0, outAt: null }));
   const outOrder: number[] = [];
   /** Who sealed each island's bunker last (player i+1 lives on island i). */
   const sealedBy = new Map<number, number>();
+  /** Last player to kill each player (the finisher of a seal chain). */
+  const lastKiller = new Map<number, number>();
   const maxTicks = Math.round(spec.maxSec * TICK_HZ);
   let snap: Snapshot = m.tick(new Map());
   const t0 = performance.now();
@@ -108,6 +120,13 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
         const walls = (p.inv.pieces.wood ?? 0) + (p.inv.pieces.metal ?? 0) + (p.inv.pieces.steel ?? 0);
         const on = islandOf(p.pos);
         if (walls > 0 && on >= 0 && on !== p.island) seats[p.id - 1].raidSec += dtS;
+        // A full kit (one plug per doorway; sandbags plug two high) at a rival's open door.
+        const kit = walls + Math.floor((p.inv.pieces.sandbags ?? 0) / 2);
+        if (kit >= 3 && bunkers.some((b, i) => i !== p.island && !snap.sealed[i] && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) <= KIT_DOOR_M))
+          seats[p.id - 1].kitAtDoorSec! += dtS;
+        const target = (brains[p.id - 1] as { currentTarget?: number | null }).currentTarget;
+        if (goal && (goal === 'attack' || goal === 'fight') && target != null && sealedBy.has(target - 1) && snap.players[target - 1]?.alive)
+          seats[p.id - 1].huntSealedSec! += dtS;
         if (snap.time > 120 && p.inv.cash + p.vault.cash > HOARD) seats[p.id - 1].hoardSec += dtS;
         {
           const b = bunkers[p.island];
@@ -158,7 +177,7 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
       if (e.type === 'kill') {
         const v = e.data.victim as number, k = e.data.killer as number | null;
         seats[v - 1].deaths++;
-        if (k != null && k !== v) seats[k - 1].kills++;
+        if (k != null && k !== v) { seats[k - 1].kills++; lastKiller.set(v, k); } else lastKiller.delete(v);
       } else if (e.type === 'sealed' && e.t < LIFECYCLE.suddenDeathAt) {
         const by = e.data.by as number | null | undefined;
         if (by != null && by !== e.data.owner) { seats[by - 1].seals++; seats[by - 1].sealScore += early(e.t); sealedBy.set(e.data.island as number, by); }
@@ -168,8 +187,14 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
           outOrder.push(id);
           seats[id - 1].survived = e.t;
           seats[id - 1].outAt = e.t;
-          const by = sealedBy.get(id - 1);
-          if (by !== undefined && by !== id) { seats[by - 1].elims++; seats[by - 1].elimScore += early(e.t); }
+          const sealer = sealedBy.get(id - 1);
+          if (sealer !== undefined) {
+            // Whoever landed the final kill on a sealed player finishes the chain; the sealer gets an assist share.
+            const finisher = lastKiller.get(id) ?? sealer;
+            seats[finisher - 1].elims++;
+            seats[finisher - 1].elimScore += early(e.t);
+            if (finisher !== sealer) { seats[sealer - 1].assists!++; seats[sealer - 1].assistScore! += early(e.t); }
+          }
         }
       }
     }
@@ -194,7 +219,7 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
 
 const HOARD = 600, WASTE_SEC = 5;
 const ATTACK_GOALS = new Set(['attack', 'seal', 'bridge', 'raid', 'fight']);
-const CLOSE_M = 20, LONG_M = 40, IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15;
+const CLOSE_M = 20, LONG_M = 40, IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15, KIT_DOOR_M = 10;
 const dist = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
 
 /** Rapier worlds live in WASM memory and are never garbage collected: free it after a headless match. */
@@ -204,29 +229,36 @@ function freePhysics(m: Match) {
 }
 
 /**
- * Fitness of one seat (run 3: play like a good human working toward winning).
- *  1. Outcome: placement; a win by sealing everyone out before sudden death outweighs everything; eliminations and
- *     seals are big and worth more the earlier they happen; kills are small; reaching sudden death costs everyone.
- *  2. Progress toward a seal: plugs placed at rival bunkers, time on rival islands carrying wall pieces, bridging.
- *  3. Buying well: no hoarding cash past 2 minutes.
- *  4. Building well: pieces that are destroyed right after placing are wasted.
- *  5. Fighting up close: damage within 20 m; penalties for plinking from beyond 40 m and for idling at home geared.
+ * Fitness of one seat (run 4: the seal → death → eliminated chain dominates; active play wins, passivity can't). Run 3's
+ * champion won storm endgames by attacking less and sitting at home, so placement and survival are now small.
+ * Every seal/elimination term is earliness-weighted (1 + time left before 15:00 / 15:00, so 1..2 each).
+ *  1. Chain (dominant): SEAL_W per bunker I sealed; ELIM_W (larger) per chain I finished (the final kill on a
+ *     sealed player, or the elimination of one I sealed when nobody landed it); ASSIST_W when I sealed and someone
+ *     else finished (set up and finish together). Shaping toward the chain: plugs at rival doors, time at a rival's
+ *     open door with a full kit, time hunting a rival whose bunker is sealed, time on rival islands with wall pieces.
+ *  2. Outcome (small): placement; a decisive win; reaching sudden death costs everyone.
+ *  3. Activity: share of alive time attacking (attack/seal/bridge/raid/fight); damage dealt within 20 m.
+ *  4. Penalties: a geared home-sit over 60 s (strong), idling at home, plinking beyond 40 m, hoarding, wasted pieces.
  */
+export const FITNESS_W = { seal: 2.0, elim: 3.5, assist: 1.5, placement: 0.2, decisiveWin: 1.5 } as const;
 export function seatFitness(r: MatchResult, seat: number, maxSec = 18 * 60): number {
   const s = r.seats[seat];
   const n = r.seats.length;
+  const W = FITNESS_W;
   const placement = (n - s.place) / (n - 1);
   const won = r.winner === seat + 1;
-  const outcome = placement + 1.0 * (s.elimScore ?? s.elims) + 0.25 * (s.sealScore ?? s.seals) + 0.01 * s.kills +
-    0.05 * (s.survived / Math.max(1, r.time)) + (won ? 0.4 * Math.max(0, 1 - r.time / maxSec) : 0) + (won && r.decisive ? 2 : 0) -
+  const chain = W.seal * (s.sealScore ?? s.seals) + W.elim * (s.elimScore ?? s.elims) + W.assist * (s.assistScore ?? s.assists ?? 0);
+  const alive = Math.max(30, s.aliveSec || s.survived);
+  const toward = Math.min(0.6, 0.12 * (s.plugs ?? 0)) + Math.min(0.4, 0.004 * (s.kitAtDoorSec ?? 0)) +
+    Math.min(0.5, 0.005 * (s.huntSealedSec ?? 0)) + Math.min(0.2, 0.002 * (s.raidSec ?? 0)) + Math.min(0.1, 0.008 * (s.scaffolds ?? 0));
+  const outcome = W.placement * placement + 0.01 * s.kills + (won && r.decisive ? W.decisiveWin + Math.max(0, 1 - r.time / maxSec) : 0) -
     (r.time >= LIFECYCLE.suddenDeathAt ? 0.4 : 0);
-  const alive = Math.max(30, s.survived);
-  const progress = Math.min(0.3, 0.05 * (s.plugs ?? 0)) + Math.min(0.2, 0.002 * (s.raidSec ?? 0)) + Math.min(0.1, 0.008 * (s.scaffolds ?? 0));
-  const economy = -0.15 * Math.min(1, (s.hoardSec ?? 0) / alive);
-  const building = -Math.min(0.15, 0.02 * (s.wasted ?? 0));
-  const fighting = Math.min(0.3, 0.002 * (s.closeDmg ?? 0)) - Math.min(0.2, 0.002 * Math.max(0, (s.longShots ?? 0) - 2 * (s.longHits ?? 0))) -
-    0.3 * Math.min(1, (s.idleHome ?? 0) / alive);
-  return outcome + progress + economy + building + fighting;
+  const activity = 0.8 * Math.min(1, (s.attackSec ?? 0) / alive) + Math.min(0.6, 0.004 * (s.closeDmg ?? 0));
+  const homeSit = Math.min(1, Math.max(0, (s.longestHomeIdle ?? 0) - 60) / 120);
+  const penalties = -1.2 * homeSit - 0.5 * Math.min(1, (s.idleHome ?? 0) / alive) -
+    Math.min(0.2, 0.002 * Math.max(0, (s.longShots ?? 0) - 2 * (s.longHits ?? 0))) -
+    0.15 * Math.min(1, (s.hoardSec ?? 0) / alive) - Math.min(0.15, 0.02 * (s.wasted ?? 0));
+  return chain + toward + outcome + activity + penalties;
 }
 
 /** Median of a list (NaN when empty). */
