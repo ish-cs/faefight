@@ -18,6 +18,7 @@ export interface HostRoom {
 }
 
 export interface Transport {
-  host(): Promise<HostRoom>;
+  /** `code`: open the room under this invite code (host migration: the backup's pre-announced room); fails if taken. */
+  host(code?: string): Promise<HostRoom>;
   join(code: string): Promise<Link>;
 }

@@ -9,6 +9,16 @@ import { v3 } from './vec';
 export type HitTarget = { type: 'player'; id: number } | { type: 'piece'; id: number } | { type: 'world' };
 /** `part`: for player hits, whether the ray went through the head sphere (HEAD) or just the body. */
 export type RayHit = { dist: number; point: Vec3; hit: HitTarget; part?: 'head' | 'body' };
+/** Physics.save(): collider handles by entity, and the Rapier world snapshot. */
+export type PhysicsSave = {
+  world: Uint8Array;
+  entities: [number, HitTarget][];
+  pieces: [number, number][];
+  pieceKinds: [number, PieceState['kind']][];
+  players: [number, number][];
+  slits: number[];
+  dirty: boolean;
+};
 
 /** Distance along a unit ray to a sphere, or null if it misses. */
 export function raySphere(o: Vec3, d: Vec3, c: Vec3, r: number): number | null {
@@ -80,6 +90,39 @@ export class Physics {
     for (const h of this.anchors) ph.anchors.add(h);
     for (const [g, z] of this.zones) ph.zones.set(g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } })));
     ph.dirty = this.dirty;
+    return ph;
+  }
+
+  /** The collision world as plain data + Rapier's own snapshot bytes (host migration checkpoints: net/checkpoint.ts). */
+  save(): PhysicsSave {
+    return {
+      world: this.world.takeSnapshot(),
+      entities: [...this.entities].map(([h, t]) => [h, { ...t }]),
+      pieces: [...this.pieces].map(([id, c]) => [id, c.handle]),
+      pieceKinds: [...this.pieceKinds],
+      players: [...this.players].map(([id, c]) => [id, c.handle]),
+      slits: [...this.slits],
+      dirty: this.dirty,
+    };
+  }
+
+  /** Inverse of save(): same handles, same state, so the restored world steps exactly like the saved one. */
+  static async load(s: PhysicsSave): Promise<Physics> {
+    await ensureInit();
+    const world = RAPIER.World.restoreSnapshot(s.world);
+    if (!world) throw new Error('Physics.load: Rapier could not restore the world snapshot');
+    const ph = new Physics(world);
+    const col = (h: number) => {
+      const c = world.getCollider(h);
+      if (!c) throw new Error(`Physics.load: collider ${h} missing from the snapshot`);
+      return c;
+    };
+    for (const [h, t] of s.entities) ph.entities.set(h, { ...t });
+    for (const [id, h] of s.pieces) ph.pieces.set(id, col(h));
+    for (const [id, k] of s.pieceKinds) ph.pieceKinds.set(id, k);
+    for (const [id, h] of s.players) ph.players.set(id, col(h));
+    for (const h of s.slits) ph.slits.add(h);
+    ph.dirty = s.dirty;
     return ph;
   }
 

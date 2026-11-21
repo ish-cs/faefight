@@ -13,6 +13,13 @@ export type ToWorker =
   | { type: 'finishRecording' }
   /** Encode the recording so far WITHOUT stopping it (tab hidden mid-match: upload what there is); answered by 'replay' with partial. */
   | { type: 'peekRecording' }
+  /** Host migration: snapshot the whole match (answer: 'checkpoint'). */
+  | { type: 'checkpoint' }
+  /**
+   * Host migration, on the new host: run the gzipped checkpoint `match` instead of a fresh match. `botify`
+   * the old host's player, fast-forward to `toTick` (bots act, humans idle), then tick live (answer: 'restored').
+   */
+  | { type: 'restore'; match: Uint8Array; humanId: number; botify: number[]; toTick: number }
   /** Local player's input. */
   | { type: 'input'; input: PlayerInput; cmds?: MoveCmd[] }
   /** A remote player's (already sanitized) input, forwarded by the host session. */
@@ -50,4 +57,7 @@ export type FromWorker =
   | { type: 'error'; message: string }
   /** A finished recording (match over, or finishRecording). */
   | { type: 'replay'; bytes: Uint8Array; meta: ReplayMeta; partial?: boolean }
-  | { type: 'recordingDone' };
+  | { type: 'recordingDone' }
+  /** Gzipped match checkpoint (matchCheckpoint.ts) as of `tick`. */
+  | { type: 'checkpoint'; match: Uint8Array; tick: number }
+  | { type: 'restored'; tick: number };

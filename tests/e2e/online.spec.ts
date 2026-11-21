@@ -110,24 +110,4 @@ test('joining a bad code shows an error with a way back', async ({ page }) => {
   await expect(page.getByTestId('host-game')).toBeVisible();
 });
 
-test('host leaving shows "Host left" to the client', async ({ context }) => {
-  test.skip(ON_CI, NEEDS_GPU);
-  const a = await context.newPage();
-  const b = await context.newPage();
-  await a.goto('/?net=local&debug=1');
-  await a.getByTestId('name-input').fill('Alice');
-  await a.getByTestId('host-game').click();
-  const code = (await a.getByTestId('lobby-code').textContent())!;
-  await b.goto('/?net=local&debug=1');
-  await b.getByTestId('name-input').fill('Bob');
-  await b.getByTestId('code-input').fill(code);
-  await b.getByTestId('join-game').click();
-  await expect(a.getByTestId('seat-1')).toContainText('Bob');
-  await a.getByTestId('start-match').click();
-  await expect.poll(async () => (await dbg<Snap | null>(b, 'snapshot'))?.players.length ?? 0, { timeout: 30_000 }).toBe(2);
-  await a.close();
-  // The link times out (~3 s), then the client checks whether the host's room still exists before giving up.
-  await expect(b.getByTestId('fatal')).toContainText('Host left', { timeout: 15_000 });
-  await b.getByText('Back to menu').click();
-  await expect(b.getByTestId('host-game')).toBeVisible();
-});
+// Host leaving mid-match now migrates the match to a guest: see migration.spec.ts.
