@@ -67,35 +67,47 @@ const look = (from: { x: number; y: number; z: number }, to: { x: number; y: num
 };
 
 /** Third-person scenes. */
-function setup(name: 'closeup' | 'group' | 'shop' | 'fp' | 'far') {
+function setup(name: 'face' | 'closeup' | 'back' | 'group' | 'shop' | 'fp' | 'far') {
   tick = 0;
   fpv = null;
   settings.update((s) => { s.gameplay.cameraMode = 'third'; });
   // the group stands on open ground in front of the bunker, facing the camera (+Z local → yaw toward camera)
   const C = W(0, 9);
   const faceCam = yaw0 + Math.PI; // local +Z
-  if (name === 'closeup') {
+  if (name === 'face') {
+    actors = [mk(1, 1, C, faceCam - 0.35, 'pistol')];
+    const c = actors[0].p.pos;
+    const cam = W(0.3, 9.85);
+    look({ x: cam.x, y: GY + 1.62, z: cam.z }, { x: c.x, y: GY + 1.58, z: c.z });
+  } else if (name === 'back') {
+    actors = [mk(1, 1, C, faceCam - 1.2, 'rifle')];
+    const c = actors[0].p.pos;
+    const cam = W(-1.3, 8.0);
+    look({ x: cam.x, y: GY + 1.7, z: cam.z }, { x: c.x, y: GY + 1.2, z: c.z });
+  } else if (name === 'closeup') {
     actors = [mk(1, 1, C, faceCam - 0.5, 'rifle')];
     const c = actors[0].p.pos;
-    const cam = W(0.9, 10.6);
-    look({ x: cam.x, y: GY + 1.62, z: cam.z }, { x: c.x, y: GY + 1.38, z: c.z });
+    const cam = W(0.55, 10.25);
+    look({ x: cam.x, y: GY + 1.62, z: cam.z }, { x: c.x, y: GY + 1.42, z: c.z });
   } else if (name === 'group' || name === 'far') {
     actors = GUNS.map((g, i) => {
       const row = i < 4 ? 0 : 1;
-      const at = W(-3.3 + (i % 4) * 2.2 + row * 1.1, 9 - row * 2.2);
-      return mk(i + 1, i, at, faceCam + (i % 3 - 1) * 0.35, g, i === 2 ? 1.6 : i === 6 ? 5.5 : 0);
+      const at = W(-3.3 + (i % 4) * 2.2 + row * 1.1, 7.5 + row * 2.2);
+      return mk(i + 1, i, at, yaw0 + (i % 3 - 1) * 0.35, g, i === 2 ? 1.6 : i === 6 ? 5.5 : 0);
     });
     const d = name === 'far' ? 30 : 0;
-    const cam = W(0.2, 15 + d);
-    look({ x: cam.x, y: GY + 2.1 + d * 0.06, z: cam.z }, { ...(() => { const t = W(0, 8.2); return { x: t.x, z: t.z }; })(), y: GY + 1.0 });
+    const cam = W(0.2, 1 - d);
+    look({ x: cam.x, y: GY + 2.1 + d * 0.06, z: cam.z }, { ...(() => { const t = W(0, 8.3); return { x: t.x, z: t.z }; })(), y: GY + 1.0 });
   } else if (name === 'shop') {
     // shop keeper + two customers walking up
-    const sw = (x: number, z: number) => W(shop.x - isl.center.x + x, shop.z - isl.center.z + z); // approx island-local
-    actors = [mk(1, 2, sw(1.4, 3.2), faceCam, 'rifle', 1.4), mk(2, 3, sw(-1.6, 2.6), faceCam, 'pistol')];
-    const k = { x: shop.x, z: shop.z };
-    look({ x: k.x + 3.2 * Math.sin(yaw0) + 1.3, y: GY + 1.9, z: k.z + 3.2 * Math.cos(yaw0) + 1.3 }, { x: k.x, y: GY + 1.25, z: k.z });
+    // keeper faces the island's local +Z: customers stand in front of the counter, facing him
+    const fx = Math.sin(yaw0), fz = Math.cos(yaw0), sx = Math.cos(yaw0), sz = -Math.sin(yaw0);
+    const at = (f: number, s: number) => ({ x: shop.x + fx * f + sx * s, z: shop.z + fz * f + sz * s });
+    actors = [mk(1, 2, at(2.4, 1.1), yaw0 - 0.3, 'rifle'), mk(2, 3, at(2.8, -1.2), yaw0 + 0.4, 'pistol')];
+    const cam = at(3.6, 1.9);
+    look({ x: cam.x, y: GY + 1.85, z: cam.z }, { x: shop.x + fx * 0.6, y: GY + 1.2, z: shop.z + fz * 0.6 });
   } else if (name === 'fp') {
-    actors = [mk(HUMAN, 0, C, faceCam, 'rifle'), mk(2, 4, W(0.4, 4), yaw0, 'rifle')];
+    actors = [mk(HUMAN, 0, C, faceCam, 'rifle'), mk(2, 4, W(0.8, 2), faceCam, 'rifle')];
     me = actors[0].p;
     settings.update((s) => { s.gameplay.cameraMode = 'first'; });
     fpv = new FirstPersonView(r, () => true);

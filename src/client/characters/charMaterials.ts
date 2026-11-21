@@ -47,10 +47,10 @@ export function camoPalette(team: number | null): CamoPalette {
   const t = lin(team ?? 0x6b6b58);
   const olive = lin(0x4f5236), khaki = lin(0x9a8a66);
   return {
-    base: t.clone().lerp(olive, 0.3).multiplyScalar(0.62),
-    dark: t.clone().lerp(olive, 0.55).multiplyScalar(0.3),
-    light: t.clone().lerp(khaki, 0.55).multiplyScalar(0.8),
-    black: lin(0x221f1b),
+    base: t.clone().lerp(olive, 0.38).multiplyScalar(0.6),
+    dark: t.clone().lerp(olive, 0.5).multiplyScalar(0.4),
+    light: t.clone().lerp(khaki, 0.45).multiplyScalar(0.72),
+    black: t.clone().lerp(lin(0x2a2620), 0.75).multiplyScalar(0.8),
     team: t.clone().multiplyScalar(0.9),
   };
 }
@@ -84,23 +84,23 @@ function fullMaterial(team: number | null, dirtAmt: number) {
   const vc = attribute('color', 'vec3') as V3;
   const pal = camoPalette(team);
   const P = positionGeometry;
-  const nA = tri(1.35), nB = tri(3.2), nC = tri(9);
+  const nA = tri(2.6), nB = tri(5.5), nC = tri(11);
 
   // --- camo (woodland blobs at three sizes)
-  let camo = mix(c3(pal.base), c3(pal.dark), smoothstep(0.52, 0.555, nA.x)) as V3;
+  let camo = mix(c3(pal.base), c3(pal.dark), smoothstep(0.5, 0.53, nA.x)) as V3;
   camo = mix(camo, c3(pal.light), smoothstep(0.6, 0.63, nA.y)) as V3;
-  camo = mix(camo, c3(pal.black), smoothstep(0.66, 0.69, nB.x)) as V3;
+  camo = mix(camo, c3(pal.black), smoothstep(0.68, 0.71, nB.x)) as V3;
   // --- weave: a fine plain weave, faded out before it can alias
   const a = P.x.add(P.z).mul(1300), b = P.y.mul(1300);
   const weave = sin(a).mul(sin(b));
   const fade = float(1).sub(smoothstep(0.7, 2.2, fwidth(a).add(fwidth(b))));
   const seam = surf.y;
   const fabricK = is(K.camo).add(is(K.cloth)).add(is(K.team));
-  const fabricShade = float(1).add(weave.mul(0.05).mul(fade)).sub(seam.mul(0.32)).mul(float(0.94).add(nC.x.mul(0.12)));
+  const fabricShade = float(1).add(weave.mul(0.025).mul(fade)).sub(seam.mul(0.32)).mul(float(0.94).add(nC.x.mul(0.12)));
   const stitch = step(0.55, sin(P.x.add(P.y).add(P.z).mul(900))).mul(seam).mul(0.18);
 
   // --- skin: tone variation, a touch of redness, stubble from surf.y
-  const skinTone = vc.mul(float(0.93).add(nB.y.mul(0.14))).mul(mix(vec3(1, 1, 1), vec3(1.07, 0.93, 0.9), smoothstep(0.4, 0.7, nA.y)));
+  const skinTone = vc.mul(float(0.8).add(nB.y.mul(0.14))).mul(mix(vec3(1, 1, 1), vec3(1.07, 0.93, 0.9), smoothstep(0.4, 0.7, nA.y)));
   const skin = mix(skinTone, vc.mul(0.42).add(vec3(0.012, 0.01, 0.009)), seam.mul(float(0.55).add(nC.y.mul(0.45))));
   // --- leather: grain + lighter scuffs
   const scuff = smoothstep(0.6, 0.72, nB.y);
@@ -138,7 +138,7 @@ function fullMaterial(team: number | null, dirtAmt: number) {
   m.roughnessNode = rough.add(dirtK.mul(0.15)).min(1);
   m.metalnessNode = is(K.metal).mul(float(0.75).add(wear.mul(0.25))).add(is(K.hivis).mul(0.45));
   // warm subsurface lift on skin, the eye glint, retro-reflective tape catching light
-  m.emissiveNode = skin.mul(vec3(0.5, 0.16, 0.1)).mul(0.1).mul(is(K.skin))
+  m.emissiveNode = skin.mul(vec3(0.5, 0.16, 0.1)).mul(0.03).mul(is(K.skin))
     .add(vec3(1.6, 1.6, 1.6).mul(is(K.glint)))
     .add(vc.mul(0.12).mul(is(K.hivis)));
 

@@ -33,7 +33,7 @@ const DETAIL: Record<Lod, Detail> = {
   2: { limb: 6, torso: 8, headU: 9, headV: 7, hands: 0, face: 0, gear: 0 },
 };
 
-export const SKIN_TONES = [0xf1c7a5, 0xe0ac85, 0xc68863, 0xa0694a, 0x7a4b31, 0x5a3624];
+export const SKIN_TONES = [0xe3b392, 0xd29a74, 0xc08562, 0xa0694a, 0x7a4b31, 0x5a3624];
 const HAIR = [0x1d1612, 0x3b2617, 0x6a4a2c, 0x9a7a4e, 0x24201c, 0x6e6a66];
 const EYES = [0x4a2f1c, 0x2f5f86, 0x5d6b3a, 0x3a2a1c, 0x6b7f8f];
 
@@ -167,6 +167,14 @@ export class BodyBuilder {
     for (let k = 0; k < 4; k++) { this.si.push(top[k]?.[0] ?? 0); this.sw.push(top[k] ? top[k][1] / sum : 0); }
   }
 
+  /** Like add (no mirror), with per-vertex colours (r, g, b per vertex) instead of one colour. */
+  addColored(geo: THREE.BufferGeometry, rgb: number[], o: Omit<AddOpts, 'color' | 'mirror'>) {
+    const start = this.col.length;
+    this.addOne(geo, { ...o, color: 0xffffff }, false);
+    for (let i = 0; i < rgb.length && start + i < this.col.length; i++) this.col[start + i] = rgb[i];
+    geo.dispose();
+  }
+
   get vertexCount() { return this.pos.length / 3; }
 
   build(): THREE.BufferGeometry {
@@ -283,7 +291,7 @@ function capsule(a: THREE.Vector3, b: THREE.Vector3, r: number, radial = 8) {
 
 // ------------------------------------------------------------------------------------------------- the body
 
-const OLIVE = 0x4a4f3a, KHAKI = 0x8c7f62, BLACK = 0x1e1f21, BOOT = 0x2c241d, GLOVE = 0x2a2826, TAN = 0x8a6a48;
+const OLIVE = 0x4a4f3a, KHAKI = 0x8c7f62, BLACK = 0x1e1f21, BOOT = 0x3b3026, GLOVE = 0x5a4a38, TAN = 0x8a6a48;
 
 /**
  * Builds the merged skinned geometry for one look at one level of detail. `J` gives bind-pose joint positions,
@@ -330,8 +338,8 @@ export function buildBody(look: Look, lod: Lod, J: Joints, bones: readonly strin
     { t: 0.5, rx: 0.152, ry: 0.1, oy: 0.008 },
     { t: 0.64, rx: 0.17, ry: 0.112, oy: 0.012 },
     { t: 0.78, rx: 0.178, ry: 0.104, oy: 0.008 },
-    { t: 0.87, rx: 0.165, ry: 0.088, oy: 0.0 },
-    { t: 0.94, rx: 0.115, ry: 0.07, oy: -0.004 },
+    { t: 0.87, rx: 0.168, ry: 0.09, oy: 0.0 },
+    { t: 0.94, rx: 0.135, ry: 0.076, oy: -0.004 },
     { t: 1.0, rx: 0.062, ry: 0.058, oy: -0.004 },
   ], D.torso, Math.round(D.torso * 0.9), 2.4);
   // shirt / trousers split at the belt line; side seams on the shirt
@@ -401,7 +409,7 @@ export function buildBody(look: Look, lod: Lod, J: Joints, bones: readonly strin
 
   // --- neck + head
   const neck = loft(V(0, 1.45, hz - 0.01), V(0, 1.6, hz + 0.0), V(-1, 0, 0), [
-    { t: 0, rx: 0.06, ry: 0.058 }, { t: 0.5, rx: 0.05, ry: 0.052 }, { t: 1, rx: 0.052, ry: 0.055 },
+    { t: 0, rx: 0.066, ry: 0.062 }, { t: 0.5, rx: 0.056, ry: 0.057 }, { t: 1, rx: 0.054, ry: 0.057 },
   ], Math.max(8, D.limb), 4, 2, false);
   B.add(neck.geo, { color: look.skin, kind: K.skin, w: spineW });
   addHead(B, look, D, J, headW);
@@ -498,7 +506,7 @@ export function headSurface(J: Joints) {
     const u = tmp.copy(d).normalize();
     let { x, y, z } = u;
     const low = sstep(0.05, -0.95, y);
-    const sx = 1 - 0.25 * low;
+    const sx = 1 - 0.17 * low;
     if (z < 0) z *= 1 - 0.3 * sstep(0.0, -0.9, y) + 0.06 * sstep(0, 0.6, y);
     if (z > 0.55) z = 0.55 + (z - 0.55) * 0.62; // flatter face
     if (z > 0 && y < -0.55) z *= 1 - 0.1 * sstep(-0.55, -1, y); // chin underside
@@ -509,7 +517,7 @@ export function headSurface(J: Joints) {
       sock += Math.exp(-(dx * dx + dy * dy * 1.6 + dz * dz) / 0.012);
     }
     const k = 1 - 0.05 * sock;
-    return out.set(c.x + x * 0.076 * sx * k, c.y + y * 0.114 * k, c.z + z * 0.096 * k);
+    return out.set(c.x + x * 0.08 * sx * k, c.y + y * 0.112 * k, c.z + z * 0.097 * k);
   };
   return { c, f, eyeDir };
 }
@@ -530,8 +538,9 @@ function addHead(B: BodyBuilder, look: Look, D: Detail, J: Joints, headW: BoneW)
     stub.push(look.beard ? Math.min(1, beardZone) * (look.beard === 1 ? 0.55 : 0.8) : Math.min(1, beardZone) * 0.15);
   }
   g.computeVertexNormals();
+  const shade = headShade(g, look.skin, f, eyeDir);
   const neckW = (p: THREE.Vector3): BoneW => mixW(headW, [['Neck', 1]], sstep(J('Head').y + 0.01, J('Head').y - 0.04, p.y) * sstep(0.03, -0.04, p.z - c.z) * 0.5);
-  B.add(g, { color: look.skin, kind: K.skin, w: neckW, seam: (_p, i) => stub[i] });
+  B.addColored(g, shade, { kind: K.skin, w: neckW, seam: (_p, i) => stub[i] });
   const nrm = (p: THREE.Vector3) => p.clone().sub(c).normalize();
   const skinDark = new THREE.Color(look.skin).multiplyScalar(0.82);
 
@@ -557,13 +566,13 @@ function addHead(B: BodyBuilder, look: Look, D: Detail, J: Joints, headW: BoneW)
   B.add(sphere(D.face > 1 ? 12 : 8, D.face > 1 ? 10 : 6), { m: M4(eyeC, null, R), color: 0xe9e4dc, kind: K.eye, w: headW, mirror: true });
   const gaze = V(0.04, -0.02, 1).normalize();
   const irisM = (dz: number) => new THREE.Matrix4().compose(eyeC.clone().addScaledVector(gaze, R + dz), new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), gaze), V(1, 1, 1));
-  B.add(new THREE.RingGeometry(0.0024, 0.0056, 14, 1), { m: irisM(0.0002), color: look.eyes, kind: K.eye, w: headW, mirror: true });
+  B.add(new THREE.RingGeometry(0.0026, 0.0062, 14, 1), { m: irisM(0.0002), color: look.eyes, kind: K.eye, w: headW, mirror: true });
   B.add(new THREE.CircleGeometry(0.0025, 10), { m: irisM(0.0003), color: 0x050505, kind: K.eye, w: headW, mirror: true });
   if (D.face > 1) {
     B.add(new THREE.CircleGeometry(0.0011, 6), { m: irisM(0.0004).multiply(new THREE.Matrix4().makeTranslation(-0.0016, 0.0019, 0)), color: 0xffffff, kind: K.glint, w: headW, mirror: true });
     // upper + lower lids (skin shells over the eyeball)
-    B.add(sphere(12, 4, 0, Math.PI * 0.36), { m: M4(eyeC, new THREE.Euler(0.55, 0, 0), R * 1.12), color: skinDark, kind: K.skin, w: headW, mirror: true });
-    B.add(sphere(12, 3, Math.PI * 0.74, Math.PI * 0.26), { m: M4(eyeC, new THREE.Euler(-0.2, 0, 0), R * 1.1), color: look.skin, kind: K.skin, w: headW, mirror: true });
+    B.add(sphere(12, 4, 0, Math.PI * 0.4), { m: M4(eyeC, new THREE.Euler(0.9, 0, 0), R * 1.12), color: skinDark, kind: K.skin, w: headW, mirror: true });
+    B.add(sphere(12, 3, Math.PI * 0.68, Math.PI * 0.32), { m: M4(eyeC, new THREE.Euler(-0.35, 0, 0), R * 1.1), color: look.skin, kind: K.skin, w: headW, mirror: true });
     // brows
     const b0 = f(V(0.17, 0.27, 1)).addScaledVector(nrm(f(V(0.17, 0.27, 1))), 0.002), b1 = f(V(0.6, 0.29, 0.8)).addScaledVector(nrm(f(V(0.6, 0.29, 0.8))), 0.001);
     B.add(capsule(b0, b1, 0.0042, 6), { m: new THREE.Matrix4().makeScale(1, 0.75, 1).premultiply(new THREE.Matrix4().makeTranslation(0, b0.y * 0.25, 0)), color: look.hair, kind: K.hair, w: headW, mirror: true });
@@ -607,6 +616,31 @@ function addHead(B: BodyBuilder, look: Look, D: Detail, J: Joints, headW: BoneW)
   }
 }
 
+/**
+ * Per-vertex skin colour for the head: the tone, darkened in the eye sockets, under the brow ridge and nose and under
+ * the jaw, a little redder on the cheeks and nose (cheap baked ambient occlusion + blood flow).
+ */
+function headShade(g: THREE.BufferGeometry, skin: number, f: (d: THREE.Vector3, out?: THREE.Vector3) => THREE.Vector3, eyeDir: THREE.Vector3): number[] {
+  const ref = new THREE.SphereGeometry(1, (g as THREE.SphereGeometry).parameters.widthSegments, (g as THREE.SphereGeometry).parameters.heightSegments).getAttribute('position');
+  const base = new THREE.Color(skin), red = new THREE.Color(skin).lerp(new THREE.Color(0xb0503c), 0.22), c = new THREE.Color();
+  const out: number[] = [];
+  const u = new THREE.Vector3();
+  void f;
+  for (let i = 0; i < ref.count; i++) {
+    u.fromBufferAttribute(ref, i);
+    let ao = 0;
+    for (const s of [-1, 1]) {
+      const dx = u.x - s * eyeDir.x, dy = u.y - eyeDir.y - 0.04, dz = u.z - eyeDir.z;
+      ao += 0.32 * Math.exp(-(dx * dx + dy * dy * 1.4 + dz * dz) / 0.02);
+    }
+    ao += 0.3 * sstep(-0.55, -0.95, u.y) * sstep(-0.4, 0.4, u.z); // under the jaw
+    const cheek = Math.max(0, 1 - Math.hypot(Math.abs(u.x) - 0.55, u.y + 0.25, u.z - 0.75) / 0.35) * 0.7 + Math.max(0, 1 - Math.hypot(u.x, u.y + 0.3, u.z - 1) / 0.25) * 0.5;
+    c.copy(base).lerp(red, Math.min(1, cheek)).multiplyScalar(1 - Math.min(0.5, ao));
+    out.push(c.r, c.g, c.b);
+  }
+  return out;
+}
+
 /** Drops triangles whose unit-sphere vertices (the original SphereGeometry positions) fail `keep`. */
 function keepTris(g: THREE.BufferGeometry, keep: (u: THREE.Vector3) => boolean) {
   // The positions were already moved; rebuild the unit directions from a fresh sphere of the same layout.
@@ -626,8 +660,8 @@ function addHeadgear(B: BodyBuilder, look: Look, D: Detail, J: Joints, headW: Bo
   const seg = Math.max(8, D.headU - 4), hs = Math.max(5, Math.round(D.headV / 2));
   if (look.head === 'helmet') {
     // high-cut ballistic helmet with a fabric cover, team band, NVG shroud, side rails, ear pro, chin strap
-    const hc = c.clone().add(V(0, 0.022, -0.004));
-    const shell = sphere(seg, hs + 2, 0, Math.PI * 0.47);
+    const hc = c.clone().add(V(0, 0.028, -0.006));
+    const shell = sphere(seg, hs + 2, 0, Math.PI * 0.5);
     const SP = shell.getAttribute('position');
     for (let i = 0; i < SP.count; i++) {
       const x = SP.getX(i), y = SP.getY(i), z = SP.getZ(i);
@@ -636,10 +670,10 @@ function addHeadgear(B: BodyBuilder, look: Look, D: Detail, J: Joints, headW: Bo
       SP.setXYZ(i, x, y + lift, z);
     }
     shell.computeVertexNormals();
-    B.add(shell, { m: M4(hc, null, V(0.099, 0.104, 0.116)), color: 0x6a6a5a, kind: K.camo, w: headW });
+    B.add(shell, { m: M4(hc, null, V(0.104, 0.108, 0.122)), color: 0x6a6a5a, kind: K.camo, w: headW });
     // rim lip + team band
-    B.add(new THREE.TorusGeometry(1, 0.06, 4, seg), { m: M4(hc.clone().add(V(0, 0.01, 0)), new THREE.Euler(Math.PI / 2, 0, 0), V(0.101, 0.118, 0.1)), color: BLACK, kind: K.polymer, w: headW });
-    B.add(new THREE.CylinderGeometry(1, 1, 1, seg, 1, true), { m: M4(hc.clone().add(V(0, 0.024, 0)), null, V(0.0985, 0.022, 0.1155)), color: 0xffffff, kind: K.team, w: headW });
+    B.add(new THREE.TorusGeometry(1, 0.06, 4, seg), { m: M4(hc.clone().add(V(0, 0.0, 0)), new THREE.Euler(Math.PI / 2, 0, 0), V(0.105, 0.123, 0.1)), color: BLACK, kind: K.polymer, w: headW });
+    B.add(new THREE.CylinderGeometry(1, 1, 1, seg, 1, true), { m: M4(hc.clone().add(V(0, 0.016, 0)), null, V(0.1035, 0.022, 0.1215)), color: 0xffffff, kind: K.team, w: headW });
     if (D.gear >= 1) {
       // NVG shroud on the front, side rails
       B.add(rbox(0.04, 0.03, 0.016, 0.006, 1), { m: M4(hc.clone().add(V(0, 0.062, 0.096)), new THREE.Euler(-0.6, 0, 0)), color: 0x2a2b2d, kind: K.metal, w: headW });
@@ -678,26 +712,28 @@ function addHeadgear(B: BodyBuilder, look: Look, D: Detail, J: Joints, headW: Bo
 function addSoldierGear(B: BodyBuilder, look: Look, D: Detail, J: Joints, torsoW: Weigher, spineW: Weigher, armW: Weigher, legW: Weigher, legSide: Weigher, headW: BoneW) {
   addHeadgear(B, look, D, J, headW);
   const hz = J('Hips').z;
+  // combat shirt collar (shortens the bare neck)
+  B.add(new THREE.TorusGeometry(0.064, 0.014, 5, Math.max(8, D.limb)), { m: M4(V(0, 1.485, hz - 0.004), new THREE.Euler(Math.PI / 2 + 0.25, 0, 0), V(1, 1.05, 1.6)), color: 0x6a6a5a, kind: K.camo, w: torsoW, seam: 0.4 });
   const g2 = D.gear >= 2, g1 = D.gear >= 1;
   const CAR = 0x55573f; // coyote/ranger plate carrier
   // plate carrier: front + back plates, cummerbund, shoulder straps
-  B.add(rbox(0.3, 0.31, 0.055, 0.022, g2 ? 2 : 1), { m: M4(V(0, 1.245, hz + 0.155), new THREE.Euler(-0.05, 0, 0)), color: CAR, kind: K.cloth, w: spineW, seam: g1 ? (p) => (Math.abs(p.y - 1.385) < 0.006 ? 1 : 0) : 0 });
+  B.add(rbox(0.3, 0.29, 0.05, 0.022, g2 ? 2 : 1), { m: M4(V(0, 1.225, hz + 0.128), new THREE.Euler(0.02, 0, 0)), color: CAR, kind: K.cloth, w: spineW, seam: g1 ? (p) => (Math.abs(p.y - 1.355) < 0.006 ? 1 : 0) : 0 });
   B.add(rbox(0.3, 0.33, 0.05, 0.022, g2 ? 2 : 1), { m: M4(V(0, 1.25, hz - 0.125), new THREE.Euler(0.05, 0, 0)), color: CAR, kind: K.cloth, w: spineW });
   const cb = loft(V(0, 1.06, hz), V(0, 1.2, hz), V(-1, 0, 0), [{ t: 0, rx: 0.168, ry: 0.115, oy: 0.012 }, { t: 1, rx: 0.172, ry: 0.12, oy: 0.012 }], D.torso, 2, 2.4, false);
   B.add(cb.geo, { color: CAR, kind: K.cloth, w: spineW, seam: (_p, i) => (cb.meta[i].t < 0.05 || cb.meta[i].t > 0.95 ? 1 : 0) });
   for (const s of [-1, 1]) {
-    const a = V(s * 0.095, 1.395, hz + 0.13), m = V(s * 0.105, 1.475, hz + 0.02), b = V(s * 0.095, 1.405, hz - 0.095);
+    const a = V(s * 0.095, 1.36, hz + 0.105), m = V(s * 0.105, 1.475, hz + 0.02), b = V(s * 0.095, 1.405, hz - 0.095);
     B.add(capsule(a, m, 0.016, 6), { color: CAR, kind: K.cloth, w: torsoW });
     B.add(capsule(m, b, 0.016, 6), { color: CAR, kind: K.cloth, w: torsoW });
   }
   // team ID patch on the front + mag pouches + admin pouch
-  B.add(rbox(0.1, 0.045, 0.01, 0.004, 1), { m: M4(V(0, 1.355, hz + 0.186), new THREE.Euler(-0.05, 0, 0)), color: 0xffffff, kind: K.team, w: spineW });
+  B.add(rbox(0.1, 0.045, 0.01, 0.004, 1), { m: M4(V(0, 1.33, hz + 0.158), new THREE.Euler(0.02, 0, 0)), color: 0xffffff, kind: K.team, w: spineW });
   if (g1) for (let k = -1; k <= 1; k++) {
-    B.add(rbox(0.07, 0.095, 0.04, 0.01, 1), { m: M4(V(k * 0.078, 1.165, hz + 0.2), new THREE.Euler(-0.05, 0, 0)), color: CAR, kind: K.cloth, w: spineW, seam: g2 ? (p) => (p.y > 1.2 ? 1 : 0) : 0 });
-    if (g2) B.add(rbox(0.074, 0.03, 0.046, 0.008, 1), { m: M4(V(k * 0.078, 1.218, hz + 0.2), new THREE.Euler(-0.05, 0, 0)), color: new THREE.Color(CAR).multiplyScalar(0.85), kind: K.cloth, w: spineW });
+    B.add(rbox(0.07, 0.095, 0.04, 0.01, 1), { m: M4(V(k * 0.078, 1.15, hz + 0.172), new THREE.Euler(0.02, 0, 0)), color: CAR, kind: K.cloth, w: spineW, seam: g2 ? (p) => (p.y > 1.2 ? 1 : 0) : 0 });
+    if (g2) B.add(rbox(0.074, 0.03, 0.046, 0.008, 1), { m: M4(V(k * 0.078, 1.203, hz + 0.172), new THREE.Euler(0.02, 0, 0)), color: new THREE.Color(CAR).multiplyScalar(0.85), kind: K.cloth, w: spineW });
   }
   if (g2) {
-    B.add(rbox(0.13, 0.07, 0.025, 0.008, 1), { m: M4(V(0, 1.285, hz + 0.192), new THREE.Euler(-0.05, 0, 0)), color: CAR, kind: K.cloth, w: spineW, seam: (p) => (Math.abs(p.y - 1.31) < 0.004 ? 1 : 0) });
+    B.add(rbox(0.13, 0.07, 0.025, 0.008, 1), { m: M4(V(0, 1.265, hz + 0.164), new THREE.Euler(0.02, 0, 0)), color: CAR, kind: K.cloth, w: spineW, seam: (p) => (Math.abs(p.y - 1.31) < 0.004 ? 1 : 0) });
     // radio on the left side + antenna
     B.add(rbox(0.04, 0.12, 0.065, 0.01, 1), { m: M4(V(0.185, 1.14, hz + 0.01)), color: 0x2c2e2b, kind: K.polymer, w: spineW });
     B.add(capsule(V(0.19, 1.2, hz - 0.005), V(0.2, 1.47, hz - 0.03), 0.0035, 4), { color: 0x151515, kind: K.polymer, w: torsoW });
@@ -720,8 +756,8 @@ function addSoldierGear(B: BodyBuilder, look: Look, D: Detail, J: Joints, torsoW
   const ua = J('UpperArmL').clone().lerp(J('LowerArmL'), 0.55);
   B.add(new THREE.CylinderGeometry(1, 1, 1, D.limb, 1, true), { m: M4(ua, new THREE.Euler(0, 0, Math.PI / 2), V(0.05, 0.045, 0.052)), color: 0xffffff, kind: K.team, w: armW, mirror: true });
   // assault pack
-  B.add(rbox(0.26, 0.3, 0.12, 0.04, g2 ? 2 : 1), { m: M4(V(0, 1.22, hz - 0.21)), color: CAR, kind: K.cloth, w: spineW, seam: g1 ? (p) => (Math.abs(p.z - (hz - 0.27)) < 0.006 ? 1 : 0) : 0 });
-  if (g1) B.add(rbox(0.22, 0.12, 0.05, 0.02, 1), { m: M4(V(0, 1.15, hz - 0.285)), color: new THREE.Color(CAR).multiplyScalar(0.9), kind: K.cloth, w: spineW });
+  B.add(rbox(0.24, 0.28, 0.09, 0.035, g2 ? 2 : 1), { m: M4(V(0, 1.23, hz - 0.2)), color: CAR, kind: K.cloth, w: spineW, seam: g1 ? (p) => (Math.abs(p.z - (hz - 0.245)) < 0.006 ? 1 : 0) : 0 });
+  if (g1) B.add(rbox(0.22, 0.12, 0.05, 0.02, 1), { m: M4(V(0, 1.16, hz - 0.255)), color: new THREE.Color(CAR).multiplyScalar(0.9), kind: K.cloth, w: spineW });
   void KHAKI; void OLIVE; void TAN;
 }
 

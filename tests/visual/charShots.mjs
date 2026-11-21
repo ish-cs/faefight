@@ -18,7 +18,7 @@ await page.waitForTimeout(2500);
 const lab = (fn, ...a) => page.evaluate(([f, x]) => window.lab[f](...x), [fn, a]);
 
 if (mode === 'shots' || mode === 'all') {
-  for (const s of ['closeup', 'group', 'shop', 'far']) {
+  for (const s of ['face', 'closeup', 'back', 'group', 'shop', 'far']) {
     await lab('setup', s);
     await page.waitForTimeout(s === 'shop' ? 2600 : 2000);
     await page.screenshot({ path: `${prefix}-${s}.png` });
