@@ -1,5 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import { NEEDS_GPU, ON_CI } from './gpu';
+import { LIFECYCLE } from '../../src/sim/constants';
+
+const RESPAWN_MS = LIFECYCLE.respawnSec * 1000;
 
 test.skip(ON_CI, NEEDS_GPU); // plays a match
 
@@ -40,7 +43,7 @@ test('dying shows the killcam from the killer, it ends before the respawn; Space
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/qol2-killfeed.png` });
 
   // Killed by the bot: the killcam plays, then ends by itself before the respawn.
-  await page.waitForTimeout(3500); // fresh history with the bot alive again
+  await page.waitForTimeout(RESPAWN_MS + 500); // fresh history with the bot alive again
   const diedAt = Date.now();
   await dbg(page, 'kill', me, bot);
   const kc = page.getByTestId('killcam');
@@ -49,16 +52,16 @@ test('dying shows the killcam from the killer, it ends before the respawn; Space
   await expect(page.locator('[data-testid="feed-entry"].me')).toBeVisible();
   const info = await dbg<KcInfo>(page, 'killcam');
   expect(info.started).toBe(true);
-  expect(info.plan!.duration).toBeLessThan(3); // fits in the 3 s respawn wait
+  expect(info.plan!.duration).toBeLessThan(LIFECYCLE.respawnSec); // fits in the respawn wait
   await page.waitForTimeout(900);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/qol2-killcam.png` });
   await expect(kc).toBeHidden({ timeout: 5_000 });
   expect((await dbg<KcInfo>(page, 'killcam')).reason).toBe('ended');
   await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);
-  expect(Date.now() - diedAt).toBeLessThan(6000); // respawn not held up
+  expect(Date.now() - diedAt).toBeLessThan(RESPAWN_MS + 3000); // respawn not held up
 
   // Again, skipped with Space.
-  await page.waitForTimeout(3500);
+  await page.waitForTimeout(RESPAWN_MS + 500);
   await dbg(page, 'kill', me, bot);
   await expect(kc).toBeVisible({ timeout: 5_000 });
   await page.keyboard.press('Space');

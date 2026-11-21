@@ -428,6 +428,29 @@ describe('shopping with an empty gun', () => {
     expect(nextPurchase(p, needs, 'hard')).toBe('ammo');
     expect(() => shoppingPlan(p, needs, 'hard')).not.toThrow();
   });
+
+  test('a full hotbar: no medkit / grenade / gun that the shop would refuse (no retry every tick)', async () => {
+    const { nextPurchase, shoppingPlan } = await import('../../src/sim/bots/plans');
+    const p = newPlayer(0, 'bot', true, 0, map[0].spawn);
+    p.inv.cash = 5000;
+    p.inv.weapons.pistol = { mag: 12, spare: 36 };
+    // Every slot taken by something else, none of them a medkit or grenade.
+    const fill: PieceKind[] = ['wood', 'metal', 'steel', 'sandbags', 'scaffold', 'ramp', 'container'];
+    for (const k of fill) p.inv.pieces[k] = 1;
+    p.hotbar = ['pistol', ...fill].slice(0, p.hotbar.length) as typeof p.hotbar;
+    while (p.hotbar.length && p.hotbar.includes(null)) p.hotbar[p.hotbar.indexOf(null)] = 'charge';
+    p.inv.charges = p.hotbar.filter((k) => k === 'charge').length;
+    const needs = { scaffolds: 0, kit: 0, charge: false, grenades: 2, medkits: 2 };
+    const warn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (...a: unknown[]) => { warnings.push(a.join(' ')); };
+    try {
+      const item = nextPurchase(p, needs, 'pro');
+      expect(['medkit', 'grenade', 'smg', 'rifle', 'shotgun']).not.toContain(item);
+      shoppingPlan(p, needs, 'pro');
+    } finally { console.warn = warn; }
+    expect(warnings.filter((w) => w.includes('Hotbar full'))).toEqual([]);
+  });
 });
 
 describe('difficulty = human skill, not special rules', () => {

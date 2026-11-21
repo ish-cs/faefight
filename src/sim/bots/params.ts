@@ -5,8 +5,9 @@ import type { Difficulty } from '../types';
  * Tunable bot strategy (drive to win, building, the elimination pipeline), in one record so self-play training can
  * search over it. A Bot takes a BotParams (default DEFAULT_BOT_PARAMS); `flattenParams` / `withParams` give the
  * trainer flat numeric keys like `drive.push.pro`, `buildSkill.hard.coverChance` or `buildTuning.coverScore`.
- * Execution skill (reaction, aim error, decision speed) stays in aim.ts / bot.ts; gun handling against recoil
- * (compensation, burst discipline) is here as `gunSkill` so the trainer can tune it.
+ * Execution skill (reaction, aim error, decision speed) is not here: it stays in aim.ts / bot.ts. How the view hand
+ * moves (AimFeel), how long a bot commits to the enemy it aims at (`aim.*`) and gun handling against recoil
+ * (compensation, burst discipline: `gunSkill.*`) are here so the trainer can tune them.
  */
 
 const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ easy, medium, hard, pro });
@@ -119,6 +120,23 @@ export type BuildTuning = {
 };
 
 /**
+ * How a bot's view moves (aim.ts Aim.look): a damped spring on yaw/pitch, capped by the skill's turn speed.
+ * - spring: natural frequency (rad/s): how fast a flick closes. Tracking lag behind a moving target ≈ 2·damping/spring s.
+ * - damping: < 1 overshoots a flick slightly and settles (PRO ≈ 5%), 1 eases in with no overshoot.
+ * - maxAccel: angular acceleration cap (rad/s²): no instant starts/stops.
+ * - driftHz: how fast the aim error wanders (OU mean reversion, 1/s): low = slow hand drift, never tick-to-tick noise.
+ * - holdSec: after losing sight of the enemy, keep looking at where they were this long before turning back to the walk.
+ */
+export type AimFeel = { spring: number; damping: number; maxAccel: number; driftHz: number; holdSec: number };
+
+/**
+ * Aim at one enemy at a time: feel per skill, plus target hysteresis.
+ * - commitSec: stay on the enemy I'm aiming at at least this long while I can still see them.
+ * - switchRatio: after that, switch only to an enemy closer than this × the current one's distance.
+ */
+export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; switchRatio: number };
+
+/**
  * Gun handling against recoil (the sim's recoil climbs the shooter's real aim, gunplay.recoilKick), per skill. Like a
  * strong human: pull the climb back down, tap/burst at range so recoil and bloom settle, spray up close.
  * - recoilComp: share of each kick pulled back down on the next tick (0 = rides the climb, 1 = perfect).
@@ -127,7 +145,7 @@ export type BuildTuning = {
  */
 export type GunSkill = { recoilComp: number; burstShots: number; burstPause: number; sprayRange: number };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; gunSkill: Record<Difficulty, GunSkill> };
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill> };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -185,6 +203,17 @@ export const BUILD_TUNING: BuildTuning = {
   coverScore: 1.05, fortifyScore: 0.5,
 };
 
+export const AIM_PARAMS: AimParams = {
+  feel: {
+    easy: { spring: 8, damping: 0.95, maxAccel: 70, driftHz: 2, holdSec: 0.5 },
+    medium: { spring: 12, damping: 0.85, maxAccel: 120, driftHz: 2.5, holdSec: 0.6 },
+    hard: { spring: 22, damping: 0.75, maxAccel: 220, driftHz: 3, holdSec: 0.7 },
+    pro: { spring: 32, damping: 0.7, maxAccel: 320, driftHz: 3, holdSec: 0.8 },
+  },
+  commitSec: 0.6,
+  switchRatio: 0.6,
+};
+
 /** Easy sprays at any range (sprayRange Infinity: not tunable); better players compensate harder and burst at range. */
 export const GUN_SKILL: Record<Difficulty, GunSkill> = {
   easy: { recoilComp: 0.25, burstShots: 30, burstPause: 0.3, sprayRange: Infinity },
@@ -193,7 +222,7 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
   pro: { recoilComp: 0.95, burstShots: 4, burstPause: 0.22, sprayRange: 15 },
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, gunSkill: GUN_SKILL });
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -248,6 +277,8 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['buildTuning.slotBackoffSec', [10, 90]], ['buildTuning.pushLead', [0, 80]], ['buildTuning.bridgeRetrySec', [0.2, 2]],
   ['buildTuning.bridgeStuckSec', [1, 10]], ['buildTuning.bridgeHoldSec', [5, 60]], ['buildTuning.freeSlots', [1, 4]],
   ['buildTuning.coverScore', [0.5, 1.5]], ['buildTuning.fortifyScore', [0.1, 1]],
+  ['aim.feel.*.spring', [6, 45]], ['aim.feel.*.damping', [0.55, 1.2]], ['aim.feel.*.maxAccel', [40, 600]],
+  ['aim.feel.*.driftHz', [0.5, 8]], ['aim.feel.*.holdSec', [0, 2]], ['aim.commitSec', [0, 2]], ['aim.switchRatio', [0.3, 1]],
   ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
 ];
 const ruleMatch = (pattern: string, key: string) => {

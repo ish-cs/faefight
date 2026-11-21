@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { DT, HEAL_POTION, PLAYER, POTIONS, SHIELD_MAX, SHIELD_POTIONS, SPEED_POTION } from '../../src/sim/constants';
+import { DT, LIFECYCLE, HEAL_POTION, PLAYER, POTIONS, SHIELD_MAX, SHIELD_POTIONS, SPEED_POTION } from '../../src/sim/constants';
 import { applyPlayerDamage, type CombatCtx } from '../../src/sim/combat';
 import { POTION_RESERVE, potionAction } from '../../src/sim/bots/plans';
 import { buyAt, vaultTransfer } from '../../src/sim/economy';
@@ -137,7 +137,7 @@ describe('shield in a match', () => {
     let s = m.tick(new Map());
     expect(s.players[0].alive).toBe(false);
     expect(s.players[0].shield).toBe(0);
-    s = ticks(m, 4);
+    s = ticks(m, LIFECYCLE.respawnSec + 1);
     expect(s.players[0].alive).toBe(true);
     expect(s.players[0].shield).toBe(0);
   });

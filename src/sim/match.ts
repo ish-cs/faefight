@@ -93,7 +93,7 @@ export class Match implements MatchApi {
   cloneSnapshots = true;
   /** Lag-compensated shots resolved so far, and the total rewind (tests/debug). */
   lagStats = { shots: 0, rewindSec: 0 };
-  /** Emote / quick-chat wheel: requests waiting for the next tick, the per-player cooldown, bots' flavour lines. */
+  /** Emote / quick-chat wheel: requests waiting for the next tick, the per-player cooldown, bots' winner emote. */
   private wheelQueue: { id: number; what: WheelId }[] = [];
   private wheelLimit = new WheelLimiter();
   private banter: Banter;
@@ -300,7 +300,7 @@ export class Match implements MatchApi {
   }
 
   /**
-   * Emote / quick-chat wheel request (any player; bots via Banter). Applied at the start of the next tick,
+   * Emote / quick-chat wheel request (humans; bots only emote via Banter, they never chat). Applied at the start of the next tick,
    * at most one per player per WHEEL_COOLDOWN_SEC; emotes need the player alive. Unknown ids throw (callers sanitize).
    */
   wheel(playerId: number, what: WheelId): void {
