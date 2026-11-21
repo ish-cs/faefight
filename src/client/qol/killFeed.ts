@@ -58,7 +58,7 @@ export function feedEntries(events: readonly MatchEvent[], ctx: FeedCtx): FeedEn
       const markers: FeedMarker[] = [];
       let weapon = typeof hit?.weapon === 'string' ? hit.weapon : null;
       if (hit?.part === 'head') markers.push('headshot');
-      if (weapon && BLASTS.has(weapon)) markers.push('explosion');
+      if ((weapon && BLASTS.has(weapon)) || typeof d.via === 'string') markers.push('explosion'); // via: a barrel / tank set off
       if (weapon === 'fall') { markers.push('fall'); weapon = null; }
       // The sim names world causes (the storm ring, a lightning strike); a plain drowning is water.
       if (d.cause === 'storm' || d.cause === 'lightning') { markers.push(d.cause); weapon = null; }

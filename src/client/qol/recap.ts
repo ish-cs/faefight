@@ -29,7 +29,7 @@ export type Recap = {
 type Hit = { t: number; by: number | null; amount: number; source: DamageSource; weapon: string | null; part: unknown };
 
 const GUNS = new Set(['pistol', 'smg', 'shotgun', 'rifle']);
-const BLASTS = new Set(['rocket', 'grenade', 'charge']);
+const BLASTS = new Set(['rocket', 'grenade', 'charge', 'barrel', 'propane']);
 
 export function sourceOf(weapon: unknown, by: unknown): DamageSource {
   if (weapon === 'fists') return 'melee';
@@ -83,9 +83,11 @@ export class RecapTracker {
     if (!k && !inWater && (lastHit?.source === 'fall' || lastHit?.source === 'fire')) weapon = lastHit.source;
     if (!k && !inWater && cause) weapon = cause;
     const distance = k && !hidden && k.alive && this.lastPos ? Math.round(Math.hypot(k.pos.x - this.lastPos.x, k.pos.y - this.lastPos.y, k.pos.z - this.lastPos.z)) : null;
-    const title = k ? `Killed by ${k.name}`
+    const viaW = (kLast ?? lastHit)?.weapon;
+    const via = viaW === 'barrel' || viaW === 'propane' ? ` via ${viaW}` : '';
+    const title = k ? `Killed by ${k.name}${via}`
       : inWater ? 'You drowned'
-      : self ? 'You blew yourself up'
+      : self ? `You blew yourself up${via}`
       : weapon === 'fall' ? 'You fell to your death'
       : weapon === 'fire' ? 'You burned to death'
       : weapon === 'storm' ? 'The storm got you'

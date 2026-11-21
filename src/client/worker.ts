@@ -252,8 +252,11 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         if (!match) throw new Error('debug before start');
         if (msg.cmd === 'teleport') {
           const pos = { x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z };
-          match.debugTeleport(humanId, pos); recordOp({ k: 'teleport', id: humanId, pos });
-        } else if (msg.cmd === 'hp') { match.debugSetHp(humanId, msg.hp); recordOp({ k: 'hp', id: humanId, hp: msg.hp }); }
+          const id = msg.id ?? humanId;
+          match.debugTeleport(id, pos); recordOp({ k: 'teleport', id, pos });
+        }
+        // Debug-only (e2e): not recorded, like time jumps.
+        else if (msg.cmd === 'hazard') match.debugDamageHazard(msg.id, msg.amount, humanId, msg.source ?? 'bullet'); else if (msg.cmd === 'hp') { match.debugSetHp(humanId, msg.hp); recordOp({ k: 'hp', id: humanId, hp: msg.hp }); }
         // Debug-only (e2e) clock jumps / strikes are not recorded: a replay of a match that used them diverges.
         else if (msg.cmd === 'time') match.debugSetTime(msg.t);
         else if (msg.cmd === 'strike') match.debugStrike(msg.x, msg.z);

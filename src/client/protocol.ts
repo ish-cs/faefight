@@ -41,7 +41,8 @@ export type ToWorker =
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
   /** Emote / quick-chat wheel pick for a human player (already sanitized; the sim applies its own cooldown). */
   | { type: 'wheel'; playerId: number; id: WheelId }
-  | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
+  | { type: 'debug'; cmd: 'teleport'; x: number; z: number; id?: number }
+  | { type: 'debug'; cmd: 'hazard'; id: number; amount: number; source?: 'bullet' | 'explosive' }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
   | { type: 'debug'; cmd: 'hp'; hp: number }
   | { type: 'debug'; cmd: 'time'; t: number }

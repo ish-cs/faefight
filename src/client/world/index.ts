@@ -1,10 +1,11 @@
 import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
-import type { FirePatch, MatchEvent, PieceState, PlayerState } from '../../sim/types';
+import type { FirePatch, HazardNet, MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { FireFx } from './fireFx';
 import { ImpactMarks } from './impacts';
 import { clearNpcSpots } from '../characters/npcSpots';
 import { CosmeticLayer } from './cosmetics';
+import { HazardLayer } from './hazards';
 import { Critters } from './critters';
 import type { CritterSound, V3 } from './critterSim';
 import { Boats, gullPerches, Gulls } from './dressing';
@@ -41,6 +42,8 @@ export class World {
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
   private cosmetics: CosmeticLayer | null = null;
+  /** Explosive barrels / propane tanks / supply crates. */
+  private hazards: HazardLayer | null = null;
   /** instanced grass beds (high/ultra) */
   readonly grass = new Grass();
   /** instanced small detail (litter, rubble, shells, seaweed…) */
@@ -103,6 +106,8 @@ export class World {
     const cos = STRESS > 1 ? stressOffsets().flatMap(([ox, oz], k) => def.cosmetics.map((c) => k === 0 ? c : { ...c, id: 1e6 * k + c.id, pos: { ...c.pos, x: c.pos.x + ox, z: c.pos.z + oz } })) : def.cosmetics;
     this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
+    this.hazards = new HazardLayer(def.hazards ?? []);
+    this.scene.add(this.hazards.root);
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
     // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
     // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
@@ -111,7 +116,7 @@ export class World {
       r.updateMatrixWorld(true);
       r.traverse((o) => { o.matrixAutoUpdate = false; o.matrixWorldAutoUpdate = false; });
     }
-    console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
+    console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics, ${(def.hazards ?? []).length} hazards in ${Math.round(performance.now() - t0)} ms`);
   }
 
   /** Drop a previous map (setMap twice in one session). Shared materials/textures stay cached. */
@@ -136,6 +141,8 @@ export class World {
     this.critters = null;
     this.cosmetics?.dispose();
     this.cosmetics = null;
+    this.hazards?.dispose();
+    this.hazards = null;
   }
 
   /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
@@ -146,6 +153,12 @@ export class World {
     if (e.type !== 'cosmeticBroken') return;
     this.cosmetics?.onBroken(e.data, this.pieceFx.particles);
   }
+
+  /** Barrels / tanks / crates: snapshot state (gone, fusing). */
+  syncHazards(hz: HazardNet[] | undefined) { this.hazards?.sync(hz); }
+
+  /** `hazard` events and hazard explosions → fuse fx, fireball debris, scorch, crate splinters. */
+  hazardEvent(e: MatchEvent) { this.hazards?.onEvent(e, this.pieceFx.particles); }
 
   syncPieces(pieces: PieceState[], fires?: FirePatch[]) {
     this.pieces.sync(pieces);
@@ -187,6 +200,7 @@ export class World {
     this.impacts.update();
     this.fire.setQuality(this.sky.quality);
     this.fire.update(Math.min(0.05, dt), this.sky.camera);
+    this.hazards?.update(now, this.pieceFx.particles);
     this.sky.render(); // cascaded shadows follow the camera themselves
   }
 }

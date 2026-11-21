@@ -177,7 +177,9 @@ type Backend = {
   /** Local worker only: practice range panel commands. */
   practice?(cmd: PracticeCmd): void;
   debug?: {
-    teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
+    teleport(x: number, z: number, id?: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
+    /** Damage a barrel / tank / crate (as the local player). */
+    hazard(id: number, amount: number, source?: 'bullet' | 'explosive'): void;
     eliminate(playerId: number): void; kill(playerId: number, killer?: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
     /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
@@ -294,7 +296,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     /** Vs bot /spectate: a bot takes over the local player. */
     handOff: () => send({ type: 'botify', playerId: humanId }),
     debug: {
-      teleport: (x, z) => send({ type: 'debug', cmd: 'teleport', x, z }),
+      teleport: (x, z, id) => send({ type: 'debug', cmd: 'teleport', x, z, id }),
+      hazard: (id, amount, source) => send({ type: 'debug', cmd: 'hazard', id, amount, source }),
       give: (inv, id) => send({ type: 'debug', cmd: 'give', inv, id }),
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),

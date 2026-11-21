@@ -14,7 +14,8 @@ const MODELS: Record<CosmeticKind, { build: (b: StaticBatch) => void; cast: bool
   lamp: { build: lampModel, cast: true },
   bollard: { build: bollardModel, cast: false },
 };
-const BARREL_COLORS = [0x1f5fa8, 0xb23a26, 0x46505a, 0x2f6b3a];
+// No red: red drums are the explosive ones (hazards.ts).
+const BARREL_COLORS = [0x1f5fa8, 0x6b6448, 0x46505a, 0x2f6b3a];
 /** Per-instance tint so a row of drums / crates doesn't look cloned. */
 const tint = (d: CosmeticDef, c: THREE.Color) => {
   if (d.kind === 'barrel') return c.setHex(BARREL_COLORS[d.id % BARREL_COLORS.length]);

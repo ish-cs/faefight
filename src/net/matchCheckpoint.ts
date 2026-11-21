@@ -11,6 +11,7 @@ import { BunkerGrid } from '../sim/bots/escape';
 import { BrainProbe } from '../sim/bots/introspect';
 import { DoorwayTracker } from '../sim/seal';
 import { Fire } from '../sim/fire';
+import { Hazards } from '../sim/hazards';
 import { WheelLimiter } from '../sim/emotes';
 import { Banter } from '../sim/bots/banter';
 import { mulberry32, isRng, type Rng } from '../sim/rng';
@@ -31,7 +32,7 @@ import { gunzip, gzip } from './checkpoint';
  */
 
 const MAGIC = 0x31434646; // "FFC1" little-endian
-const CLASSES: Record<string, { prototype: object }> = { Match, MatchStats, Cosmetics, HitboxHistory, Bot, Aim, Nav, WalkGrid, Memory, BunkerGrid, DoorwayTracker, Fire, BrainProbe, WheelLimiter, Banter };
+const CLASSES: Record<string, { prototype: object }> = { Match, MatchStats, Cosmetics, HitboxHistory, Bot, Aim, Nav, WalkGrid, Memory, BunkerGrid, DoorwayTracker, Fire, BrainProbe, WheelLimiter, Banter, Hazards };
 const TAG_OF = new Map<object, string>(Object.entries(CLASSES).map(([k, c]) => [c.prototype, k]));
 const TYPED: Record<string, new (b: ArrayBuffer) => ArrayBufferView> = { Float64Array, Float32Array, Int32Array, Uint32Array, Int16Array, Uint16Array, Int8Array, Uint8Array };
 /**
@@ -43,9 +44,9 @@ const REBUILT: Record<string, (o: Record<string, unknown>) => unknown[]> = {
   BunkerGrid: (g) => [g.bunker, g.blockers],
 };
 /** Closures the bots keep from their last BotView (Nav.view): replaced on the next think(), never called before. */
-const STALE_FNS = new Set(['groundAt', 'canPlace', 'nextId']);
+const STALE_FNS = new Set(['groundAt', 'canPlace', 'nextId', 'clearShot']);
 /** Match fields rebuilt on restore instead of saved: combat callbacks bound to the instance, the native world, the bot factory. */
-const SKIP = new Set(['ctx', 'fireCtx', 'physics', 'makeBot']);
+const SKIP = new Set(['ctx', 'fireCtx', 'hazardHost', 'physics', 'makeBot']);
 
 type J = null | boolean | number | string | J[] | { [k: string]: J };
 

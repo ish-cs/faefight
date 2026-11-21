@@ -61,6 +61,15 @@ export const COSMETIC: Record<CosmeticKind, { r: number; h: number; hp: number }
   bollard: { r: 0.25, h: 0.6, hp: 60 },
 };
 
+/**
+ * Gameplay props (hazards.ts): explosive fuel barrels and propane tanks, breakable supply crates with loot.
+ * Static positions at dock spots, never in a bunker, doorway or no-build zone (hazardSpotProblem). No colliders:
+ * players walk past them; bullets and blasts hit them. `island` = player island index, -1 = center island.
+ * Pushable later: the hazard's live position is sim state seeded from `pos` (see Hazards.moveTo).
+ */
+export type HazardKind = 'barrel' | 'propane' | 'crate';
+export type HazardDef = { id: number; kind: HazardKind; pos: Vec3; rotY: number; island: number };
+
 /** Neutral island at the middle of the ring: anyone may use its stations. */
 export type CenterIsland = {
   center: Vec3;
@@ -86,6 +95,7 @@ export type MapDef = {
   center: CenterIsland;
   statics: StaticBox[];
   cosmetics: CosmeticDef[];
+  hazards: HazardDef[];
   /** Set by the match: the rules in force (clamped) and the palette colour per island (index = island). */
   settings?: GameSettings;
   colors?: number[];
@@ -137,6 +147,8 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
   const statics: StaticBox[] = [];
   const cosmetics: CosmeticDef[] = [];
   const cosmetic = (kind: CosmeticKind, pos: Vec3, rotY: number) => cosmetics.push({ id: cosmetics.length + 1, kind, pos, rotY });
+  const hazards: HazardDef[] = [];
+  const hazard = (kind: HazardKind, pos: Vec3, rotY: number, island: number) => hazards.push({ id: hazards.length + 1, kind, pos, rotY, island });
 
   for (let i = 0; i < playerCount; i++) {
     const a = Math.PI + (2 * Math.PI * i) / playerCount;
@@ -174,6 +186,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
       statics.push({ center: v3(c.x, g + half.y, c.z), half, rotY: facingYaw, role: 'cover', island: i, look: 'container' });
     };
     const cos = (kind: CosmeticKind, fwd: number, side: number, rot = 0) => cosmetic(kind, at(fwd, side), facingYaw + rot);
+    const haz = (kind: HazardKind, fwd: number, side: number, rot = 0) => hazard(kind, at(fwd, side), facingYaw + rot, i);
     const CH = 2.59 / 2, CL = 6.06 / 2, CW = 2.44 / 2;
     if (template === 'yard') {
       // Container cover: a 1-high stack and a 2-high stack (high ground) on the flanks, a 1-high wall at the front.
@@ -192,6 +205,10 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
         const t = ((k + 0.5) / 10) * Math.PI * 2;
         cos('bollard', dm.cos(t) * (r - 0.45), dm.sin(t) * (r - 0.45));
       }
+      // Hazards: a fuel barrel + propane pair on the front quay (they chain), a lone barrel on the far flank,
+      // two supply crates (back corner by the lamp, beside the shop).
+      haz('barrel', 7, 12.5); haz('propane', 8.6, 13.9, 0.4); haz('barrel', 6, -13);
+      haz('crate', -6, 14.5, 0.3); haz('crate', 10.5, 7, -0.2);
     } else {
       // Harbor: the mooring bollards along the coping, plus a little yard clutter.
       for (let k = 0; k < 14; k++) {
@@ -202,6 +219,10 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
       cos('barrel', -4, 10); cos('barrel', -4.7, 10.6); cos('barrel', -3.9, 10.9);
       cos('crate', -3, -11, 0.3); cos('crate', -3.8, -11.5, -0.2);
       cos('fence', -r + 1.4, 8); cos('fence', -r + 1.4, -8);
+      // Hazards: a fuel barrel + propane pair on the quay toward the lamp (they chain), a lone propane tank on
+      // the other side, two supply crates (back left by the palm, front right past the vault).
+      haz('barrel', -1.5, 13.5); haz('propane', 0.6, 14.8, 0.5); haz('propane', 10, -13.5);
+      haz('crate', -7, -15, 0.3); haz('crate', 13, -3, -0.2);
     }
   }
 
@@ -221,11 +242,15 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
   for (const deg of [60, 180, 300]) cosmetic('lamp', polar(centerR - 1.2, deg), 0);
   for (const [rad, deg, kind] of [[8.2, 112, 'barrel'], [8.5, 120, 'barrel'], [8.2, 240, 'crate'], [8.6, 0, 'crate']] as const)
     cosmetic(kind, polar(rad, deg), (deg * Math.PI) / 180);
+  // Center hazards: a barrel + propane pair and a lone barrel near the rim, three supply crates between stations.
+  const hr = Math.min(8.6, centerR - 1.8);
+  for (const [deg, kind] of [[65, 'barrel'], [72, 'propane'], [190, 'barrel'], [125, 'crate'], [245, 'crate'], [345, 'crate']] as const)
+    hazard(kind, polar(hr, deg), (deg * Math.PI) / 180, -1);
 
   return {
     template, name: MAP_NAMES[template], seed,
     waterY: MAP.waterY,
-    islands, center, statics, cosmetics,
+    islands, center, statics, cosmetics, hazards,
   };
 }
 

@@ -249,6 +249,7 @@ export class Renderer {
     }
     this.world.syncPieces(this.predicted.length ? snap.pieces.concat(this.predicted) : snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
+    this.world.syncHazards(snap.hz);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
     this.snapArrived = performance.now();
@@ -277,9 +278,13 @@ export class Renderer {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {
       this.world.cosmeticEvent(e);
+    } else if (e.type === 'hazard') {
+      this.world.hazardEvent(e);
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
-      if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : e.data.kind === 'rocket' ? 3.6 : 4);
+      const k = e.data.kind;
+      if (pos) this.addBoom(pos, k === 'charge' ? 2 : k === 'rocket' ? 3.6 : k === 'barrel' ? 5 : k === 'propane' ? 4.6 : 4);
+      if (typeof e.data.hazard === 'number') this.world.hazardEvent(e);
     } else if (e.type === 'lightning') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.storm.strike(pos, this.camera);

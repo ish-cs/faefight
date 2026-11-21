@@ -7,6 +7,8 @@ import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchState
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
+import { Hazards, isExplosive, type HazardHost } from './hazards';
+import { HAZARD } from './constants';
 import { Fire, fireZones, type FireCtx } from './fire';
 import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
@@ -41,6 +43,8 @@ const SIGHT_RANGE = 120;
 const RECENT_SEC = 4;
 const FEED_SEC = 30;
 
+const add3 = (o: Vec3, d: Vec3, t: number): Vec3 => v3(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t);
+
 export class Match implements MatchApi {
   private s: MatchStateCore;
   private tickNo = 0;
@@ -67,6 +71,11 @@ export class Match implements MatchApi {
   readonly map: IslandLayout[];
   private center: CenterState = newCenterState();
   private cosmetics: Cosmetics;
+  /** Explosive barrels / propane tanks and lootable crates (hazards.ts). */
+  private hazards: Hazards;
+  /** Bound to ctx: rebuilt by rebind(), never saved. */
+  private hazardHost!: HazardHost;
+  private hazardSeed: number;
   /** Burning pieces and ground fires (sim/fire.ts). */
   private fire: Fire;
   private fireCtx: FireCtx;
@@ -101,6 +110,8 @@ export class Match implements MatchApi {
     def.settings = { ...this.settings };
     def.colors = resolveColors(setup.players.map((p) => p.color));
     this.cosmetics = new Cosmetics(def.cosmetics);
+    this.hazards = new Hazards(def.hazards);
+    this.hazardSeed = setup.seed ?? 1;
     this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
     this.potionShops = potionShopsAt([def.center.potionShop]);
     this.s = newMatchState(map, setup.seed ?? 1);
@@ -130,6 +141,7 @@ export class Match implements MatchApi {
     });
     this.ctx = this.makeCtx();
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
+    this.hazardHost = { ctx: this.ctx, loot: this.s.loot, seed: this.hazardSeed };
     if (setup.practice) {
       this.s.practice = true;
       this.practice = new PracticeRange({ s: this.s, physics: this.physics, removePiece: (id) => this.ctx.onPieceDestroyed(id) }, 1);
@@ -143,6 +155,7 @@ export class Match implements MatchApi {
   rebind(): void {
     this.ctx = this.makeCtx();
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
+    this.hazardHost = { ctx: this.ctx, loot: this.s.loot, seed: this.hazardSeed };
     this.fire.nextId = () => this.s.nextId++;
   }
 
@@ -176,8 +189,12 @@ export class Match implements MatchApi {
         this.kills.push({ victim, killer });
         // Only environment causes go on the kill event (death recap / feed); weapon kills are told by the killer.
         const env = killer === null && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
-        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env));
+        // A barrel / tank someone set off: the feed says "X via barrel".
+        const via = cause === 'barrel' || cause === 'propane' ? cause : undefined;
+        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env, via));
       },
+      castHazard: (o, d, max) => this.hazards.ray(o, d, max),
+      hitHazard: (id, amount, source, by, now, at) => this.hazards.damage(this.hazardHost, id, amount, source, by, now, at),
     };
   }
 
@@ -212,7 +229,7 @@ export class Match implements MatchApi {
     const m = Object.create(Match.prototype) as Match;
     const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
     const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
-    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
+    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx' && k !== 'hazardHost') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
     m.rebind();
     return m;
   }
@@ -256,6 +273,8 @@ export class Match implements MatchApi {
     }
 
     this.events.push(...tickExplosives(this.ctx, now));
+    this.events.push(...this.hazards.onExplosions(this.hazardHost, this.events, now));
+    this.events.push(...this.hazards.tick(this.hazardHost, now));
     this.fire.onEvents(this.events, now, this.fireCtx);
     this.events.push(...this.fire.tick(now, this.s.waterY, this.fireCtx, !!this.s.storm));
     this.collapseUnsupported(now);
@@ -349,6 +368,16 @@ export class Match implements MatchApi {
 
   debugDamagePlayer(playerId: number, amount: number): void {
     this.events.push(...applyPlayerDamage(this.ctx, this.mustPlayer(playerId), amount, null, this.s.time));
+  }
+
+  /** Hazard state (tests/debug/e2e). */
+  debugHazards() {
+    return this.hazards.list.map((h) => ({ id: h.def.id, kind: h.def.kind, pos: clone(h.pos), hp: h.hp, st: h.st, by: h.by }));
+  }
+
+  /** Damage a hazard as if `by` shot it (tests/e2e). */
+  debugDamageHazard(id: number, amount: number, by: number | null = null, source: 'bullet' | 'explosive' = 'bullet'): void {
+    this.events.push(...this.hazards.damage(this.hazardHost, id, amount, source, by, this.s.time, undefined));
   }
 
   /** Every kill so far (tests/debug). */
@@ -714,7 +743,19 @@ export class Match implements MatchApi {
       hurt: this.hits.filter((h) => h.target === self.id).map(({ t, by, amount }) => ({ t, by, amount })),
       shots: this.shots.filter((s) => s.by !== self.id && dist(s.from, eye) <= SIGHT_RANGE),
       feed: [...this.feed],
-      loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE).map((b) => clone(b.pos)),
+      // Crate ammo is only worth walking to for someone with that gun.
+      loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE && (!b.ammoOnly || Object.keys(b.inv.weapons).some((g) => !!self.inv.weapons[g as WeaponKind])))
+        .map((b) => clone(b.pos)),
+      hazards: this.hazards.list.filter((h) => h.st !== 2 && dist(h.pos, eye) <= SIGHT_RANGE).map((h) => ({
+        id: h.def.id, kind: h.def.kind, pos: clone(h.pos), center: this.hazards.center(h), radius: isExplosive(h.def.kind) ? HAZARD[h.def.kind].radius : 0, fusing: h.st === 1,
+      })),
+      clearShot: (to) => {
+        const d = dist(eye, to);
+        const dir = norm(sub(to, eye));
+        if (this.physics.raycast(eye, dir, d, self.id, true)) return false;
+        const hz = this.hazards.ray(eye, dir, d + 0.5);
+        return !hz || dist(add3(eye, dir, hz.dist), to) < 1;
+      },
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
       fires: fireZones(this.s.pieces.values(), this.fire.snapshotFires()),
@@ -727,6 +768,7 @@ export class Match implements MatchApi {
   }
 
   private snapshot(): Snapshot {
+    const hz = this.hazards.net();
     const s: Snapshot = {
       time: this.s.time,
       tick: this.tickNo,
@@ -738,6 +780,7 @@ export class Match implements MatchApi {
       generators: this.s.generators,
       center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       broken: this.cosmetics.broken,
+      ...(hz ? { hz } : {}),
       genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,

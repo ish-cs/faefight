@@ -109,7 +109,8 @@ export function practiceMapDef(seed = 1): MapDef {
   });
   const lanes = (p: Vec3) => p.x > PRACTICE.laneX[0] - 5 && p.x < PRACTICE.laneX[3] + 5 && p.z < PRACTICE.lineZ + 2;
   const dummies = (p: Vec3) => p.x > -51 && p.x < -29 && p.z > 7 && p.z < 18;
-  return { ...def, name: 'Practice Range', statics, cosmetics: def.cosmetics.filter((c) => !lanes(c.pos) && !dummies(c.pos)) };
+  return { ...def, name: 'Practice Range', statics, cosmetics: def.cosmetics.filter((c) => !lanes(c.pos) && !dummies(c.pos)),
+    hazards: def.hazards.filter((h) => !lanes(h.pos) && !dummies(h.pos)) };
 }
 
 /**

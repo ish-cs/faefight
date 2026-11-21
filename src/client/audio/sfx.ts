@@ -188,7 +188,7 @@ function gunshot(k: Kit, out: AudioNode, t: number, cue: Cue, d: number): number
 }
 
 function explosion(k: Kit, out: AudioNode, t: number, cue: Cue): number {
-  const big = cue.kind === 'charge' || cue.kind === 'rocket';
+  const big = cue.kind === 'charge' || cue.kind === 'rocket' || cue.kind === 'barrel' || cue.kind === 'propane';
   const p = jitter(k.rnd(), 0.06);
   noise(k, out, t, { type: 'highpass', freq: 1200, dur: 0.08, peak: 1.0 });
   tone(k, out, t, { f0: (big ? 62 : 78) * p, f1: 22, dur: big ? 1.7 : 1.3, peak: 1.4, attack: 0.004 });
@@ -199,6 +199,33 @@ function explosion(k: Kit, out: AudioNode, t: number, cue: Cue): number {
     len = Math.max(len, at - t + noise(k, out, at, { type: 'bandpass', freq: 1500 + k.rnd() * 3500, q: 4, dur: 0.02 + k.rnd() * 0.04, peak: 0.12 + k.rnd() * 0.25 }));
   }
   return len;
+}
+
+/** Barrels, tanks and crates: gas hiss (the fuse), a drum clang, a crate knock, a crate splintering. */
+function hazardSound(k: Kit, out: AudioNode, t: number, cue: Cue): number {
+  const p = jitter(k.rnd(), 0.06);
+  switch (cue.kind) {
+    case 'hiss':
+      // pressurised leak: a bright noise jet that rises in pitch for the whole ~1 s fuse, plus a little metal tick
+      partials(k, out, t, 900 * p, 0.25, [[1, 1, 0.12], [2.7, 0.5, 0.08]]);
+      noise(k, out, t, { type: 'bandpass', freq: 3500 * p, freqEnd: 7000, q: 1.2, dur: 1.0, peak: 0.55, attack: 0.04 });
+      return noise(k, out, t, { type: 'highpass', freq: 5000, dur: 1.0, peak: 0.25, attack: 0.1 });
+    case 'clang':
+      noise(k, out, t, { type: 'highpass', freq: 3000, dur: 0.02, peak: 0.5 });
+      return partials(k, out, t, 310 * p, 0.45, [[1, 1, 0.45], [2.4, 0.7, 0.3], [4.1, 0.4, 0.2], [6.3, 0.25, 0.12]]);
+    case 'crateHit':
+      return woodKnock(k, out, t, 0.8, p);
+    default: {
+      // crate breaking: a crack, then planks clattering down
+      noise(k, out, t, { type: 'bandpass', freq: 1400 * p, q: 1.5, dur: 0.06, peak: 0.9 });
+      let len = woodKnock(k, out, t, 1.0, p * 0.9);
+      for (let i = 0; i < 6; i++) {
+        const at = t + 0.08 + k.rnd() * 0.5;
+        len = Math.max(len, at - t + woodKnock(k, out, at, 0.25 + k.rnd() * 0.35, p * (0.9 + k.rnd() * 0.4)));
+      }
+      return len;
+    }
+  }
 }
 
 function woodKnock(k: Kit, out: AudioNode, t: number, peak: number, p: number): number {
@@ -339,6 +366,7 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       noise(k, out, t, { type: 'bandpass', freq: 3000, dur: 0.25, peak: 0.3, attack: 0.01 });
       return noise(k, out, t, { type: 'lowpass', freq: 1500 * p, freqEnd: 400, dur: 0.5, peak: 0.8, attack: 0.01 });
     case 'explosion': return explosion(k, out, t, cue);
+    case 'hazard': return hazardSound(k, out, t, cue);
     case 'placed': return placed(k, out, t, cue);
     case 'destroyed': return destroyed(k, out, t, cue);
     case 'coin': return coin(k, out, t);

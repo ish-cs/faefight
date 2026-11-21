@@ -18,7 +18,7 @@ export type CombatCtx = {
   explosives: Explosive[];
   nextId(): number;
   onPieceDestroyed(id: number): void;
-  /** `cause`: the HitInfo weapon of the killing hit ('storm', 'lightning', a gun...). */
+  /** `cause`: the HitInfo weapon of the killing hit ('storm', 'lightning', 'barrel', a gun...). */
   onKill(victim: number, killer: number | null, cause?: string): void;
   /** Whether a player stands on something (spread); defaults to "vertical speed is small". */
   grounded?(id: number): boolean;
@@ -26,6 +26,9 @@ export type CombatCtx = {
   onKnockback?(id: number, dv: Vec3): void;
   /** Hitscan ray for a shot (lag-compensated by the match); defaults to physics.raycast. */
   castShot?(origin: Vec3, dir: Vec3, maxDist: number, shooter: number): RayHit | null;
+  /** Barrels / tanks / crates (hazards.ts): the first one a ray meets, and damaging one. Absent = none. */
+  castHazard?(origin: Vec3, dir: Vec3, maxDist: number): { id: number; dist: number } | null;
+  hitHazard?(id: number, amount: number, source: 'bullet' | 'fist', by: number, now: number, at: Vec3): MatchEvent[];
 };
 
 const ev = (t: number, type: MatchEvent['type'], data: Record<string, unknown>): MatchEvent => ({ t, type, data });
@@ -85,7 +88,7 @@ export function applyPlayerDamage(
   return out;
 }
 
-function hitPiece(
+export function hitPiece(
   ctx: CombatCtx, id: number, amount: number, source: 'bullet' | 'fist' | 'explosive', now: number, by: number | null, at: Vec3,
 ): MatchEvent[] {
   const piece = ctx.pieces.get(id);
@@ -151,6 +154,14 @@ export function tryFire(ctx: CombatCtx, p: PlayerState, now: number): MatchEvent
       const dir = pelletDir(p.yaw, p.pitch, cone, seed, i, spec.pellets, ring);
       // Bullets pass bunker firing slits.
       const hit = ctx.castShot ? ctx.castShot(eye, dir, spec.range, p.id) : ctx.physics.raycast(eye, dir, spec.range, p.id, true);
+      // A barrel, tank or crate in front of whatever the ray hit stops the bullet.
+      const hz = ctx.castHazard?.(eye, dir, hit ? hit.dist : spec.range);
+      if (hz && ctx.hitHazard) {
+        const at = add(eye, scale(dir, hz.dist));
+        if (i === 0) shot.to = at; else tos.push(rv(at));
+        hits.push(...ctx.hitHazard(hz.id, shotDamage(kind, hz.dist, false).amount, kind === 'fists' ? 'fist' : 'bullet', p.id, now, at));
+        continue;
+      }
       const to = hit ? hit.point : add(eye, scale(dir, spec.range));
       if (i === 0) shot.to = to; else tos.push(rv(to));
       if (!hit) continue;
@@ -251,7 +262,7 @@ const pieceCenter = (pc: PieceState) => v3(pc.pos.x, pc.pos.y + PIECES[pc.kind].
 const bodyCenter = (pl: PlayerState) => v3(pl.pos.x, pl.pos.y + PLAYER.height / 2, pl.pos.z);
 
 /** Closest point of a player's body (capsule) to `at`, and the distance to it. */
-function nearestOnBody(pl: PlayerState, at: Vec3): { point: Vec3; d: number } {
+export function nearestOnBody(pl: PlayerState, at: Vec3): { point: Vec3; d: number } {
   const r = PLAYER.radius;
   const y = Math.min(pl.pos.y + PLAYER.height - r, Math.max(pl.pos.y + r, at.y));
   const axis = v3(pl.pos.x, y, pl.pos.z);
@@ -262,7 +273,7 @@ function nearestOnBody(pl: PlayerState, at: Vec3): { point: Vec3; d: number } {
 }
 
 /** Closest point of a piece's box to `at` (ramps use their bounding box). */
-function nearestOnPiece(pc: PieceState, at: Vec3): { point: Vec3; d: number } {
+export function nearestOnPiece(pc: PieceState, at: Vec3): { point: Vec3; d: number } {
   const s = PIECES[pc.kind];
   const c = pieceCenter(pc);
   const local = rotateY(sub(at, c), -pc.rotY);
@@ -332,8 +343,11 @@ function flyRocket(ctx: CombatCtx, e: Explosive, now: number) {
   const stepLen = Math.hypot(step.x, step.y, step.z);
   const dir = scale(step, 1 / stepLen);
   const hit = ctx.physics.raycast(e.pos, dir, stepLen, e.owner);
-  if (hit) {
-    e.pos = add(e.pos, scale(dir, Math.max(0, hit.dist - 0.05)));
+  // Rockets burst on a barrel / crate in their path too.
+  const hz = ctx.castHazard?.(e.pos, dir, hit ? hit.dist : stepLen);
+  const stop = hz ? hz.dist : hit?.dist;
+  if (stop !== undefined) {
+    e.pos = add(e.pos, scale(dir, Math.max(0, stop - 0.05)));
     e.explodeAt = now;
     return;
   }
