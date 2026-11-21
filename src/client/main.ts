@@ -1629,6 +1629,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       console.info(`[main] map: ${def.name} (${def.template}, ${map.length} islands)`);
       loading.progress('map', 0, `Loading ${def.name}`);
       renderer.setMap(def, humanId);
+      if (practice) renderer.dayNight.setCycle(null); // the range has no sudden death: always day
       loading.progress('map', 1, `Building ${def.name}`);
       maybeWarm();
       watching = id === 0;

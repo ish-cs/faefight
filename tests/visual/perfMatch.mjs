@@ -2,7 +2,7 @@
 // resolution + governor off. Per preset (fresh page each): load time, avg fps, p99 frame ms, draw calls, triangles,
 // averaged over fixed camera spots. Optional same-view screenshots.
 // Needs a dev server (`pnpm vite --port 5299`); run under the heavy lock:
-//   node tests/visual/perfMatch.mjs [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
+//   node tests/visual/perfMatch.mjs [--time=870] [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
 import { chromium } from '@playwright/test';
 
 const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? d;
@@ -15,6 +15,8 @@ const sampleMs = Number(arg('sample', '3000'));
 /** device pixel ratio of the page (2 = a Retina MacBook: the presets' render scale then applies) */
 const dpr = Number(arg('dpr', '1'));
 const competitive = arg('competitive', '0') === '1';
+/** match time (s) to jump to before measuring (e.g. 870 = night under the day/night cycle); 0 = match start */
+const atTime = Number(arg('time', '0'));
 
 const SPOTS = [
   { name: 'harbor', at: [6, 13], look: [14, 60], pitch: 0.02 },
@@ -49,6 +51,7 @@ async function run(quality) {
   const yaw0 = home.bunker.facingYaw;
   const toWorld = (x, z) => ({ x: home.center.x + x * Math.cos(yaw0) + z * Math.sin(yaw0), z: home.center.z - x * Math.sin(yaw0) + z * Math.cos(yaw0) });
   const yawToward = (from, to) => { const a = toWorld(...from), b = toWorld(...to); return Math.atan2(-(b.x - a.x), -(b.z - a.z)); };
+  if (atTime > 0) { await dbg('time', atTime); await page.waitForTimeout(1500); }
   const per = [];
   for (const s of SPOTS) {
     await dbg('hp', 100000);
