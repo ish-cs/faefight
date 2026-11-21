@@ -28,6 +28,8 @@ export type SeatResult = {
   elims: number;
   /** Seconds until eliminated (match length if never). */
   survived: number;
+  /** Match time I was eliminated at, null if never (survived to the end). */
+  outAt?: number | null;
   /** Damage dealt to players within CLOSE_M (real fights, not plinking). */
   closeDmg: number;
   /** Shots fired with no rival within LONG_M, and hits landed at that range. */
@@ -165,6 +167,7 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
         if (!outOrder.includes(id)) {
           outOrder.push(id);
           seats[id - 1].survived = e.t;
+          seats[id - 1].outAt = e.t;
           const by = sealedBy.get(id - 1);
           if (by !== undefined && by !== id) { seats[by - 1].elims++; seats[by - 1].elimScore += early(e.t); }
         }
