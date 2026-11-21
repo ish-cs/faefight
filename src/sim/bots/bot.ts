@@ -5,7 +5,7 @@ import { NO_INPUT } from '../types';
 import type {
   BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, VaultAction, Vec3, WeaponKind,
 } from '../types';
-import { add, clone, dist2D, forward, norm, right, scale, sub, v3, yawOf } from '../vec';
+import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
 import { BUILD_SKILL, BUILD_TUNING as BT, flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
@@ -92,12 +92,12 @@ const BUNKER_OUT = SEAL.exitRadius + 0.8;
  * - collectCarried: once carrying what the push needs, the generator only matters past this much cash.
  */
 export const DRIVE = {
-  offenseAt: { easy: Infinity, medium: 300, hard: 240, pro: 240 } as Record<Difficulty, number>,
-  offenseCash: { easy: Infinity, medium: 3 * PIECES.wood.price, hard: 3 * PIECES.metal.price, pro: 3 * PIECES.metal.price } as Record<Difficulty, number>,
-  push: 0.35,
+  offenseAt: { easy: Infinity, medium: 330, hard: 300, pro: 180 } as Record<Difficulty, number>,
+  offenseCash: { easy: Infinity, medium: 3 * PIECES.wood.price, hard: 3 * PIECES.metal.price, pro: 3 * PIECES.wood.price } as Record<Difficulty, number>,
+  push: { easy: 0, medium: 0.25, hard: 0.25, pro: 0.35 } as Record<Difficulty, number>,
   shopForPush: 0.75,
   plinkRange: 30,
-  maxRange: 20,
+  maxRange: { easy: Infinity, medium: 20, hard: 20, pro: 24 } as Record<Difficulty, number>,
   sprintGap: 8,
   reengageSec: 20,
   reengageHp: 0.3,
@@ -162,6 +162,8 @@ export class Bot {
   private stuckRef: { pos: Vec3; t: number } | null = null;
   private unstickUntil = -Infinity;
   private unstickSide = 1;
+  private unstickDir: Vec3 | null = null;
+  private stuckAt: { pos: Vec3; t: number; n: number } | null = null;
   private strafeSign = 1;
   private strafeFlipAt = 0;
   private retreat: { from: Vec3; until: number } | null = null;
@@ -320,9 +322,10 @@ export class Bot {
     // Movement: stuck recovery, then never step toward water.
     let dir = act.dir;
     let jump = !!act.jump;
-    this.trackStuck(now, me, dir !== null);
+    this.trackStuck(now, me, dir);
     if (now < this.unstickUntil) {
-      dir = scale(right(look.yaw), this.unstickSide);
+      // Step aside; stuck again at the same spot, back off further each time (around whatever is in the way).
+      dir = this.unstickDir ?? scale(right(look.yaw), this.unstickSide);
       jump = true;
     }
     if (dir && !act.raw) dir = this.nav.safeDir(dir);
@@ -489,9 +492,11 @@ export class Bot {
     const C = this.nav.centerNode;
     const centerReach = C >= 0 && (node === C || this.nav.hop(src, C) !== null);
     let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
-    // Center-minded: bridge to the center island first when it isn't much further than the rival.
-    if (C >= 0 && this.centerMinded && !centerReach && !view.suddenDeath &&
-        (bridgeTo === null || this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + 2)) bridgeTo = C;
+    // Center-minded: bridge to the center island first when it isn't much further than the rival. Anyone else
+    // (but easy players) goes via the center when it's the shorter bridge: it's the hub to everyone, and the fights.
+    const slack = this.centerMinded ? 2 : this.difficulty !== 'easy' ? 0 : -Infinity;
+    if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath &&
+        (bridgeTo === null ? this.centerMinded : this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
     return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, homeReach, openDoors, bridgeTo, centerReach, danger };
   }
 
@@ -903,7 +908,7 @@ export class Bot {
     }
     if (!this.offensive(c)) return s;
     switch (g) {
-      case 'bridge': case 'attack': case 'seal': return s > 0 ? s + DRIVE.push : s;
+      case 'bridge': case 'attack': case 'seal': return s > 0 ? s + DRIVE.push[this.difficulty] : s;
       case 'shop': {
         if (!c.homeReach) return s;
         const plan = this.plan(c);
@@ -915,6 +920,8 @@ export class Bot {
         const geared = (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c) && sealKit(me.inv) >= c.openDoors.length;
         return geared && stored < DRIVE.collectCarried ? Math.min(s, 0.2) : s;
       }
+      // The center island is where the fights are: worth going for when it pays.
+      case 'contest': return s > 0 ? s + DRIVE.push[this.difficulty] * 0.5 : s;
       case 'fortify': return this.t.builder >= BT.fortEarlyBuilder ? s * 0.5 : 0;
       case 'cut': return this.crossing(c) ? s : s * 0.4;
       // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
@@ -1352,7 +1359,7 @@ export class Bot {
     const gun = bestGun(me.inv, c.enemyDist);
     const pref = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
     // Skilled players close in rather than trade shots from afar.
-    const want = this.difficulty === 'easy' ? pref : Math.min(pref, DRIVE.maxRange);
+    const want = this.difficulty === 'easy' ? pref : Math.min(pref, DRIVE.maxRange[this.difficulty]);
     const side = scale(right(yawOf(to)), this.strafeSign * (want < 2 ? 0.3 : 1));
     const sameIsland = islandAt(c.view.map, e.pos) === c.on;
 
@@ -1617,14 +1624,20 @@ export class Bot {
     return this.goTo(best, 0.5);
   }
 
-  private trackStuck(now: number, me: PlayerState, moving: boolean) {
-    if (!moving || now < this.unstickUntil) { this.stuckRef = null; return; }
+  private trackStuck(now: number, me: PlayerState, want: Vec3 | null) {
+    if (!want || now < this.unstickUntil) { this.stuckRef = null; return; }
     if (!this.stuckRef) { this.stuckRef = { pos: clone(me.pos), t: now }; return; }
     if (now - this.stuckRef.t < STUCK_SEC) return;
     if (dist2D(me.pos, this.stuckRef.pos) < STUCK_DIST) {
-      this.unstickUntil = now + UNSTICK_SEC;
+      const again = this.stuckAt && dist2D(this.stuckAt.pos, me.pos) < 3 && now - this.stuckAt.t < 15;
+      const n = again ? Math.min(3, this.stuckAt!.n + 1) : 0;
+      this.stuckAt = { pos: clone(me.pos), t: now, n };
       this.unstickSide = this.rng() < 0.5 ? -1 : 1;
-      this.nextScoreAt = now + UNSTICK_SEC;
+      // 90° aside the first time, then further round toward backing off (135°, 180°), for longer.
+      const turn = this.unstickSide * (Math.PI / 2 + Math.min(n, 2) * Math.PI / 4);
+      this.unstickDir = n === 0 ? null : rotateY(norm(flat(want)), turn);
+      this.unstickUntil = now + UNSTICK_SEC * (1 + n);
+      this.nextScoreAt = now + UNSTICK_SEC * (1 + n);
       this.wander = null;
     }
     this.stuckRef = { pos: clone(me.pos), t: now };
