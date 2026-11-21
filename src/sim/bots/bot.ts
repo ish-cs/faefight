@@ -337,7 +337,9 @@ export class Bot {
     const ammo = me.equipped === 'fists' ? null : me.inv.weapons[me.equipped];
     const slot = best !== me.equipped && (me.reloadUntil === 0 || !ammo || ammo.mag === 0) ? best : null;
     if (slot) fire = false;
-    const reload = !enemy && !slot && !!ammo && me.reloadUntil === 0 && ammo.spare > 0 && ammo.mag < WEAPONS[me.equipped].mag * 0.6;
+    // An empty mag gets reloaded whoever is in sight (a full one only tops up when nobody is).
+    const reload = !slot && !!ammo && me.reloadUntil === 0 && ammo.spare > 0 &&
+      (ammo.mag === 0 || (!enemy && ammo.mag < WEAPONS[me.equipped].mag * 0.6));
 
     // Movement: stuck recovery, then never step toward water.
     let dir = act.dir;
@@ -732,14 +734,17 @@ export class Bot {
         // everything to fight when they're close or on the same island.
         const sameIsland = islandAt(view.map, c.enemy.pos) === islandAt(view.map, me.pos);
         if (!sameIsland && c.enemyDist > ENGAGE_RANGE) return 0.2;
-        return (gun || c.enemyDist < 8 ? 0.85 : 0.35) + 0.25 * t.aggression;
+        // Sudden death with no ammo left anywhere to buy it: fists are all there is.
+        return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression;
       }
       case 'disengage': {
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
+        // Outside the safe ring, getting in comes first (running from a gun into the storm kills just as well).
+        if (view.storm && Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm)) return 0;
         const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
         if (hp < low) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
-        const outgunned = !gun && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
+        const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
           (c.enemyDist < Math.min(ENGAGE_RANGE, WEAPONS[c.enemy.equipped].range) || view.now - this.mem.lastHurtAt < 1.5);
         return outgunned ? 0.95 + 0.2 * t.caution : 0;
       }
@@ -888,7 +893,7 @@ export class Bot {
     let best: Goal = (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
-      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now) continue;
+      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrep(c.view)) continue;
       const base = this.drive(g, c, this.score(g, c));
       if (base <= 0 && g !== best) continue;
       const s = base + (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
@@ -1709,7 +1714,9 @@ export class Bot {
     const st = view.storm;
     if (!st || this.difficulty === 'easy') return dir;
     const d = Math.hypot(me.pos.x - st.x, me.pos.z - st.z);
-    if (d < 0.5 || d < this.stormSafeR(st) - 1.5) return dir;
+    // Only at the edge of where I want to be: further out, the storm goal is taking me in (or back home for decks).
+    const safe = this.stormSafeR(st);
+    if (d < 0.5 || d < safe - 1.5 || d > safe + 1) return dir;
     const out = v3((me.pos.x - st.x) / d, 0, (me.pos.z - st.z) / d);
     const k = dir.x * out.x + dir.z * out.z;
     if (k <= 0) return dir;
@@ -1749,7 +1756,8 @@ export class Bot {
    */
   private watchdog(now: number, me: PlayerState) {
     const limit = STALL_SEC[this.goal];
-    if (limit === undefined) { this.prog = null; return; }
+    // Getting set for the storm (decks to the center, buying them) is never given up.
+    if (limit === undefined || this.stormPrep(this.view)) { this.prog = null; return; }
     const p = this.prog;
     if (!p || p.goal !== this.goal || dist2D(p.pos, me.pos) > STALL_DIST || this.lastDidAt > p.at) {
       this.prog = { goal: this.goal, at: now, pos: clone(me.pos) };

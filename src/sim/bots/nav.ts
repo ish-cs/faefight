@@ -454,7 +454,29 @@ export class Nav {
     const gap = sTarget - sMe;
     if (Math.abs(gap) < 0.5) return b >= 0 && a !== b ? laneAt(l, sTarget) : dest;
     const carrot = laneAt(l, sMe + Math.sign(gap) * Math.min(CARROT, Math.abs(gap)));
-    return a >= 0 ? this.within(a, me, carrot) : carrot;
+    return a >= 0 ? this.within(a, me, carrot) : this.alongDeck(me, carrot);
+  }
+
+  /**
+   * Out on a bridge: walk the centreline of the deck I'm standing on toward the carrot (the lane math can pick a
+   * neighbouring lane a few metres to the side, and steering at it walks off the edge).
+   */
+  private alongDeck(me: Vec3, carrot: Vec3): Vec3 {
+    let deck: { pos: Vec3; rotY: number } | null = null, bestD = Infinity;
+    for (const p of this.view.pieces) {
+      if (p.kind !== 'scaffold' || Math.abs(p.pos.y - me.y) > 1) continue;
+      const d = dist2D(p.pos, me);
+      if (d < bestD && d < 2.4) { bestD = d; deck = p; }
+    }
+    if (!deck) return carrot;
+    const u = v3(Math.sin(deck.rotY), 0, Math.cos(deck.rotY));
+    const along = (me.x - deck.pos.x) * u.x + (me.z - deck.pos.z) * u.z;
+    const side = Math.abs((me.x - deck.pos.x) * u.z - (me.z - deck.pos.z) * u.x);
+    // Off this deck's footprint (between two decks, or stepping onto land): the lane carrot is fine.
+    if (Math.abs(along) > 2.2 || side > 1.2) return carrot;
+    const k = (carrot.x - me.x) * u.x + (carrot.z - me.z) * u.z;
+    const sign = k >= 0 ? 1 : -1;
+    return v3(deck.pos.x + u.x * (along + sign * CARROT), me.y, deck.pos.z + u.z * (along + sign * CARROT));
   }
 
   /**
