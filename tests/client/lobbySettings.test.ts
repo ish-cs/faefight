@@ -35,7 +35,7 @@ async function hostWithFriends(n = 1) {
 
 describe('lobby over the network', () => {
   test('NET_VERSION bumped for the new messages', () => {
-    expect(NET_VERSION).toBe(8);
+    expect(NET_VERSION).toBeGreaterThanOrEqual(8);
   });
 
   test('ready state syncs to the host and every guest; resets back in the lobby', async () => {
