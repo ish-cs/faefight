@@ -93,7 +93,8 @@ function fullMaterial(team: number | null, dirtAmt: number) {
   // --- weave: a fine plain weave, faded out before it can alias
   const a = P.x.add(P.z).mul(2400), b = P.y.mul(2400);
   const weave = sin(a).mul(sin(b));
-  const fade = float(1).sub(smoothstep(0.7, 2.2, fwidth(a).add(fwidth(b))));
+  // first-person sleeves (dirt 0) sit centimetres from the camera, where the weave would read as a printed chevron
+  const fade = float(1).sub(smoothstep(0.7, 2.2, fwidth(a).add(fwidth(b)))).mul(uniform(dirtAmt > 0 ? 1 : 0.2));
   const seam = surf.y;
   const fabricK = is(K.camo).add(is(K.cloth)).add(is(K.team));
   const fabricShade = float(1).add(weave.mul(0.025).mul(fade)).sub(seam.mul(0.32)).mul(float(0.94).add(nC.x.mul(0.12)));
