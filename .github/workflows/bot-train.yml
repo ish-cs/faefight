@@ -1,0 +1,249 @@
+name: bot-train
+
+# ES self-play training (scripts/train/*) on GitHub runners, one generation per workflow run. See docs/bots-on-ci.md.
+#
+# MANUAL ONLY. This workflow is started by hand (workflow_dispatch) and never on a schedule or on push, to stay
+# within GitHub's Actions terms (Actions is for the repo's software lifecycle; no unattended always-on compute).
+# A run chains the next generation with `gh workflow run` only until the `generations` hard stop it was started
+# with (also capped at 200 in scripts/ci/train-step.ts). Stop a chain early with `gh run cancel <id>`.
+#
+# Design (simplest robust option): one run = one generation.
+#   prepare  → state from the previous run's `train-state` artifact (or a fresh init), re-uploaded as train-state-in
+#   play     → matrix: each shard re-derives the generation's match list from the state (seeded) and plays its slice
+#   update   → gathers all shards' results, steps the ES, uploads `train-state` (state.json, log.jsonl, champion)
+#   eval     → matrix, only every evalEvery generations and at the last one: champion vs hand-tuned head-to-head
+#   finish   → folds the eval into the state, writes the job summary + `champion` artifact, dispatches the next run
+# The state never lives anywhere but artifacts; a failed run can be resumed by dispatching with prev_run=<its parent>.
+#
+#   gh workflow run bot-train.yml --ref <branch with this file> -f ref=<trainer code> -f generations=10
+# Or: scripts/gh-train.sh <ref> <generations> ['<config json>']
+
+on:
+  # Registration only: GitHub can dispatch a workflow by --ref only once it has run at least once. A push that
+  # edits this file creates a no-op run (every job is skipped on push). It never trains on push.
+  push:
+    paths: [.github/workflows/bot-train.yml]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref with the trainer code to run (must have scripts/train/)
+        required: true
+        default: main
+      generations:
+        description: Hard stop — total generations for this training run (1..200). Read only when starting fresh.
+        required: true
+        default: '10'
+      config:
+        description: 'TrainConfig overrides as JSON, fresh start only (lambda, games, candSeats, players, maxSec, seed, duels, duelWeight, evalEvery, evalGames)'
+        required: false
+        default: '{}'
+      from_trained:
+        description: Fresh start from src/sim/bots/trained-params.json instead of the hand-tuned params
+        type: boolean
+        default: false
+      shards:
+        description: Parallel jobs for a generation's games
+        required: false
+        default: '5'
+      eval_shards:
+        description: Parallel jobs for the champion-vs-hand eval
+        required: false
+        default: '10'
+      prev_run:
+        description: Run id to continue from (set by the chain; empty = fresh start)
+        required: false
+        default: ''
+      label:
+        description: Free-text name for this training run (carried along the chain)
+        required: false
+        default: ''
+
+run-name: "bot-train ${{ inputs.label }} @ ${{ inputs.ref }}${{ inputs.prev_run && format(' (after {0})', inputs.prev_run) || ' (start)' }}"
+
+permissions:
+  contents: read
+  actions: write   # download the previous run's artifacts, dispatch the next generation
+
+concurrency:
+  group: bot-train-${{ inputs.label }}-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: ${{ github.event_name != 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      eval_shards: ${{ steps.plan.outputs.eval_shards }}
+      gen: ${{ steps.plan.outputs.gen }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: tools }
+      - uses: ./tools/.github/actions/bot-setup
+        with: { ref: '${{ inputs.ref }}', need-trainer: 'true' }
+      - name: state
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREV: ${{ inputs.prev_run }}
+          GENS: ${{ inputs.generations }}
+          CONFIG: ${{ inputs.config }}
+          FROM_TRAINED: ${{ inputs.from_trained }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PREV" ]; then
+            [[ "$PREV" =~ ^[0-9]+$ ]] || { echo "::error::prev_run must be a run id"; exit 1; }
+            gh run download "$PREV" --repo "$GITHUB_REPOSITORY" -n train-state -D "$RUNNER_TEMP/state"
+          else
+            cfg="$CONFIG"; [ -n "$cfg" ] || cfg='{}'
+            tsx scripts/ci/train-step.ts init --out "$RUNNER_TEMP/state" --generations "$GENS" --config "$cfg" --from-trained "$FROM_TRAINED"
+          fi
+          rm -f "$RUNNER_TEMP/state/summary.md"
+          gen=$(jq .es.gen "$RUNNER_TEMP/state/state.json"); stop=$(jq .stopAtGen "$RUNNER_TEMP/state/ci-config.json")
+          echo "generation $gen of $stop"
+          [ "$gen" -lt "$stop" ] || { echo "::error::already at generation $gen (hard stop $stop)"; exit 1; }
+      - id: plan
+        env:
+          SHARDS: ${{ inputs.shards }}
+          EVAL_SHARDS: ${{ inputs.eval_shards }}
+        run: |
+          set -euo pipefail
+          for n in "$SHARDS" "$EVAL_SHARDS"; do [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le 20 ] || { echo "::error::shards must be 1..20"; exit 1; }; done
+          echo "shards=$(seq 1 "$SHARDS" | jq -sc .)" >> "$GITHUB_OUTPUT"
+          echo "eval_shards=$(seq 1 "$EVAL_SHARDS" | jq -sc .)" >> "$GITHUB_OUTPUT"
+          echo "gen=$(jq .es.gen "$RUNNER_TEMP/state/state.json")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with: { name: train-state-in, path: '${{ runner.temp }}/state', retention-days: 7 }
+
+  play:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: ${{ fromJSON(needs.prepare.outputs.shards) }}
+    name: gen ${{ needs.prepare.outputs.gen }} shard ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: tools }
+      - uses: ./tools/.github/actions/bot-setup
+        with: { ref: '${{ inputs.ref }}', need-trainer: 'true' }
+      - uses: actions/download-artifact@v4
+        with: { name: train-state-in, path: '${{ runner.temp }}/state' }
+      - working-directory: target
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.shards }}
+        run: tsx scripts/ci/train-step.ts play --state "$RUNNER_TEMP/state" --phase gen --shard "$SHARD" --shards "$SHARDS" --out "$RUNNER_TEMP/gen-$SHARD.json"
+      - uses: actions/upload-artifact@v4
+        with: { name: 'gen-shard-${{ matrix.shard }}', path: '${{ runner.temp }}/gen-${{ matrix.shard }}.json', retention-days: 3 }
+
+  update:
+    needs: [prepare, play]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      eval_due: ${{ steps.update.outputs.eval_due }}
+      done: ${{ steps.update.outputs.done }}
+      gen: ${{ steps.update.outputs.gen }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: tools }
+      - uses: ./tools/.github/actions/bot-setup
+        with: { ref: '${{ inputs.ref }}', need-trainer: 'true' }
+      - uses: actions/download-artifact@v4
+        with: { name: train-state-in, path: '${{ runner.temp }}/state' }
+      - uses: actions/download-artifact@v4
+        with: { pattern: gen-shard-*, path: '${{ runner.temp }}/gen' }
+      - id: update
+        working-directory: target
+        run: tsx scripts/ci/train-step.ts update --state "$RUNNER_TEMP/state" --results "$RUNNER_TEMP/gen" --out "$RUNNER_TEMP/next"
+      - uses: actions/upload-artifact@v4
+        with: { name: train-state, path: '${{ runner.temp }}/next', retention-days: 30 }
+
+  eval:
+    needs: [prepare, update]
+    if: ${{ needs.update.outputs.eval_due == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: ${{ fromJSON(needs.prepare.outputs.eval_shards) }}
+    name: eval gen ${{ needs.update.outputs.gen }} shard ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: tools }
+      - uses: ./tools/.github/actions/bot-setup
+        with: { ref: '${{ inputs.ref }}', need-trainer: 'true' }
+      - uses: actions/download-artifact@v4
+        with: { name: train-state, path: '${{ runner.temp }}/state' }
+      - working-directory: target
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.eval_shards }}
+        run: tsx scripts/ci/train-step.ts play --state "$RUNNER_TEMP/state" --phase eval --shard "$SHARD" --shards "$SHARDS" --out "$RUNNER_TEMP/eval-$SHARD.json"
+      - uses: actions/upload-artifact@v4
+        with: { name: 'eval-shard-${{ matrix.shard }}', path: '${{ runner.temp }}/eval-${{ matrix.shard }}.json', retention-days: 3 }
+
+  finish:
+    needs: [update, eval]
+    if: ${{ !cancelled() && needs.update.result == 'success' && needs.eval.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: tools }
+      - uses: ./tools/.github/actions/bot-setup
+        if: ${{ needs.update.outputs.eval_due == 'true' }}
+        with: { ref: '${{ inputs.ref }}', need-trainer: 'true' }
+      - uses: actions/download-artifact@v4
+        with: { name: train-state, path: '${{ runner.temp }}/state' }
+      - uses: actions/download-artifact@v4
+        if: ${{ needs.update.outputs.eval_due == 'true' }}
+        with: { pattern: eval-shard-*, path: '${{ runner.temp }}/eval' }
+      - name: eval result
+        if: ${{ needs.update.outputs.eval_due == 'true' }}
+        working-directory: target
+        run: tsx scripts/ci/train-step.ts eval --state "$RUNNER_TEMP/state" --results "$RUNNER_TEMP/eval" --out "$RUNNER_TEMP/state"
+      - uses: actions/upload-artifact@v4
+        if: ${{ needs.update.outputs.eval_due == 'true' }}
+        with: { name: train-state, path: '${{ runner.temp }}/state', retention-days: 30, overwrite: true }
+      - uses: actions/upload-artifact@v4
+        with: { name: champion, path: '${{ runner.temp }}/state/trained-params.json', retention-days: 30 }
+      - name: summary
+        env:
+          REF: ${{ inputs.ref }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          set -euo pipefail
+          S="$RUNNER_TEMP/state"
+          {
+            echo "## bot-train ${LABEL} @ ${REF}"
+            cat "$S/summary.md"
+            echo
+            echo "### Champion-vs-hand evals so far"
+            echo "| gen | win share | 95% CI | decisive | games |"
+            echo "|---|---|---|---|---|"
+            jq -r '.evals[] | "| \(.gen) | \(.share*100|round)% | ± \(.ci95*100|round) | \(.decisive)/\(.games) | \(.games) |"' "$S/state.json"
+            echo
+            echo "Artifacts: \`train-state\` (state.json, log.jsonl, ci-config.json, trained-params.json), \`champion\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: chain next generation
+        if: ${{ needs.update.outputs.done != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+          LABEL: ${{ inputs.label }}
+          SHARDS: ${{ inputs.shards }}
+          EVAL_SHARDS: ${{ inputs.eval_shards }}
+        run: |
+          set -euo pipefail
+          gh workflow run bot-train.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f ref="$REF" -f prev_run="$GITHUB_RUN_ID" -f label="$LABEL" -f shards="$SHARDS" -f eval_shards="$EVAL_SHARDS"
+          echo "dispatched generation ${{ needs.update.outputs.gen }} (after run $GITHUB_RUN_ID)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: done
+        if: ${{ needs.update.outputs.done == 'true' }}
+        run: echo "**Training finished** at generation ${{ needs.update.outputs.gen }} (hard stop)." | tee -a "$GITHUB_STEP_SUMMARY"
