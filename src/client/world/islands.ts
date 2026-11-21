@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
 import { bunkerSlitBoxes, bunkerWallBoxes, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
+import { registerDistanceCull } from './lod';
 import { buildCenter, paintedTopMaterial } from './center';
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrierProp, containerCover, containerLite, reefer, rtg } from './mapProps';
@@ -36,6 +37,8 @@ function labelSprite(text: string, bg: string): THREE.Sprite {
   m.color.setScalar(UNLIT_BOOST);
   const s = new THREE.Sprite(m);
   s.scale.set(1.5, 0.375, 1);
+  // a 1.5 m label is a few unreadable pixels past ~90 m: one draw (own texture) saved per far label
+  s.userData.lod = registerDistanceCull(s, 90, { center: s.position, radius: 1 });
   return s;
 }
 
@@ -240,9 +243,9 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   if (yard) gapCranes(dress, map, groundY, def.center);
   distantIslands(dress, map);
 
-  const bunkers = solid.build(root, 'bunkers');
+  const bunkers = solid.build(root, 'bunkers', { chunked: true });
   collidables.push(...bunkers);
-  dress.build(root, 'dressing');
+  dress.build(root, 'dressing', { chunked: true });
   return { collidables, root };
 }
 

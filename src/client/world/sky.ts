@@ -6,6 +6,7 @@ import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
+import { SMALL_CASTER_LAYER } from './lod';
 import { buildPipeline, grade, type PostOptions, sunScreen } from './post';
 
 export type Quality = 'low' | 'high' | 'ultra';
@@ -33,6 +34,9 @@ const PRESETS: Record<Quality, Preset> = {
   high: { pixelRatio: 1.5, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true } },
   ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true } },
 };
+
+/** Far-cascade caster mask: layer 0 only (+ unused bit 31, see cascadeLayers). */
+const FAR_CASCADE_MASK = 1 | (1 << 31);
 
 const SKY = { turbidity: 3, rayleigh: 1.5, mieCoefficient: 0.002, mieDirectionalG: 0.9 };
 
@@ -88,6 +92,7 @@ export class SkyLighting {
 
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
+    camera.layers.enable(SMALL_CASTER_LAYER); // small props: drawn by the camera, cast into the near cascades only
     gpu.toneMapping = THREE.ACESFilmicToneMapping;
     gpu.toneMappingExposure = 0.5;
     gpu.shadowMap.enabled = true;
@@ -216,7 +221,8 @@ export class SkyLighting {
     // Cascaded shadows: crisp near the player, still casting long shadows out to `shadowFar`. CSMShadowNode
     // snaps each cascade to its texel grid, so edges don't shimmer as the camera moves.
     const sh = this.sun.shadow;
-    sh.mapSize.set(p.shadowMap, p.shadowMap);
+    const size = p.shadowMap * this.govShadow;
+    sh.mapSize.set(size, size);
     sh.radius = p.shadowMap >= 2048 ? 2.5 : 1.5;
     const prev = this.csm;
     const csm = new CSMShadowNode(this.sun, { cascades: p.cascades, maxFar: p.shadowFar, mode: 'practical', lightMargin: 120 });
@@ -233,8 +239,37 @@ export class SkyLighting {
     }
 
     this.pipeline?.dispose();
-    this.pipeline = buildPipeline(this.gpu, this.scene, this.camera, p.post, this.interiorAO);
+    this.pipeline = buildPipeline(this.gpu, this.scene, this.camera, this.postOptions(), this.interiorAO);
   }
+
+  /** The preset's post chain minus whatever the frame-time governor has switched off. */
+  private postOptions(): PostOptions {
+    const p = PRESETS[this.quality].post;
+    return this.govAo ? p : { ...p, ao: false };
+  }
+  private govAo = true;
+  private govShadow = 1;
+
+  /**
+   * Frame-time governor knobs (governor.ts): GTAO on/off (rebuilds the post pipeline) and a shadow-map size
+   * multiplier (applied live to every cascade).
+   */
+  setGovernor(k: { ao: boolean; shadowScale: number }) {
+    if (k.ao !== this.govAo) {
+      this.govAo = k.ao;
+      this.pipeline?.dispose();
+      this.pipeline = buildPipeline(this.gpu, this.scene, this.camera, this.postOptions(), this.interiorAO);
+    }
+    if (k.shadowScale !== this.govShadow) {
+      this.govShadow = k.shadowScale;
+      const size = PRESETS[this.quality].shadowMap * k.shadowScale;
+      this.sun.shadow.mapSize.set(size, size);
+      for (const l of this.csm?.lights ?? []) l.shadow!.mapSize.set(size, size);
+    }
+  }
+
+  /** Whether the current preset has screen-space AO at all (the governor skips the AO rung when not). */
+  get presetHasAo(): boolean { return !!PRESETS[this.quality].post.ao; }
 
   /** Draw the frame (cascades follow the camera on their own). */
   render() {
@@ -244,7 +279,19 @@ export class SkyLighting {
       sunScreen.front.value = v.z < 1 ? 1 : 0;
       sunScreen.aspect.value = this.camera.aspect;
     }
+    this.cascadeLayers();
     this.pipeline!.render();
+  }
+
+  /**
+   * Shadow-caster culling per cascade: the near cascades see every caster (camera's layers); the far ones skip the
+   * SMALL_CASTER_LAYER (an extra unused layer bit keeps ShadowNode from copying the camera's mask over it).
+   */
+  private cascadeLayers() {
+    const lights = this.csm?.lights;
+    if (!lights?.length) return;
+    const near = lights.length >= 3 ? 2 : 1;
+    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i < near ? this.camera.layers.mask : FAR_CASCADE_MASK;
   }
 
   dispose() { this.pipeline?.dispose(); this.csm?.dispose(); }

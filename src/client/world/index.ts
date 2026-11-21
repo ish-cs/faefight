@@ -11,6 +11,7 @@ import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
 import { setBuiltInPotionStalls } from './potionSeller';
 import { installQualityToggle, SkyLighting } from './sky';
+import { lods, releaseLods } from './lod';
 import { STRESS, stressOffsets } from './stress';
 import { buildWater, type Ocean } from './water';
 
@@ -88,6 +89,7 @@ export class World {
     if (this.islands) {
       const hulls = new Set(this.islandHulls);
       for (let i = this.collidables.length - 1; i >= 0; i--) if (hulls.has(this.collidables[i])) this.collidables.splice(i, 1);
+      releaseLods(this.islands);
       this.islands.traverse((o) => { if (o instanceof THREE.Mesh) o.geometry.dispose(); });
       this.islands.removeFromParent();
       this.islands = null;
@@ -127,6 +129,8 @@ export class World {
     this.grass.setQuality(this.sky.quality);
     this.scatter.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
+    lods.setQuality(this.sky.quality);
+    lods.update(this.sky.camera.position);
     this.pieceFx.update(performance.now());
     this.sky.render(); // cascaded shadows follow the camera themselves
   }

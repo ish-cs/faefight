@@ -30,7 +30,8 @@ import { HELP_TEXT, HOST_ONLY, MONEY_HOST_ONLY, MONEY_NOT_IN_MATCH, MONEY_USAGE,
 import { currentDevice, currentIsChromium, isMobileDevice, showComputerOnly } from './device';
 import { openHowTo } from './howTo';
 import { SnapshotBuffer } from './snapBuffer';
-import { DynamicResolution } from './dynRes';
+import { FrameGovernor } from './governor';
+import { lods } from './world/lod';
 import { endButtons, GameScope, type EndRole } from './rematch';
 import { Scoreboard } from './scoreboard';
 import { applyDocumentSettings } from './settings/apply';
@@ -606,15 +607,32 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let running = true;
   /** Free-fly chosen from the end screen (otherwise spectating = being dead). */
   let spectateChosen = false;
-  /** Dynamic resolution: drops the render scale while frames run over budget, restores it when stable. */
-  const dynRes = new DynamicResolution();
-  dynRes.enabled = settings.get().video.dynamicResolution;
+  /**
+   * Frame-time governor (Settings → Video "dynamic resolution"): over budget it drops GTAO, shadow resolution,
+   * grass density and LOD distance first, render resolution last; restores them with headroom.
+   */
+  const governor = new FrameGovernor();
+  const sky = renderer.world.sky;
+  const govSkip = () => governor.setSkip((a, b) => !sky.presetHasAo && a.ao !== b.ao && a.shadowScale === b.shadowScale && a.grass === b.grass && a.lodBias === b.lodBias && a.res === b.res);
+  govSkip();
+  governor.enabled = settings.get().video.dynamicResolution;
+  const applyGovernor = () => {
+    const k = governor.knobs;
+    sky.setGovernor(k);
+    renderer.world.grass.densityScale = k.grass;
+    lods.bias = k.lodBias;
+    sky.setDynamicScale(k.res);
+  };
+  let govQuality = sky.quality;
   const offSettings = settings.subscribe((st) => {
-    renderer.world.sky.setQuality(st.video.quality);
-    renderer.world.sky.setResolutionScale(st.video.resolutionScale);
-    dynRes.enabled = st.video.dynamicResolution;
-    renderer.world.sky.setDynamicScale(dynRes.scale);
+    sky.setQuality(st.video.quality);
+    sky.setResolutionScale(st.video.resolutionScale);
+    governor.enabled = st.video.dynamicResolution;
+    if (sky.quality !== govQuality) { govQuality = sky.quality; governor.reset(); govSkip(); }
+    applyGovernor();
   });
+  /** Shift+F3: perf detail under the FPS counter. */
+  let perfDetail = DEBUG;
 
   // ---- reveal: map + avatars + first snapshot → shader warm-up → a few hidden frames → fade in ----
   let charsReady = false, warmStarted = false, warmed = false, revealed = false, framesAfterWarm = 0;
@@ -797,6 +815,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   window.addEventListener('keydown', (e) => {
     if (e.repeat || !isAction('fps', e.code) || e.target instanceof HTMLInputElement) return;
     e.preventDefault();
+    if (e.shiftKey) { perfDetail = !perfDetail; if (!perfDetail) hud.setFpsDetail(null); return; }
     settings.update((d) => { d.video.showFps = !d.video.showFps; });
   });
 
@@ -1063,7 +1082,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       frames: () => frameStats(),
       resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; },
       gpuMs: () => renderer.gpuStats(),
-      renderScale: () => ({ dyn: dynRes.scale, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: dynRes.smoothedMs }),
+      renderScale: () => ({ dyn: governor.knobs.res, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: governor.smoothedMs }),
+      governor: () => ({ level: governor.level, knobs: governor.knobs, enabled: governor.enabled, lodTargets: lods.count, lodScale: lods.scale }),
       interpDelay: () => renderer.interpDelay,
       shotPredict: () => ({ ...shots.stats, inFlight: shots.inFlight, times: shotTimes }),
       /** Current build ghost: snap tag, ghost/rest position, rotation, validity (+ reason) and the exact request a click sends. */
@@ -1146,14 +1166,24 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
-      dynRes.frame(now - last, 1000 / (cap || 60));
-      renderer.world.sky.setDynamicScale(dynRes.scale);
+      if (governor.frame(now - last, 1000 / (cap || 60))) applyGovernor();
     }
     frameMs.push(now - last);
     if (frameMs.length > 600) frameMs.shift();
     last = now;
     fpsFrames++;
-    if (now - fpsSince >= 500) { hud.setFps((fpsFrames * 1000) / (now - fpsSince)); fpsFrames = 0; fpsSince = now; }
+    if (now - fpsSince >= 500) {
+      hud.setFps((fpsFrames * 1000) / (now - fpsSince));
+      if (perfDetail) {
+        const ri = renderer.info(), g = renderer.gpuMs.length ? renderer.gpuMs[renderer.gpuMs.length - 1] : null;
+        hud.setFpsDetail([
+          `${((now - fpsSince) / fpsFrames).toFixed(1)} ms${g !== null ? ` · gpu ${g.toFixed(1)} ms` : ''}`,
+          `${ri.drawCalls} draws · ${(ri.triangles / 1e6).toFixed(2)}M tris`,
+          `gov ${governor.level} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
+        ]);
+      }
+      fpsFrames = 0; fpsSince = now;
+    }
     if (buffer) for (const r of buffer.advance(dt)) applySnapshot(r.snap);
     renderer.beginFrame();
 
