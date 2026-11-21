@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU); // plays a match
 
 // Practice range: Practice on the main menu → alone on the range with ∞ cash and no clock; the shop is free and
 // opens anywhere; shooting a lane target shows hit feedback and damage numbers; building is free; the seal check
