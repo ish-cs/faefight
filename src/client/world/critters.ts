@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import {
   abs, attribute, positionLocal, cameraFar, instancedDynamicBufferAttribute, cameraNear, cos, exp, float, max, min, mix, positionGeometry, positionView, sin,
   uniform, vec3, viewZToPerspectiveDepth,
+  mx_noise_float, mx_worley_noise_float, normalLocal, smoothstep, uv, vec2, vertexColor,
 } from 'three/tsl';
 import type { MapDef } from '../../sim/map';
 import type { MatchEvent, Vec3 } from '../../sim/types';
@@ -42,7 +43,63 @@ function animated(name: string, water: boolean, critAttr: THREE.InstancedBufferA
   const off = vec3(p.x.mul(fold.mul(swell).sub(1)).add(dxTail), dyLeg.add(dyWing).add(dyHead), p.z.mul(swell.sub(1)).add(dz));
   const col = (k: number) => (instancedDynamicBufferAttribute(mats, 'vec4', 16, k * 4) as unknown as THREE.Node<'vec4'>).xyz;
   m.positionNode = positionLocal.add(col(0).mul(off.x)).add(col(1).mul(off.y)).add(col(2).mul(off.z));
+  surface(m, name);
   if (water) underwater(m, name === 'jelly' ? 0.55 : 0.7);
+  return m;
+}
+
+type Coat = 'fur' | 'feather' | 'scale' | 'shell' | 'none';
+const COAT: Record<string, Coat> = {
+  rat: 'fur', dog: 'fur',
+  pigeon: 'feather', gull: 'feather', crow: 'feather', pelican: 'feather', cormorant: 'feather', heron: 'feather', parrot: 'feather',
+  lizard: 'scale', gecko: 'scale', iguana: 'scale', fish: 'scale',
+  crab: 'shell', hermit: 'shell', turtle: 'shell', starfish: 'shell',
+};
+
+/**
+ * Procedural coat in model space (the pattern sticks to the animal as it moves): fine fur streaks / feather rows /
+ * scale cells / mottled shell, broad mottling, countershading (darker back, lighter belly), darker legs, glossy
+ * eyes (the near-black vertex colour), a warm translucent tint on thin pink parts (ears, feet), roughness from the
+ * same noise. `colorNode` multiplies vertex × instance colour.
+ */
+function surface(m: THREE.MeshStandardNodeMaterial, name: string) {
+  const coat = COAT[name] ?? 'none';
+  if (coat === 'none') return;
+  const P = positionGeometry, vc = vertexColor() as unknown as THREE.Node<'vec3'>;
+  const limb = attribute<'vec2'>('limb', 'vec2');
+  const legs = isK(limb.x, 1).add(isK(limb.x, 2));
+  const mottle = mx_noise_float(P.mul(9)).mul(0.5).add(0.5);
+  let pat: F;
+  if (coat === 'fur') pat = mx_noise_float(vec3(P.x.mul(140), P.y.mul(140), P.z.mul(40))).mul(0.22).add(0.92).mul(mottle.mul(0.18).add(0.91));
+  else if (coat === 'feather') {
+    // overlapping feather rows down the body, each with a lighter edge
+    const row = P.z.mul(38).add(mx_noise_float(P.mul(25)).mul(0.6)).fract();
+    pat = smoothstep(0.55, 0.95, row).mul(0.16).add(0.9).mul(mottle.mul(0.12).add(0.94));
+  } else if (coat === 'scale') {
+    const cell = mx_worley_noise_float(P.mul(110)) as unknown as F;
+    pat = smoothstep(0.05, 0.45, cell).mul(0.3).add(0.78).mul(mottle.mul(0.25).add(0.88));
+  } else pat = mx_noise_float(P.mul(30)).mul(0.18).add(0.92).mul(mottle.mul(0.3).add(0.82));
+  // countershading: up-facing back darker, belly lighter; legs and feet darker
+  const back = normalLocal.y;
+  const shade = mix(float(1.12), float(0.88), smoothstep(-0.6, 0.8, back)).mul(mix(float(1), float(0.72), legs));
+  m.colorNode = vec3(pat.mul(shade));
+  const lum = vc.x.add(vc.y).add(vc.z);
+  const eye = float(1).sub(smoothstep(0.02, 0.06, lum));
+  const base = coat === 'scale' ? 0.45 : coat === 'shell' ? 0.5 : coat === 'feather' ? 0.7 : 0.85;
+  m.roughnessNode = mix(float(base).add(mottle.sub(0.5).mul(0.2)), float(0.06), eye);
+  // warm back-lit tint on thin pinkish parts (ears, feet, tails): red clearly above green
+  const pink = smoothstep(0.06, 0.18, vc.x.sub(vc.y)).mul(smoothstep(0.5, 0.9, vc.x));
+  m.emissiveNode = vec3(0.9, 0.35, 0.3).mul(pink.mul(0.12));
+}
+
+/** Contact shadows: one instanced soft dark disc under every grounded animal (they don't cast real shadows). */
+function blobMaterial() {
+  const m = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false });
+  m.name = 'critter:blob';
+  const d = uv().sub(vec2(0.5, 0.5)).length();
+  m.colorNode = vec3(0, 0, 0);
+  m.opacityNode = float(1).sub(smoothstep(0.12, 0.5, d)).mul(0.42);
+  m.polygonOffset = true; m.polygonOffsetFactor = -2; m.polygonOffsetUnits = -2;
   return m;
 }
 
@@ -61,7 +118,7 @@ function underwater(m: THREE.MeshStandardNodeMaterial, opacity: number) {
 type SpeciesMesh = { def: SpeciesDef; mesh: THREE.InstancedMesh; crit: THREE.InstancedBufferAttribute; mats: THREE.InstancedInterleavedBuffer; tinted: boolean };
 type SwarmMesh = { def: SwarmDef; mesh: THREE.InstancedMesh; a: THREE.InstancedBufferAttribute; b: THREE.InstancedBufferAttribute };
 
-const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _e = new THREE.Euler();
+const _m2 = new THREE.Matrix4(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _e = new THREE.Euler();
 const _x = new THREE.Vector3(), _y = new THREE.Vector3(), _z = new THREE.Vector3(), _c = new THREE.Color();
 const _fr = new THREE.Frustum(), _pm = new THREE.Matrix4(), _sp = new THREE.Sphere();
 
@@ -77,6 +134,7 @@ export class Critters {
   /** Positional critter sounds for the audio system (squeak, bark, buzz, …). */
   onSound: ((s: CritterSound) => void) | null = null;
   private species: SpeciesMesh[] = [];
+  private blobs!: THREE.InstancedMesh;
   private swarms: SwarmMesh[] = [];
   private hab: Habitats;
   private swarmClock = 0;
@@ -112,6 +170,13 @@ export class Critters {
       this.root.add(mesh);
     }
     for (const d of SWARM_DEFS) this.swarms.push(this.swarmMesh(d));
+    const maxBlobs = SPECIES_DEFS.filter((d) => d.mode === 'ground').reduce((a, d) => a + d.cap.ultra, 0);
+    this.blobs = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), blobMaterial(), maxBlobs);
+    this.blobs.name = 'critter:blobs';
+    this.blobs.count = 0;
+    this.blobs.frustumCulled = false;
+    this.blobs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.root.add(this.blobs);
   }
 
   setQuality(q: CritterQuality) { this.quality = q; this.sim.quality = q; }
@@ -170,6 +235,7 @@ export class Critters {
   }
 
   private writeAgents(visible: (x: number, y: number, z: number, r: number) => boolean) {
+    let nb = 0;
     for (const s of this.species) {
       let n = 0;
       const crit = s.crit.array as Float32Array;
@@ -179,6 +245,11 @@ export class Critters {
         s.mesh.setMatrixAt(n, _m);
         crit[n * 3] = a.phase; crit[n * 3 + 1] = a.gait; crit[n * 3 + 2] = a.pose;
         if (s.tinted) { const t = TINTS[s.def.name]; s.mesh.setColorAt(n, _c.setHex(t[a.id % t.length])); }
+        if (s.def.mode === 'ground' && a.st !== 'fly' && a.st !== 'circle' && a.st !== 'dive' && nb < this.blobs.instanceMatrix.count) {
+          const r = a.def.size * (a.def.scale ?? 1) * 1.1 * a.show;
+          _m.makeScale(r * 0.75, 1, r).premultiply(_m2.makeRotationY(a.yaw)).setPosition(a.x, a.y + 0.012, a.z);
+          this.blobs.setMatrixAt(nb++, _m);
+        }
         n++;
       }
       s.mesh.count = n;
@@ -190,6 +261,9 @@ export class Critters {
         if (s.mesh.instanceColor) s.mesh.instanceColor.needsUpdate = true;
       }
     }
+    this.blobs.count = nb;
+    this.blobs.visible = nb > 0;
+    if (nb) this.blobs.instanceMatrix.needsUpdate = true;
   }
 
   private matrixOf(a: Agent, out: THREE.Matrix4) {
