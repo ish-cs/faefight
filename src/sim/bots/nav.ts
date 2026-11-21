@@ -1,3 +1,4 @@
+import * as dm from '../dmath';
 import { MAP, PIECES, PLAYER } from '../constants';
 import { MOVE } from '../movement';
 import type { Box, Bunker, CenterIsland, Doorway, IslandLayout, StaticBox } from '../map';
@@ -473,7 +474,7 @@ export class Nav {
       if (d < bestD && d < 2.4) { bestD = d; deck = p; }
     }
     if (!deck) return carrot;
-    const u = v3(Math.sin(deck.rotY), 0, Math.cos(deck.rotY));
+    const u = v3(dm.sin(deck.rotY), 0, dm.cos(deck.rotY));
     const along = (me.x - deck.pos.x) * u.x + (me.z - deck.pos.z) * u.z;
     const side = Math.abs((me.x - deck.pos.x) * u.z - (me.z - deck.pos.z) * u.x);
     // Off this deck's footprint (between two decks, or stepping onto land): the lane carrot is fine.
@@ -493,8 +494,8 @@ export class Nav {
     // (they're 2 m wide: one bad hop and I'm swimming).
     const me = this.view.self.pos;
     const onDeck = this.view.pieces.some((p) => p.kind === 'scaffold' && Math.abs(p.pos.y + PIECES.scaffold.h - me.y) < 0.5 &&
-      Math.abs((me.x - p.pos.x) * Math.cos(p.rotY) - (me.z - p.pos.z) * Math.sin(p.rotY)) < PIECES.scaffold.w / 2 + 0.4 &&
-      Math.abs((me.x - p.pos.x) * Math.sin(p.rotY) + (me.z - p.pos.z) * Math.cos(p.rotY)) < PIECES.scaffold.d / 2 + 0.4);
+      Math.abs((me.x - p.pos.x) * dm.cos(p.rotY) - (me.z - p.pos.z) * dm.sin(p.rotY)) < PIECES.scaffold.w / 2 + 0.4 &&
+      Math.abs((me.x - p.pos.x) * dm.sin(p.rotY) + (me.z - p.pos.z) * dm.cos(p.rotY)) < PIECES.scaffold.d / 2 + 0.4);
     return !onDeck && this.landsOnGround(dir, sprint, PLAYER.jumpVelocity, true);
   }
 
@@ -536,7 +537,7 @@ export class Nav {
     if (under !== null && !airborne) return null;
     let best: Vec3 | null = null, bestD = Infinity;
     for (let a = 0; a < 16; a++) {
-      const d = v3(Math.sin(a * Math.PI / 8), 0, Math.cos(a * Math.PI / 8));
+      const d = v3(dm.sin(a * Math.PI / 8), 0, dm.cos(a * Math.PI / 8));
       if (airborne) {
         if (this.landsOnGround(d, sprint)) {
           const k = -(d.x * me.vel.x + d.z * me.vel.z);
