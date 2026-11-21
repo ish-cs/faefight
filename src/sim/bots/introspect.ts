@@ -63,6 +63,8 @@ export type BrainDigest = {
     stress: number; winded: boolean;
     /** Current aim error (deg), reaction delay (s) and what's left of it on the current target. */
     aimErr: number; react: number; reactLeft: number;
+    /** Gun handling (params.ts gunSkill): recoil pulled back (0..1), shots this burst / burst cap, rest left (s), full-auto range (m). */
+    comp: number; burst: [number, number]; rest: number; spray: number | null;
   };
 };
 
@@ -90,7 +92,8 @@ type Planned = { node: number; goal: Vec3; at: number; pts: Vec3[] } | null;
 type Internals = {
   id: number; difficulty: Difficulty; personality: { archetype: string; traits: Traits };
   t: Traits; style: ShopStyle; goal: Goal; targetId: number | null; hesitateUntil: number; nextScoreAt: number;
-  winded: boolean; centerMinded: boolean; view?: BotView; grid: unknown; lastScores: { goal: string; score: number }[];
+  winded: boolean; centerMinded: boolean; view?: BotView; burstN: number; burstRestUntil: number;
+  P: { gunSkill: Record<Difficulty, { recoilComp: number; burstShots: number; burstPause: number; sprayRange: number }> }; grid: unknown; lastScores: { goal: string; score: number }[];
   aim: { target: number; seenAt: number; lastSeen: number; err: Angles; p: AimProfile };
   nav: { cache: Map<string, unknown>; planned: Planned; bridges: Map<number, unknown>; centerNode: number; nodeAt(p: Vec3): number };
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
@@ -619,6 +622,8 @@ export function debugBrain(bot: Bot): BrainDigest {
       stress: r1(me?.mv?.stress ?? 0), winded: I.winded,
       aimErr: r2(tracking ? Math.hypot(aim.err.yaw, aim.err.pitch) * cone * 180 / Math.PI : aim.p.coneRad * 180 / Math.PI),
       react: r2(aim.p.reactSec), reactLeft: r2(tracking ? Math.max(0, aim.seenAt + aim.p.reactSec - now) : 0),
+      comp: r2(aim.p.recoilComp), burst: [I.burstN, I.P.gunSkill[I.difficulty].burstShots], rest: r2(Math.max(0, I.burstRestUntil - now)),
+      spray: Number.isFinite(I.P.gunSkill[I.difficulty].sprayRange) ? I.P.gunSkill[I.difficulty].sprayRange : null,
     },
   };
   return fitDigest(d);

@@ -42,18 +42,59 @@ export function viewDir(yaw: number, pitch: number): Vec3 {
 }
 
 /** Walk/run bob: figure-eight offset (metres, view space) for a stride phase in radians. */
-export function bobOffset(phase: number, speed: number): { x: number; y: number; roll: number } {
+export function bobOffset(phase: number, speed: number, out = { x: 0, y: 0, roll: 0 }): { x: number; y: number; roll: number } {
   const k = Math.min(1, speed / PLAYER.sprint);
   const amp = 0.011 + 0.013 * k; // run bobs harder than walk
-  return { x: Math.sin(phase) * amp, y: -Math.abs(Math.cos(phase)) * amp * 0.9, roll: Math.sin(phase) * 0.02 * k };
+  out.x = Math.sin(phase) * amp; out.y = -Math.abs(Math.cos(phase)) * amp * 0.9; out.roll = Math.sin(phase) * 0.02 * k;
+  return out;
 }
 
 /** Stride phase rate (rad/s) for a horizontal speed: a step every ~0.8 m. */
 export const bobRate = (speed: number) => (speed < 0.3 ? 0 : (speed / 0.8) * Math.PI);
 
 /** Slow breathing sway while standing still, in metres. */
-export function idleSway(t: number): { x: number; y: number } {
-  return { x: Math.sin(t * 0.9) * 0.0035, y: Math.sin(t * 1.8) * 0.0025 };
+export function idleSway(t: number, out = { x: 0, y: 0 }): { x: number; y: number } {
+  out.x = Math.sin(t * 0.9) * 0.0035; out.y = Math.sin(t * 1.8) * 0.0025;
+  return out;
+}
+
+/**
+ * First-person camera bob (the eye itself, on top of the viewmodel's own bob): metres sideways / up and a
+ * roll in radians, written into `out`. Much subtler than the gun's, and position + roll only, so the
+ * crosshair (screen centre) stays on the aim. Zero standing still.
+ */
+export function cameraBob(phase: number, speed: number, out: { x: number; y: number; roll: number }) {
+  if (speed < 0.3) { out.x = 0; out.y = 0; out.roll = 0; return out; }
+  const k = Math.min(1, speed / PLAYER.sprint);
+  const amp = (0.004 + 0.008 * k) * Math.min(1, speed / 1.5);
+  out.x = Math.sin(phase) * amp * 0.6;
+  out.y = (0.5 - Math.abs(Math.cos(phase))) * amp; // dips on each footfall, centred on the eye
+  out.roll = Math.sin(phase) * 0.0035 * k;
+  return out;
+}
+
+// ---- impact feel: hit-stop and screen shake (client visuals only) --------------------------------
+
+/**
+ * Hit-stop lengths (s): a few frames of near-frozen camera/viewmodel animation on a kill or a heavy hit.
+ * Purely visual: the sim, input sampling and look angles never pause.
+ */
+export const HIT_STOP = { kill: 0.075, heavy: 0.04 };
+
+/** Visual time scale with `left` of a `dur` second hit-stop to go: held near zero, eased back over the last 30%. */
+export function hitStopScale(left: number, dur: number): number {
+  if (left <= 0 || dur <= 0) return 1;
+  const k = left / dur;
+  return k > 0.3 ? 0.08 : 0.08 + 0.92 * (1 - k / 0.3);
+}
+
+/** A hit worth a short hit-stop: a big chunk of damage or a headshot. */
+export const heavyHit = (amount: number, part: unknown) => amount >= 40 || part === 'head';
+
+/** Camera shake (rad) from an explosion `d` metres away: quadratic falloff, nothing past 30 m. */
+export function blastShake(d: number, grenade: boolean): number {
+  if (d >= 30) return 0;
+  return 0.03 * (1 - d / 30) ** 2 * (grenade ? 0.7 : 1);
 }
 
 /** Recoil kick 0..1 (`since` = seconds after a shot): snaps up, settles over ~0.18 s. */

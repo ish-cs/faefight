@@ -42,7 +42,9 @@ export type Settings = {
   controls: { sensitivity: number; invertY: boolean; keys: Keymap };
   video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; perfDetail: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean; competitive: boolean };
   audio: { master: number; effects: number; ambience: number; muted: boolean };
-  gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct };
+  gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct;
+    /** Screen shake + hit-stop strength, 0 (off) .. 1 (full). Accessibility. */ screenShake: number;
+    /** First-person camera bob while walking / sprinting. */ cameraBob: boolean };
   /** One-time things: the How to play card shows by itself until it has been seen once. */
   onboarding: { howToSeen: boolean };
 };
@@ -60,7 +62,7 @@ export function defaultSettings(): Settings {
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true, competitive: false },
     audio: { master: 0.8, effects: 1, ambience: 1, muted: false },
-    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100 },
+    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true },
     onboarding: { howToSeen: false },
   };
 }
@@ -113,6 +115,8 @@ export function sanitizeSettings(raw: unknown): Settings {
       damageNumbers: bool(g.damageNumbers, d.gameplay.damageNumbers),
       cameraMode: oneOf(g.cameraMode, ['third', 'first'] as const, d.gameplay.cameraMode),
       genAlertPct: oneOf(g.genAlertPct, GEN_ALERT_PCTS, d.gameplay.genAlertPct),
+      screenShake: num(g.screenShake, 0, 1, d.gameplay.screenShake),
+      cameraBob: bool(g.cameraBob, d.gameplay.cameraBob),
     },
     onboarding: { howToSeen: bool(o.howToSeen, d.onboarding.howToSeen) },
   };

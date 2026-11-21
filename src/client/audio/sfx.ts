@@ -524,6 +524,20 @@ export function clank(k: Kit, out: AudioNode, t: number): number {
   return 0.45 + partials(k, out, t + 0.45, 210 * p, 0.25, [[1, 1, 0.7], [2.7, 0.4, 0.4]]);
 }
 
+/**
+ * A spent case hitting the ground: brass gives a short bright clink (two inharmonic partials + a tick),
+ * a plastic shotgun hull a dull tock. `v` 0..1 = how hard it landed.
+ */
+export function casingClink(k: Kit, out: AudioNode, t: number, hull: boolean, v: number): number {
+  const p = jitter(k.rnd(), 0.12);
+  if (hull) {
+    noise(k, out, t, { type: 'bandpass', freq: 900 * p, q: 2, dur: 0.05, peak: 0.35 * v });
+    return Math.max(0.06, partials(k, out, t, 520 * p, 0.12 * v, [[1, 1, 0.05], [2.3, 0.4, 0.03]]));
+  }
+  noise(k, out, t, { type: 'highpass', freq: 5000, dur: 0.012, peak: 0.25 * v });
+  return Math.max(0.12, partials(k, out, t, 3300 * p, 0.16 * v, [[1, 1, 0.12], [1.47, 0.6, 0.08], [2.62, 0.35, 0.05]]));
+}
+
 export function heartbeat(k: Kit, out: AudioNode, t: number): number {
   tone(k, out, t, { f0: 62, f1: 40, dur: 0.12, peak: 0.9 });
   noise(k, out, t, { type: 'lowpass', freq: 120, dur: 0.08, peak: 0.5 });

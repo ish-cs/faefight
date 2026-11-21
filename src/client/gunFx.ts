@@ -34,7 +34,7 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3
 
 export class GunFx {
   readonly root = new THREE.Group();
-  /** Spent cases that stay on the ground (ring buffer, capped per quality: set `casings.limit`). */
+  /** Spent cases: bounce, lie a few seconds, shrink away (ring buffer, capped per quality: set `casings.limit`). */
   readonly casings = new Casings();
   private tracers: Tracer[] = [];
   private tracerGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);

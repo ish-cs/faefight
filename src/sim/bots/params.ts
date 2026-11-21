@@ -5,7 +5,8 @@ import type { Difficulty } from '../types';
  * Tunable bot strategy (drive to win, building, the elimination pipeline), in one record so self-play training can
  * search over it. A Bot takes a BotParams (default DEFAULT_BOT_PARAMS); `flattenParams` / `withParams` give the
  * trainer flat numeric keys like `drive.push.pro`, `buildSkill.hard.coverChance` or `buildTuning.coverScore`.
- * Execution skill (reaction, aim, decision speed) is not here: it stays in aim.ts / bot.ts.
+ * Execution skill (reaction, aim error, decision speed) stays in aim.ts / bot.ts; gun handling against recoil
+ * (compensation, burst discipline) is here as `gunSkill` so the trainer can tune it.
  */
 
 const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ easy, medium, hard, pro });
@@ -117,7 +118,16 @@ export type BuildTuning = {
   coverScore: number; fortifyScore: number;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning };
+/**
+ * Gun handling against recoil (the sim's recoil climbs the shooter's real aim, gunplay.recoilKick), per skill. Like a
+ * strong human: pull the climb back down, tap/burst at range so recoil and bloom settle, spray up close.
+ * - recoilComp: share of each kick pulled back down on the next tick (0 = rides the climb, 1 = perfect).
+ * - burstShots: past sprayRange, an automatic gun (rifle / SMG) fires at most this many shots in a row, then
+ * - burstPause: waits this long (s) before the next burst. Within sprayRange: full auto.
+ */
+export type GunSkill = { recoilComp: number; burstShots: number; burstPause: number; sprayRange: number };
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; gunSkill: Record<Difficulty, GunSkill> };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -175,7 +185,15 @@ export const BUILD_TUNING: BuildTuning = {
   coverScore: 1.05, fortifyScore: 0.5,
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING });
+/** Easy sprays at any range (sprayRange Infinity: not tunable); better players compensate harder and burst at range. */
+export const GUN_SKILL: Record<Difficulty, GunSkill> = {
+  easy: { recoilComp: 0.25, burstShots: 30, burstPause: 0.3, sprayRange: Infinity },
+  medium: { recoilComp: 0.6, burstShots: 6, burstPause: 0.35, sprayRange: 12 },
+  hard: { recoilComp: 0.85, burstShots: 5, burstPause: 0.3, sprayRange: 14 },
+  pro: { recoilComp: 0.95, burstShots: 4, burstPause: 0.22, sprayRange: 15 },
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, gunSkill: GUN_SKILL });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -230,6 +248,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['buildTuning.slotBackoffSec', [10, 90]], ['buildTuning.pushLead', [0, 80]], ['buildTuning.bridgeRetrySec', [0.2, 2]],
   ['buildTuning.bridgeStuckSec', [1, 10]], ['buildTuning.bridgeHoldSec', [5, 60]], ['buildTuning.freeSlots', [1, 4]],
   ['buildTuning.coverScore', [0.5, 1.5]], ['buildTuning.fortifyScore', [0.1, 1]],
+  ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
 ];
 const ruleMatch = (pattern: string, key: string) => {
   const a = pattern.split('.'), b = key.split('.');

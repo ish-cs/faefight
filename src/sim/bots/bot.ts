@@ -215,6 +215,10 @@ export class Bot {
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
   private barrelPlan: { id: number; until: number } | null = null;
   private nextBarrelRollAt = 0;
+  /** Burst discipline (params.ts gunSkill): shots fired in the current burst, and the pause after it. */
+  private burstN = 0;
+  private burstRestUntil = -Infinity;
+  private seenShotAt = -Infinity;
   private view!: BotView;
   /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
   private readonly centerMinded: boolean;
@@ -241,7 +245,7 @@ export class Bot {
       invest: t.patience > 0.75,
       buildFirst: t.builder > 0.7,
     };
-    this.aim = new Aim(AIM[difficulty], rng);
+    this.aim = new Aim({ ...AIM[difficulty], recoilComp: P.gunSkill[difficulty].recoilComp }, rng);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
@@ -253,6 +257,20 @@ export class Bot {
   get barrelTarget(): number | null { return this.barrelPlan?.id ?? null; }
   /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
   get planScores(): { goal: string; score: number }[] { return this.lastScores; }
+  /**
+   * Burst discipline against recoil and bloom: with an automatic gun past my spray range, stop after
+   * `burstShots` shots for `burstPause` s (the climb and bloom settle, then the next burst lands). Up close: full auto.
+   * Counts real shots (the sim's lastShotAt moving), so a held trigger between shots doesn't count.
+   */
+  private burstRest(now: number, me: PlayerState, dist: number): boolean {
+    const g = this.P.gunSkill[this.difficulty];
+    if (me.lastShotAt !== this.seenShotAt) { this.seenShotAt = me.lastShotAt; if (me.lastShotAt > 0) this.burstN++; }
+    if (now < this.burstRestUntil) return true;
+    if (WEAPONS[me.equipped].rps < 5 || dist <= g.sprayRange) { this.burstN = 0; return false; }
+    if (this.burstN >= g.burstShots) { this.burstN = 0; this.burstRestUntil = now + g.burstPause; return true; }
+    return false;
+  }
+
   /** Start / stop recording decisions for a spectator (read-only: never changes what the bot does). */
   watch(on: boolean) { this.probe = on ? this.probe ?? new BrainProbe(this) : null; }
   /** What it's thinking, for the brain inspector (starts recording if it wasn't). */
@@ -341,7 +359,7 @@ export class Bot {
       const w = WEAPONS[me.equipped];
       const scratch = this.difficulty !== 'easy' && ctx.enemyDist > w.falloff.end * this.P.drive.fireRangeMult &&
         !(this.mem.lastHurtBy === enemy.id && now - this.mem.lastHurtAt < 3);
-      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist) && !scratch;
+      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist) && !scratch && !this.burstRest(now, me, ctx.enemyDist);
     } else if (nade) {
       look = turnToward(cur, nade, TURN_RATE, dt);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {

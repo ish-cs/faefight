@@ -4,15 +4,16 @@ import type { Quality } from './sky';
 /** Spent cases left lying around, per quality preset (oldest recycled first). */
 export const CASING_CAP: Record<Quality, number> = { low: 60, high: 160, ultra: 260 };
 const MAX = Math.max(...Object.values(CASING_CAP));
-/** Seconds a case stays on the ground before it shrinks away (if not recycled sooner). */
-export const CASING_LIFE = 40;
+/** Seconds a case stays on the ground before it shrinks away over the next second (if not recycled sooner). */
+export const CASING_LIFE = 5;
 const G = 14;
 
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _ax = new THREE.Vector3(), _c = new THREE.Color();
 
 /**
- * Ejected shell casings that tumble, bounce, then stay on the ground: one InstancedMesh (1 draw call), a ring
- * buffer capped per quality. Resting cases cost nothing per frame (their matrices are left alone).
+ * Ejected shell casings that tumble, bounce, lie on the ground a few seconds, then shrink away: one InstancedMesh
+ * (1 draw call), a ring buffer capped per quality. Resting cases cost nothing per frame (their matrices are left alone).
+ * Each hard bounce calls `onClink` (position, impact speed m/s, shotgun hull or brass) for the clink sound.
  */
 export class Casings {
   readonly mesh: THREE.InstancedMesh;
@@ -21,6 +22,7 @@ export class Casings {
   private next = 0;
   private high = 0;
   limit = CASING_CAP.high;
+  onClink: ((x: number, y: number, z: number, speed: number, hull: boolean) => void) | null = null;
 
   constructor() {
     const geo = new THREE.CylinderGeometry(1, 1, 1, 7).rotateX(Math.PI / 2); // unit case along Z
@@ -77,8 +79,10 @@ export class Casings {
       _q.set(st[s + 6], st[s + 7], st[s + 8], st[s + 9]);
       if (st[s + 1] <= floor) {
         st[s + 1] = floor;
-        if (st[s + 4] < -1.2) { st[s + 4] *= -0.3; st[s + 3] *= 0.5; st[s + 5] *= 0.5; st[s + 10] *= 0.5; }
-        else {
+        if (st[s + 4] < -1.2) {
+          this.onClink?.(st[s], st[s + 1], st[s + 2], -st[s + 4], st[s + 12] > 0.05);
+          st[s + 4] *= -0.3; st[s + 3] *= 0.5; st[s + 5] *= 0.5; st[s + 10] *= 0.5;
+        } else {
           // Settle: lie flat (case axis horizontal) at a random heading, and stop simulating.
           _q.setFromAxisAngle(_ax.set(0, 1, 0), Math.atan2(st[s + 3], st[s + 5]) + Math.random());
           st[s + 6] = _q.x; st[s + 7] = _q.y; st[s + 8] = _q.z; st[s + 9] = _q.w;
