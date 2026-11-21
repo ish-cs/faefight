@@ -13,6 +13,7 @@ import type { IslandLayout } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { Snapshot } from '../sim/types';
 import type { ToWorker } from './protocol';
+import { MONEY_MAX, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven } from './commands';
 
 const HELLO_TIMEOUT_MS = 10_000;
 // Lobby key for the host. Contains a NUL so no remote peer id (PeerJS, BroadcastChannel, loopback) can equal it.
@@ -114,6 +115,21 @@ export class HostSession {
     const next = !this.lobby.hostSpectating();
     this.lobby.setHostSpectator(next);
     return { text: next ? 'You will keep spectating next match.' : 'You can rejoin as a player next match.', handoff: false };
+  }
+
+  /**
+   * Host's /money: credit the host's own player in the authoritative sim. `amount` must already be
+   * validated (parseCommand); re-checked here so nothing else can push junk into the worker.
+   * Returns the chat line for the host. Never reachable from a guest: remote chat is only relayed.
+   */
+  giveMoney(amount: number): string {
+    if (!Number.isInteger(amount) || amount < 1 || amount > MONEY_MAX) return MONEY_USAGE;
+    if (!this.started) return MONEY_NOT_IN_MATCH;
+    if (this.hostPlayerId === null) return 'You are spectating: no player to give cash to';
+    if (!this.worker) throw new Error('HostSession.giveMoney: match started without a worker');
+    this.worker.postMessage({ type: 'debug', cmd: 'give', inv: { cash: amount }, id: this.hostPlayerId });
+    console.info(`[host] /money +$${amount} to host player ${this.hostPlayerId}`);
+    return moneyGiven(amount);
   }
 
   /** Player id of a seat in the running match (null: the spectating host, or not started). */
