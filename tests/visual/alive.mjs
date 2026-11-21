@@ -26,7 +26,7 @@ async function openGame(quality = 'high') {
   });
   page.on('pageerror', (e) => errors.push(String(e).slice(0, 500)));
   await page.addInitScript((q) => {
-    try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { dynamicResolution: false, quality: q } })); } catch { /* fresh profile */ }
+    try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { dynamicResolution: false, quality: q }, onboarding: { howToSeen: true } })); } catch { /* fresh profile */ }
   }, quality);
   await page.goto(`${url}/?debug=1&bots=7&gputime=1`);
   const clicked = performance.now();
