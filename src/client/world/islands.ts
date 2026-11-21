@@ -105,7 +105,7 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   const root = new THREE.Group();
   root.name = 'islands';
   const collidables: THREE.Object3D[] = [];
-  const dress = new StaticBatch(); // non-colliding decoration
+  const dress = new StaticBatch({ stress: true }); // non-colliding decoration
   const solid = new StaticBatch(); // bunker walls + barriers: match sim colliders exactly
   const M = mats();
   const n = map.length;

@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { stressMatrices } from './stress';
 
 const ATTRS = ['position', 'normal', 'uv', 'color'] as const;
 
@@ -70,11 +71,18 @@ export function strut(a: THREE.Vector3, b: THREE.Vector3, r: number, seg = 8): T
 export class StaticBatch {
   private bins = new Map<THREE.Material, THREE.BufferGeometry[]>();
   private flags = new Map<THREE.Material, { cast: boolean; receive: boolean }>();
+  /** Debug stress scene: extra shifted copies of every part (decorative batches only, see stress.ts). */
+  private copies: THREE.Matrix4[] = [];
+
+  constructor(opts: { stress?: boolean } = {}) {
+    if (opts.stress) this.copies = stressMatrices();
+  }
 
   add(material: THREE.Material, geo: THREE.BufferGeometry, m: THREE.Matrix4 | null = null, col: THREE.ColorRepresentation = 0xffffff, cast = true, receive = true) {
     let bin = this.bins.get(material);
     if (!bin) { bin = []; this.bins.set(material, bin); this.flags.set(material, { cast, receive }); }
     bin.push(part(geo, m, col));
+    for (const T of this.copies) bin.push(part(geo, m ? T.clone().multiply(m) : T, col));
   }
 
   build(parent: THREE.Object3D, name: string): THREE.Mesh[] {

@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { attribute, cameraPosition, float, positionLocal, smoothstep } from 'three/tsl';
 import type { Quality } from './sky';
+import { stressOffsets } from './stress';
 import { makeRng } from './textures';
 
 /**
@@ -41,8 +42,10 @@ export class Scatter {
     const k = this.kinds.get(key);
     if (!k) throw new Error(`[world/scatter] unknown kind "${key}"`);
     const sc = typeof s === 'number' ? _s.set(s, s, s) : _s.set(s[0], s[1], s[2]);
-    const m = new THREE.Matrix4().compose(_p.set(x, y, z), _q.setFromEuler(_e.set(tilt[0], yaw, tilt[1], 'YXZ')), sc);
-    k.items.push({ m, c: new THREE.Color(color), p: new THREE.Vector3(x, y, z) });
+    for (const [ox, oz] of stressOffsets()) {
+      const m = new THREE.Matrix4().compose(_p.set(x + ox, y, z + oz), _q.setFromEuler(_e.set(tilt[0], yaw, tilt[1], 'YXZ')), sc);
+      k.items.push({ m, c: new THREE.Color(color), p: new THREE.Vector3(x + ox, y, z + oz) });
+    }
   }
 
   build() {

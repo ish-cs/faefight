@@ -11,6 +11,7 @@ import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
 import { setBuiltInPotionStalls } from './potionSeller';
 import { installQualityToggle, SkyLighting } from './sky';
+import { STRESS, stressOffsets } from './stress';
 import { buildWater, type Ocean } from './water';
 
 export { pieceGeometry } from './pieces';
@@ -75,7 +76,9 @@ export class World {
     this.gulls = new Gulls(map, gullPerches(map, (isl) => backdropFrame(isl, map.length)));
     this.scene.add(this.boats.root, this.gulls.mesh);
     setBuiltInPotionStalls([def.center.potionShop]); // center.ts draws this seller; PotionSellers must not double it
-    this.cosmetics = new CosmeticLayer(def.cosmetics);
+    // debug stress scene: visual-only shifted copies with ids the sim never uses
+    const cos = STRESS > 1 ? stressOffsets().flatMap(([ox, oz], k) => def.cosmetics.map((c) => k === 0 ? c : { ...c, id: 1e6 * k + c.id, pos: { ...c.pos, x: c.pos.x + ox, z: c.pos.z + oz } })) : def.cosmetics;
+    this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
