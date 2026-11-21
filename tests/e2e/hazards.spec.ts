@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU); // plays a match
 
 // Explosive barrels and supply crates, end to end in a real match (vs an easy bot): shooting a barrel blows it up
 // and hurts the bot standing next to it; shooting a crate breaks it and a loot bag appears where it stood.
