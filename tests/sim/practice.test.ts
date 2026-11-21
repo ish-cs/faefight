@@ -36,15 +36,18 @@ describe('normal matches are unaffected by practice mode', () => {
     expect(m.def.name).toBe('Harbor');
     const cash0 = me(s).inv.cash;
     // Far from the shop: nothing bought.
-    s = run(m, 1, { shop: { buy: 'pistol' } }).s;
-    expect(me(s).inv.weapons.pistol).toBeUndefined();
-    expect(me(s).inv.cash).toBe(cash0);
-    // At the shop: pistol bought, cash spent.
+    // (Everyone spawns with a pistol, so buy the next gun up.)
+    m.debugGive(1, { cash: 200 });
+    s = run(m, 1, { shop: { buy: 'smg' } }).s;
+    const cash1 = me(s).inv.cash;
+    expect(cash1).toBe(cash0 + 200);
+    expect(me(s).inv.weapons.smg).toBeUndefined();
+    // At the shop: SMG bought, cash spent.
     const shop = m.map[me(s).island].shop;
     m.debugTeleport(1, v3(shop.x + 1, shop.y, shop.z));
-    s = run(m, 1, { shop: { buy: 'pistol' } }).s;
-    expect(me(s).inv.weapons.pistol).toBeDefined();
-    expect(me(s).inv.cash).toBeLessThan(cash0);
+    s = run(m, 1, { shop: { buy: 'smg' } }).s;
+    expect(me(s).inv.weapons.smg).toBeDefined();
+    expect(me(s).inv.cash).toBeLessThan(cash1);
     expect(() => m.practiceCommand({ kind: 'reset' })).toThrow(/not a practice match/);
     setTime(m, LIFECYCLE.suddenDeathAt - 0.01);
     s = run(m, 1).s;
