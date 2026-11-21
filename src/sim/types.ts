@@ -88,6 +88,8 @@ export type PlayerState = {
   /** Set while trapped in a sealed bunker after respawning: eliminated at this time unless out. */
   breakoutUntil: number | null;
   invulnUntil: number;
+  /** How many of your own bunker's 3 doorways no one can walk out through (3 = sealed). Only sent to you. */
+  doorsBlocked?: number;
   /** Just respawned and hasn't left the bunker or attacked yet (anti spawn-camping). */
   spawnProtected?: boolean;
   /** Sim time of the last damage taken (regen waits after this). */

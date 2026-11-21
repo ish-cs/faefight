@@ -1,12 +1,13 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
+import { DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
+import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
@@ -57,6 +58,7 @@ export class Match implements MatchApi {
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
   private sealDirty = true;
+  private doors: DoorwayTracker;
   private supportDirty = false;
   private kills: { victim: number; killer: number | null }[] = [];
   private ctx: CombatCtx;
@@ -89,6 +91,7 @@ export class Match implements MatchApi {
     this.s.waterY = def.waterY;
     this.s.stormCenter = stormCenterOf(def.center);
     this.sealed = map.map(() => false);
+    this.doors = new DoorwayTracker(map.map((isl) => isl.bunker));
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
     this.makeBot = opts.makeBot;
@@ -263,6 +266,28 @@ export class Match implements MatchApi {
   debugStrike(x: number, z: number): void {
     if (!this.s.storm) throw new Error('debugStrike: no storm before sudden death');
     addStrike(this.s.storm, x, z, this.s.time + STORM.telegraphSec);
+  }
+
+  /** A steel plate standing just outside doorway `door` of `island`'s bunker, placed by `owner`. Returns its id. */
+  debugPlugDoor(island: number, door: number, owner: number): number {
+    const d = this.map[island]?.bunker.doorways[door];
+    if (!d) throw new Error(`debugPlugDoor: no doorway ${door} on island ${island}`);
+    const out = forward(d.yaw), off = MAP.bunker.wall / 2 + PIECES.steel.d / 2 + 0.05;
+    const x = d.center.x + out.x * off, z = d.center.z + out.z * off;
+    // Sunk 1 cm so the support probe meets the ground before the plate's own bottom face (exact ties are float noise).
+    const y = (this.physics.surfaceBelow(x, d.center.y + 1, z, 2) ?? d.center.y) - 0.01;
+    return this.debugPlacePiece('steel', v3(x, y, z), d.yaw, owner);
+  }
+
+  debugRemovePiece(id: number): void {
+    if (!this.s.pieces.has(id)) throw new Error(`debugRemovePiece: no piece ${id}`);
+    this.ctx.onPieceDestroyed(id);
+  }
+
+  debugSetGenerator(island: number, stored: number): void {
+    const g = this.s.generators.find((x) => x.island === island);
+    if (!g || !Number.isFinite(stored) || stored < 0) throw new Error(`debugSetGenerator: bad island ${island} / amount ${stored}`);
+    g.stored = stored;
   }
 
   debugTeleport(playerId: number, pos: Vec3): void {
@@ -496,6 +521,11 @@ export class Match implements MatchApi {
       }
       this.sealed[i] = sealed;
     });
+    // Per-doorway threat for each owner's HUD: cached per bunker, recomputed only when blockers near it change.
+    // Sealed always reads 3/3 (sudden death's forced seal too); short of that at most 2/3.
+    const doors = this.doors.update(this.s.pieces.values());
+    for (const p of this.s.players.values())
+      p.doorsBlocked = this.sealed[p.island] ? 3 : Math.min(2, doors[p.island] ?? 0);
   }
 
   private remember(now: number) {

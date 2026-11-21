@@ -130,6 +130,7 @@ type Backend = {
     /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
     time(t: number): void; strike(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
+    plugDoor(door: number, owner: number): void; removePiece(id: number): void; genStored(stored: number): void;
   };
 };
 
@@ -178,6 +179,9 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       time: (t) => send({ type: 'debug', cmd: 'time', t }),
       strike: (x, z) => send({ type: 'debug', cmd: 'strike', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
+      plugDoor: (door, owner) => send({ type: 'debug', cmd: 'plugDoor', door, owner }),
+      removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
+      genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
     },
@@ -729,7 +733,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     dropSlot: (slot, amount) => { input.select(slot); input.queue({ drop: amount }); },
   });
   const online = backend.buffered || !!onChat;
-  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item) }, { online, isHost: !!onChat });
+  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
   let rejoinTouchedAt = 0;
 

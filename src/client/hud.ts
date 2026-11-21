@@ -11,6 +11,7 @@ import { endState } from './endState';
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
 import { dragOutcome } from './hotbarDrag';
+import { SEALED_OUTSIDE_TEXT } from './qol/alerts';
 
 const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
 const LABEL: Record<string, string> = {
@@ -572,7 +573,8 @@ export class Hud {
     const trapped = me.alive && me.breakoutUntil != null;
     setText(this.sealedBanner, trapped
       ? `BREAK OUT! ${Math.max(0, me.breakoutUntil! - snap.time).toFixed(1)}s`
-      : 'YOUR BUNKER IS SEALED');
+      : me.alive ? SEALED_OUTSIDE_TEXT : 'YOUR BUNKER IS SEALED');
+    this.sealedBanner.classList.toggle('outside', me.alive && !trapped);
     this.sealedBanner.style.display = (ownSealed || trapped) && !me.eliminated && snap.winner === null ? 'block' : 'none';
 
     if (!me.alive && !me.eliminated && me.respawnAt !== null) {
