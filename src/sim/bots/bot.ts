@@ -115,6 +115,8 @@ const STALL_SEC: Partial<Record<Goal, number>> = {
   seal: 8, attack: 15, bridge: 10, contest: 10, raid: 10, loot: 8, shop: 10, bank: 8, fortify: 10, cut: 12,
 };
 const STALL_DIST = 2.5, STALL_BAN_SEC = 20;
+/** Camping a sealed bunker: this far out from the doorway (outside a grenade's reach of the door). */
+const SIEGE_DIST = 6.5, SIEGE_AFTER_DEATH = 16;
 const TARGETED = new Set<Goal>(['seal', 'attack', 'bridge']);
 const PUSH_GEAR: ShopItem[] = ['pistol', 'ammo', 'scaffold', 'wood', 'metal', 'steel', 'charge'];
 
@@ -822,6 +824,8 @@ export class Bot {
         if (!c.reach || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
+        // Sealed in (or about to respawn into a sealed bunker): be there to finish it.
+        if (this.sieging(c)) return 0.75 + 0.2 * t.opportunism;
         // Respawn window with no kit to seal: wait at their door for the unarmed respawn.
         if (rivalDown) return gun && sealKit(me.inv) === 0 ? 0.35 + 0.3 * t.opportunism : 0.3;
         if (!gun) return 0.1;
@@ -1113,6 +1117,16 @@ export class Bot {
     if (seen && c.rival.alive && seen.island >= 0 && seen.island !== c.rival.island && (seen.island === c.on || this.nav.hop(c.src, seen.island) !== null))
       return this.goTo(seen.pos, 3);
     const b = c.rivalIsl.bunker;
+    // Their bunker is sealed: camp the plug most likely to give (weakest), out of grenade reach, and shoot
+    // whoever breaks out (respawned inside, they're eliminated if they die before getting clear) or comes
+    // home to unseal it.
+    if (this.sieging(c) && c.on === c.rivalIsl.index) {
+      const hp = (d: Doorway) => doorPieces(c.view.pieces, d).reduce((n, p) => n + p.hp, 0);
+      const door = b.doorways.reduce((a, d) => (hp(d) < hp(a) ? d : a));
+      const spot = add(door.center, scale(forward(door.yaw), SIEGE_DIST));
+      const walk = this.goTo(spot, 1.2);
+      return walk.dir ? walk : { dir: null, face: v3(door.center.x, door.center.y + CHEST, door.center.z) };
+    }
     // They went into their bunker: take the open doorway that sees inside (grenade it, shoot what comes out).
     const inside = c.on === c.rivalIsl.index ? this.inTheirBunker(c) : null;
     const door = inside ? b.doorways.filter((d) => !doorBlocked(c.view.pieces, d))
@@ -1147,6 +1161,15 @@ export class Bot {
       return { dir: null, face: base, build: { kind: plug.kind, pos, rotY: door.yaw, free: true } };
     }
     return { dir: null, face: base };
+  }
+
+  /** My rival's bunker is sealed and they're in it or around it (just died, or seen there lately): camp it. */
+  private sieging(c: Ctx): boolean {
+    if (!c.rival || !c.rivalIsl || !c.view.sealed[c.rivalIsl.index] || c.view.suddenDeath) return false;
+    const now = c.view.now;
+    if (now - (this.mem.diedAt.get(c.rival.id) ?? -Infinity) < SIEGE_AFTER_DEATH) return true;
+    const s = this.mem.recent(c.rival.id, now, 10);
+    return !!s && s.island === c.rivalIsl.index;
   }
 
   /** Pieces in my own doorways, softest-to-clear first. */
