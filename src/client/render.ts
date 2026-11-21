@@ -183,6 +183,7 @@ export class Renderer {
     this.waterY = snap.waterY;
     this.world.syncPieces(snap.pieces);
     this.world.syncCosmetics(snap.broken ?? []);
+    this.world.syncProps(snap.props);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
     this.snapArrived = performance.now();

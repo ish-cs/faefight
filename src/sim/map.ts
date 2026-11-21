@@ -1,5 +1,6 @@
 import { CENTER, MAP } from './constants';
 import type { Vec3 } from './types';
+import { placeProps, type PropSpawn } from './props';
 import { add, forward, right, rotateY, scale, v3, yawOf } from './vec';
 
 export type Doorway = { center: Vec3; yaw: number; width: number };
@@ -71,6 +72,8 @@ export type MapDef = {
   center: CenterIsland;
   statics: StaticBox[];
   cosmetics: CosmeticDef[];
+  /** Tier A gameplay props (props.ts): dynamic bodies at these spawns. Optional for hand-built maps (tests). */
+  props?: PropSpawn[];
 };
 
 type TemplateSpec = {
@@ -208,6 +211,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
     template, name: MAP_NAMES[template], seed,
     waterY: MAP.waterY, tideRate: MAP.tideRate,
     islands, center, statics, cosmetics,
+    props: placeProps({ islands, center, statics, cosmetics, seed }),
   };
 }
 
