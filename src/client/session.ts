@@ -1,10 +1,10 @@
-import { NET_VERSION, type HostMsg, type Slot } from '../net/protocol';
+import { NET_VERSION, type ClientMsg, type HostMsg, type Slot } from '../net/protocol';
 import { sanitizeClientMsg } from '../net/sanitize';
 import type { HostRoom, Link, Transport } from '../net/transport';
 import { ChatLimiter, cleanChat } from '../net/chat';
 import { Lobby } from '../net/lobby';
 import { SnapshotEncoder } from '../net/snapshotCodec';
-import { InterestManager } from '../net/interest';
+import { InterestManager, spectateTarget } from '../net/interest';
 import { WireEncoder, wireHeader } from '../net/wire';
 import { SnapRate } from '../net/snapRate';
 import { PeerGuard, type Verdict } from '../net/rateLimit';
@@ -12,15 +12,20 @@ import type { Placement } from '../sim/building';
 import { resolveMapChoice, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { Snapshot } from '../sim/types';
+import { clampSettings, DEFAULT_SETTINGS, type GameSettings } from '../sim/settings';
 import type { ToWorker } from './protocol';
 import { MONEY_MAX, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven } from './commands';
 import { PING_EVERY_MS, PingTracker, TickMonitor, type HostTick } from './qol/netQuality';
 import { newRejoinToken, REJOIN_GRACE_MS } from './qol/rejoin';
 import { quipLines, WheelLimiter, type WheelId } from '../sim/emotes';
+import { HostMigrator } from './migration';
+import type { SessionMeta } from '../net/checkpoint';
 
 const HELLO_TIMEOUT_MS = 10_000;
 // Lobby key for the host. Contains a NUL so no remote peer id (PeerJS, BroadcastChannel, loopback) can equal it.
 const HOST_PEER = '\u0000host';
+/** After a host migration, how long the new host waits for each other guest before a bot takes their seat. */
+const MIGRATE_GRACE_MS = 15_000;
 /** Difficulty of the bot that takes a leaver's seat in a rematch (same as a mid-match takeover). */
 const TAKEOVER_DIFFICULTY = 'medium' as const;
 
@@ -28,7 +33,7 @@ const TAKEOVER_DIFFICULTY = 'medium' as const;
 export type SpectateResult = { text: string; handoff: boolean };
 
 export type HostEvents = {
-  lobby(slots: Slot[], map: MapChoice): void;
+  lobby(slots: Slot[], map: MapChoice, settings: GameSettings): void;
   chat(from: string, text: string): void;
   /** Connection quality (every ~2 s during a match): RTT by seat (host = 0) and the host's tick health. */
   net?(rtt: (number | null)[], host: HostTick): void;
@@ -75,11 +80,81 @@ export class HostSession {
   private seatIds: (number | null)[] = [];
   /** The host's own player in the running match; null while it spectates (from the start or after a handoff). */
   private hostPlayerId: number | null = null;
+  /** Per remote player: who they follow while spectating (their 'follow' message; vetted every snapshot by spectateTarget). */
+  private follows = new Map<number, number | null>();
+  /** Host's game settings (always clamped); sent to guests, frozen into each match's setup. */
+  private gameSettings: GameSettings = { ...DEFAULT_SETTINGS };
+  /** Host migration: backup choice, plans and checkpoints for it (migration.ts). */
+  readonly migrator = new HostMigrator({
+    guests: () => {
+      const now = performance.now();
+      return [...this.links.keys()].flatMap((peerId) => {
+        const seat = this.lobby.seatOf(peerId);
+        return seat === null || this.idOf(seat) === null ? [] : [{ seat, peerId, rtt: this.pings.get(peerId, now) }];
+      });
+    },
+    send: (peerId, m) => { const l = this.links.get(peerId); if (l) this.send(l, m); },
+    requestCheckpoint: () => this.worker?.postMessage({ type: 'checkpoint' }),
+    meta: () => {
+      if (!this.startInfo) throw new Error('HostSession: checkpoint before the match map is known');
+      return { slots: this.lobby.slots(), seatIds: this.seatIds, islands: this.startInfo.islands, mapChoice: this.mapChoice, tokens: [...this.tokens] };
+    },
+  });
 
-  private constructor(private room: HostRoom, readonly hostName: string, private ev: HostEvents) {
-    this.lobby = new Lobby(hostName, HOST_PEER);
-    room.onJoin((link) => this.onJoin(link));
+  /** `adopted`: host migration (adopt): seating comes from the checkpoint, and links are handed in via accept(). */
+  private constructor(private room: HostRoom, readonly hostName: string, private ev: HostEvents, adopted?: Lobby) {
+    this.lobby = adopted ?? new Lobby(hostName, HOST_PEER);
+    if (!adopted) room.onJoin((link) => this.onJoin(link));
     addEventListener('pagehide', () => this.close());
+  }
+
+  /**
+   * Host migration: this guest takes over the running match restored from a checkpoint (migration.ts
+   * takeOver). Same seats and player ids; the old host's seat becomes a bot; every other guest's seat is
+   * held for MIGRATE_GRACE_MS (their player stands still) until they rejoin with their seat token.
+   */
+  static adopt(room: HostRoom, hostName: string, ev: HostEvents, a: { meta: SessionMeta; seat: number; map: MapDef; worker: { postMessage(m: ToWorker): void } }): HostSession {
+    const slots: Slot[] = a.meta.slots.map((sl, i) => {
+      if (i === a.seat && sl.kind === 'human') return { ...sl, peerId: HOST_PEER, isHost: true };
+      if (sl.kind === 'human' && sl.isHost) return { kind: 'bot', difficulty: TAKEOVER_DIFFICULTY, name: sl.name };
+      return sl;
+    });
+    const s = new HostSession(room, hostName, ev, Lobby.fromSlots(slots));
+    s.started = true;
+    s.worker = a.worker;
+    s.seatIds = a.meta.seatIds;
+    s.hostPlayerId = a.meta.seatIds[a.seat] ?? null;
+    s.mapChoice = a.meta.mapChoice;
+    s.startInfo = { map: a.map, islands: a.meta.islands };
+    s.interest = new InterestManager(a.map.islands, a.map.statics);
+    const tokens = new Map(a.meta.tokens);
+    slots.forEach((sl, seat) => {
+      const token = tokens.get(seat);
+      if (sl.kind !== 'human' || sl.isHost || !token) return;
+      s.tokens.set(seat, token);
+      s.reserved.set(seat, setTimeout(() => s.migrationGraceOver(seat), MIGRATE_GRACE_MS));
+    });
+    s.pingTimer = setInterval(() => s.pingTick(), PING_EVERY_MS);
+    console.info(`[host] adopted the match as seat ${a.seat}; waiting for ${s.reserved.size} guest(s)`);
+    return s;
+  }
+
+  /** A guest never came back to the new host: a bot takes the seat (they may still rejoin for REJOIN_GRACE_MS). */
+  private migrationGraceOver(seat: number) {
+    const id = this.idOf(seat);
+    if (id !== null) this.worker?.postMessage({ type: 'botify', playerId: id });
+    console.info(`[host] seat ${seat} did not follow the migration; bot plays it`);
+    this.system(`${this.nameOf(seat)} did not reconnect — a bot took over`);
+    this.reserved.set(seat, setTimeout(() => { this.reserved.delete(seat); this.tokens.delete(seat); }, REJOIN_GRACE_MS));
+  }
+
+  /** A link from a room someone else listened on (migration.ts), with its hello if already read. */
+  accept(link: Link, hello?: ClientMsg) { this.onJoin(link, hello); }
+
+  /** Worker checkpoint (gzipped match at `tick`) for the backup host. */
+  onCheckpoint(match: Uint8Array, tick: number) {
+    if (!this.started) return;
+    this.migrator.onCheckpoint(match, tick).catch((err) => console.error('[migrate] sealing the checkpoint failed', err));
   }
 
   static async create(transport: Transport, hostName: string, ev: HostEvents): Promise<HostSession> {
@@ -104,6 +179,31 @@ export class HostSession {
     this.broadcastLobby();
     if (link) { this.send(link, { t: 'ended', reason: 'kicked' }); setTimeout(() => link.close(), 200); }
   }
+  // ---- lobby extras: ready, colours, game settings ----
+  get settings(): GameSettings { return { ...this.gameSettings }; }
+  /** Host edits the game settings (lobby only); clamped here whatever the UI sent. */
+  setSettings(x: Partial<GameSettings>) {
+    if (this.started) return;
+    this.gameSettings = clampSettings({ ...this.gameSettings, ...x });
+    this.broadcastLobby();
+  }
+  /** Host picks a seat's colour (its own; guests pick theirs with {t:'color'}). */
+  setColor(seat: number, color: number) {
+    if (!this.started && this.lobby.setColor(seat, color)) this.broadcastLobby();
+  }
+  /** A guest's lobby-only message (ready / colour). True if it was one. */
+  private onLobbyMsg(peerId: string, seat: number, msg: { t: string; ready?: boolean; color?: number }): boolean {
+    if (msg.t === 'ready') {
+      if (!this.started && this.lobby.setReady(peerId, msg.ready === true)) this.broadcastLobby();
+      return true;
+    }
+    if (msg.t === 'color') {
+      if (!this.started && msg.color !== undefined && this.lobby.setColor(seat, msg.color)) this.broadcastLobby();
+      return true;
+    }
+    return false;
+  }
+
   get map(): MapChoice { return this.mapChoice; }
   get lastPlayedMap(): MapTemplate | null { return this.lastMap; }
   setMap(choice: MapChoice) {
@@ -175,9 +275,9 @@ export class HostSession {
     const slots = this.lobby.slots();
     for (const [peerId, link] of this.links) {
       const you = this.lobby.seatOf(peerId);
-      if (you !== null) this.send(link, { t: 'lobby', slots, you, map: this.mapChoice });
+      if (you !== null) this.send(link, { t: 'lobby', slots, you, map: this.mapChoice, settings: this.settings });
     }
-    this.ev.lobby(slots, this.mapChoice);
+    this.ev.lobby(slots, this.mapChoice, this.settings);
   }
 
   private send(link: Link, m: HostMsg) {
@@ -190,7 +290,7 @@ export class HostSession {
     setTimeout(() => link.close(), 200); // let the reason flush first
   }
 
-  private onJoin(link: Link) {
+  private onJoin(link: Link, hello?: ClientMsg) {
     let seated = false;
     let kicked = false;
     const guard = new PeerGuard(Date.now());
@@ -208,11 +308,11 @@ export class HostSession {
       }
       return true;
     };
-    link.onMessage((raw) => {
+    const onMsg = (raw: unknown, pre?: ClientMsg) => {
       if (kicked) return;
       const now = Date.now();
-      if (blocked(guard.admit(raw, now))) return;
-      const msg = sanitizeClientMsg(raw);
+      if (!pre && blocked(guard.admit(raw, now))) return;
+      const msg = pre ?? sanitizeClientMsg(raw);
       if (!msg) {
         if (now - (this.warned.get(link.peerId) ?? -Infinity) > WARN_EVERY_MS) {
           this.warned.set(link.peerId, now);
@@ -238,6 +338,7 @@ export class HostSession {
       const seat = this.lobby.seatOf(link.peerId);
       if (seat === null) return;
       const playerId = this.idOf(seat);
+      if (this.onLobbyMsg(link.peerId, seat, msg)) return;
       switch (msg.t) {
         case 'input':
           if (blocked(guard.admitInput(now))) return;
@@ -257,8 +358,13 @@ export class HostSession {
         case 'pong':
           this.pings.pong(link.peerId, msg.n, performance.now());
           break;
+        case 'follow':
+          if (playerId !== null) this.follows.set(playerId, msg.id);
+          break;
       }
-    });
+    };
+    link.onMessage((raw) => onMsg(raw));
+    if (hello) onMsg(hello, hello);
   }
 
   private previewAllowed(peerId: string) {
@@ -277,7 +383,7 @@ export class HostSession {
     const seat = this.lobby.seatOf(peerId);
     this.links.delete(peerId);
     if (seat === null) return;
-    { const gone = this.idOf(seat); if (gone !== null) { this.interest?.forget(gone); this.streams.delete(gone); } }
+    { const gone = this.idOf(seat); if (gone !== null) { this.interest?.forget(gone); this.streams.delete(gone); this.follows.delete(gone); } }
     if (!this.started) { this.lobby.removePeer(peerId); this.broadcastLobby(); return; }
     const playerId = this.idOf(seat);
     if (playerId === null) throw new Error(`HostSession.onLeave: seat ${seat} has no player`);
@@ -318,7 +424,7 @@ export class HostSession {
     this.encoder.resync(playerId);
     this.streams.delete(playerId); // fresh binary stream: the new client has no delta baseline
     this.worker?.postMessage({ type: 'humanize', playerId });
-    this.send(link, { t: 'lobby', slots: this.lobby.slots(), you: seat, map: this.mapChoice });
+    this.send(link, { t: 'lobby', slots: this.lobby.slots(), you: seat, map: this.mapChoice, settings: this.settings });
     this.send(link, { t: 'start', map: this.startInfo.map, playerId, island: this.startInfo.islands[playerId - 1] ?? playerId - 1 });
     this.send(link, { t: 'rejoin', token });
     console.info(`[host] ${slot.name} reclaimed seat ${seat}`);
@@ -330,6 +436,7 @@ export class HostSession {
   private pingTick() {
     const now = performance.now();
     for (const [peerId, link] of this.links) this.send(link, { t: 'ping', n: this.pings.ping(peerId, now) });
+    if (this.started) this.migrator.tick();
     if (this.pingRound++ % 2 !== 0 || !this.started) return;
     // Indexed by player id - 1 (the host's own player, if it has one, is 0 ms).
     const rtt: (number | null)[] = this.seatIds.map(() => null);
@@ -402,7 +509,7 @@ export class HostSession {
     this.seatIds = this.lobby.playerIds();
     this.hostPlayerId = this.seatIds[0];
     // Same map choice every match (rematches too); Random never repeats the map just played.
-    return { setup: { ...setup, map: this.nextMap() }, humanId: this.hostPlayerId ?? 0 };
+    return { setup: { ...setup, map: this.nextMap(), settings: this.settings }, humanId: this.hostPlayerId ?? 0 };
   }
 
   /**
@@ -422,6 +529,7 @@ export class HostSession {
       this.lobby.setHostSpectator(false);
     }
     this.resetStream(worker);
+    this.migrator.reset();
     this.ticks = new TickMonitor();
     console.info('[host] rematch');
     return this.freezeSeats();
@@ -435,9 +543,11 @@ export class HostSession {
       if (slot.kind === 'human') this.lobby.removePeer(slot.peerId);
     }
     this.started = false;
+    this.lobby.resetReady();
     this.seatIds = [];
     this.hostPlayerId = null;
     this.resetStream(null);
+    this.migrator.reset();
     this.tokens.clear();
     for (const t of this.reserved.values()) clearTimeout(t);
     this.reserved.clear();
@@ -454,6 +564,7 @@ export class HostSession {
     this.worker = worker;
     this.encoder = new SnapshotEncoder();
     this.streams.clear();
+    this.follows.clear();
     this.tickNo = 0;
     this.previewBudget.clear();
   }
@@ -490,8 +601,9 @@ export class HostSession {
       if (!st) { st = { wire: new WireEncoder(), rate: new SnapRate() }; this.streams.set(id, st); }
       if (!st.rate.due(tick)) continue;
       if (!updated) { this.interest?.update(snap); updated = true; }
-      const s = this.encoder.take(id, true);
-      const b = st.wire.encode(snap.tick, this.interest ? this.interest.apply(id, s) : s);
+      const follow = spectateTarget(snap, id, this.follows.get(id));
+      const s = this.encoder.take(id, true, follow);
+      const b = st.wire.encode(snap.tick, this.interest ? this.interest.apply(id, s, follow) : s);
       st.rate.sent(b.byteLength, wireHeader(b).baseSeq === 0);
       this.send(link, { t: 'snap', b });
     }

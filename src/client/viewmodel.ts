@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { pass, renderOutput } from 'three/tsl';
-import { PLAYER } from '../sim/constants';
+import { PLAYER, WEAPONS } from '../sim/constants';
 import type { MatchEvent, PlayerState, Vec3, WeaponKind } from '../sim/types';
 import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import {
@@ -8,7 +8,8 @@ import {
 } from './firstPerson';
 import { activeKeymap, bindingLabel, isAction } from './keymap';
 import { settings } from './settings/store';
-import { ISLAND_COLORS, type Renderer } from './render';
+import type { Renderer } from './render';
+import { islandColor } from './colors';
 import { SUN_DIR } from './world/sky';
 
 /**
@@ -272,7 +273,7 @@ export class FirstPersonView {
   private setWeapon(kind: WeaponKind, island: number) {
     if (island !== this.sleeveIsland) {
       this.sleeveIsland = island;
-      this.sleeve.color.set(ISLAND_COLORS[island % 8]).multiplyScalar(0.45).lerp(new THREE.Color(0x3a4048), 0.35);
+      this.sleeve.color.set(islandColor(island)).multiplyScalar(0.45).lerp(new THREE.Color(0x3a4048), 0.35);
     }
     if (kind === this.kind) return;
     if (this.rig) this.motion.remove(this.rig.root);
@@ -291,6 +292,7 @@ export class FirstPersonView {
   /** Animate and draw the viewmodel over the already-rendered frame. Call after Renderer.render. */
   /** vel = the local player's predicted velocity (smoother than the sim's 30 Hz one), when known; simNow = sim clock (reloads). */
   render(me: PlayerState | undefined, yaw: number, pitch: number, dt: number, vel?: Vec3, simNow = 0) {
+    if (this.warmFrames > 0) { this.warmFrames--; this.drawWarm(); return; }
     if (!this.active || !me) return;
     const now = performance.now();
     this.setWeapon(me.equipped, me.island);
@@ -380,7 +382,48 @@ export class FirstPersonView {
       hit.position.set(0.16 * side - 0.12 * side * punch, -0.14 + 0.06 * punch, -0.42 - 0.22 * punch);
       rest.position.set(-0.16 * side, -0.14, -0.42);
     }
+    this.draw();
+  }
 
+  /**
+   * Loading warm-up: for the next `frames` frames draw every weapon rig (fists too, flashes lit) in the
+   * viewmodel pass whatever the camera mode, so the first switch to first person or first shot in it
+   * compiles nothing. The rigs stay cached for the match.
+   */
+  warmUp(frames: number) {
+    for (const kind of Object.keys(WEAPONS) as WeaponKind[]) {
+      let rig = this.rigs.get(kind);
+      if (!rig) {
+        rig = kind === 'fists' ? buildFistsRig(this.sleeve) : buildGunRig(kind, this.sleeve);
+        rig.root.traverse((o) => { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; });
+        this.rigs.set(kind, rig);
+      }
+    }
+    this.warmFrames = frames;
+  }
+  private warmFrames = 0;
+
+  /** The warm-up frame: all rigs side by side in front of the viewmodel camera, then back to the current one. */
+  private drawWarm() {
+    const all = [...this.rigs.values()];
+    const keep = all.map((r) => ({ r, parent: r.root.parent, x: r.root.position.x, vis: r.root.visible, flash: r.flash?.visible ?? false }));
+    all.forEach((r, i) => {
+      r.root.position.x = (i - (all.length - 1) / 2) * 0.12;
+      r.root.visible = true;
+      if (r.flash) r.flash.visible = true;
+      this.motion.add(r.root);
+    });
+    try { this.draw(); } finally {
+      for (const k of keep) {
+        k.r.root.position.x = k.x;
+        k.r.root.visible = k.vis;
+        if (k.r.flash) k.r.flash.visible = k.flash;
+        if (k.parent) k.parent.add(k.r.root); else this.motion.remove(k.r.root);
+      }
+    }
+  }
+
+  private draw() {
     // Draw: same orientation as the world camera (world-space sun lighting), own FOV + near plane.
     const gpu = this.renderer.gpu;
     this.scene.environment = this.renderer.scene.environment;

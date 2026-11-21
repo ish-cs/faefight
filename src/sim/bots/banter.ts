@@ -5,7 +5,7 @@ import type { MatchEvent, PlayerState } from '../types';
  * Bots' occasional quick chat and emotes: pure flavour, never a rule. Rare by design:
  * - match end: about half the bots say "GG" (staggered a few seconds), the winner sometimes waves or dances;
  * - after an even fight (the killer came out of it hurt): the bot that lost sometimes says "Nice shot!",
- *   a bot that won sometimes waves;
+ *   a bot that won sometimes says "GG" (mid-match bots only chat: an emote would make them stand still);
  * - at most one mid-match line across all bots per QUIET_SEC.
  * Its own random stream, so bots' combat choices don't shift when banter rolls dice.
  */
@@ -13,7 +13,8 @@ export const BANTER = {
   ggChance: 0.55,
   winnerEmoteChance: 0.4,
   niceShotChance: 0.12,
-  waveChance: 0.05,
+  /** A bot that won a close fight says GG. */
+  ggAfterFightChance: 0.05,
   /** Killer at or under this hp+shield = the fight was close. */
   evenFightHp: 50,
   quietSec: 20,
@@ -48,8 +49,8 @@ export class Banter {
         if (bot(e.data.victim) && this.rng() < BANTER.niceShotChance) {
           this.pending.push({ at: now + 0.6 + this.rng() * 0.8, id: e.data.victim as number, what: 'niceShot' });
           this.quietUntil = now + BANTER.quietSec;
-        } else if (killer.isBot && this.rng() < BANTER.waveChance) {
-          this.pending.push({ at: now + 1 + this.rng(), id: killer.id, what: 'wave' });
+        } else if (killer.isBot && this.rng() < BANTER.ggAfterFightChance) {
+          this.pending.push({ at: now + 1 + this.rng(), id: killer.id, what: 'gg' });
           this.quietUntil = now + BANTER.quietSec;
         }
       }

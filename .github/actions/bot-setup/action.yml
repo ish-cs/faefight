@@ -1,0 +1,37 @@
+name: bot-setup
+description: >
+  Check out the ref whose bots to run into ./target, install its deps and tsx, and copy in the CI scripts
+  (scripts/ci/*) from ./tools (the workflow's own commit, which must already be checked out at ./tools).
+inputs:
+  ref:
+    description: Git ref to check out into ./target
+    required: true
+  need-trainer:
+    description: Fail unless the ref has the ES trainer (scripts/train/generation.ts)
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with: { path: target, ref: '${{ inputs.ref }}' }
+    - uses: pnpm/action-setup@v4
+      with: { version: 9.15.9 }
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: target/pnpm-lock.yaml
+    - shell: bash
+      working-directory: target
+      env:
+        NEED_TRAINER: ${{ inputs.need-trainer }}
+        REF: ${{ inputs.ref }}
+      run: |
+        set -euo pipefail
+        if [ "$NEED_TRAINER" = true ] && [ ! -f scripts/train/generation.ts ]; then
+          echo "::error::ref '$REF' has no scripts/train/generation.ts (the ES trainer); pick a ref that has it"; exit 1
+        fi
+        pnpm install --frozen-lockfile
+        npm i -g tsx@4.19.2
+        mkdir -p scripts/ci && cp ../tools/scripts/ci/*.ts scripts/ci/

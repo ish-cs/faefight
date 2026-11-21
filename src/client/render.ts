@@ -1,16 +1,24 @@
+import { CASING_CAP } from './world/casings';
 import * as THREE from 'three/webgpu';
-import { GENERATOR_MAX_LEVEL, PLAYER } from '../sim/constants';
+import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
-import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
+import type { MatchEvent, PieceKind, Snapshot, Vec3, WeaponKind } from '../sim/types';
+import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import { CharacterSystem, type Motion } from './characters/avatar';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
-import { PotionSellers } from './world/potionSeller';
+import { preloadPbr } from './world/pbr';
+import { PotionSellers, stall } from './world/potionSeller';
+import { loadQuality } from './world/sky';
+import { StormFx } from './world/storm';
+import { LootView, lootWarmObjects } from './lootView';
+export { lods } from './world/lod';
+export { pbrStats } from './world/pbr';
 
 export { pieceGeometry };
-import { ISLAND_COLORS } from './colors';
+import { islandColor, setIslandPalette } from './colors';
 export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 
 /** WebGPURenderer tone-maps everything on output (per-material toneMapped is ignored), so unlit
@@ -37,14 +45,17 @@ export class Renderer {
   /** Display-rate playback of other players: adaptive clock + per-player Hermite tracks (interp.ts). */
   private clock = new RenderClock();
   private tracks = new Map<number, PlayerTrack>();
+  /** Interpolation clock source (s). Replays swap in their own (paused / 0.25–8×); default wall time. */
+  clockNow: () => number = () => performance.now() / 1000;
   private playT: number | null = null;
   /** The local player's predicted render state (predict.ts), when prediction is running. */
   private local: { pos: Vec3; vel: Vec3 } | null = null;
   private motion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
   private lastFrame = performance.now();
   /** Animated player avatars (src/client/characters). */
-  readonly characters = new CharacterSystem(this.scene, (island) => ISLAND_COLORS[island % 8]);
-  private loot = new Map<number, THREE.Mesh>();
+  readonly characters = new CharacterSystem(this.scene, (island) => islandColor(island));
+  /** Loot on the ground drawn as its items, with labels nearby (lootView.ts). */
+  readonly lootView = new LootView(this.scene);
   private potionSellers = new PotionSellers(this.scene);
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
   private fx: Fx[] = [];
@@ -59,14 +70,14 @@ export class Renderer {
   private ghostTmp2 = new THREE.Vector3();
   private ghostWhite = new THREE.Color(0xffffff);
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
-  private lootGeo = new THREE.SphereGeometry(0.28, 16, 10).scale(1, 0.8, 1);
-  private lootMat = new THREE.MeshStandardNodeMaterial({ color: 0x8b5a2b, roughness: 0.9 });
   /** Level pips above each island's generator (lit = reached), by island. */
   private genPips: THREE.Mesh[][] = [];
   private pipGeo = new THREE.BoxGeometry(0.18, 0.18, 0.18);
   private pipOn = new THREE.MeshBasicNodeMaterial({ color: boosted(0xffd23d) });
   private pipOff = new THREE.MeshBasicNodeMaterial({ color: 0x4a525c });
 
+  /** Sudden-death weather: storm wall, rain, telegraph markers, lightning (world/storm.ts). */
+  storm!: StormFx;
   /** Tracers, muzzle light/smoke, shell casings, hit sparks, projectiles, explosion flashes. */
   gunFx!: GunFx;
   private snapArrived = performance.now();
@@ -95,11 +106,13 @@ export class Renderer {
   static async create(canvas: HTMLCanvasElement): Promise<Renderer> {
     const r = new Renderer(canvas);
     await r.gpu.init();
+    await preloadPbr(r.gpu, loadQuality()); // compressed PBR maps in place before any material samples them
     r.characters.camera = r.camera;
     r.world = new World(r.gpu, r.scene, r.camera, r.collidables); // tone mapping, pixel ratio, shadows, sky
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
+    r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
     r.resize();
     return r;
   }
@@ -125,8 +138,10 @@ export class Renderer {
   setMap(def: MapDef, humanId: number) {
     this.map = def.islands;
     this.humanId = humanId;
-    this.world.setMap(def, ISLAND_COLORS);
+    setIslandPalette(def.colors);
+    this.world.setMap(def, def.islands.map((isl) => islandColor(isl.index)));
     const map = def.islands;
+    this.storm.setMap(map, def.center);
     this.gunFx.warmUp([this.boomMat]);
     for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);
     const h = PROP_HALF.generator;
@@ -148,7 +163,7 @@ export class Renderer {
 
   /** Every snapshot as soon as it arrives (before any event delay): drives player interpolation. */
   ingest(snap: Snapshot) {
-    this.clock.push(snap.time, performance.now() / 1000);
+    this.clock.push(snap.time, this.clockNow());
     if (snap.time > this.newestSim) this.newestSim = snap.time;
     for (const p of snap.players) {
       let tr = this.tracks.get(p.id);
@@ -164,7 +179,13 @@ export class Renderer {
 
   /** Advance the interpolation clock; call once per frame before reading positions. */
   beginFrame() {
-    this.playT = this.clock.advance(performance.now() / 1000);
+    this.playT = this.clock.advance(this.clockNow());
+  }
+
+  /** Forget interpolation history (replay seek: sim time jumps, possibly backwards). */
+  resetInterp() {
+    this.clock = new RenderClock();
+    this.tracks.clear();
   }
 
   /**
@@ -181,7 +202,7 @@ export class Renderer {
   pushSnapshot(snap: Snapshot): MatchEvent[] {
     this.curr = snap;
     this.waterY = snap.waterY;
-    this.world.syncPieces(snap.pieces);
+    this.world.syncPieces(snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
@@ -191,6 +212,7 @@ export class Renderer {
       pips.forEach((m, i) => { m.material = i < level ? this.pipOn : this.pipOff; });
     });
     this.potionSellers.sync(snap.potionShops);
+    this.storm.sync(snap.storm, snap.suddenDeath);
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
   }
@@ -203,6 +225,9 @@ export class Renderer {
   private onEvent(e: MatchEvent) {
     if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
+    if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
+    if ((e.type === 'shot' || e.type === 'explosion') && this.curr)
+      this.world.impactEvent(e, { pieces: this.curr.pieces, players: this.curr.players, waterY: this.waterY, broken: this.curr.broken ?? [] });
     if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {
@@ -210,6 +235,9 @@ export class Renderer {
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : e.data.kind === 'rocket' ? 3.6 : 4);
+    } else if (e.type === 'lightning') {
+      const pos = e.data.pos as Vec3 | undefined;
+      if (pos) this.storm.strike(pos, this.camera);
     }
   }
 
@@ -225,6 +253,29 @@ export class Renderer {
     this.fx.push({ mesh: m, mat, born: performance.now(), life: 450, grow: radius });
   }
 
+  /**
+   * Loading warm-up (warmup.ts): one of each thing that only appears mid-match — every gun model and the muzzle
+   * flash (third person), an explosion fireball, a loot bag, the build ghost material, a potion stall — in a row.
+   */
+  warmProps(): THREE.Group {
+    const g = new THREE.Group();
+    g.name = 'warmProps';
+    const add = (o: THREE.Object3D) => { o.position.x = g.children.length * 0.8; g.add(o); };
+    for (const kind of Object.keys(WEAPONS) as WeaponKind[]) {
+      const w = buildWeapon(kind);
+      if (w) add(w);
+    }
+    const flash = buildMuzzleFlash();
+    flash.visible = true;
+    add(flash);
+    add(new THREE.Mesh(this.boomGeo, this.boomMat));
+    for (const o of lootWarmObjects()) add(o);
+    add(new THREE.Mesh(this.ghostLinkGeo, this.ghostMat));
+    add(stall());
+    g.traverse((o) => { o.frustumCulled = false; });
+    return g;
+  }
+
   geometryFor(kind: PieceKind) {
     let g = this.pieceGeo.get(kind);
     if (!g) { g = pieceGeometry(kind); this.pieceGeo.set(kind, g); }
@@ -232,19 +283,7 @@ export class Renderer {
   }
 
   private syncLoot(snap: Snapshot) {
-    const seen = new Set<number>();
-    for (const l of snap.loot) {
-      seen.add(l.id);
-      let m = this.loot.get(l.id);
-      if (!m) {
-        m = new THREE.Mesh(this.lootGeo, this.lootMat);
-        m.castShadow = true;
-        this.scene.add(m);
-        this.loot.set(l.id, m);
-      }
-      m.position.set(l.pos.x, l.pos.y + 0.3, l.pos.z);
-    }
-    for (const [id, m] of this.loot) if (!seen.has(id)) { this.scene.remove(m); this.loot.delete(id); }
+    this.lootView.sync(snap.loot);
   }
 
   /** Display-rate motion of a player: predicted for the local player, else interpolated at the render clock. */
@@ -337,6 +376,9 @@ export class Renderer {
   private aimList: THREE.Object3D[] = [];
   private motionOf = (id: number, out: Motion) => this.playerMotion(id, out);
 
+  /** Debug/screenshots only (?debug=1 harness): pin the camera at `pos` looking at `look`, overriding the game camera. */
+  debugView: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
+
   render(localYaw: number) {
     this.potionSellers.frame(performance.now());
     const now = performance.now();
@@ -345,7 +387,8 @@ export class Renderer {
     const snap = this.curr;
     if (snap) {
       this.characters.sync(snap.players, this.humanId, localYaw, snap.time, this.motionOf, snap.hidden);
-      for (const m of this.loot.values()) m.rotation.y += 1.2 * dt;
+      // Labels within reach of the player (predicted feet when playing, else the camera).
+      this.lootView.frame(dt, now / 1000, this.local?.pos ?? this.camera.position, this.camera);
     }
 
     for (let i = this.fx.length - 1; i >= 0; i--) {
@@ -362,12 +405,26 @@ export class Renderer {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
+    if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
+    this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
+    this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }
 
-  info() {
+  /** This frame's totals (world + post + viewmodel); call after the frame's last render. */
+  captureInfo() {
     const r = this.gpu.info.render as unknown as { drawCalls?: number; calls?: number; triangles: number };
-    return { backend: this.backend, drawCalls: r.drawCalls ?? r.calls ?? 0, triangles: r.triangles };
+    this.lastInfo.drawCalls = r.drawCalls ?? r.calls ?? 0;
+    this.lastInfo.triangles = r.triangles;
+  }
+  private lastInfo = { drawCalls: 0, triangles: 0 };
+
+  /**
+   * Draw calls / triangles of the last complete frame. three resets renderer.info at the start of its own
+   * animation frame (before the game's), so reading it live mid-frame gives 0: main captures it after rendering.
+   */
+  info() {
+    return { backend: this.backend, drawCalls: this.lastInfo.drawCalls, triangles: this.lastInfo.triangles };
   }
 }

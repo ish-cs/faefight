@@ -47,7 +47,7 @@ describe('structural support', () => {
     const at = (d: number, side: number) => add(add(isl.center, scale(f, d)), scale(r, side));
     const base = place('sandbags', at(4, 3), v3(at(7, 3).x, isl.groundY, at(7, 3).z), yaw);
     const top = place('sandbags', at(4, 3), v3(at(7, 3).x, isl.groundY + 1.2, at(7, 3).z), yaw);
-    const side = place('wood', at(4, 6), v3(at(7, 6).x, isl.groundY, at(7, 6).z), yaw);
+    const side = place('wood', at(1, 6), v3(at(3, 6).x, isl.groundY, at(3, 6).z), yaw); // clear of the shop stall at (6, 6)
     m.debugDamagePiece(base, 10_000);
     const ids = m.tick(new Map()).pieces.map((p) => p.id);
     expect(ids).not.toContain(top);

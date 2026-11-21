@@ -1,6 +1,6 @@
 import type { CenterIsland, IslandLayout, StaticBox } from '../map';
 import type { Placement } from '../building';
-import type { PieceKind, PieceState, PlayerState, Vec3 } from '../types';
+import type { PieceKind, PieceState, PlayerState, StormSnap, Vec3 } from '../types';
 
 /** Public status of every other player (what a human would know from the HUD). */
 export type OtherStatus = {
@@ -46,7 +46,16 @@ export type BotView = {
   /** Positions of loot bags within sight range. */
   loot: Vec3[];
   waterY: number;
+  /** Burning pieces and ground fires as circles to stay out of (absent in hand-made test views). */
+  fires?: { pos: Vec3; r: number }[];
   suddenDeath: boolean;
+  /**
+   * Sudden-death storm as anyone sees it on screen: ring centre/radius, how fast it closes (m/s), and the
+   * telegraphed lightning strikes. Absent/null before sudden death.
+   */
+  storm?: (StormSnap & { rate: number }) | null;
+  /** Match time sudden death begins (host setting; default LIFECYCLE.suddenDeathAt). */
+  suddenDeathAt?: number;
   /** Potion seller positions (anyone may buy there). */
   potionShops?: Vec3[];
   /** Top surface y under (x, z) (land, piece or scaffold), or null over open water. */

@@ -6,3 +6,7 @@ playwright-report/
 .claude/
 .vitest/
 .vercel
+.env*
+.autoimprove/
+.measure/
+.train-ci/

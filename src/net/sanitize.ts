@@ -2,6 +2,7 @@ import type { MoveCmd } from '../sim/movement';
 import { PIECES, WEAPONS } from '../sim/constants';
 import { POTION_KINDS, validSlot } from '../sim/hotbar';
 import type { BuildRequest, GunKind, Inventory, PieceKind, PlayerInput, ShopItem, VaultAction, Vec3, WeaponKind } from '../sim/types';
+import { clampSettings, isColor, type GameSettings } from '../sim/settings';
 import { CHAT_MAX_LEN, type ClientMsg } from './protocol';
 import { isWheelId } from '../sim/emotes';
 
@@ -167,7 +168,10 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
       const name = cleanName(x.name);
       if (!name) return null;
       const rejoin = typeof x.rejoin === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(x.rejoin) ? x.rejoin : undefined;
-      return rejoin ? { t: 'hello', name, version: x.version, rejoin } : { t: 'hello', name, version: x.version };
+      // Host migration: the checkpoint key this guest held, handed to the backup that now hosts (only with a rejoin token).
+      const mkey = rejoin && typeof x.mkey === 'string' && /^[A-Za-z0-9+/]{22}==$/.test(x.mkey) ? x.mkey : undefined;
+      if (!rejoin) return { t: 'hello', name, version: x.version };
+      return mkey ? { t: 'hello', name, version: x.version, rejoin, mkey } : { t: 'hello', name, version: x.version, rejoin };
     }
     case 'pong': {
       return Number.isInteger(x.n) && (x.n as number) > 0 ? { t: 'pong', n: x.n as number } : null;
@@ -183,6 +187,12 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
       const req = buildReq(x.req);
       return req && Number.isInteger(x.key) ? { t: 'preview', req, key: x.key as number } : null;
     }
+    case 'follow':
+      return x.id === null || (Number.isInteger(x.id) && (x.id as number) > 0 && (x.id as number) <= 64) ? { t: 'follow', id: x.id as number | null } : null;
+    case 'ready':
+      return typeof x.ready === 'boolean' ? { t: 'ready', ready: x.ready } : null;
+    case 'color':
+      return isColor(x.color) ? { t: 'color', color: x.color } : null;
     case 'chat':
       // Generous bound here; cleanChat trims to CHAT_MAX_LEN after stripping junk.
       return typeof x.text === 'string' && x.text.length <= CHAT_MAX_LEN * 4 ? { t: 'chat', text: x.text } : null;
@@ -192,4 +202,12 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
     default:
       return null;
   }
+}
+
+/**
+ * Game settings from anywhere untrusted (the host's lobby message on a guest, localStorage, an old
+ * recording): every field clamped to its slider range and step; missing / junk fields take the defaults.
+ */
+export function sanitizeSettings(x: unknown): GameSettings {
+  return clampSettings(x);
 }

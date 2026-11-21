@@ -59,6 +59,12 @@ export class Cosmetics {
     }
   }
 
+  /** Fire damage over time on one prop (sim/fire.ts). */
+  burn(id: number, dmg: number, now: number, out: MatchEvent[]) {
+    const d = this.defs.find((x) => x.id === id);
+    if (d && this.hp.has(id)) this.damage(d, dmg, now, out);
+  }
+
   private damage(d: CosmeticDef, dmg: number, now: number, out: MatchEvent[]) {
     const left = (this.hp.get(d.id) ?? 0) - dmg;
     if (left > 0) { this.hp.set(d.id, left); return; }

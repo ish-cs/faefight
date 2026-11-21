@@ -1,12 +1,21 @@
 import type { IslandLayout, MapDef, MapTemplate } from './map';
 import type { Placement } from './building';
+import type { GameSettings } from './settings';
 import type { BuildRequest, Difficulty, Inventory, PlayerInput, Snapshot, Vec3 } from './types';
 
 export type MatchSetup = {
-  players: { name: string; isBot: boolean; difficulty?: Difficulty }[];
+  /** color: palette index the player picked in the lobby (resolveColors fills/dedupes). */
+  players: { name: string; isBot: boolean; difficulty?: Difficulty; color?: number }[];
   seed?: number;
   /** Map template (already resolved from the lobby's choice; 'random' never reaches the sim). Default harbor. */
   map?: MapTemplate;
+  /** Host's game settings (clamped by the sim; missing = today's defaults). Stored with the setup so replays match. */
+  settings?: GameSettings;
+  /**
+   * Practice range (offline sandbox, see practice.ts): exactly one human player; the map is the practice layout,
+   * targets and dummies are added by the range; no timer, sudden death or elimination; cash and pieces never run out.
+   */
+  practice?: boolean;
 };
 
 /**

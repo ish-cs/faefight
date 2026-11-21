@@ -8,14 +8,17 @@ import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import type { Placement } from '../sim/building';
 import { BuildAim, type AimOutcome } from './buildAim';
-import { DT, HEAD, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
+import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
-import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
+import { errors, installErrorReporting } from './telemetry/errors';
+import { telemetryEnabled } from './telemetry/config';
+import { installReplayUploads, MIN_UNFINISHED_SEC, replayUploader } from './telemetry/replayUpload';
 import { reloadClock } from './firstPerson';
 import { ChatUi } from './chatUi';
 import { loadGameModules, preloadGame } from './gameModules';
@@ -24,13 +27,16 @@ import { InputController } from './input';
 import { ACTIONS, activeKeymap, bindingLabel, isAction, type Action } from './keymap';
 import { loadingScreen as loadingOverlay } from './loading';
 import { LobbyUi, MapPicker } from './lobbyUi';
+import { GameSettingsPanel } from './gameSettingsUi';
+import { sanitizeSettings } from '../net/sanitize';
+import type { GameSettings } from '../sim/settings';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom, type SpectateResult } from './session';
 import { HELP_TEXT, HOST_ONLY, MONEY_HOST_ONLY, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven, parseCommand, unknownCommand } from './commands';
 import { currentDevice, currentIsChromium, isMobileDevice, showComputerOnly } from './device';
 import { openHowTo } from './howTo';
 import { SnapshotBuffer } from './snapBuffer';
-import { DynamicResolution } from './dynRes';
+import { FrameGovernor } from './governor';
 import { endButtons, GameScope, type EndRole } from './rematch';
 import { Scoreboard } from './scoreboard';
 import { applyDocumentSettings } from './settings/apply';
@@ -47,7 +53,14 @@ import { botCountControl, prepareJoin, rememberDifficulty } from './qol/menu';
 import { loadPrefs, savePrefs, seatPrefsOf } from './qol/prefs';
 import { clearRejoin, loadRejoin, markAutoRejoin, saveRejoin, touchRejoin } from './qol/rejoin';
 import { isPieceItem } from '../sim/hotbar';
-import { aimDirection, ShotPredictor } from './shotPredict';
+import { aimDirection, predictedHit, ShotPredictor } from './shotPredict';
+import { BUILD, saveReplay, savesSettled, trackSave } from './replay/save';
+import { ReplayLink } from './replay/link';
+import { showReplays } from './replay/replaysUi';
+import { ReplayControls } from './replay/viewerUi';
+import { followNewHost, GuestMigration, hostReachable, takeOver, type HeldLink, type HostWorker } from './migration';
+import type { PracticeCmd } from '../sim/practice';
+import { PracticePanel } from './practicePanel';
 import { EmoteWheel } from './emoteWheel';
 import { isWheelId, quipLines, type WheelId } from '../sim/emotes';
 
@@ -107,6 +120,8 @@ type GameSink = {
   fatal(title: string, detail: string): void;
   /** Guest: the link dropped without the host ending the match; try to take the seat back. */
   reconnect?(): void;
+  /** Sim time jumped (replay seek): forget interpolation history before the next snapshot. */
+  reset?(): void;
 };
 
 type Backend = {
@@ -120,16 +135,29 @@ type Backend = {
   preview(req: BuildRequest, key: number): void;
   chat(text: string): void;
   /** Emote / quick-chat wheel pick (the host rate-limits it; the sim applies it). */
-  wheel(id: WheelId): void;
+  wheel?(id: WheelId): void;
+  /** Spectating: the player followed (null = none). Remote only: the host then sends their HUD state. */
+  follow?(id: number | null): void;
   /** Stop delivering to the sink (game torn down for a rematch / back to lobby). Remote: the link stays open. */
   close(): void;
   /** Vs bot only: stop / restart the simulation (pause card). */
   pause?(paused: boolean): void;
+  /** Watching a recording (forced spectator camera, playback controls). */
+  replay?: ReplayLink;
+  /** Local worker only: practice range panel commands. */
+  practice?(cmd: PracticeCmd): void;
   debug?: {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
+    /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
+    time(t: number): void; strike(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
+    /** Place one piece (rules skipped) on the ground at (x, z) + `up` m, owned by `owner` (default: nobody). */
+    place(kind: PieceKind, x: number, z: number, rotY: number, up?: number, owner?: number): void;
+    /** Detonate a rocket / grenade / charge at (x, ground + up, z). */
+    explode(kind: 'rocket' | 'grenade' | 'charge', x: number, z: number, up?: number): void;
+    plugDoor(door: number, owner: number): void; removePiece(id: number): void; genStored(stored: number): void;
   };
 };
 
@@ -138,17 +166,32 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
   const send = (m: ToWorker) => worker.postMessage(m);
   let humanId = 0;
+  // Every match is recorded here (vs bot, or online as host), always: kept locally (Replays screen) and,
+  // in deployed builds, uploaded so the bots learn from it. No setting turns this off.
+  const gotReplay = (m: Extract<FromWorker, { type: 'replay' }>) => {
+    if (!m.partial) saveReplay(m.bytes, m.meta);
+    void replayUploader?.share(m.bytes, { id: m.meta.id, unfinished: m.partial || m.meta.unfinished, duration: m.meta.duration });
+  };
+  // Tab hidden mid-match (often the last chance before it's closed): upload what's recorded so far, once, after 60 s of play.
+  let simTime = 0, peeked = false;
+  const onHidden = () => {
+    if (document.visibilityState !== 'hidden' || peeked || simTime < MIN_UNFINISHED_SEC) return;
+    peeked = true;
+    send({ type: 'peekRecording' });
+  };
+  let closed = false;
   return {
     buffered: false,
     inputHz: null,
     connect(sink) {
-      worker.onerror = (e) => { console.error('[worker] crashed', e.message); sink.fatal('Simulation crashed', e.message); };
+      worker.onerror = (e) => { console.error('[worker] crashed', e.message); errors?.report('worker', e.message, `at ${e.filename}:${e.lineno}:${e.colno}`); sink.fatal('Simulation crashed', e.message); };
       worker.onmessage = (e: MessageEvent<FromWorker>) => {
         const m = e.data;
         if (m.type === 'map') {
           sink.map(m.map, m.humanId, m.humanIsland);
           session?.onMap(m.map, m.islands);
         } else if (m.type === 'snapshot') {
+          simTime = m.snap.time;
           sink.snapshot(m.snap);
           session?.onSnapshot(m.snap);
           // Vs bot: quick chat (ours and the bots') shows as chat lines here; online the host session relays it.
@@ -156,14 +199,20 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
         } else if (m.type === 'preview') {
           if (m.playerId === humanId) sink.preview(m.result, m.key);
           else session?.onPreview(m.playerId, m.result, m.key);
+        } else if (m.type === 'replay') {
+          gotReplay(m);
+        } else if (m.type === 'checkpoint') {
+          session?.onCheckpoint(m.match, m.tick);
         } else if (m.type === 'error') {
           console.error(`[worker] ${m.message}`);
+          errors?.report('worker', m.message);
           toast(m.message);
         }
       };
+      document.addEventListener('visibilitychange', onHidden);
       const s = setupFor(worker);
       humanId = s.humanId;
-      send({ type: 'start', setup: s.setup, humanId: s.humanId });
+      send({ type: 'start', setup: s.setup, humanId: s.humanId, record: { kind: session ? 'host' : 'solo', build: BUILD } });
     },
     input: (input, cmds) => send({ type: 'input', input, cmds }),
     preview: (req, key) => send({ type: 'preview', playerId: humanId, req, key }),
@@ -173,6 +222,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       else if (humanId !== 0) send({ type: 'wheel', playerId: humanId, id });
     },
     pause: session ? undefined : (paused) => send({ type: 'pause', paused }),
+    practice: (cmd) => send({ type: 'practice', cmd }),
     /** Vs bot /spectate: a bot takes over the local player. */
     handOff: () => send({ type: 'botify', playerId: humanId }),
     debug: {
@@ -181,24 +231,63 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       hp: (hp) => send({ type: 'debug', cmd: 'hp', hp }),
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
       potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
+      time: (t) => send({ type: 'debug', cmd: 'time', t }),
+      strike: (x, z) => send({ type: 'debug', cmd: 'strike', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
+      place: (kind, x, z, rotY, up = 0, owner = 0) => send({ type: 'debug', cmd: 'place', kind, x, z, rotY, up, owner }),
+      explode: (kind, x, z, up = 0) => send({ type: 'debug', cmd: 'explode', kind, x, z, up }),
+      plugDoor: (door, owner) => send({ type: 'debug', cmd: 'plugDoor', door, owner }),
+      removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
+      genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
     },
     close() {
-      worker.onmessage = null;
+      if (closed) return;
+      closed = true;
       worker.onerror = null;
-      worker.terminate();
+      document.removeEventListener('visibilitychange', onHidden);
+      // Left before a result: keep what was recorded. The worker sends it, then says it's done.
+      trackSave(new Promise<void>((resolve) => {
+        const stop = () => { clearTimeout(timer); worker.onmessage = null; worker.terminate(); resolve(); };
+        const timer = setTimeout(() => { console.warn('[replays] recording did not finish in time; dropped'); stop(); }, 5000);
+        worker.onmessage = (e: MessageEvent<FromWorker>) => {
+          if (e.data.type === 'replay') gotReplay(e.data);
+          else if (e.data.type === 'recordingDone') stop();
+        };
+        send({ type: 'finishRecording' });
+      }));
     },
   };
 }
 
-/** Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived before the game was ready. */
-function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, early: HostMsg[]): Backend {
-  const decoder = new SnapshotDecoder();
-  const wire = new WireDecoder();
+/** Host migration hooks for a guest's backend (migration.ts); joinLobby owns the lobby-level bookkeeping. */
+type MigrationCtx = {
+  gm: GuestMigration;
+  name: string;
+  /** Room code of the current host. */
+  code(): string;
+  /** Another guest took over: its link replaces the old one (flush() is called after the handlers attach). */
+  relink(link: HeldLink, code: string): void;
+  /** This guest now hosts the match. */
+  promoted(): void;
+};
+
+/**
+ * Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived
+ * before the game was ready. With `mig`, losing the host mid-match migrates it (migration.ts): either this
+ * tab takes over (a restored worker + HostSession feed the same game) or it follows the guest who did.
+ */
+function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>, early: HostMsg[], mig?: MigrationCtx): Backend {
+  let link = firstLink;
+  let decoder = new SnapshotDecoder();
+  let wire = new WireDecoder();
   let closed = false;
   let disposed = false;
+  /** Newest snapshot tick and when it arrived; whether the match already has a result. */
+  let lastTick = 0, lastTickAt = 0, over = false;
+  /** Set once this guest has taken over as host. */
+  let hosting: { worker: Worker; session: HostSession | null; humanId: number } | null = null;
   return {
     buffered: true,
     inputHz: TICK_HZ,
@@ -208,28 +297,175 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
         if (disposed) return;
         if (m.t === 'snap') {
           const n = wire.decode<NetSnapshot>(m.b);
-          if (n) sink.snapshot(decoder.decode(n));
+          if (n) {
+            const snap = decoder.decode(n);
+            lastTick = snap.tick;
+            lastTickAt = performance.now();
+            if (snap.winner !== null) over = true;
+            sink.snapshot(snap);
+          }
         }
+        else if (mig?.gm.onHostMsg(m)) return;
         else if (m.t === 'preview') sink.preview(m.result, m.key);
         else if (m.t === 'chat') sink.chat(m.from, m.text);
-        else if (m.t === 'ended') { closed = true; if (m.reason === 'host-left') sink.fatal('Host left', 'Match over: the host left the game.'); else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`); }
+        else if (m.t === 'ended') {
+          closed = true;
+          if (m.reason === 'host-left') { if (!migrate(false)) sink.fatal('Host left', 'Match over: the host left the game.'); }
+          else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`);
+        }
+      };
+      const attach = (l: Link) => {
+        l.onMessage((raw) => { if (l === link) handle(raw as HostMsg); });
+        l.onClose(() => {
+          if (l !== link || closed || disposed) return;
+          closed = true;
+          if (migrate(true)) return;
+          // No goodbye from the host: maybe just our connection. With a fresh rejoin token, try to take the seat back.
+          if (sink.reconnect && loadRejoin()) sink.reconnect();
+          else sink.fatal('Host left', 'Match over: lost the connection to the host.');
+        });
+      };
+      /** Host lost mid-match: move the match to the backup. False if this guest can't (no plan/checkpoint yet, match over). */
+      const migrate = (probe: boolean): boolean => {
+        if (!mig || over || disposed || !mig.gm.ready) return false;
+        const { gm, name } = mig;
+        const transport = pickTransport(location.search);
+        const run = async () => {
+          // Our own connection may be what dropped: if the old host still answers, rejoin it as before.
+          if (probe && await hostReachable(transport, mig.code())) {
+            console.info('[migrate] old host still up; reconnecting to it instead');
+            if (sink.reconnect && loadRejoin()) { sink.reconnect(); return; }
+            throw new Error('lost the connection to the host');
+          }
+          toast('Host left: migrating…');
+          const t0 = performance.now();
+          if (gm.isBackup) {
+            const w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+            const h: { worker: Worker; session: HostSession | null; humanId: number } = { worker: w, session: null, humanId: start.playerId };
+            hosting = h;
+            const ready = new Promise<HostWorker>((resolve, reject) => {
+              w.onerror = (e) => { console.error('[worker] crashed', e.message); reject(new Error(e.message)); };
+              w.onmessage = (e: MessageEvent<FromWorker>) => {
+                const m = e.data;
+                if (disposed) return;
+                if (m.type === 'restored') resolve(w);
+                else if (m.type === 'snapshot') { sink.snapshot(m.snap); h.session?.onSnapshot(m.snap); }
+                else if (m.type === 'preview') { if (m.playerId === h.humanId) sink.preview(m.result, m.key); else h.session?.onPreview(m.playerId, m.result, m.key); }
+                else if (m.type === 'checkpoint') h.session?.onCheckpoint(m.match, m.tick);
+                else if (m.type === 'error') { console.error(`[worker] ${m.message}`); reject(new Error(m.message)); toast(m.message); }
+              };
+            });
+            const { session } = await takeOver({
+              transport, gm, name, map: start.map, lastTick, lastTickAt,
+              startWorker: (match, humanId, botify, toTick) => {
+                w.postMessage({ type: 'restore', match, humanId, botify, toTick } satisfies ToWorker, [match.buffer]);
+                return ready;
+              },
+              events: { lobby: () => {}, chat: (from, text) => sink.chat(from, text), net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; } },
+            });
+            h.session = session;
+            mig.promoted();
+            session.system(`${name} is now hosting`);
+            toast('You are now hosting');
+          } else {
+            const token = loadRejoin()?.token;
+            if (!token || !gm.plan) throw new Error('no seat token for the new host');
+            const plan = gm.plan;
+            const f = await followNewHost({ transport, plan, name, token });
+            gm.plan = null;
+            gm.sealed = null; // the new host sends its own plan
+            link = f.link;
+            decoder = new SnapshotDecoder();
+            wire = new WireDecoder();
+            closed = false;
+            attach(f.link);
+            mig.relink(f.link, plan.code);
+            f.link.flush();
+            toast(`${f.hostName || 'Another player'} is now hosting`);
+          }
+          console.info(`[migrate] done in ${Math.round(performance.now() - t0)} ms (${hosting ? 'now hosting' : 'following the new host'})`);
+          if (DEBUG) (window as unknown as { __faefightMigrated?: string }).__faefightMigrated = hosting ? 'host' : 'guest';
+        };
+        run().catch((err) => {
+          console.warn('[migrate] failed', err);
+          if (hosting) { hosting.worker.terminate(); hosting = null; }
+          sink.fatal('Host left', `Match over: the host left and the match could not move to another player (${err?.message ?? err}).`);
+        });
+        return true;
       };
       early.forEach(handle);
-      link.onMessage((raw) => handle(raw as HostMsg));
-      link.onClose(() => {
-        if (closed || disposed) return;
-        closed = true;
-        // No goodbye from the host: maybe just our connection. With a fresh rejoin token, try to take the seat back.
-        if (sink.reconnect && loadRejoin()) sink.reconnect();
-        else sink.fatal('Host left', 'Match over: lost the connection to the host.');
+      attach(link);
+    },
+    input: (input, cmds) => {
+      if (disposed) return;
+      if (hosting) hosting.worker.postMessage({ type: 'input', input, cmds } satisfies ToWorker);
+      else link.send({ t: 'input', input, cmds, ack: wire.ack || undefined });
+    },
+    preview: (req, key) => {
+      if (disposed) return;
+      if (hosting) hosting.worker.postMessage({ type: 'preview', playerId: hosting.humanId, req, key } satisfies ToWorker);
+      else link.send({ t: 'preview', req, key });
+    },
+    chat: (text) => { if (hosting) hosting.session?.localChat(text); else link.send({ t: 'chat', text }); },
+    wheel: (id) => {
+      if (disposed) return;
+      if (hosting) hosting.session?.localWheel(id); else link.send({ t: 'wheel', id });
+    },
+    close: () => {
+      disposed = true;
+      if (hosting) { hosting.session?.close(); hosting.worker.terminate(); hosting = null; }
+    },
+    // Spectator follow is for a remote host; a guest hosting after a migration has the full snapshot.
+    follow: (id) => { if (!disposed && !hosting) link.send({ t: 'follow', id }); },
+  };
+}
+
+/** A recorded match, re-simulated in a worker (replay viewer). */
+function replayBackend(bytes: Uint8Array): Backend {
+  const link = new ReplayLink(bytes);
+  return {
+    buffered: false,
+    inputHz: null,
+    replay: link,
+    connect(sink) {
+      link.onError = (m) => { console.error(`[replay] ${m}`); toast(m); };
+      link.info.then((info) => {
+        const h = info.header;
+        const id = h.localId || h.players[0]?.id || 1;
+        sink.map(info.map, id, h.players.find((p) => p.id === id)?.island ?? 0);
+        link.onSnapshot = (m) => { if (m.reset) sink.reset?.(); sink.snapshot(m.snap); };
+      }, (err) => sink.fatal('Could not open replay', String(err?.message ?? err)));
+    },
+    input: () => {},
+    preview: () => {},
+    chat: () => {},
+    close: () => link.close(),
+  };
+}
+
+/** Watch a recording; Exit goes back to the Replays screen. */
+async function playReplay(bytes: Uint8Array, screen: HTMLElement) {
+  let game: Game | null = null;
+  game = await startGame(replayBackend(bytes), screen, undefined, {
+    role: { kind: 'client' },
+    hostId: null,
+    exitReplay: () => { game?.destroy(); openReplays(); },
+  });
+}
+
+function openReplays() {
+  const screen = showReplays(app, {
+    back: () => { screen.remove(); showMenu(); },
+    play: (bytes) => {
+      screen.querySelectorAll('button').forEach((b) => (b.disabled = true));
+      playReplay(bytes, screen).catch((err) => {
+        console.error('[replay] failed to start', err);
+        toast(`Could not play replay: ${err?.message ?? err}`);
+        screen.remove();
+        openReplays();
       });
     },
-    input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds, ack: wire.ack || undefined }); },
-    preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
-    chat: (text) => link.send({ t: 'chat', text }),
-    wheel: (id) => { if (!disposed) link.send({ t: 'wheel', id }); },
-    close: () => { disposed = true; },
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -258,6 +494,20 @@ function showMenu() {
   const mapRow = document.createElement('div');
   mapRow.className = 'map-row';
   mapRow.append('Map', mapSel.root);
+  // Game settings for vs-bot matches (same panel and remembered values as the host's lobby). Hidden behind a toggle.
+  const soloSettings = new GameSettingsPanel(loadPrefs().settings, (st) => savePrefs({ settings: st }), 'menu-settings');
+  soloSettings.root.hidden = true;
+  const settingsToggle = document.createElement('button');
+  settingsToggle.type = 'button';
+  settingsToggle.className = 'btn small toggle gs-toggle';
+  settingsToggle.textContent = 'Game settings';
+  settingsToggle.dataset.testid = 'menu-settings-toggle';
+  settingsToggle.setAttribute('aria-pressed', 'false');
+  settingsToggle.onclick = () => {
+    soloSettings.root.hidden = !soloSettings.root.hidden;
+    settingsToggle.classList.toggle('selected', !soloSettings.root.hidden);
+    settingsToggle.setAttribute('aria-pressed', String(!soloSettings.root.hidden));
+  };
   for (const d of ['easy', 'medium', 'hard', 'pro'] as Difficulty[]) {
     const b = document.createElement('button');
     b.className = `btn${d === 'medium' ? ' primary' : ''}`;
@@ -267,7 +517,7 @@ function showMenu() {
       lockMenu();
       const choice = mapSel.value as MapChoice;
       status.textContent = choice === 'random' ? 'Loading…' : `Loading ${MAP_NAMES[choice]}…`;
-      playSolo(d, choice, menu, bots.count()).catch((err) => {
+      playSolo(d, choice, menu, bots.count(), soloSettings.value).catch((err) => {
         console.error('[main] failed to start', err);
         status.textContent = `Failed to start: ${err?.message ?? err}`;
       });
@@ -352,9 +602,33 @@ function showMenu() {
   howBtn.onclick = () => openHowTo();
   const menuBtns = document.createElement('div');
   menuBtns.className = 'menu-btns';
-  menuBtns.append(howBtn, settingsButton());
+  const replaysBtn = document.createElement('button');
+  replaysBtn.className = 'btn menu-settings';
+  replaysBtn.textContent = 'Replays';
+  replaysBtn.dataset.testid = 'open-replays';
+  replaysBtn.onclick = () => { menu.remove(); openReplays(); };
+  menuBtns.append(howBtn, settingsButton(), replaysBtn);
   rememberDifficulty(play);
-  card.append(mapRow, play, bots.root, online, status, menuBtns, keys);
+  // Practice range: offline sandbox (targets, dummies, free shop and building). Not a difficulty, so not in `play`.
+  const practiceRow = document.createElement('div');
+  practiceRow.className = 'practice-play';
+  const practiceBtn = document.createElement('button');
+  practiceBtn.className = 'btn';
+  practiceBtn.textContent = 'Practice';
+  practiceBtn.dataset.testid = 'play-practice-range';
+  practiceBtn.onclick = () => {
+    lockMenu();
+    status.textContent = 'Loading the practice range…';
+    playPractice(menu).catch((err) => {
+      console.error('[main] failed to start practice', err);
+      status.textContent = `Failed to start: ${err?.message ?? err}`;
+      unlockMenu();
+    });
+  };
+  const practiceNote = document.createElement('span');
+  practiceNote.textContent = 'Targets, dummies, free shop & building';
+  practiceRow.append(practiceBtn, practiceNote);
+  card.append(mapRow, play, bots.root, practiceRow, settingsToggle, soloSettings.root, online, status, menuBtns, keys);
   menu.append(card);
   app.append(menu);
   if (!currentIsChromium()) menu.append(chromeBanner());
@@ -406,14 +680,14 @@ function loadingScreen(text: string): HTMLElement {
 }
 
 /** Vs `bots` opponents (1-7) on the chosen map (Random: a different map than the last one played). Play again keeps difficulty, map choice and bot count. */
-async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bots = 1) {
+async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bots = 1, settings: GameSettings = loadPrefs().settings) {
   const map = resolveMapChoice(choice, lastBotMap);
   lastBotMap = map;
   const urlBots = DEBUG ? Number(new URLSearchParams(location.search).get('bots')) : 0;
   const backend = workerBackend(() => ({
     // ?debug=1&bots=N (1-7) overrides the menu's bot count (perf testing)
     setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: Math.min(7, Math.max(1, urlBots || bots)) },
-      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map },
+      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map, settings: sanitizeSettings(settings) },
     humanId: 1,
   }), null);
   let game: Game | null = null;
@@ -440,12 +714,23 @@ async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bot
       kind: 'solo',
       playAgain: () => {
         game?.destroy();
-        playSolo(d, choice, loadingScreen('Starting a new match…'), bots).catch((err) => {
+        playSolo(d, choice, loadingScreen('Starting a new match…'), bots, settings).catch((err) => {
           console.error('[main] play again failed', err);
           toast(`Could not restart: ${err?.message ?? err}`);
         });
       },
     },
+  });
+}
+
+/** Practice range: you alone on the range layout (sim/practice.ts); no timer, no result, Esc → Quit to menu. */
+async function playPractice(menu: HTMLElement) {
+  const backend = workerBackend(() => ({ setup: { players: [{ name: 'You', isBot: false }], practice: true }, humanId: 1 }), null);
+  await startGame(backend, menu, undefined, {
+    hostId: null,
+    practice: true,
+    money: () => 'Practice: cash is already unlimited',
+    role: { kind: 'solo', playAgain: () => location.reload() },
   });
 }
 
@@ -458,7 +743,7 @@ function showJoinError(menu: HTMLElement, message: string) {
 async function hostLobby(name: string, menu: HTMLElement) {
   let ui: LobbyUi | null = null;
   const session = await HostSession.create(pickTransport(location.search), name, {
-    lobby: (slots, map) => ui?.render(slots, 0, map),
+    lobby: (slots, map, settings) => ui?.render(slots, 0, map, settings),
     chat: (from, text) => { chat?.add(from, text); ui?.addChat(from, text); },
     net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; },
   });
@@ -501,6 +786,8 @@ async function hostLobby(name: string, menu: HTMLElement) {
     removeSeat: (i) => session.removeSeat(i),
     kick: (i) => session.kick(i),
     setMap: (c) => { session.setMap(c); localStorage.setItem(MAP_KEY, c); },
+    setColor: (c) => { session.setColor(0, c); savePrefs({ color: c }); },
+    setSettings: (st) => { session.setSettings(st); savePrefs({ settings: session.settings }); },
     start: () => { savePrefs({ seats: seatPrefsOf(session.lobby.slots()) }); launch((w) => session.start(w), ui!.root); },
     back: () => location.reload(),
   }, () => location.reload(), (text) => {
@@ -511,31 +798,49 @@ async function hostLobby(name: string, menu: HTMLElement) {
     else ui!.addChat('', c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
   });
   session.setMap(storedMapChoice());
+  // The host's last game settings and colour.
+  { const p = loadPrefs(); session.setSettings(p.settings); if (p.color !== null) session.setColor(0, p.color); }
   addInviteButton(ui.root, session.code);
   console.info(`[host] room ${session.code} open`);
 }
 
-async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?: string) {
-  const { link, lobby } = await joinRoom(pickTransport(location.search), code, name, rejoin).catch((err) => {
+async function joinLobby(firstCode: string, name: string, menu: HTMLElement, rejoin?: string) {
+  let code = firstCode;
+  const joined = await joinRoom(pickTransport(location.search), code, name, rejoin).catch((err) => {
     clearRejoin(); // the seat is gone (grace over / match ended / host left): no more offers
     throw err;
   });
+  let link: Link = joined.link;
+  const lobby = joined.lobby;
   menu.remove();
   const ui = new LobbyUi(app, code, null, () => { clearRejoin(); link.close(); location.reload(); }, (text) => {
     const c = parseCommand(text);
     if (!c) link.send({ t: 'chat', text });
     else ui.addChat('', c.kind === 'spectate' ? HOST_ONLY : c.kind === 'money' ? MONEY_HOST_ONLY : c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
+  }, {
+    setReady: (ready) => link.send({ t: 'ready', ready }),
+    setColor: (color) => { link.send({ t: 'color', color }); savePrefs({ color }); },
   });
-  ui.render(lobby.slots, lobby.you, lobby.map);
+  ui.render(lobby.slots, lobby.you, lobby.map, sanitizeSettings(lobby.settings));
+  // Ask for the colour this player picked last time (the host refuses it if someone else has it).
+  { const c = loadPrefs().color; if (c !== null) link.send({ t: 'color', color: c }); }
   addInviteButton(ui.root, code);
   let slots = lobby.slots;
+  /** Our seat (host migration: the plan names the backup by seat). */
+  let you = lobby.you;
   let phase: 'lobby' | 'starting' | 'game' | 'over' = 'lobby';
   let early: HostMsg[] = [];
   let game: Game | null = null;
   const launch = (m: Extract<HostMsg, { t: 'start' }>, screen: HTMLElement) => {
     phase = 'starting';
     early = [];
-    const backend = remoteBackend(link, m, early);
+    const backend = remoteBackend(link, m, early, {
+      gm: new GuestMigration(you),
+      name,
+      code: () => code,
+      relink: (l, c) => { link = l; code = c; l.onMessage(onHostMsg); },
+      promoted: () => { phase = 'over'; clearRejoin(); link.close(); },
+    });
     // A spectating host has no player for the scoreboard to mark.
     startGame(backend, screen, undefined, { hostId: slots[0]?.kind === 'human' && slots[0].spectator ? null : 1, role: { kind: 'client' } }).then((g) => { game = g; phase = 'game'; }, (err) => {
       console.error('[join] failed to start', err);
@@ -546,7 +851,7 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     });
   };
   link.onClose(() => { if (phase === 'lobby') ui.error('The host closed the lobby.'); });
-  link.onMessage((raw) => {
+  const onHostMsg = (raw: unknown) => {
     const m = raw as HostMsg;
     // Connection quality + reconnect bookkeeping, in any phase.
     if (m.t === 'ping') { link.send({ t: 'pong', n: m.n }); return; }
@@ -557,14 +862,15 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     if (phase === 'game') {
       // The game's backend handles everything else; the host restarting or returning to the lobby is ours.
       if (m.t === 'start') { game?.destroy(); game = null; launch(m, loadingScreen('Host started a rematch…')); }
-      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; app.append(ui.root); ui.render(m.slots, m.you, m.map); }
+      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; you = m.you; app.append(ui.root); ui.render(m.slots, m.you, m.map, sanitizeSettings(m.settings)); }
       return;
     }
-    if (m.t === 'lobby') { slots = m.slots; ui.render(m.slots, m.you, m.map); }
+    if (m.t === 'lobby') { slots = m.slots; you = m.you; ui.render(m.slots, m.you, m.map, sanitizeSettings(m.settings)); }
     else if (m.t === 'chat') ui.addChat(m.from, m.text);
     else if (m.t === 'ended') { phase = 'over'; ui.error(m.reason === 'host-left' ? 'The host closed the lobby.' : `Removed from lobby (${m.reason}).`); }
     else if (m.t === 'start') { ui.loading(m.map.name); launch(m, ui.root); }
-  });
+  };
+  link.onMessage(onHostMsg);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -574,7 +880,7 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
 /** A running game; destroy() removes every trace of it (rematch / back to lobby). */
 type Game = { destroy(): void };
 /** spectate / money: what /spectate and /money do here (host / vs bot); absent for a joined friend. */
-type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult; money?: (amount: number) => string };
+type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult; money?: (amount: number) => string; exitReplay?: () => void; practice?: boolean };
 
 /** Loading-screen phases for a match and their share of the bar (real progress, see loading.ts). */
 const MATCH_PHASES = { code: 15, gpu: 10, characters: 25, map: 15, shaders: 30, frames: 5 };
@@ -600,7 +906,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const loadStart = performance.now();
   const mods = await loadGameModules((done, total) => loading.progress('code', done / total, 'Loading game code'));
   const THREE = mods.three;
-  const { Renderer } = mods.render, { ThirdPersonCamera } = mods.camera, { FirstPersonView } = mods.viewmodel;
+  // lods/pbrStats come through the lazy render module: a static import would pull three.js onto the phone card.
+  const { Renderer, lods, pbrStats } = mods.render, { ThirdPersonCamera } = mods.camera, { FirstPersonView } = mods.viewmodel;
   const { DamageFx } = mods.damageFx, { Hud } = mods.hud, { Spectator } = mods.spectator;
   const offCharProgress = mods.characters.onCharacterProgress((f) => loading.progress('characters', f, 'Downloading characters'));
 
@@ -611,21 +918,44 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   app.prepend(canvas);
   loading.progress('gpu', 0, 'Starting WebGPU');
   const renderer = await Renderer.create(canvas);
+  const prevLost = renderer.gpu.onDeviceLost.bind(renderer.gpu);
+  renderer.gpu.onDeviceLost = (info) => { errors?.report('gpu', `device lost: ${info.message} (${info.reason ?? 'unknown'})`); prevLost(info); };
+  renderer.world.onCritterSound = (s) => audio.critter(s);
   loading.progress('gpu', 1, 'Starting the simulation');
+  loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
+  loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
   console.info(`[render] backend: ${renderer.backend}`);
   scope.begin(); // window/document listeners from here on are removed by destroy()
   let running = true;
   /** Free-fly chosen from the end screen (otherwise spectating = being dead). */
   let spectateChosen = false;
-  /** Dynamic resolution: drops the render scale while frames run over budget, restores it when stable. */
-  const dynRes = new DynamicResolution();
-  dynRes.enabled = settings.get().video.dynamicResolution;
+  /**
+   * Frame-time governor (Settings → Video "dynamic resolution"): over budget it drops GTAO, shadow resolution,
+   * grass density and LOD distance first, render resolution last; restores them with headroom.
+   */
+  const governor = new FrameGovernor();
+  const sky = renderer.world.sky;
+  const govSkip = () => governor.setSkip((a, b) => !sky.presetHasAo && a.ao !== b.ao && a.shadowScale === b.shadowScale && a.grass === b.grass && a.lodBias === b.lodBias && a.res === b.res);
+  govSkip();
+  governor.enabled = settings.get().video.dynamicResolution;
+  const applyGovernor = () => {
+    const k = governor.knobs;
+    sky.setGovernor(k);
+    renderer.world.grass.densityScale = k.grass;
+    lods.bias = k.lodBias;
+    sky.setDynamicScale(k.res);
+  };
+  let govQuality = sky.quality;
   const offSettings = settings.subscribe((st) => {
-    renderer.world.sky.setQuality(st.video.quality);
-    renderer.world.sky.setResolutionScale(st.video.resolutionScale);
-    dynRes.enabled = st.video.dynamicResolution;
-    renderer.world.sky.setDynamicScale(dynRes.scale);
+    sky.setQuality(st.video.quality);
+    sky.setResolutionScale(st.video.resolutionScale);
+    governor.enabled = st.video.dynamicResolution;
+    perfDetail = st.video.perfDetail || DEBUG;
+    if (sky.quality !== govQuality) { govQuality = sky.quality; governor.reset(); govSkip(); }
+    applyGovernor();
   });
+  /** Shift + the FPS key (F3 / `): perf detail under the FPS counter (Settings → Video → Performance stats). */
+  let perfDetail = settings.get().video.perfDetail || DEBUG, detailShown = false;
 
   // ---- reveal: map + avatars + first snapshot → shader warm-up → a few hidden frames → fade in ----
   let charsReady = false, warmStarted = false, warmed = false, revealed = false, framesAfterWarm = 0;
@@ -636,12 +966,20 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     maybeWarm();
   });
   const revealTimer = setTimeout(() => { console.warn('[loading] warm-up took too long; showing the game anyway'); reveal(); }, REVEAL_TIMEOUT_MS);
+  /** Frame-loop hooks for the warm-up (warmup.ts): pause drawing, count drawn frames, run a hook before each. */
+  const warmLoop = { paused: false, left: 0, before: null as (() => void) | null, done: null as (() => void) | null };
   function maybeWarm() {
     if (warmStarted || !snap || !map.length || !charsReady) return;
     warmStarted = true;
     // One normal frame first so the camera already sits behind the player.
     requestAnimationFrame(() => {
-      mods.warmup.warmUp(renderer, () => snap?.pieces ?? [], input.yaw, (f, label) => loading.progress('shaders', f, label))
+      const loop = {
+        setPaused: (on: boolean) => { warmLoop.paused = on; },
+        frames: (n: number, before?: () => void) => new Promise<void>((done) => {
+          warmLoop.before = before ?? null; warmLoop.left = n; warmLoop.done = done;
+        }),
+      };
+      mods.warmup.warmUp(renderer, loop, fpv, (f, label) => loading.progress('shaders', f, label))
         .catch((err) => console.warn('[loading] shader warm-up failed; continuing', err))
         .finally(() => { warmed = true; });
     });
@@ -700,7 +1038,15 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     input.enabled = !hud.ended && !dead;
     chat.enabled = !hud.ended && !dead;
     canvas.focus();
+    // Same click / key press that closed the panel re-captures the mouse: no extra click needed.
+    if (input.enabled) input.requestLock();
   };
+
+  /** Back to the menu (a page reload) once this match's recording is stored. */
+  function leaveToMenu() {
+    backend.close();
+    void savesSettled().then(() => location.reload());
+  }
 
   const fxPos = new THREE.Vector3();
   const damageFx = new DamageFx(app);
@@ -711,7 +1057,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     canvas.classList.add('shake');
   });
   /** Leaving on purpose: no reconnect offer afterwards. */
-  const leave = () => { clearRejoin(); location.reload(); };
+  const leave = () => { clearRejoin(); leaveToMenu(); };
   // Shop buys go through a paced queue: Shift+click buys several pieces, one per sim tick.
   const buys = new BuyQueue();
   const buyItem = (item: ShopItem, bulk = false) => {
@@ -729,9 +1075,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     }),
     select: (i) => input.select(i),
     moveSlot: (from, to) => input.queue({ moveSlot: { from, to } }),
+    // Same as the drop key: select that slot and drop from it in the same input (the sim selects first).
+    dropSlot: (slot, amount) => { input.select(slot); input.queue({ drop: amount }); },
   });
+  if (end.practice) hud.setPractice();
   const online = backend.buffered || !!onChat;
-  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item) }, { online, isHost: !!onChat });
+  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
   let rejoinTouchedAt = 0;
 
@@ -749,6 +1098,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         if (input.inventory) input.setInventory(false);
         return;
       }
+      if (replay) return; // Esc just frees the mouse for the playback bar
       if (spectateChosen && !chat.open && !dead) {
         // Esc while spectating from the end screen: back to it (it's the pause menu here).
         spectateChosen = false;
@@ -756,10 +1106,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         hud.setEndVisible(true);
         return;
       }
-      if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead) showPause();
+      if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead && !practice?.open) showPause();
     },
     inventoryChange: (open) => {
-      hint.textContent = open ? `Drag hotbar items to reorder · ${bindingLabel(activeKeymap(), 'inventory')} to resume` : 'Click to capture the mouse';
+      hint.textContent = open ? `Drag hotbar items to reorder · ${bindingLabel(activeKeymap(), 'inventory')} to resume` : 'Click to resume';
       hint.classList.toggle('inventory', open);
     },
   });
@@ -784,6 +1134,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const sendWheel = (id: WheelId) => {
     if (!isWheelId(id)) throw new Error(`[wheel] unknown id ${String(id)}`);
     console.info(`[wheel] ${id}`);
+    if (!backend.wheel) { console.info('[wheel] not available here (replay)'); return; }
     backend.wheel(id);
   };
   window.addEventListener('keydown', (e) => {
@@ -835,12 +1186,42 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   // FPS counter hotkey (rebindable; Settings → Video has the same toggle).
   window.addEventListener('keydown', (e) => {
-    if (e.repeat || !isAction('fps', e.code) || e.target instanceof HTMLInputElement) return;
+    const t = e.target as HTMLElement | null;
+    if (e.repeat || !isAction('fps', e.code) || (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))) return;
     e.preventDefault();
-    settings.update((d) => { d.video.showFps = !d.video.showFps; });
+    if (e.shiftKey) settings.update((d) => { d.video.perfDetail = !d.video.perfDetail; if (d.video.perfDetail) d.video.showFps = true; });
+    else settings.update((d) => { d.video.showFps = !d.video.showFps; });
   });
 
   const spectator = new Spectator(app, renderer.camera, () => renderer.collidables, canvas, () => input.enabled);
+  // Replay viewer: always the spectator camera, playback bar at the bottom, interpolation on the playback clock.
+  const replay = backend.replay ?? null;
+  let replayUi: ReplayControls | null = null;
+  if (replay) {
+    app.classList.add('replay-mode'); // hides the first-person HUD (hotbar, health…): nobody is "you" here
+    renderer.clockNow = replay.clock;
+    spectateChosen = true;
+    replay.info.then((info) => {
+      if (!running) return;
+      replayUi = new ReplayControls(app, {
+        length: info.length,
+        kills: info.kills,
+        players: info.header.players,
+        play: () => replay.play(),
+        pause: () => replay.pause(),
+        speed: (x) => replay.setSpeed(x),
+        seek: (t) => replay.seek(t),
+        follow: (id) => {
+          if (id === null) { spectator.mode = 'free'; spectator.pos.copy(renderer.camera.position); }
+          else { spectator.mode = 'follow'; spectator.followId = id; }
+          canvas.focus();
+        },
+        exit: () => end.exitReplay?.(),
+      });
+      replay.onState = (st) => replayUi?.setState(st);
+      if (replay.last) replayUi.setState(replay.last);
+    }, () => {});
+  }
   const scoreboard = new Scoreboard(app);
   const scoreOpts = () => ({ humanId, hostId: end.hostId, ...(online ? { ping: (id: number) => qol.pingFor(id, end.hostId), hostTick: netStatus.host } : {}) });
   window.addEventListener('keydown', (e) => {
@@ -853,7 +1234,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   const hint = document.createElement('div');
   hint.className = 'click-hint glass';
-  hint.textContent = 'Click to capture the mouse';
+  hint.textContent = 'Click to resume';
   document.body.append(hint);
 
   /** Remove the pause card; vs bot, the simulation runs again. */
@@ -893,8 +1274,41 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     document.body.append(paused);
   }
 
+  // ---- practice range panel (practicePanel.ts): O opens the controls, O / Esc / Resume closes them ----
+  const practice = end.practice ? new PracticePanel(app, {
+    send: (cmd) => {
+      if (!backend.practice) throw new Error('practice panel: backend has no practice channel');
+      backend.practice(cmd);
+    },
+    faceRange: () => { input.yaw = 0; input.pitch = 0; },
+    closed: () => closePractice(),
+  }) : null;
+  function openPractice() {
+    practice!.setOpen(true);
+    input.enabled = false;
+    chat.enabled = false;
+    if (document.pointerLockElement) document.exitPointerLock();
+  }
+  function closePractice() {
+    practice!.setOpen(false);
+    input.enabled = !hud.ended && !dead;
+    chat.enabled = !hud.ended && !dead;
+    canvas.focus();
+    input.requestLock();
+  }
+  if (practice) window.addEventListener('keydown', (e) => {
+    if (e.repeat || e.target instanceof HTMLInputElement) return;
+    if (practice.open && (e.code === 'Escape' || e.code === 'KeyO')) { e.preventDefault(); e.stopPropagation(); closePractice(); return; }
+    // O, unless the player bound it to a game action.
+    if (e.code === 'KeyO' && !ACTIONS.some((a) => isAction(a.id, 'KeyO')) && !hud.panelOpen && !paused && !chat.open && !dead && !input.inventory) {
+      e.preventDefault();
+      openPractice();
+    }
+  }, { capture: true });
+
   function showFatal(titleText: string, detail: string) {
     if (dead) return;
+    if (titleText === 'Simulation crashed') errors?.report('fatal', `${titleText}: ${detail}`);
     reveal();
     input.enabled = false;
     chat.enabled = false;
@@ -956,15 +1370,16 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   }
 
   /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
-  const gunHud = (me: Snapshot['players'][number] | undefined) => {
+  const gunHud = (me: Snapshot['players'][number] | undefined, own = true) => {
     if (!me?.alive || me.equipped === 'fists') return { spreadPx: 4, reload: null, scoped: false };
     const now = simNow();
-    const deg = spreadDeg(me.equipped, { ads: fpv.adsK > 0.5, bloom: me.bloom, lastShotAt: me.lastShotAt }, now,
+    const ads = own ? fpv.adsK > 0.5 : me.ads;
+    const deg = spreadDeg(me.equipped, { ads, bloom: me.bloom, lastShotAt: me.lastShotAt }, now,
       { speed: Math.hypot(me.vel.x, me.vel.z), grounded: Math.abs(me.vel.y) < 0.5 });
     const cam = renderer.camera;
     const px = (Math.tan((deg * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (canvas.clientHeight / 2);
     const c = reloadClock(me, now);
-    return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && fpv.adsK > 0.9 };
+    return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && (own ? fpv.adsK > 0.9 : me.ads && spectator.firstPerson) };
   };
 
   // Client shot prediction (shotPredict.ts); predictShot is defined with the frame loop.
@@ -995,12 +1410,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       maybeWarm();
     }
     damageFx.onSnapshot(s, humanId);
+    practice?.onSnapshot(s, humanId);
     sealAnnouncer.onSnapshot(s, humanId);
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
     const wasEnded = hud.ended;
-    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory, ...gunHud(meNow) });
-    if (hud.ended && !wasEnded) spectateChosen = false; // a (new) result popped the end screen up
+    // Spectating someone: the HUD shows their view (hotbar, ammo, cash, hp/shield/stamina, crosshair).
+    const viewId = spectator.following;
+    const viewed = viewId !== null ? s.players.find((p) => p.id === viewId) : undefined;
+    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory,
+      stamina: predictor?.stamina ?? null, viewId, ...(viewed ? gunHud(viewed, false) : gunHud(meNow)) });
+    if (hud.ended && !wasEnded && !replay) spectateChosen = false; // a (new) result popped the end screen up
     scoreboard.update(s, scoreOpts());
     qol.onSnapshot(s, input.selected);
     if (backend.buffered) {
@@ -1008,8 +1428,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       if (s.winner !== null) clearRejoin();
       else if (performance.now() - rejoinTouchedAt > 2000) { rejoinTouchedAt = performance.now(); touchRejoin(); }
     }
-    chat.enabled = !hud.ended && !dead && !hud.panelOpen;
-    if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
+    chat.enabled = !replay && !hud.ended && !dead && !hud.panelOpen;
+    if (replay) { if (hud.ended) hud.setEndVisible(false); } // the result shows in the kill feed; keep watching
+    else if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
   };
 
   backend.connect({
@@ -1036,6 +1457,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       import('./predict').then(({ Predictor: P }) => P.create(def, id)).then((p) => { predictor = p; },
         (err) => console.error('[predict] could not start; falling back to server positions', err));
       hud.setMap(map, humanId, island, def.center);
+      hud.suddenDeathAt = def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt;
+      hud.genMult = def.settings?.genMult ?? 1;
+      if (practice && map[island]) practice.setBunker(map[island].bunker);
       qol.setMap(map, humanId, island);
       audio.setMap(map, humanId);
     },
@@ -1071,6 +1495,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         location.reload();
       }, (err) => { console.info('[rejoin] host unreachable', err); hostGone(); });
     },
+    reset: () => renderer.resetInterp(),
   });
 
   if (DEBUG) {
@@ -1081,6 +1506,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       mapDef: () => mapDef,
       humanId: () => humanId,
       renderInfo: () => renderer.info(),
+      /** Wildlife: drawn instances per species / swarm, and live agents (incl. hidden + off-screen) per species. */
+      critters: () => {
+        const c = renderer.world.critters;
+        if (!c) return null;
+        const live: Record<string, number> = {};
+        for (const a of c.sim.agents) live[a.def.name] = (live[a.def.name] ?? 0) + 1;
+        return { drawn: c.stats(), live };
+      },
       renderer,
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
       /** Emote wheel: open state and hovered slot; `wheel(id)` sends a pick directly. */
@@ -1097,7 +1530,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         selfVisible: renderer.characters.hiddenId !== humanId &&
           !!(renderer.characters as unknown as { avatars: Map<number, { group: Object3D }> }).avatars.get(humanId)?.group.visible,
       }),
+      /** Free-fly camera position while spectating (offline map thumbnails: tests/visual/mapThumbs.mjs). */
+      spectateAt: (x: number, y: number, z: number) => { spectator.pos.set(x, y, z); },
       scoreboard: () => scoreboard.visible,
+      /** Loot on the ground as drawn: label lines, label shown, model count. */
+      loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
@@ -1106,9 +1543,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       frames: () => frameStats(),
       resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; },
       gpuMs: () => renderer.gpuStats(),
-      renderScale: () => ({ dyn: dynRes.scale, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: dynRes.smoothedMs }),
+      renderScale: () => ({ dyn: governor.knobs.res, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: governor.smoothedMs }),
+      pbr: () => pbrStats,
+      /** Input→render latency probe: synthetic look events (no pointer lock needed), then stats. */
+      latency: () => latency.stats(),
+      resetLatency: () => { latency.cpu.length = 0; latency.gpu.length = 0; },
+      lookProbe: (on: boolean) => { input.debugLocked = on; },
+      governor: () => ({ level: governor.level, knobs: governor.knobs, enabled: governor.enabled, lodTargets: lods.count, lodScale: lods.scale }),
       interpDelay: () => renderer.interpDelay,
       shotPredict: () => ({ ...shots.stats, inFlight: shots.inFlight, times: shotTimes }),
+      /** Replay viewer: playback state (tick, playing, speed, divergedAt), or null in a live game. */
+      replayState: () => (replay ? replay.last : null),
       /** Current build ghost: snap tag, ghost/rest position, rotation, validity (+ reason) and the exact request a click sends. */
       buildAim: () => aim,
       /** The sim's own verdict for a build request (round trip), to cross-check the local ghost. */
@@ -1143,15 +1588,18 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const cone = spreadDeg(w, { ads: fpv.adsK > 0.5, bloom: meNew.bloom, lastShotAt: meNew.lastShotAt }, simNow(),
       { speed: Math.hypot(meNew.vel.x, meNew.vel.z), grounded: Math.abs(meNew.vel.y) < 0.5 });
     if (WEAPONS[w].pellets === 1 && Math.atan2(PLAYER.radius * 0.8, hit!.distance) < (cone * Math.PI) / 180) return;
+    const head = to.y >= victimFeet.y + HEAD.y - HEAD.r;
     shots.markHit();
-    hud.hitmarker(to.y >= victimFeet.y + HEAD.y - HEAD.r);
+    hud.hitmarker(head);
     audio.predicted('hitmarker');
-    renderer.gunFx.onEvent({ t: ev.t, type: 'hit', data: { target: victim, by: humanId, pos: { x: to.x, y: to.y, z: to.z }, part: to.y >= victimFeet.y + HEAD.y - HEAD.r ? 'head' : 'body', weapon: w } }, humanId);
+    renderer.gunFx.onEvent({ t: ev.t, type: 'hit', data: { target: victim, by: humanId, pos: { x: to.x, y: to.y, z: to.z }, part: head ? 'head' : 'body', weapon: w, ...predictedHit(w, hit!.distance, head) } }, humanId);
   };
 
   // ---- frame loop ----
   const feet = new THREE.Vector3();
   const aimDir = new THREE.Vector3();
+  const specMotion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  let lastFollow: number | null = null;
   const sendAcc = new InputAccumulator();
   let nextSendAt = 0;
   let last = performance.now();
@@ -1179,6 +1627,24 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     };
   };
   const workMs: number[] = [];
+  /**
+   * Input → render latency (mouse look): from the oldest undrawn look event to (a) the frame's draw submission
+   * (CPU) and (b) the GPU finishing that frame (queue.onSubmittedWorkDone). Display scan-out comes on top.
+   */
+  const latency = {
+    cpu: [] as number[], gpu: [] as number[],
+    drawn(t0: number) {
+      const cpu = performance.now() - t0;
+      this.cpu.push(cpu); if (this.cpu.length > 300) this.cpu.shift();
+      const dev = (renderer.gpu.backend as { device?: { queue: { onSubmittedWorkDone(): Promise<void> } } }).device;
+      dev?.queue.onSubmittedWorkDone().then(() => { this.gpu.push(performance.now() - t0); if (this.gpu.length > 300) this.gpu.shift(); }, () => {});
+    },
+    stats() {
+      const q = (xs: number[], k: number) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * k))] ?? 0; };
+      const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
+      return { n: this.cpu.length, cpuAvg: avg(this.cpu), cpuP95: q(this.cpu, 0.95), gpuAvg: avg(this.gpu), gpuP95: q(this.gpu, 0.95) };
+    },
+  };
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
   const frame = () => {
@@ -1189,14 +1655,27 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
-      dynRes.frame(now - last, 1000 / (cap || 60));
-      renderer.world.sky.setDynamicScale(dynRes.scale);
+      if (governor.frame(now - last, 1000 / (cap || 60))) applyGovernor();
     }
     frameMs.push(now - last);
+    errors?.frame(now - last);
     if (frameMs.length > 600) frameMs.shift();
     last = now;
     fpsFrames++;
-    if (now - fpsSince >= 500) { hud.setFps((fpsFrames * 1000) / (now - fpsSince)); fpsFrames = 0; fpsSince = now; }
+    if (now - fpsSince >= 500) {
+      hud.setFps((fpsFrames * 1000) / (now - fpsSince));
+      if (!perfDetail && detailShown) { hud.setFpsDetail(null); detailShown = false; }
+      if (perfDetail) {
+        detailShown = true;
+        const ri = renderer.info(), g = renderer.gpuMs.length ? renderer.gpuMs[renderer.gpuMs.length - 1] : null;
+        hud.setFpsDetail([
+          `${((now - fpsSince) / fpsFrames).toFixed(1)} ms${g !== null ? ` · gpu ${g.toFixed(1)} ms` : ''}`,
+          `${ri.drawCalls} draws · ${(ri.triangles / 1e6).toFixed(2)}M tris`,
+          `gov ${governor.level} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
+        ]);
+      }
+      fpsFrames = 0; fpsSince = now;
+    }
     if (buffer) for (const r of buffer.advance(dt)) applySnapshot(r.snap);
     renderer.beginFrame();
 
@@ -1220,21 +1699,28 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (unsent.length > MAX_CMDS_PER_MSG) unsent = unsent.slice(-MAX_CMDS_PER_MSG);
     const predicting = !!predictor && predictor.renderState(liveCmd(moveSeq + 1), moveAcc / DT, dt, predicted);
     renderer.setLocal(predicting ? predicted : null);
-    hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead ? '' : 'none';
+    hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead && !practice?.open ? '' : 'none';
 
     const me = snap?.players.find((p) => p.id === humanId);
     if (wheel.open && (!input.enabled || chat.open)) closeWheel();
     // No player of our own (spectating host / handed to a bot), dead (respawning or eliminated), or free
     // fly picked on the end screen: invisible spectator camera.
-    const spectating = !!snap && (watching || (!!me && (!me.alive || spectateChosen)));
+    const spectating = replay ? !!snap : !!snap && (watching || (!!me && (!me.alive || spectateChosen)));
     if (spectating) {
       spectator.enter(renderer.camera.position);
-      renderer.characters.hiddenId = humanId;
+      renderer.characters.hiddenId = replay ? -1 : humanId; // a replay shows everyone
       renderer.setGhost(null);
       aim = null;
-      spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId, players: snap!.players,
-        posOf: (id, out) => renderer.playerPos(id, out) });
+      spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId: replay ? 0 : humanId, players: snap!.players,
+        posOf: (id, out) => renderer.playerPos(id, out),
+        lookOf: (id) => renderer.playerMotion(id, specMotion), firstPerson: fpv.mode === 'first' });
+      // From their eyes: hide their avatar (as your own is hidden in first person).
+      renderer.characters.hiddenId = spectator.firstPerson && spectator.following !== null ? spectator.following : humanId;
+      replayUi?.setFollow(spectator.following);
     } else spectator.exit();
+    // Online: tell the host who we watch, so it can send that player's HUD state (only while we're dead).
+    const following = spectator.following;
+    if (following !== lastFollow) { lastFollow = following; backend.follow?.(following); }
     input.applyKick(dt);
     // Sights: right mouse with a gun, not while reloading (the sim agrees). Zoom slows mouse look to match.
     const adsWant = !!me?.alive && !spectating && input.ads && me.equipped !== 'fists' && me.reloadUntil === 0;
@@ -1310,10 +1796,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     fpv.applyShake(dt); // visual only: the aim ray above was taken without it
-    renderer.render(input.yaw);
-    fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+    if (!warmLoop.paused) {
+      warmLoop.before?.();
+      renderer.render(input.yaw);
+      fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+      renderer.captureInfo();
+      if (input.lookEventT !== null) { latency.drawn(input.lookEventT); input.lookEventT = null; }
+      if (warmLoop.left > 0 && --warmLoop.left === 0) { warmLoop.before = null; warmLoop.done?.(); }
+    }
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());
+    audio.fires(renderer.world.fire.burning());
     if (warmed && !revealed) {
       framesAfterWarm++;
       loading.progress('frames', framesAfterWarm / WARM_FRAMES);
@@ -1338,6 +1831,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       chat.close();
       if (document.pointerLockElement) document.exitPointerLock();
       backend.close();
+      app.classList.remove('replay-mode');
       scope.dispose(); // listeners + every element this game added (canvas, HUD, chat, overlays)
       renderer.gpu.dispose();
       console.info('[game] torn down');
@@ -1353,6 +1847,7 @@ async function boot() {
     events: () => loading.events,
     screen: loading, // screenshots drive it directly (tests/visual/settingsShots.mjs)
   };
+  if (telemetryEnabled()) { installErrorReporting(); installReplayUploads(); }
   if (isMobileDevice(currentDevice())) {
     // Phones and tablets: a card instead of the game, and nothing of the game is loaded.
     console.info('[main] mobile device: showing the computer-only card');
