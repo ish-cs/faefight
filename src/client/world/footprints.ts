@@ -42,7 +42,7 @@ export function printOn(surface: WorldSurface, wet: number): { strength: number;
     case 'sand': return { strength: Math.min(1, 0.5 * (1 + 0.6 * wet)), life: 45 }; // wet sand holds a sharper print
     case 'gravel': return { strength: 0.28 + 0.15 * wet, life: 20 };
     case 'concrete': case 'quay': case 'asphalt': case 'wood':
-      return wet > 0.2 ? { strength: 0.42 * wet, life: 9 } : null; // wet boot soles on the docks, drying fast
+      return wet > 0.2 ? { strength: 0.3 * wet, life: 9 } : null; // wet boot soles on the docks, drying fast
     default: return null;
   }
 }
