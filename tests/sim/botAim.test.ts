@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { AIM, Aim, wrapAngle, type Angles } from '../../src/sim/bots/aim';
 import { aimStats, type AimSample } from '../../src/sim/bots/aimStats';
 import { AIM_PARAMS, GUN_SKILL } from '../../src/sim/bots/params';
-import { DT } from '../../src/sim/constants';
+import { DT, WEAPONS } from '../../src/sim/constants';
 import { Match } from '../../src/sim/match';
 import { mulberry32 } from '../../src/sim/rng';
 import type { Difficulty } from '../../src/sim/types';
@@ -51,6 +51,13 @@ describe('bot aim hand (Aim.look)', () => {
   });
 });
 
+/**
+ * The sim adds a gun's recoil kick on top of the hand's move in the tick a shot goes out, so the snapshot view can
+ * exceed the hand's cap by one kick. Bound (°/s) for the biggest single kick of any gun (recoilKick's maxima).
+ */
+const MAX_KICK_DPS = Math.max(...Object.values(WEAPONS).map(({ recoil: r }) =>
+  Math.hypot(r.up * (1 + r.upGrow * 10) * 1.1, Math.abs(r.sideBias) + r.side))) / DT;
+
 /** 8-bot mixed FFA: each player's view per tick. */
 async function viewTracks(seed: number, secs: number) {
   const diffs: Difficulty[] = ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'];
@@ -79,7 +86,9 @@ describe('bot view in a match (spectating feels human)', () => {
       expect(s.reversalsPerSec, msg).toBeLessThan(0.15);
       expect(s.flickBacksPerSec, msg).toBeLessThan(0.03);
       expect(s.spikesPerSec, msg).toBeLessThan(0.03);
-      expect(s.max, msg).toBeLessThanOrEqual(Math.max(AIM[d].maxTurn, 8) / DEG + 1); // never faster than a hand (or the walk turn)
+      // Never faster than a hand (or the walk turn), plus at most one recoil kick in that tick.
+      expect(s.p99, msg).toBeLessThanOrEqual(Math.max(AIM[d].maxTurn, 8) / DEG + 1);
+      expect(s.max, msg).toBeLessThanOrEqual(Math.max(AIM[d].maxTurn, 8) / DEG + MAX_KICK_DPS + 1);
     }
   }, 120_000);
 
