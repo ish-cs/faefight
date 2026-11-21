@@ -56,6 +56,18 @@ export async function preloadPbr(gpu: THREE.WebGPURenderer, quality: 'low' | 'hi
   const t0 = performance.now();
   const off = typeof location !== 'undefined' && new URLSearchParams(location.search).get('ktx2') === '0';
   if (off) { pbrStats.ms = 0; return; }
+  // Only maps listed in the encoder's manifest are fetched as KTX2. Without the manifest (not encoded yet) don't
+  // probe 36 URLs: a preview/SPA server answers unknown paths with index.html, not a 404.
+  let listed: Set<string>;
+  try {
+    const r = await fetch(`${BASE}ktx2.json`);
+    const j = r.ok && (r.headers.get('content-type') ?? '').includes('json') ? await r.json() as { maps?: string[] } : null;
+    if (!j?.maps?.length) { console.info('[world/pbr] no KTX2 manifest: JPEG textures'); return; }
+    listed = new Set(j.maps);
+  } catch (err) {
+    console.warn('[world/pbr] KTX2 manifest unreadable: JPEG textures', err);
+    return;
+  }
   const { KTX2Loader } = await import('three/addons/loaders/KTX2Loader.js');
   const ktx = new KTX2Loader().setTranscoderPath(`${import.meta.env.BASE_URL}assets/basis/`);
   try {
@@ -67,6 +79,7 @@ export async function preloadPbr(gpu: THREE.WebGPURenderer, quality: 'low' | 'hi
   let bytes = 0, files = 0, failed = 0;
   await Promise.all(PBR_SETS.flatMap((set) => PBR_MAPS.map(async (m) => {
     const name = `${set}/${m}`;
+    if (!listed.has(name)) return;
     try {
       const t = await ktx.loadAsync(`${BASE}${name}.ktx2`) as THREE.CompressedTexture;
       setup(t, m === 'albedo');

@@ -1,6 +1,6 @@
 /**
  * Frame-time budget governor (pure: no three.js / DOM). Holds a stable frame rate by walking a ladder of
- * quality knobs: the expensive effects go first (GTAO, shadow resolution, grass density, LOD distance), render
+ * quality knobs: the expensive effects go first (GTAO resolution, shadow resolution, grass density, LOD distance), render
  * resolution only after them; with headroom it climbs back the same way, effects last-in first-out.
  *
  * Timing is DynamicResolution's (dynRes.ts): a smoothed frame time (EMA) over budget × overFrac for overSec steps
@@ -8,7 +8,7 @@
  * raise that overloads again within failWindowSec is undone and the next raise waits twice as long (backoff).
  */
 export type GovernorKnobs = {
-  /** screen-space ambient occlusion on (if the preset has it) */
+  /** screen-space ambient occlusion at full resolution (false = cheap: lower-resolution AO; never a rebuild) */
   ao: boolean;
   /** shadow map size multiplier (1, 0.5) */
   shadowScale: number;
