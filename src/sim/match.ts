@@ -13,6 +13,7 @@ import { newMoveState, stepMove, type MoveCmd } from './movement';
 import { adsMoveCmd, adsSpeed } from './gunplay';
 import { unsupportedPieces } from './support';
 import { newPlayer } from './player';
+import { MatchStats } from './stats';
 import { isPlaceholderBotName, nickname } from './names';
 import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
@@ -45,6 +46,8 @@ export class Match implements MatchApi {
   private tickNo = 0;
   private events: MatchEvent[] = [];
   private explosives: Explosive[] = [];
+  /** End-screen totals (damage, seals, pieces, cash, longest life). */
+  private stats = new MatchStats();
 
   private bots = new Map<number, BotBrain>();
   private rng: () => number;
@@ -166,6 +169,7 @@ export class Match implements MatchApi {
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
     this.updateSeals(now);
     this.remember(now);
+    this.stats.onTick(this.events, this.s.players.values(), now);
     this.history.record(now, this.s.players.values());
     return this.snapshot();
   }
@@ -182,6 +186,14 @@ export class Match implements MatchApi {
     if (!this.makeBot) throw new Error('Match.setBot: no bot factory configured');
     p.isBot = true;
     this.bots.set(playerId, this.makeBot(playerId, difficulty, this.rng));
+  }
+
+  /** A seat's human came back (reconnect grace): drop the bot; their movement numbering starts over. */
+  setHuman(playerId: number): void {
+    const p = this.mustPlayer(playerId);
+    this.bots.delete(playerId);
+    p.isBot = false;
+    if (p.mv) p.mv.ack = 0;
   }
 
   /** Pieces left with nothing holding them up fall apart (no floating bridges or walls). */
@@ -293,7 +305,11 @@ export class Match implements MatchApi {
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
 
     if (input.interact)
-      for (const g of this.s.generators) if (near(this.map[g.island].generator)) collect(p, g);
+      for (const g of this.s.generators) if (near(this.map[g.island].generator)) {
+        const before = p.inv.cash;
+        collect(p, g);
+        this.stats.earned(p.id, p.inv.cash - before);
+      }
     // Shop NPCs serve anyone standing at them, on any island (vaults stay owner-only); potions only at the
     // potion seller; generator upgrades and gun locks only at your own island's shop.
     if (input.shop) {
@@ -400,7 +416,7 @@ export class Match implements MatchApi {
       speedMult(p, this.s.time) * adsSpeed(p));
     mv.ack = cmd.seq;
     if (landingSpeed > LIFECYCLE.safeFallSpeed)
-      this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time, { bypassShield: true }));
+      this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time, { bypassShield: true, weapon: 'fall' }));
   }
 
   private build(p: PlayerState, req: BuildRequest, now: number) {
@@ -503,6 +519,8 @@ export class Match implements MatchApi {
       winner: this.s.winner,
       potionShops: this.potionShops,
       events: this.events,
+      // Totals only once there's a result: keeps the per-tick snapshot (and the network budget) unchanged.
+      ...(this.s.winner !== null ? { stats: this.stats.totals(this.s.players.values(), this.s.time) } : {}),
     };
     return this.cloneSnapshots ? structuredClone(s) : s;
   }

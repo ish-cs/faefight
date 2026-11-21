@@ -40,17 +40,18 @@ const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
 export class Scoreboard {
   readonly root = el('div', 'scoreboard glass');
   private body = el('tbody');
+  private head = el('tr');
+  private title = el('div', 'sb-title', 'Scoreboard');
   private sig = '';
 
   constructor(parent: HTMLElement) {
     this.root.dataset.testid = 'scoreboard';
     this.root.style.display = 'none';
     const table = el('table');
-    const head = el('tr');
-    for (const h of ['', 'Player', 'Kills', 'Deaths', 'Status', 'Bunker']) head.append(el('th', '', h));
+    this.setHead(false);
     table.append(el('thead'), this.body);
-    table.tHead!.append(head);
-    this.root.append(el('div', 'sb-title', 'Scoreboard'), table);
+    table.tHead!.append(this.head);
+    this.root.append(this.title, table);
     parent.append(this.root);
   }
 
@@ -58,12 +59,24 @@ export class Scoreboard {
 
   setVisible(v: boolean) { this.root.style.display = v ? '' : 'none'; }
 
-  update(snap: Snapshot, o: { humanId: number; hostId: number | null }) {
+  private setHead(ping: boolean) {
+    const cols = ['', 'Player', 'Kills', 'Deaths', 'Status', 'Bunker', ...(ping ? ['Ping'] : [])];
+    if (this.head.children.length === cols.length) return;
+    this.head.replaceChildren(...cols.map((h) => el('th', '', h)));
+  }
+
+  /** Online: `ping(id)` fills a Ping column and `hostTick` goes in the title ("Host tick ok"). */
+  update(snap: Snapshot, o: { humanId: number; hostId: number | null; ping?: (id: number) => string; hostTick?: string }) {
     if (!this.visible) return;
     const rows = scoreRows(snap, o);
-    const sig = JSON.stringify(rows);
+    const pings = o.ping ? rows.map((r) => o.ping!(r.id)) : null;
+    const titleText = o.hostTick ? `Scoreboard · Host tick ${o.hostTick}` : 'Scoreboard';
+    const sig = JSON.stringify([rows, pings, titleText]);
     if (sig === this.sig) return;
     this.sig = sig;
+    this.setHead(!!pings);
+    this.title.textContent = titleText;
+    this.title.classList.toggle('strained', o.hostTick === 'strained');
     this.body.replaceChildren(...rows.map((r) => {
       const tr = el('tr', `sb-row ${r.status}${r.isYou ? ' you' : ''}`);
       tr.dataset.testid = `score-${r.id}`;
@@ -77,6 +90,13 @@ export class Scoreboard {
       dotCell.append(dot);
       tr.append(dotCell, name, el('td', 'num', String(r.kills)), el('td', 'num', String(r.deaths)),
         el('td', 'sb-status', STATUS_LABEL[r.status]), el('td', `sb-seal${r.sealed ? ' sealed' : ''}`, r.sealed ? 'Sealed' : 'Open'));
+      if (pings) {
+        const cell = el('td', 'num sb-ping', pings[rows.indexOf(r)]);
+        cell.dataset.testid = `ping-${r.id}`;
+        const ms = parseInt(pings[rows.indexOf(r)], 10);
+        if (ms > 150) cell.classList.add(ms > 250 ? 'bad' : 'meh');
+        tr.append(cell);
+      }
       return tr;
     }));
   }

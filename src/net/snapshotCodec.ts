@@ -72,6 +72,12 @@ export class SnapshotEncoder {
     return out;
   }
 
+  /** A client starts over (reconnected): its next update carries every piece and only events from now on. */
+  resync(forPlayerId: number): void {
+    this.sentPiecesKey.delete(forPlayerId);
+    if (this.latest) this.sentTick.set(forPlayerId, this.latest.tick);
+  }
+
   private player(p: PlayerState, own: boolean): NetPlayer {
     // Your own position/velocity go out unrounded: the client replays its movement from them (prediction).
     const out: NetPlayer = {

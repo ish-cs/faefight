@@ -298,7 +298,7 @@ function explode(ctx: CombatCtx, e: Explosive, now: number): MatchEvent[] {
   } else if (e.kind === 'grenade') {
     for (const pl of ctx.players.values()) {
       const d = dist(bodyCenter(pl), e.pos);
-      if (d < GRENADE.radius) out.push(...applyPlayerDamage(ctx, pl, GRENADE.dmg * (1 - d / GRENADE.radius), e.owner, now));
+      if (d < GRENADE.radius) out.push(...applyPlayerDamage(ctx, pl, GRENADE.dmg * (1 - d / GRENADE.radius), e.owner, now, { weapon: 'grenade' }));
     }
     for (const pc of [...ctx.pieces.values()]) {
       const d = dist(pieceCenter(pc), e.pos);
@@ -306,7 +306,7 @@ function explode(ctx: CombatCtx, e: Explosive, now: number): MatchEvent[] {
     }
   } else {
     for (const pl of ctx.players.values())
-      if (dist(bodyCenter(pl), e.pos) < CHARGE.playerRadius) out.push(...applyPlayerDamage(ctx, pl, CHARGE.playerDmg, e.owner, now));
+      if (dist(bodyCenter(pl), e.pos) < CHARGE.playerRadius) out.push(...applyPlayerDamage(ctx, pl, CHARGE.playerDmg, e.owner, now, { weapon: 'charge' }));
     for (const pc of [...ctx.pieces.values()])
       if (dist(pieceCenter(pc), e.pos) < CHARGE.radius) out.push(...hitPiece(ctx, pc.id, CHARGE.pieceDmg, 'explosive', now, e.owner, pieceCenter(pc)));
   }

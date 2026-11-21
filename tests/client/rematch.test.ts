@@ -63,7 +63,8 @@ describe('HostSession rematch', () => {
     bob.got.length = 0;
     host.onMap(MAP, [0, 1, 2]);
     await flush();
-    expect(bob.got).toEqual([{ t: 'start', map: MAP, playerId: 2, island: 1 }]);
+    expect(bob.got.filter((m) => m.t === 'start')).toEqual([{ t: 'start', map: MAP, playerId: 2, island: 1 }]);
+    expect(bob.got.filter((m) => m.t === 'rejoin')).toHaveLength(1); // a fresh reconnect token per match
     expect(bob.isClosed()).toBe(false);
   });
 
