@@ -41,10 +41,14 @@ export class SpectatorCamera {
 }
 
 /** How long the spectator camera stays on a followed player who just died, looking at their killer. */
-export const KILLCAM_SEC = 3;
+export const BODYCAM_SEC = 3;
 
-/** The followed player's death, replayed for the spectator: who killed them, until when. */
-export class Killcam {
+/**
+ * Body cam: the spectator camera holds on a followed player who just died, turned toward their killer.
+ * Only the fallback: the killer-view replay (qol/killcam.ts) plays instead whenever there's enough of the
+ * killer on record (main.ts decides).
+ */
+export class BodyCam {
   victim: number | null = null;
   killer: number | null = null;
   until = -Infinity;
@@ -58,7 +62,7 @@ export class Killcam {
       if (victim !== followId) continue;
       this.victim = followId;
       this.killer = typeof killer === 'number' && killer !== followId ? killer : null;
-      this.until = now + KILLCAM_SEC;
+      this.until = now + BODYCAM_SEC;
     }
   }
 

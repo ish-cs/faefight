@@ -450,8 +450,9 @@ export class Match implements MatchApi {
     this.physics.setPotionShops(positions);
   }
 
-  debugKill(playerId: number): void {
-    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
+  /** Debug: kill a player, optionally credited to `killer` (e2e: killcam / kill feed). */
+  debugKill(playerId: number, killer: number | null = null): void {
+    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false, killer));
   }
 
   /** Kill (if alive) and eliminate for good: no respawn. The win check runs on the next tick. */

@@ -47,7 +47,7 @@ type Frame = {
   lookOf?(id: number): { yaw: number; pitch: number } | null;
   /** Follow from their eyes (first person) instead of over their shoulder; toggled with the camera key (V). */
   firstPerson?: boolean;
-  /** The followed player was just killed: stay on them, looking at the killer (viewed.ts Killcam). */
+  /** The followed player was just killed: stay on them, looking at the killer (viewed.ts BodyCam: the killcam fallback). */
   killcam?: { victim: number; killer: number | null } | null;
 };
 
@@ -150,7 +150,7 @@ export class Spectator {
     const kc = f.killcam && this.mode === 'follow' && f.killcam.victim === this.followId ? f.killcam : null;
     this.killcamOn = !!kc;
     if (kc) {
-      // Killcam: over the victim's body, turned toward whoever killed them.
+      // Body cam (killcam fallback): over the victim's body, turned toward whoever killed them.
       const at = f.posOf(kc.victim, this.tmp) ?? this.lastAt;
       const k = kc.killer !== null ? f.posOf(kc.killer, this.tmp2) : null;
       const yaw = k ? Math.atan2(-(k.x - at.x), -(k.z - at.z)) : f.yaw;

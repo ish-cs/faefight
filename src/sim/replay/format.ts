@@ -76,7 +76,7 @@ export type ReplayOp =
   | { k: 'shield'; id: number; shield: number }
   | { k: 'potionShops'; positions: Vec3[] }
   | { k: 'eliminate'; id: number }
-  | { k: 'kill'; id: number }
+  | { k: 'kill'; id: number; killer?: number }
   | { k: 'give'; id: number; inv: Partial<Inventory> }
   | { k: 'piece'; kind: PieceKind; pos: Vec3; rotY: number }
   /** A human's emote / quick-chat wheel pick (bots' come from the sim itself). */

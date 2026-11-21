@@ -16,7 +16,8 @@ export type SoundId =
   | 'kill' | 'death' | 'eliminated' | 'win' | 'lose' | 'draw'
   | 'alarm' | 'ping' | 'tick' | 'escaped' | 'horn' | 'footstep'
   | 'shieldHit' | 'shieldBreak' | 'drink' | 'potionDone'
-  | 'reload' | 'dry' | 'ads' | 'thunder';
+  | 'reload' | 'dry' | 'ads' | 'thunder'
+  | 'headshot' | 'shieldCrack' | 'land';
 
 export type Cue = {
   sound: SoundId;
@@ -38,6 +39,20 @@ const STRIDE = 1.7; // metres between footsteps
 const STEP_MIN_SPEED = 0.8; // m/s
 const TELEPORT = 4; // metres in one snapshot = respawn/teleport, not walking
 const LOOT_PICKUP_RADIUS = 3.5;
+/** Someone else's footstep loudness (yours: 0.4). */
+export const ENEMY_STEP_GAIN = 0.75;
+/** Falling faster than this (m/s down) and then grounded = a landing thud. */
+export const LAND_MIN_FALL = 4.5;
+
+/** Was falling (vy below -LAND_MIN_FALL), now on the ground (|vy| small), not a teleport, not into water. */
+export function isLanding(prevVy: number, vy: number, moved: number, aboveWater: boolean): boolean {
+  return prevVy < -LAND_MIN_FALL && Math.abs(vy) < 0.5 && moved <= TELEPORT && aboveWater;
+}
+
+/** Landing loudness by fall speed (m/s, negative = down). */
+export function landGain(prevVy: number, own: boolean): number {
+  return Math.min(own ? 0.7 : 1.1, (own ? 0.35 : 0.55) + (-prevVy - LAND_MIN_FALL) / 20);
+}
 
 /** Ground the player stands on: a piece top under their feet, else the island (bunker floor / shore sand / grass). */
 export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[]): Surface {
@@ -139,7 +154,12 @@ export class SoundDirector {
             if (at && shield > 0) out.push({ sound: 'shieldHit', pos: at, gain: 0.7 });
             if (at && d.broke) out.push({ sound: 'shieldBreak', pos: at, gain: 1 });
             if (at && flesh > 0) out.push({ sound: 'impact', pos: at, gain: 0.7 });
-            if (d.by === this.humanId && !d.echo) out.push({ sound: 'hitmarker', pos: null, gain: 0.6 });
+            if (d.by === this.humanId && !d.echo) {
+              // Your hit: tick, plus a ding for a headshot and a crack when it broke their shield.
+              out.push({ sound: 'hitmarker', pos: null, gain: 0.6 });
+              if (d.part === 'head') out.push({ sound: 'headshot', pos: null, gain: 0.7 });
+            }
+            if (d.by === this.humanId && d.broke) out.push({ sound: 'shieldCrack', pos: null, gain: 0.75 });
           }
           break;
         }
@@ -197,6 +217,7 @@ export class SoundDirector {
     this.potions(s, prev, out);
     this.countdown(me, s, out);
     this.footsteps(s, prev, out);
+    this.landings(s, prev, out);
     this.reloadBeats(s, out);
 
     if (me) {
@@ -267,6 +288,18 @@ export class SoundDirector {
     }
   }
 
+  /** Touching down after a fall: a thud on the surface landed on, heavier the faster the fall. */
+  private landings(s: Snapshot, prev: Snapshot | null, out: Cue[]) {
+    if (!prev) return;
+    for (const p of s.players) {
+      const was = prev.players.find((q) => q.id === p.id);
+      if (!was || !p.alive || !was.alive || s.hidden?.includes(p.id)) continue;
+      if (!isLanding(was.vel.y, p.vel.y, Math.hypot(p.pos.x - was.pos.x, p.pos.z - was.pos.z), p.pos.y > s.waterY + 0.2)) continue;
+      const own = p.id === this.humanId;
+      out.push({ sound: 'land', kind: surfaceAt(p.pos, s.pieces, this.map), pos: own ? null : { ...p.pos }, gain: landGain(was.vel.y, own), own });
+    }
+  }
+
   /** A step every STRIDE metres of grounded horizontal movement; surface from what's underfoot. */
   private footsteps(s: Snapshot, prev: Snapshot | null, out: Cue[]) {
     const dt = prev ? s.time - prev.time : 0;
@@ -281,7 +314,8 @@ export class SoundDirector {
       if (t.acc >= STRIDE) {
         t.acc -= STRIDE;
         const own = p.id === this.humanId;
-        out.push({ sound: 'footstep', kind: surfaceAt(p.pos, s.pieces, this.map), pos: { ...p.pos }, gain: own ? 0.4 : 0.32, own });
+        // Enemy steps are louder than your own: they're information (capped by HEARING.footstep).
+        out.push({ sound: 'footstep', kind: surfaceAt(p.pos, s.pieces, this.map), pos: { ...p.pos }, gain: own ? 0.4 : ENEMY_STEP_GAIN, own });
       }
     }
   }

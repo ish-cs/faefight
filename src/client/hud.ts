@@ -12,6 +12,9 @@ import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
 import { dragOutcome } from './hotbarDrag';
 import { SEALED_OUTSIDE_TEXT } from './qol/alerts';
+import { FEED_FADE_MS, FEED_LIFE_MS, FeedList, feedEntries, feedText, type FeedEntry, type FeedMarker } from './qol/killFeed';
+
+const MARK_GLYPH: Record<FeedMarker, string> = { headshot: '◎', explosion: '✸', fall: '↓', water: '≈', storm: '≋', lightning: 'ϟ' };
 
 const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
 const LABEL: Record<string, string> = {
@@ -150,7 +153,7 @@ export class Hud {
   private viewId = 0;
   private me: PlayerState | null = null;
   private snap: Snapshot | null = null;
-  private feed: { at: number; node: HTMLElement }[] = [];
+  private feed = new FeedList<HTMLElement>();
 
   private hp = el('div', 'hp');
   private hpFill = el('div', 'hp-fill');
@@ -748,22 +751,23 @@ export class Hud {
       if (typeof id !== 'number') return null;
       return id === this.humanId ? 'You' : snap?.players.find((p) => p.id === id)?.name ?? `#${id}`;
     };
+    for (const f of feedEntries(events, {
+      humanId: this.humanId,
+      ownerOf: (island) => snap?.players.find((p) => p.island === island)?.id ?? null,
+    })) this.addFeedNode(this.feedNode(f));
     for (const e of events) {
-      if (e.type === 'kill') {
-        const v = this.viewId || this.humanId;
-        if ((e.data.killer ?? e.data.by) === v && (e.data.victim ?? e.data.target) !== v) this.hitmarker(false, true);
-        const victim = name(e.data.victim ?? e.data.target), killer = name(e.data.killer ?? e.data.by);
-        const how = e.data.cause === 'storm' ? 'was caught in the storm' : e.data.cause === 'lightning' ? 'was struck by lightning' : 'died';
-        this.addFeed(killer && killer !== victim ? `${killer}  ✕  ${victim}` : `${victim} ${how}`);
-      } else if (e.type === 'sealed' || e.type === 'unsealed') {
+      if (e.type === 'unsealed') {
         const isl = e.data.island as number | undefined;
-        this.addFeed(`${isl === this.me?.island ? 'Your' : `${islandName(isl ?? 0)}'s`} bunker ${e.type === 'sealed' ? 'SEALED' : 'reopened'}`, e.type === 'sealed');
+        this.addFeed(`${isl === this.me?.island ? 'Your' : `${islandName(isl ?? 0)}'s`} bunker reopened`);
       } else if (e.type === 'eliminated') {
         this.addFeed(`${name(e.data.player ?? e.data.id) ?? 'Someone'} eliminated`, true);
       } else if (e.type === 'suddenDeath') {
         this.addFeed('Sudden death: generators stopped, the storm is closing in', true);
         this.stormWarnUntil = performance.now() + 4000;
         this.stormWarn.style.display = 'flex';
+      } else if (e.type === 'kill') {
+        const v = this.viewId || this.humanId;
+        if (e.data.killer === v && e.data.victim !== v) this.hitmarker(false, true);
       } else if (e.type === 'hit') {
         // The viewed player's hits (their own predicted ones were shown already: echo).
         const v = this.viewId || this.humanId;
@@ -789,19 +793,53 @@ export class Hud {
   }
 
   private addFeed(text: string, alert = false) {
-    const node = el('div', `feed-item${alert ? ' alert' : ''}`, text);
+    this.addFeedNode(el('div', `feed-item${alert ? ' alert' : ''}`, text));
+  }
+
+  private addFeedNode(node: HTMLElement) {
+    node.style.animationDelay = `0s, ${(FEED_LIFE_MS - FEED_FADE_MS) / 1000}s`;
     this.killfeed.prepend(node);
-    this.feed.unshift({ at: performance.now(), node });
-    while (this.feed.length > 5) this.feed.pop()!.node.remove();
+    for (const gone of this.feed.push(node, performance.now())) gone.remove();
+  }
+
+  /** A kill / seal line: killer (island colour) ⟶ weapon icon + markers ⟶ victim. Yours highlighted. */
+  private feedNode(f: FeedEntry): HTMLElement {
+    const snap = this.snap;
+    const nameOf = (id: number) => (id === this.humanId ? 'You' : snap?.players.find((p) => p.id === id)?.name ?? `#${id}`);
+    const who = (id: number | null) => {
+      const span = el('span', 'fd-name', id === null ? '' : nameOf(id));
+      const p = id === null ? undefined : snap?.players.find((q) => q.id === id);
+      if (p) span.style.setProperty('--c', hex(islandColor(p.island)));
+      if (id === this.humanId) span.classList.add('you');
+      return span;
+    };
+    const node = el('div', `feed-item ${f.kind}${f.mine ? ' mine' : ''}${f.me ? ' me' : ''}`);
+    node.dataset.testid = 'feed-entry';
+    node.title = feedText(f, nameOf);
+    const how = el('span', 'fd-how');
+    if (f.kind === 'sealed') {
+      how.innerHTML = LOCK_ICON;
+      how.append(el('span', 'fd-tag', 'SEALED'));
+      if (f.killer !== null) node.append(who(f.killer));
+      node.append(how);
+      if (f.victim !== null) node.append(who(f.victim));
+      return node;
+    }
+    if (f.weapon && Object.hasOwn(ICONS, f.weapon)) how.innerHTML = ICONS[f.weapon as IconKind];
+    else if (f.weapon === 'fists') how.append(el('span', 'fd-glyph', '✊'));
+    else if (f.killer !== null || !f.markers.length) how.append(el('span', 'fd-glyph', '⟶'));
+    for (const m of f.markers) {
+      const b = el('span', `fd-mark ${m}`, MARK_GLYPH[m]);
+      b.title = m;
+      how.append(b);
+    }
+    if (f.killer !== null) node.append(who(f.killer));
+    node.append(how, who(f.victim));
+    return node;
   }
 
   private tickFeed() {
-    const now = performance.now();
-    this.feed = this.feed.filter((f) => {
-      if (now - f.at < 6000) return true;
-      f.node.remove();
-      return false;
-    });
+    for (const gone of this.feed.expire(performance.now())) gone.remove();
   }
 
   // ---- panels ---------------------------------------------------------------------------------

@@ -16,7 +16,7 @@ export function applyOp(m: Match, op: ReplayOp): void {
     case 'shield': m.debugSetShield(op.id, op.shield); break;
     case 'potionShops': m.debugSetPotionShops(op.positions); break;
     case 'eliminate': m.debugEliminate(op.id); break;
-    case 'kill': m.debugKill(op.id); break;
+    case 'kill': m.debugKill(op.id, op.killer ?? null); break;
     case 'give': m.debugGive(op.id, op.inv); break;
     case 'piece': m.debugPlacePiece(op.kind, op.pos, op.rotY); break;
     case 'wheel': m.wheel(op.id, op.what); break;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { KILLCAM_SEC, Killcam, SpectatorCamera, personalize, viewedPlayer, viewingOther } from '../../src/client/viewed';
+import { BODYCAM_SEC, BodyCam, SpectatorCamera, personalize, viewedPlayer, viewingOther } from '../../src/client/viewed';
 import { damageNumbers } from '../../src/client/damageFx';
 import { SoundDirector } from '../../src/client/audio/events';
 import { buildMap } from '../../src/sim/map';
@@ -44,16 +44,16 @@ describe('spectator camera mode follows the watched player', () => {
   });
 });
 
-describe('killcam', () => {
+describe('body cam (killcam fallback)', () => {
   const kill = (victim: number, killer: number | null) => ({ type: 'kill', data: { victim, killer } });
-  test('the followed player dying starts it (looking at the killer), for KILLCAM_SEC', () => {
-    const k = new Killcam();
+  test('the followed player dying starts it (looking at the killer), for BODYCAM_SEC', () => {
+    const k = new BodyCam();
     k.onEvents([kill(4, 2)], 3, 10); // someone else died
     expect(k.active(3, 10)).toBe(false);
     k.onEvents([kill(3, 2)], 3, 10);
     expect(k.active(3, 10.5)).toBe(true);
     expect(k.killer).toBe(2);
-    expect(k.active(3, 10 + KILLCAM_SEC + 0.01)).toBe(false);
+    expect(k.active(3, 10 + BODYCAM_SEC + 0.01)).toBe(false);
     expect(k.active(5, 10.5)).toBe(false); // followed someone else meanwhile
     k.onEvents([kill(3, null)], 3, 20); // the storm
     expect(k.active(3, 20.1)).toBe(true);
