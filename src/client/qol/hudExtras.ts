@@ -2,7 +2,7 @@ import { WEAPONS } from '../../sim/constants';
 import { isGunItem } from '../../sim/hotbar';
 import type { IslandLayout } from '../../sim/map';
 import type { PlayerState, PlayerStats, ShopItem, Snapshot } from '../../sim/types';
-import { ISLAND_COLORS } from '../colors';
+import { islandColor } from '../colors';
 import { ICONS, type IconKind } from '../icons';
 import { ammoWarning, slotAmmoState } from './combatQol';
 import { barX, headingDeg, relAngle, yawToward } from './compassMath';
@@ -113,7 +113,7 @@ class Compass {
       if (!owner) continue; // centre island (no owner): marked below
       const key = `isl${isl.index}`;
       const m = this.marker(key, 'island', '');
-      m.node.style.setProperty('--c', hex(ISLAND_COLORS[isl.index % 8]));
+      m.node.style.setProperty('--c', hex(islandColor(isl.index)));
       const out = owner.eliminated, sealed = !!snap.sealed[isl.index];
       m.node.classList.toggle('out', out);
       m.node.classList.toggle('sealed', sealed && !out);
@@ -165,7 +165,7 @@ function recapCard(r: Recap): HTMLElement {
   head.append(icon, title);
   if (r.killer) {
     const dot = el('span', 'dot');
-    dot.style.background = hex(ISLAND_COLORS[r.killer.island % 8]);
+    dot.style.background = hex(islandColor(r.killer.island));
     title.prepend(dot);
   }
   card.append(head);
@@ -232,7 +232,7 @@ function summaryNode(stats: PlayerStats[], snap: Snapshot, humanId: number): HTM
     const tr = el('tr', s.id === humanId ? 'you' : '');
     tr.dataset.testid = `summary-${s.id}`;
     const dot = el('span', 'dot');
-    dot.style.background = hex(ISLAND_COLORS[(p?.island ?? 0) % 8]);
+    dot.style.background = hex(islandColor(p?.island ?? 0));
     const dc = el('td');
     dc.append(dot);
     const name = el('td', 'qs-name', p?.name ?? `#${s.id}`);

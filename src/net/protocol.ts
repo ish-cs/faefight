@@ -1,6 +1,7 @@
 import type { MoveCmd } from '../sim/movement';
 import type { Placement } from '../sim/building';
 import type { MapChoice, MapDef } from '../sim/map';
+import type { GameSettings } from '../sim/settings';
 import type { BuildRequest, Difficulty, PlayerInput } from '../sim/types';
 
 /**
@@ -9,7 +10,8 @@ import type { BuildRequest, Difficulty, PlayerInput } from '../sim/types';
  */
 export type Slot =
   | { kind: 'open' }
-  | { kind: 'human'; name: string; peerId: string; isHost: boolean; spectator?: boolean }
+  /** ready: a guest's Ready toggle (the host is always ready). color: palette index they picked (unique per lobby). */
+  | { kind: 'human'; name: string; peerId: string; isHost: boolean; spectator?: boolean; ready?: boolean; color?: number }
   | { kind: 'bot'; difficulty: Difficulty; name?: string };
 
 export const MAX_PLAYERS = 8;
@@ -26,11 +28,16 @@ export type ClientMsg =
   | { t: 'preview'; req: BuildRequest; key: number }
   | { t: 'chat'; text: string }
   /** Spectating (dead/eliminated): the player followed, null = free fly. The host only honours it while you're dead. */
-  | { t: 'follow'; id: number | null };
+  | { t: 'follow'; id: number | null }
+  /** Lobby: the guest's Ready toggle. */
+  | { t: 'ready'; ready: boolean }
+  /** Lobby: the palette colour the guest wants (host refuses one another player picked). */
+  | { t: 'color'; color: number };
 
 /** Host → remote client. */
 export type HostMsg =
-  | { t: 'lobby'; slots: Slot[]; you: number; map: MapChoice }
+  /** settings: the host's game settings (read-only for guests). */
+  | { t: 'lobby'; slots: Slot[]; you: number; map: MapChoice; settings: GameSettings }
   | { t: 'start'; map: MapDef; playerId: number; island: number }
   /** A NetSnapshot, binary + delta-compressed (wire.ts). */
   | { t: 'snap'; b: ArrayBuffer }
@@ -44,4 +51,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 10;
+export const NET_VERSION = 11;

@@ -1704,7 +1704,7 @@ export class Bot {
 
   /** Bridging to the center island ahead of the storm (medium+, from STORM_PREP_SEC before sudden death). */
   private stormPrep(view: BotView): boolean {
-    return this.difficulty !== 'easy' && (view.suddenDeath || view.now >= LIFECYCLE.suddenDeathAt - STORM_PREP_SEC);
+    return this.difficulty !== 'easy' && (view.suddenDeath || view.now >= (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) - STORM_PREP_SEC);
   }
 
   /** Whatever I'm doing, don't walk back out toward the storm once at the edge of where I want to be (not easy). */
