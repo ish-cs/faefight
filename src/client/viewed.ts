@@ -91,3 +91,44 @@ export class EarlyKey {
     return k;
   }
 }
+
+type Alive = { id: number; alive: boolean; eliminated: boolean; pos: { x: number; z: number } };
+
+/**
+ * Who the spectator follows once the followed player's death (killcam) has played: the killer (a player or bot;
+ * barrel and fire kills are credited to whoever caused them) while they are alive; else the victim until they
+ * respawn; else (eliminated) the living player nearest to where they fell. Never the local player; null = nobody.
+ */
+export function followAfterDeath(victim: number, killer: number | null, players: Alive[], selfId: number): number | null {
+  const ok = (p: Alive | undefined) => !!p && p.alive && !p.eliminated && p.id !== selfId;
+  const k = killer === null || killer === victim ? undefined : players.find((p) => p.id === killer);
+  if (ok(k)) return k!.id;
+  const v = players.find((p) => p.id === victim);
+  if (v && !v.eliminated) return victim;
+  let best: Alive | null = null, bestD = Infinity;
+  for (const p of players) {
+    if (!ok(p)) continue;
+    const d = v ? Math.hypot(p.pos.x - v.pos.x, p.pos.z - v.pos.z) : 0;
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best?.id ?? null;
+}
+
+/** The followed player just died: who killed them and when (resolved by followAfterDeath once the killcam ends). */
+export class KillerLock {
+  pending: { victim: number; killer: number | null; at: number } | null = null;
+
+  onDeath(victim: number, killer: number | null, nowMs: number) { this.pending = { victim, killer, at: nowMs }; }
+
+  /**
+   * Once the killcam is over: the next target, or null when the spectator picked someone themselves since the
+   * death (manual cycling overrides) or there is nothing to resolve.
+   */
+  resolve(players: Alive[], selfId: number, manualAt: number): { target: number | null; victim: number } | null {
+    const p = this.pending;
+    if (!p) return null;
+    this.pending = null;
+    if (manualAt >= p.at) return null;
+    return { target: followAfterDeath(p.victim, p.killer, players, selfId), victim: p.victim };
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { BODYCAM_SEC, BodyCam, SpectatorCamera, personalize, viewedPlayer, viewingOther, EARLY_KEY_MS, EarlyKey } from '../../src/client/viewed';
+import { BODYCAM_SEC, BodyCam, SpectatorCamera, personalize, viewedPlayer, viewingOther, EARLY_KEY_MS, EarlyKey, KillerLock, followAfterDeath } from '../../src/client/viewed';
 import { damageNumbers } from '../../src/client/damageFx';
 import { SoundDirector } from '../../src/client/audio/events';
 import { buildMap } from '../../src/sim/map';
@@ -82,5 +82,35 @@ describe('a follow key pressed just before the spectator camera starts', () => {
     k.press(3, 1000);
     expect(k.take(1000 + EARLY_KEY_MS + 1)).toBeNull(); // pressed long before (e.g. a hotbar pick while playing)
     expect(new EarlyKey().take(0)).toBeNull();
+  });
+});
+
+describe('after the followed player is killed: lock onto the killer', () => {
+  const pl = (id: number, alive: boolean, eliminated = false, x = 0) => ({ id, alive, eliminated, pos: { x, z: 0 } });
+  test('the killer while alive (players, bots, and whoever set off the barrel / fire: the credited killer)', () => {
+    expect(followAfterDeath(2, 3, [pl(1, true), pl(2, false), pl(3, true)], 1)).toBe(3);
+  });
+  test('killer dead or eliminated, or no killer: stay on the victim until they respawn', () => {
+    expect(followAfterDeath(2, 3, [pl(1, true), pl(2, false), pl(3, false)], 1)).toBe(2);
+    expect(followAfterDeath(2, 3, [pl(1, true), pl(2, false), pl(3, false, true)], 1)).toBe(2);
+    expect(followAfterDeath(2, null, [pl(1, true), pl(2, false)], 1)).toBe(2); // storm, water, fall
+    expect(followAfterDeath(2, 2, [pl(1, true), pl(2, false)], 1)).toBe(2); // own grenade
+  });
+  test('victim eliminated with no killer to follow: the nearest living player (never yourself)', () => {
+    const ps = [pl(1, true, false, 1), pl(2, false, true, 0), pl(3, true, false, 30), pl(4, true, false, 8)];
+    expect(followAfterDeath(2, null, ps, 1)).toBe(4);
+    expect(followAfterDeath(2, null, [pl(1, true), pl(2, false, true)], 1)).toBeNull();
+  });
+  test('the killer is never the local player: they can\'t be "followed"', () => {
+    expect(followAfterDeath(2, 1, [pl(1, true), pl(2, false)], 1)).toBe(2);
+  });
+  test('manual target cycling after the death overrides the automatic switch', () => {
+    const k = new KillerLock();
+    const ps = [pl(1, true), pl(2, false), pl(3, true)];
+    k.onDeath(2, 3, 1000);
+    expect(k.resolve(ps, 1, 500)).toEqual({ target: 3, victim: 2 }); // last manual pick was before the death
+    k.onDeath(2, 3, 1000);
+    expect(k.resolve(ps, 1, 1200)).toBeNull(); // picked someone during the killcam
+    expect(k.resolve(ps, 1, -Infinity)).toBeNull(); // nothing pending
   });
 });
