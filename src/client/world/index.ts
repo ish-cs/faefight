@@ -3,6 +3,7 @@ import type { MapDef } from '../../sim/map';
 import type { FirePatch, MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { FireFx } from './fireFx';
 import { ImpactMarks } from './impacts';
+import { clearNpcSpots } from '../characters/npcSpots';
 import { CosmeticLayer } from './cosmetics';
 import { Critters } from './critters';
 import type { CritterSound, V3 } from './critterSim';
@@ -69,6 +70,7 @@ export class World {
     this.clearMap();
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
+    clearNpcSpots(); // the shop/potion props below register their keepers
     const { root, collidables } = buildIslands(def, teamColors, this.scatter);
     this.scatter.build();
     this.scene.add(this.scatter.root);

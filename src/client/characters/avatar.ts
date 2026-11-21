@@ -4,7 +4,8 @@ import { PLAYER } from '../../sim/constants';
 import type { MatchEvent, PlayerState, WeaponKind } from '../../sim/types';
 import { reloadClock, reloadPose, type ReloadPose } from '../firstPerson';
 import { chooseClip } from './animState';
-import { HAND_BONE, loadCharacters, type CharacterAssets } from './loader';
+import { soldierLook } from './body';
+import { BODY_LOD, HAND_BONE, loadCharacters, makeBody, type Body, type CharacterAssets } from './loader';
 import { buildMuzzleFlash, buildWeapon } from './weapons';
 
 const AIM_HOLD_S = 0.6; // keep the aim pose this long after a shot
@@ -28,14 +29,24 @@ const _sphere = new THREE.Sphere();
 const _proj = new THREE.Matrix4();
 
 /**
- * Level of detail (draw calls are the client's main cost: each skinned part is a draw in the main pass and in
- * every shadow cascade it overlaps).
+ * Level of detail. Each body is ONE skinned draw (all parts merged, see body.ts) in three detail levels (BODY_LOD).
  * - Culling: a sphere around the avatar that also covers its death pose (and its shadow, which at this sun
  *   elevation falls within ~2.5 m) — so the main pass and each shadow cascade cull avatars properly.
- * - Shadows: every part casts up close; the few big parts (torso, legs, head) further out; none far away.
+ * - Shadows: the body casts out to shadowBodyM; the gun only up close (shadowAllM); nothing far away.
  * - Animation: off-screen avatars skip the mixer (time is kept, so they resume in step); far ones update at half rate.
  */
-export const CHAR_LOD = { cullRadius: 2.2, shadowRadius: 2.6, shadowAllM: 30, shadowMajorM: 90, majorParts: 3, animHalfRateM: 45 };
+export const CHAR_LOD = { cullRadius: 2.2, shadowRadius: 2.6, shadowAllM: 30, shadowBodyM: 90, animHalfRateM: 45 };
+
+/** Body detail level for a camera distance, sticky within `hysteresis` of each threshold. */
+export function bodyLod(dist: number, current: number): 0 | 1 | 2 {
+  const h = BODY_LOD.hysteresis;
+  const lo1 = current >= 1 ? BODY_LOD.lod1 - h : BODY_LOD.lod1 + h;
+  const lo2 = current >= 2 ? BODY_LOD.lod2 - h : BODY_LOD.lod2 + h;
+  return dist >= lo2 ? 2 : dist >= lo1 ? 1 : 0;
+}
+
+/** Stable per-player look seed (skin tone, beard, eyes). */
+const lookSeed = (p: PlayerState) => [...p.name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, p.id * 977 + p.island * 131);
 
 /** Display-rate motion of one player (render.ts fills it: predicted locally, interpolated for others). */
 export type Motion = { pos: THREE.Vector3; vel: THREE.Vector3; yaw: number; pitch: number };
@@ -161,8 +172,8 @@ export class Avatar {
   private lastPos = new THREE.Vector3();
   private smoothVel = new THREE.Vector3();
   private materials: THREE.Material[] = [];
-  /** Skinned parts with whether they keep casting a shadow at mid range (the biggest few). */
-  private parts: { mesh: THREE.SkinnedMesh; major: boolean }[] = [];
+  private body: Body | null = null;
+  private lod = -1;
   private shadowTier = -1;
   /** LOD inputs for the next update(): set by CharacterSystem from the camera each frame. */
   lodOnScreen = true;
@@ -209,45 +220,24 @@ export class Avatar {
 
   private buildModel(assets: CharacterAssets, p: PlayerState, color: number) {
     this.hitbox.visible = false; // still raycastable: Raycaster ignores .visible
-    const variant = assets.variants[(p.isBot ? 1 : 0) % assets.variants.length];
-    const model = cloneSkinned(variant.scene);
+    const body = makeBody(assets, soldierLook(lookSeed(p)), color);
+    const model = body.model;
     model.scale.setScalar(assets.scale);
     model.position.y = -assets.footY * assets.scale;
     model.rotation.y = Math.PI; // Quaternius rigs face +Z; yaw 0 faces -Z
-    // Team colour: tint this avatar's uniform (one cloned material; everything else stays shared).
-    const team = new THREE.Color(color);
-    let uniform: THREE.MeshStandardMaterial | null = null;
-    model.traverse((o) => {
-      const m = o as THREE.SkinnedMesh;
-      if (!m.isSkinnedMesh) return;
-      // Bind-pose bounds don't follow the animation (death, lean): cull against a fixed sphere round the avatar.
-      this.parts.push({ mesh: m, major: false });
-      const swap = (mat: THREE.Material) => {
-        if (mat.name !== variant.uniformMaterial) return mat;
-        if (!uniform) {
-          uniform = (mat as THREE.MeshStandardMaterial).clone();
-          uniform.color.copy(team).multiplyScalar(0.55).lerp((mat as THREE.MeshStandardMaterial).color, 0.25);
-          this.materials.push(uniform);
-        }
-        return uniform;
-      };
-      m.material = Array.isArray(m.material) ? m.material.map(swap) : swap(m.material);
-    });
-    if (!uniform) console.warn(`[characters] uniform material "${variant.uniformMaterial}" not found; team colour only on name tag`);
     this.group.add(model);
     this.model = model;
+    this.body = body;
     this.group.updateMatrixWorld(true);
-    const inv = new THREE.Matrix4(), size = new THREE.Vector3();
-    for (const part of this.parts) {
-      const m = part.mesh;
-      // The avatar-space sphere (centre 0.9 m up, CHAR_LOD.cullRadius) in this mesh's local frame.
+    const inv = new THREE.Matrix4();
+    for (const m of body.lods) {
+      // Bind-pose bounds don't follow the animation (death, lean): cull against a fixed sphere round the avatar,
+      // the avatar-space sphere (centre 0.9 m up, CHAR_LOD.cullRadius) in this mesh's local frame.
       inv.copy(m.matrixWorld).invert();
       const scale = m.matrixWorld.getMaxScaleOnAxis() || 1;
-      m.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0).applyMatrix4(inv), (CHAR_LOD.cullRadius + CHAR_LOD.shadowRadius) / scale);
+      m.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0).applyMatrix4(this.group.matrixWorld).applyMatrix4(inv), (CHAR_LOD.cullRadius + CHAR_LOD.shadowRadius) / scale);
       m.frustumCulled = true;
     }
-    const vol = (m: THREE.SkinnedMesh) => { m.geometry.computeBoundingBox(); m.geometry.boundingBox!.getSize(size); return size.x * size.y * size.z; };
-    [...this.parts].sort((a, b) => vol(b.mesh) - vol(a.mesh)).slice(0, CHAR_LOD.majorParts).forEach((p) => { p.major = true; });
 
     this.mixer = new THREE.AnimationMixer(model);
     for (const [name, clip] of assets.clips) this.actions.set(name, this.mixer.clipAction(clip));
@@ -365,7 +355,7 @@ export class Avatar {
       if (sh !== this.shownShield) { this.shownShield = sh; this.shieldTag.draw(sh); }
     }
 
-    this.applyShadowLod();
+    this.applyLod();
     if (!this.mixer) return;
     // Animation LOD: nothing to see off screen; far away, half rate. Skipped time is caught up on the next update.
     this.animFrame++;
@@ -397,14 +387,18 @@ export class Avatar {
     }
   }
 
-  /** Shadow casting by distance tier (only touches the meshes when the tier changes). */
-  private applyShadowLod() {
+  /** Body detail + shadow casting by distance (only touches the meshes when something changes). */
+  private applyLod() {
     const d = this.lodDist;
-    const tier = d < CHAR_LOD.shadowAllM ? 0 : d < CHAR_LOD.shadowMajorM ? 1 : 2;
+    if (this.body) {
+      const lod = bodyLod(d, this.lod);
+      if (lod !== this.lod) { this.lod = lod; this.body.lods.forEach((m, i) => { m.visible = i === lod; }); }
+    }
+    const tier = d < CHAR_LOD.shadowAllM ? 0 : d < CHAR_LOD.shadowBodyM ? 1 : 2;
     if (tier === this.shadowTier && !this.weaponDirty) return;
     this.shadowTier = tier;
     this.weaponDirty = false;
-    for (const p of this.parts) p.mesh.castShadow = tier === 0 || (tier === 1 && p.major);
+    if (this.body) for (const m of this.body.lods) m.castShadow = tier < 2;
     this.weapon?.traverse((o) => {
       if (!(o as THREE.Mesh).isMesh) return;
       o.userData.castsShadow ??= o.castShadow; // as built (weapons.ts)
