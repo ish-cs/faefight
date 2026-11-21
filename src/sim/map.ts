@@ -211,6 +211,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
     template, name: MAP_NAMES[template], seed,
     waterY: MAP.waterY, tideRate: MAP.tideRate,
     islands, center, statics, cosmetics,
+    // when MapDef.hazards lands: pass `avoid: hazards.map((h) => h.pos)` so props keep 1.5 m from them
     props: placeProps({ islands, center, statics, cosmetics, seed }),
   };
 }

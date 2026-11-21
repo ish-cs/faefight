@@ -66,6 +66,8 @@ export const PROPS = {
   /** Pose tolerance before a prop counts as displaced (m, quaternion 1-|dot|). */
   posEps: 0.03,
   rotEps: 2e-4,
+  /** Clearance from PlacementWorld.avoid points (hazards), m. */
+  avoidM: 1.5,
 };
 
 const quatYaw = (yaw: number): Quat => [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
@@ -111,7 +113,8 @@ const CENTER_SPOTS: { kind: PropKind; rad: number; deg: number }[] = [
   { kind: 'crate', rad: 4.5, deg: 30 }, { kind: 'drum', rad: 4.5, deg: 150 }, { kind: 'crate', rad: 4.5, deg: 270 },
 ];
 
-export type PlacementWorld = { islands: IslandLayout[]; center: CenterIsland; statics: StaticBox[]; cosmetics: CosmeticDef[]; seed: number };
+/** `avoid`: other things props keep ≥ PROPS.avoidM from (e.g. MapDef.hazards positions, once that lands). */
+export type PlacementWorld = { islands: IslandLayout[]; center: CenterIsland; statics: StaticBox[]; cosmetics: CosmeticDef[]; seed: number; avoid?: Vec3[] };
 
 /** Zones props keep out of: no-build zones of every island and the center stations. */
 export function propZones(def: Pick<PlacementWorld, 'islands' | 'center'>): NoBuildZone[] {
@@ -135,7 +138,7 @@ export function inBunkerArea(islands: IslandLayout[], p: Vec3, pad = 0): boolean
 }
 
 /** Why a prop of `kind` at `pos` (body centre, yaw) is not allowed, or null. */
-export function propBlockedBy(w: Pick<PlacementWorld, 'islands' | 'center' | 'statics' | 'cosmetics'>, kind: PropKind, pos: Vec3, yaw: number, zones = propZones(w)): string | null {
+export function propBlockedBy(w: Pick<PlacementWorld, 'islands' | 'center' | 'statics' | 'cosmetics' | 'avoid'>, kind: PropKind, pos: Vec3, yaw: number, zones = propZones(w)): string | null {
   const e = PROP_KINDS[kind].ext, r = Math.hypot(e.x, e.z);
   const islandOf = [...w.islands.map((i) => ({ c: i.center, R: i.radius })), { c: w.center.center, R: w.center.radius }]
     .find((i) => dist2D(i.c, pos) < i.R);
@@ -146,6 +149,7 @@ export function propBlockedBy(w: Pick<PlacementWorld, 'islands' | 'center' | 'st
   for (const s of w.statics) if (boxesOverlap(pos, half, yaw, { center: s.center, half: s.half, rotY: s.rotY, reason: 'static' })) return 'static';
   for (const c of w.cosmetics) if (dist2D(c.pos, pos) < r + 1.1) return `cosmetic:${c.kind}`;
   if (dist2D(w.center.shieldWell, pos) < r + 2.2) return 'well';
+  for (const a of w.avoid ?? []) if (dist2D(a, pos) < r + PROPS.avoidM) return 'avoid';
   return null;
 }
 

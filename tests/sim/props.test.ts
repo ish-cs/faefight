@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { Match } from '../../src/sim/match';
 import { buildMapDef, type IslandLayout, type MapTemplate } from '../../src/sim/map';
-import { inBunkerArea, PROP_KINDS, propBlockedBy, propZones } from '../../src/sim/props';
+import { inBunkerArea, placeProps, PROP_KINDS, propBlockedBy, propZones } from '../../src/sim/props';
 import { boxesOverlap } from '../../src/sim/propZones';
 import { ISLAND_DECOR } from '../../src/client/world/decor';
 import { NO_INPUT, type PlayerInput, type Snapshot, type Vec3 } from '../../src/sim/types';
@@ -41,6 +41,13 @@ describe('prop placement', () => {
       }
     });
   }
+
+  test('placement keeps 1.5 m from `avoid` points (hazards)', () => {
+    const def = buildMapDef(4, 'harbor', 2);
+    const avoid = def.props!.slice(0, 3).map((p) => p.pos);
+    const again = placeProps({ ...def, avoid });
+    for (const p of again) for (const a of avoid) expect(dist2D(p.pos, a)).toBeGreaterThan(1.5);
+  });
 
   test('harbor props stay off the gravel paths', () => {
     const def = buildMapDef(8, 'harbor', 3);
