@@ -5,7 +5,7 @@ import { DEBRIS_KINDS, DEBRIS_SPEC, type DebrisKind, placeDebris } from './debri
 import { DebrisSim } from './debrisSim';
 import { merge, part } from './geo';
 import { boxTape, faceLabel, labelMaterial } from './labels';
-import { SMALL_CASTER_LAYER } from './lod';
+import { TINY_CASTER_LAYER } from './lod';
 import { mats } from './materials';
 import type { Quality } from './sky';
 import { movingVariant } from './weathering';
@@ -90,7 +90,7 @@ export class Debris {
         const mesh = new THREE.InstancedMesh(part(geometryFor(kind), null), mat, ids.length);
         mesh.name = `debris:${kind}`;
         mesh.castShadow = kind === 'box' || kind === 'cone';
-        mesh.layers.set(SMALL_CASTER_LAYER); // near shadow cascades only
+        mesh.layers.set(TINY_CASTER_LAYER); // first shadow cascade only
         mesh.receiveShadow = true;
         mesh.frustumCulled = false; // spans the map
         mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -100,7 +100,7 @@ export class Debris {
           overlay = new THREE.InstancedMesh(og, movingVariant(labelMaterial()), ids.length);
           overlay.name = `debris:${kind}:labels`;
           overlay.frustumCulled = false;
-          overlay.layers.set(SMALL_CASTER_LAYER);
+          overlay.layers.set(TINY_CASTER_LAYER);
           overlay.receiveShadow = true;
           overlay.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
           this.root.add(overlay);

@@ -5,7 +5,7 @@ import type { IslandLayout } from '../../sim/map';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
 import { Lighting, type ShadowPreset, SUN_DIR as LIGHT_SUN_DIR } from './lighting';
-import { SMALL_CASTER_LAYER } from './lod';
+import { SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
 import { cascadeToRefresh, type CascadeCacheState, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen } from './post';
 
@@ -68,6 +68,7 @@ export class SkyLighting {
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
     camera.layers.enable(SMALL_CASTER_LAYER); // small props: drawn by the camera, cast into the near cascades only
+    camera.layers.enable(TINY_CASTER_LAYER); // tiny moving props: first cascade only
     this.lighting = new Lighting(gpu, scene);
     this.sun = this.lighting.sun;
     const u = this.lighting.u;
@@ -223,7 +224,9 @@ export class SkyLighting {
     const lights = this.lighting.csm?.lights;
     if (!lights?.length) return;
     const near = lights.length >= 3 ? 2 : 1;
-    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i < near ? this.camera.layers.mask : FAR_CASCADE_MASK;
+    // cascade 0: everything; other near cascades: not the tiny casters; far cascades: neither tiny nor small
+    const noTiny = this.camera.layers.mask & ~(1 << TINY_CASTER_LAYER);
+    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i === 0 ? this.camera.layers.mask : i < near ? noTiny | (1 << 31) : FAR_CASCADE_MASK;
     this.cacheFarCascades(lights, near);
   }
 

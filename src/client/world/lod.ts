@@ -12,6 +12,8 @@ import { LOD_QUALITY_SCALE, type QualityName, selectLod } from './lodMath';
 
 /** Small shadow casters live on this layer: they cast into the near cascades only (sky.ts sets the far masks). */
 export const SMALL_CASTER_LAYER = 4;
+/** Tiny moving casters (gameplay props, debris): drawn by the camera, cast into the first shadow cascade only. */
+export const TINY_CASTER_LAYER = 5;
 
 export interface LodTarget {
   /** Re-pick levels for a camera at `cam`; `scale` multiplies every registered distance. */

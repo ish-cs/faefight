@@ -3,7 +3,7 @@ import { PROP_KIND_LIST, type PropKind, type PropPose, type PropSpawn } from '..
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrelModel } from './mapProps';
 import { faceLabel, labelMaterial } from './labels';
-import { SMALL_CASTER_LAYER } from './lod';
+import { TINY_CASTER_LAYER } from './lod';
 import { mats } from './materials';
 import { movingVariant } from './weathering';
 
@@ -85,7 +85,7 @@ export class GameProps {
         const m = new THREE.InstancedMesh(geometry, movingVariant(material), list.length);
         m.name = `gameProp:${kind}:${material.name || 'mat'}`;
         m.castShadow = !material.name.startsWith('labels');
-        m.layers.set(SMALL_CASTER_LAYER); // ≤ 1.2 m props: near shadow cascades only (far ones get contact AO)
+        m.layers.set(TINY_CASTER_LAYER); // ≤ 1.2 m props: first shadow cascade only (far ones get contact AO)
         m.receiveShadow = true;
         m.frustumCulled = false; // ~40 instances across the map: one draw each, no per-frame bounds
         this.root.add(m);

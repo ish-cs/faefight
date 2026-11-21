@@ -80,11 +80,11 @@ export const STATIC_CHUNKS = {
   /** a bin (material × shadow flags) lighter than this stays one mesh */
   minTris: 40_000,
   /** small parts: shrink away between 70 % and 100 % of `cull` (no pop), chunk hidden past it */
-  small: { maxR: 0.6, grid: 48, cull: 90, splitTris: 25_000, maxChunks: 8 },
+  small: { maxR: 0.6, grid: 48, cull: 90, splitTris: 25_000, maxChunks: 4 },
   /** medium parts: chunked for frustum culling only (no impostors yet, so never distance-culled) */
-  medium: { maxR: 4, grid: 160, cull: Infinity, splitTris: 60_000, maxChunks: 6 },
+  medium: { maxR: 4, grid: 160, cull: Infinity, splitTris: 60_000, maxChunks: 3 },
   /** a grid cell lighter than this isn't worth its own draw: it joins the bin's leftover mesh */
-  minChunkTris: 8_000,
+  minChunkTris: 16_000,
 };
 
 const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + g.getAttribute('position').count / 3, 0);
