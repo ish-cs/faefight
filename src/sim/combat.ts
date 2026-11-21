@@ -1,8 +1,9 @@
 import {
-  CHARGE, DT, GRENADE, HEAD, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
+  CHARGE, DT, GRENADE, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
 } from './constants';
 import { damagePiece } from './building';
-import { bloomAfterShot, coneOffset, DEG, falloff, hash01, magCap, nextBurst, recoilKick, reloadTime, shellsLoadedBy, spreadDeg } from './gunplay';
+import { stressFromDamage } from './movement';
+import { bloomAfterShot, coneOffset, DEG, hash01, magCap, nextBurst, recoilKick, reloadTime, shellsLoadedBy, shotDamage, spreadDeg } from './gunplay';
 import type { Physics, RayHit } from './physics';
 import type { MatchEvent, PieceState, PlayerState, Projectile, Vec3 } from './types';
 import { add, dist, forward, norm, right, rotateY, scale, sub, v3 } from './vec';
@@ -16,8 +17,8 @@ export type CombatCtx = {
   explosives: Explosive[];
   nextId(): number;
   onPieceDestroyed(id: number): void;
-  /** `weapon`: what did it (hit info), so the feed can say "X via barrel". */
-  onKill(victim: number, killer: number | null, weapon?: string): void;
+  /** `cause`: the HitInfo weapon of the killing hit ('storm', 'lightning', 'barrel', a gun...). */
+  onKill(victim: number, killer: number | null, cause?: string): void;
   /** Whether a player stands on something (spread); defaults to "vertical speed is small". */
   grounded?(id: number): boolean;
   /** A blast pushed this player (velocity change, m/s). */
@@ -56,7 +57,7 @@ export function pelletDir(yaw: number, pitch: number, coneDeg: number, seed: num
 }
 
 /** Extra hit-event detail: which body part, where it landed, what did it (client fx). */
-export type HitInfo = { part?: 'head' | 'body'; pos?: Vec3; weapon?: string };
+export type HitInfo = { part?: 'head' | 'body'; pos?: Vec3; weapon?: string; /** Range falloff multiplier, present only when < 1. */ falloff?: number };
 
 /**
  * Every damage path (bullets, fists, grenades, charges, rockets, falls, debug) ends here. The shield soaks
@@ -73,6 +74,8 @@ export function applyPlayerDamage(
   target.shield = had - shieldAmount;
   target.hp -= amount - shieldAmount;
   target.lastDamagedAt = now;
+  // Getting hurt is stressful: less stamina now and slower recovery for a while (movement.ts).
+  if (target.mv) { stressFromDamage(target.mv, amount); target.stamina = target.mv.stamina; }
   const broke = had > 0 && target.shield <= 0;
   const { bypassShield: _bypass, ...info } = opts;
   const out = [ev(now, 'hit', { target: target.id, by: attackerId, amount, shieldAmount, broke, ...info })];
@@ -155,19 +158,20 @@ export function tryFire(ctx: CombatCtx, p: PlayerState, now: number): MatchEvent
       if (hz && ctx.hitHazard) {
         const at = add(eye, scale(dir, hz.dist));
         if (i === 0) shot.to = at; else tos.push(rv(at));
-        hits.push(...ctx.hitHazard(hz.id, spec.dmg * falloff(kind, hz.dist), kind === 'fists' ? 'fist' : 'bullet', p.id, now, at));
+        hits.push(...ctx.hitHazard(hz.id, shotDamage(kind, hz.dist, false).amount, kind === 'fists' ? 'fist' : 'bullet', p.id, now, at));
         continue;
       }
       const to = hit ? hit.point : add(eye, scale(dir, spec.range));
       if (i === 0) shot.to = to; else tos.push(rv(to));
       if (!hit) continue;
-      const dmg = spec.dmg * falloff(kind, hit.dist);
+      // Range falloff (and the headshot multiplier on top) via the function the client predicts with.
+      const { amount, mult } = shotDamage(kind, hit.dist, hit.hit.type === 'player' && hit.part === 'head');
       if (hit.hit.type === 'player') {
         const target = ctx.players.get(hit.hit.id);
-        const head = hit.part === 'head';
-        if (target) hits.push(...applyPlayerDamage(ctx, target, dmg * (head ? HEAD.mult : 1), p.id, now, { part: hit.part, pos: rv(hit.point), weapon: kind }));
+        const range = mult < 1 ? { falloff: r2(mult) } : {};
+        if (target) hits.push(...applyPlayerDamage(ctx, target, amount, p.id, now, { part: hit.part, pos: rv(hit.point), weapon: kind, ...range }));
       } else if (hit.hit.type === 'piece') {
-        hits.push(...hitPiece(ctx, hit.hit.id, dmg, kind === 'fists' ? 'fist' : 'bullet', now, p.id, hit.point));
+        hits.push(...hitPiece(ctx, hit.hit.id, amount, kind === 'fists' ? 'fist' : 'bullet', now, p.id, hit.point));
       }
     }
     if (tos.length) shot.tos = tos;

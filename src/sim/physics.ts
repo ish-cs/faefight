@@ -1,12 +1,24 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { HEAD, PIECES, PLAYER } from './constants';
-import { bunkerSlitBoxes, bunkerWallBoxes, type IslandLayout, type MapDef } from './map';
+import { generatorZone, islandNoBuildZones, potionZone, type NoBuildZone } from './building';
+import { bunkerSlitBoxes, bunkerWallBoxes, harborCraneBoxes, type IslandLayout, type MapDef } from './map';
+import { defaultPotionShops } from './potions';
 import type { PieceState, Vec3 } from './types';
 import { v3 } from './vec';
 
 export type HitTarget = { type: 'player'; id: number } | { type: 'piece'; id: number } | { type: 'world' };
 /** `part`: for player hits, whether the ray went through the head sphere (HEAD) or just the body. */
 export type RayHit = { dist: number; point: Vec3; hit: HitTarget; part?: 'head' | 'body' };
+/** Physics.save(): collider handles by entity, and the Rapier world snapshot. */
+export type PhysicsSave = {
+  world: Uint8Array;
+  entities: [number, HitTarget][];
+  pieces: [number, number][];
+  pieceKinds: [number, PieceState['kind']][];
+  players: [number, number][];
+  slits: number[];
+  dirty: boolean;
+};
 
 /** Distance along a unit ray to a sphere, or null if it misses. */
 export function raySphere(o: Vec3, d: Vec3, c: Vec3, r: number): number | null {
@@ -42,16 +54,83 @@ export class Physics {
   /** Collider handles of bunker firing-slit plugs (see raycast `throughSlits`). */
   private readonly slits = new Set<number>();
   private pieceKinds = new Map<number, PieceState['kind']>();
+  private pieceBaseY = new Map<number, number>();
+  /** Collider handles of static structures that anchor pieces built against them (cranes). */
+  private readonly anchors = new Set<number>();
   private players = new Map<number, RAPIER.Collider>();
   private dirty = true;
+  /** No-build zones by group ('islands', 'potion'), see building.ts. */
+  private zones = new Map<string, NoBuildZone[]>();
 
-  private constructor() {
-    this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+  private constructor(world?: RAPIER.World) {
+    this.world = world ?? new RAPIER.World({ x: 0, y: 0, z: 0 });
     this.cc = this.world.createCharacterController(0.02);
     this.cc.enableAutostep(0.35, 0.2, false);
     this.cc.enableSnapToGround(0.3);
     this.cc.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
   }
+
+  /** Independent copy of the collision world (replay seeking: Match.fork). Same handles, same state. */
+  clone(): Physics {
+    const snap = this.world.takeSnapshot();
+    const world = RAPIER.World.restoreSnapshot(snap);
+    if (!world) throw new Error('Physics.clone: Rapier could not restore the world snapshot');
+    const ph = new Physics(world);
+    const same = (c: RAPIER.Collider) => {
+      const copy = world.getCollider(c.handle);
+      if (!copy) throw new Error(`Physics.clone: collider ${c.handle} missing from the snapshot`);
+      return copy;
+    };
+    for (const [h, t] of this.entities) ph.entities.set(h, { ...t });
+    for (const [id, c] of this.pieces) ph.pieces.set(id, same(c));
+    for (const [id, k] of this.pieceKinds) ph.pieceKinds.set(id, k);
+    for (const [id, c] of this.players) ph.players.set(id, same(c));
+    for (const h of this.slits) ph.slits.add(h);
+    for (const [id, y] of this.pieceBaseY) ph.pieceBaseY.set(id, y);
+    for (const h of this.anchors) ph.anchors.add(h);
+    for (const [g, z] of this.zones) ph.zones.set(g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } })));
+    ph.dirty = this.dirty;
+    return ph;
+  }
+
+  /** The collision world as plain data + Rapier's own snapshot bytes (host migration checkpoints: net/checkpoint.ts). */
+  save(): PhysicsSave {
+    return {
+      world: this.world.takeSnapshot(),
+      entities: [...this.entities].map(([h, t]) => [h, { ...t }]),
+      pieces: [...this.pieces].map(([id, c]) => [id, c.handle]),
+      pieceKinds: [...this.pieceKinds],
+      players: [...this.players].map(([id, c]) => [id, c.handle]),
+      slits: [...this.slits],
+      dirty: this.dirty,
+    };
+  }
+
+  /** Inverse of save(): same handles, same state, so the restored world steps exactly like the saved one. */
+  static async load(s: PhysicsSave): Promise<Physics> {
+    await ensureInit();
+    const world = RAPIER.World.restoreSnapshot(s.world);
+    if (!world) throw new Error('Physics.load: Rapier could not restore the world snapshot');
+    const ph = new Physics(world);
+    const col = (h: number) => {
+      const c = world.getCollider(h);
+      if (!c) throw new Error(`Physics.load: collider ${h} missing from the snapshot`);
+      return c;
+    };
+    for (const [h, t] of s.entities) ph.entities.set(h, { ...t });
+    for (const [id, h] of s.pieces) ph.pieces.set(id, col(h));
+    for (const [id, k] of s.pieceKinds) ph.pieceKinds.set(id, k);
+    for (const [id, h] of s.players) ph.players.set(id, col(h));
+    for (const h of s.slits) ph.slits.add(h);
+    ph.dirty = s.dirty;
+    return ph;
+  }
+
+  /** Free the WASM-side world (it is never garbage collected). The instance is unusable afterwards. */
+  dispose(): void {
+    this.world.free();
+  }
+
 
   /** A full map, or (tests) bare player islands with no center island or cover. */
   static async create(mapOrIslands: MapDef | IslandLayout[]): Promise<Physics> {
@@ -60,6 +139,12 @@ export class Physics {
       ? { islands: mapOrIslands, statics: [], center: null }
       : mapOrIslands;
     const ph = new Physics();
+    ph.setNoBuildZones('islands', [
+      ...def.islands.flatMap(islandNoBuildZones),
+      ...(def.center ? [generatorZone(def.center.goldGen, centerPropYaw(def.center.goldGen, def.center.center)),
+        generatorZone(def.center.supplyGen, centerPropYaw(def.center.supplyGen, def.center.center))] : []),
+    ]);
+    ph.setPotionShops(def.center ? [def.center.potionShop] : defaultPotionShops().map((s) => s.pos));
     const disc = (center: Vec3, radius: number, groundY: number) => {
       const desc = RAPIER.ColliderDesc.cylinder(ISLAND_DEPTH / 2, radius)
         .setTranslation(center.x, groundY - ISLAND_DEPTH / 2, center.z);
@@ -85,6 +170,9 @@ export class Physics {
         ph.addStaticBox(v3(p.x, p.y + h.y, p.z), h, isl.bunker.facingYaw);
       }
     }
+    // Harbor cranes: solid, and anchors (a piece touching one is supported, like one on the ground).
+    if (Array.isArray(mapOrIslands) || mapOrIslands.template === 'harbor')
+      for (const b of harborCraneBoxes(def.islands)) ph.anchors.add(ph.addStaticBox(b.center, b.half, b.rotY).handle);
     return ph;
   }
 
@@ -100,11 +188,35 @@ export class Physics {
     this.dirty = false;
   }
 
-  addStaticBox(center: Vec3, half: Vec3, rotY: number) {
+  setNoBuildZones(group: string, zones: NoBuildZone[]): void {
+    this.zones.set(group, zones);
+  }
+
+  /** Potion sellers move with the map (and tests/e2e): keep their no-build zones in step. */
+  setPotionShops(positions: Vec3[]): void {
+    this.setNoBuildZones('potion', positions.map((p) => potionZone(p)));
+  }
+
+  noBuildZones(): NoBuildZone[] {
+    return [...this.zones.values()].flat();
+  }
+
+  addStaticBox(center: Vec3, half: Vec3, rotY: number): RAPIER.Collider {
     const desc = RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
       .setTranslation(center.x, center.y, center.z)
       .setRotation(quatY(rotY));
     return this.track(this.world.createCollider(desc), { type: 'world' });
+  }
+
+  /** Does this oriented box touch a structural anchor (crane leg or beam)? */
+  touchesAnchor(center: Vec3, half: Vec3, rotY: number): boolean {
+    this.sync();
+    let hit = false;
+    this.world.intersectionsWithShape(center, quatY(rotY), new RAPIER.Cuboid(half.x, half.y, half.z), (c) => {
+      hit = this.anchors.has(c.handle);
+      return !hit;
+    });
+    return hit;
   }
 
   addPiece(p: PieceState): void {
@@ -122,6 +234,7 @@ export class Physics {
     desc.setRotation(quatY(p.rotY));
     this.pieces.set(p.id, this.track(this.world.createCollider(desc), { type: 'piece', id: p.id }));
     this.pieceKinds.set(p.id, p.kind);
+    this.pieceBaseY.set(p.id, p.pos.y);
   }
 
   removePiece(id: number): void {
@@ -131,11 +244,18 @@ export class Physics {
     this.world.removeCollider(c, false);
     this.pieces.delete(id);
     this.pieceKinds.delete(id);
+    this.pieceBaseY.delete(id);
     this.dirty = true;
   }
 
   pieceKind(id: number): PieceState['kind'] | undefined {
     return this.pieceKinds.get(id);
+  }
+
+  /** Height of a piece's top (its base + kind height), or undefined if it's gone. */
+  pieceTop(id: number): number | undefined {
+    const y = this.pieceBaseY.get(id), k = this.pieceKinds.get(id);
+    return y === undefined || !k ? undefined : y + PIECES[k].h;
   }
 
   addPlayer(id: number, pos: Vec3): void {
@@ -229,11 +349,15 @@ export class Physics {
     return this.probeDown(x, yFrom, z, maxDrop)?.y ?? null;
   }
 
-  /** Like surfaceBelow, but also reports what was hit. */
-  probeDown(x: number, yFrom: number, z: number, maxDrop: number): { y: number; hit: HitTarget } | null {
+  /**
+   * Like surfaceBelow, but also reports what was hit. `solid`: a start point inside a collider hits it
+   * at once (y = yFrom) instead of passing through to its far face.
+   */
+  probeDown(x: number, yFrom: number, z: number, maxDrop: number, ignorePiece?: number, solid = false): { y: number; hit: HitTarget } | null {
     this.sync();
     const ray = new RAPIER.Ray({ x, y: yFrom, z }, { x: 0, y: -1, z: 0 });
-    const h = this.world.castRay(ray, maxDrop, false, undefined, undefined, undefined, undefined,
+    const own = ignorePiece !== undefined ? this.pieces.get(ignorePiece) : undefined;
+    const h = this.world.castRay(ray, maxDrop, solid, undefined, undefined, own, undefined,
       (c) => this.entities.get(c.handle)?.type !== 'player');
     if (!h) return null;
     return { y: yFrom - h.timeOfImpact, hit: this.entities.get(h.collider.handle) ?? { type: 'world' } };

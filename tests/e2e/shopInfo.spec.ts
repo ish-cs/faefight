@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU); // the shader warm-up makes a software-GL match load exceed 30 s
 
 test('shop item details show in the info bar, fully inside the panel', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });

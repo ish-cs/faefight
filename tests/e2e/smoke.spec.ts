@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 type Snap = {
   players: {
@@ -119,16 +122,20 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await dbg(page, 'give', { medkits: 1 });
   await expect(page.locator('[data-testid="hotbar-slot-1"] .hb-count')).toHaveText('2');
   await dbg(page, 'hp', 40);
-  await expect.poll(async () => (await me()).hp).toBe(40);
+  // The set landed (from 100); passive regen (1 HP/s) may already have added a little on top.
+  await expect.poll(async () => (await me()).hp).toBeLessThanOrEqual(45);
   await page.keyboard.press('Digit2');
   await expect(page.getByTestId('weapon')).toHaveText(/medkit/i);
   await expect(async () => {
     if ((await me()).inv.medkits === 2) await page.mouse.click(640, 360);
     await expect.poll(async () => (await me()).inv.medkits, { timeout: 1000 }).toBe(1);
   }).toPass({ timeout: 10_000 });
+  const hpAtUse = (await me()).hp; // the heal has started; it adds its +50 when it finishes
+  expect(hpAtUse).toBeLessThan(50);
   await expect(page.getByTestId('healing')).toBeVisible();
   await expect(page.locator('[data-testid="hotbar-slot-1"] .hb-count')).toHaveText('1');
-  await expect.poll(async () => (await me()).hp, { timeout: 5000 }).toBe(90);
+  // At least the full +50 over the HP it started from (passive regen during the 2 s heal can only add to it).
+  await expect.poll(async () => (await me()).hp, { timeout: 5000 }).toBeGreaterThanOrEqual(hpAtUse + 50);
   await expect(page.getByTestId('healing')).toBeHidden();
 
   expect(errors, errors.join('\n')).toEqual([]);

@@ -316,24 +316,33 @@ describe('bots and hazards', () => {
   async function duel(difficulty: 'easy' | 'pro', seed: number) {
     const m = await Match.create({ players: [{ name: 'me', isBot: false }, { name: 'Bot', isBot: true, difficulty }], seed });
     const b = firstOf(m, 'barrel', 0);
-    place(m, 1, beside(m, b, 1.0));
+    // The human stands 1.3 m beside the barrel, square to the bot's line of fire (stray shots at them miss it).
+    const t = beside(m, b, 1);
+    const side = v3(b.pos.x - (t.z - b.pos.z) * 1.3, b.pos.y, b.pos.z + (t.x - b.pos.x) * 1.3);
+    place(m, 1, side);
     m.debugGive(2, { weapons: { rifle: { mag: 25, spare: 100 } } });
     place(m, 2, beside(m, b, 14));
-    let barrelBy: unknown = null;
+    const bot = (m as unknown as { bots: Map<number, { barrelTarget: number | null }> }).bots.get(2)!;
+    let aimed = false, aimedAt = Infinity, barrelBy: unknown = null;
     for (let i = 0; i < 30 * 12 && barrelBy === null; i++) {
-      if (i % 30 === 0) place(m, 1, beside(m, b, 1.0)); // the human holds still next to it
+      if (i % 30 === 0) place(m, 1, side); // the human holds still next to it
       m.debugSetHp(1, 100);
       const s = m.tick(new Map());
+      if (bot.barrelTarget === b.id && !aimed) { aimed = true; aimedAt = s.time; }
       for (const e of s.events) if (e.type === 'hazard' && e.data.what === 'fuse' && e.data.id === b.id) barrelBy = e.data.by;
     }
-    return barrelBy;
+    return { aimed, aimedAt, barrelBy };
   }
 
   test('pro bots sometimes shoot the barrel next to an enemy; easy bots never do', async () => {
-    let pro = 0;
-    for (const seed of [1, 2, 3, 4, 5, 6]) if ((await duel('pro', seed)) === 2) pro++;
-    expect(pro).toBeGreaterThan(0);
-    for (const seed of [1, 2, 3]) expect(await duel('easy', seed)).not.toBe(2);
+    // Deliberate (the bot chose the barrel as its target), not a stray bullet: a choice, so not every time.
+    const pro = [];
+    for (const seed of [1, 2, 3, 4, 5, 6]) pro.push(await duel('pro', seed));
+    expect(pro.filter((r) => r.aimed && r.barrelBy === 2).length).toBeGreaterThan(0);
+    // A roll per opportunity (BARREL_ROLL_SEC apart), not a reflex: some bots pass on the first ones.
+    const times = pro.map((r) => r.aimedAt).sort((a, b) => a - b);
+    expect(times[times.length - 1] - times[0]).toBeGreaterThan(1);
+    for (const seed of [1, 2, 3]) expect((await duel('easy', seed)).aimed).toBe(false);
   });
 
   test('in a fight, a bot steps out of blast range of a barrel and stays out; anyone runs from a fusing one', async () => {

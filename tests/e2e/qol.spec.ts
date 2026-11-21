@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
   page.evaluate(([f, a]) => {
@@ -66,6 +69,9 @@ test('menu remembers difficulty + bot count; compass; Esc pauses vs bots; death 
   // Esc (pointer released) pauses the world: sim time stops; Resume restarts it.
   await page.locator('canvas.game').click();
   await expect.poll(() => page.evaluate(() => !!document.pointerLockElement)).toBe(true);
+  // pointerlockchange is dispatched at the next rendering step: let the game see the lock before releasing it,
+  // or a late frame delivers both changes as "unlocked" and the pause card never shows (test race).
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   // Esc releases the pointer (the browser does that; synthetic key presses don't, so release it directly).
   await page.evaluate(() => document.exitPointerLock());
   await expect(page.getByTestId('pause')).toBeVisible();
@@ -80,7 +86,13 @@ test('menu remembers difficulty + bot count; compass; Esc pauses vs bots; death 
   await expect.poll(async () => (await snapOf(page)).time).toBeGreaterThan(t0 + 0.5);
 
   // Death recap: walk off into the sea → "You drowned", gone again after respawn.
-  await dbg(page, 'teleport', 0, 0);
+  // Open water just past the outer rim of our island (the map origin is the center island now).
+  await page.evaluate(() => {
+    const f = (window as any).__faefight; const id = f.humanId();
+    const isl = f.map()[f.snapshot().players.find((p: any) => p.id === id).island];
+    const d = Math.hypot(isl.center.x, isl.center.z), k = (d + isl.radius + 6) / d;
+    f.teleport(isl.center.x * k, isl.center.z * k);
+  });
   const recap = page.getByTestId('death-recap');
   await expect(recap).toBeVisible({ timeout: 15_000 });
   await expect(recap).toContainText('You drowned');

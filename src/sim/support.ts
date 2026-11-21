@@ -12,10 +12,15 @@ function grounded(physics: Physics, p: PieceState): boolean {
   const hx = s.w / 2 - 0.05, hz = s.d / 2 - 0.05;
   for (const local of [v3(0, 0, 0), v3(-hx, 0, -hz), v3(hx, 0, -hz), v3(-hx, 0, hz), v3(hx, 0, hz)]) {
     const w = add(p.pos, rotateY(local, p.rotY));
-    const below = physics.probeDown(w.x, p.pos.y + GROUND_EPS, w.z, 2 * GROUND_EPS);
+    // Skip the piece's own collider: the probe starts inside it and can report its own base first.
+    // Solid: a base sunk more than GROUND_EPS into the island starts the probe inside the ground, which
+    // must still count as ground (a hollow probe would pass through to the island's underside and miss).
+    const below = physics.probeDown(w.x, p.pos.y + GROUND_EPS, w.z, 2 * GROUND_EPS, p.id, true);
     if (below?.hit.type === 'world') return true;
   }
-  return false;
+  // Built against a crane leg or onto its beam: anchored like the ground.
+  const center = v3(p.pos.x, p.pos.y + s.h / 2, p.pos.z);
+  return physics.touchesAnchor(center, v3(s.w / 2 + TOUCH_EPS, s.h / 2 + TOUCH_EPS, s.d / 2 + TOUCH_EPS), p.rotY);
 }
 
 /**

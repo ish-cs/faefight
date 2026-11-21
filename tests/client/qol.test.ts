@@ -58,7 +58,7 @@ describe('rejoin record', () => {
 describe('prefs', () => {
   test('round trip and sanitize', () => {
     const kv = memStore();
-    expect(loadPrefs(kv)).toEqual({ difficulty: 'medium', bots: 1, map: null, seats: null, lastBuy: null });
+    expect(loadPrefs(kv)).toEqual({ difficulty: 'medium', bots: 1, map: null, seats: null, lastBuy: null, settings: { startCash: 50, suddenDeathSec: 900, genMult: 1 }, color: null });
     savePrefs({ difficulty: 'pro', bots: 4 }, kv);
     savePrefs({ seats: [{ kind: 'bot', difficulty: 'hard' }, { kind: 'open' }], lastBuy: 'steel' }, kv);
     expect(loadPrefs(kv)).toMatchObject({ difficulty: 'pro', bots: 4, seats: [{ kind: 'bot', difficulty: 'hard' }, { kind: 'open' }], lastBuy: 'steel' });
@@ -164,6 +164,18 @@ describe('death recap', () => {
     expect(k.bySource).toEqual([{ source: 'explosion', amount: 100 }]);
     const self = new RecapTracker().onSnapshot(snap(6, [hit(6, { by: 1, amount: 90, weapon: 'propane' }), { t: 6, type: 'kill', data: { victim: 1, killer: 1, via: 'propane' } }]), 1)!;
     expect(self.title).toBe('You blew yourself up via propane');
+  });
+
+  test('storm and lightning deaths', () => {
+    const r = new RecapTracker();
+    r.onSnapshot(snap(20, [hit(20, { by: null, amount: 12, weapon: 'storm', shieldAmount: 0 })]), 1);
+    const s = r.onSnapshot(snap(21, [hit(21, { by: null, amount: 14, weapon: 'storm' }), { t: 21, type: 'kill', data: { victim: 1, killer: null, inWater: false, cause: 'storm' } }]), 1)!;
+    expect(s.title).toBe('The storm got you');
+    expect(s.weapon).toBe('storm');
+    expect(s.bySource).toEqual([{ source: 'storm', amount: 26 }]);
+    const l = r.onSnapshot(snap(30, [hit(30, { by: null, amount: 40, weapon: 'lightning' }), { t: 30, type: 'kill', data: { victim: 1, killer: null, inWater: false, cause: 'lightning' } }]), 1)!;
+    expect(l.title).toBe('Struck by lightning');
+    expect(l.bySource).toEqual([{ source: 'lightning', amount: 40 }]);
   });
 });
 

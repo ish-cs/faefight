@@ -8,7 +8,7 @@
 import type { IslandLayout } from '../../sim/map';
 import type { Snapshot, Vec3 } from '../../sim/types';
 import { type Cue, type Env, SoundDirector } from './events';
-import { clank, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
+import { clank, critterCall, fireLoop, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
 import {
   audibility, DEFAULT_LIMITS, dist, distanceCutoff, echoSend, heartbeatInterval, MAX_DISTANCE, muffleCutoff,
   REF_DISTANCE, ROLLOFF, VoiceLimiter, waveLevel,
@@ -42,7 +42,7 @@ export class AudioSystem {
   private uiBus!: GainNode;
   private reverbSend!: GainNode;
   private echoIn!: GainNode;
-  private ambient: { bus: GainNode; lp: BiquadFilterNode; waves: GainNode; wind: GainNode } | null = null;
+  private ambient: { bus: GainNode; lp: BiquadFilterNode; waves: GainNode; wind: GainNode; rain: GainNode } | null = null;
   private pool: Chain[] = [];
   private voices = new Map<number, GainNode>();
   private limiter = new VoiceLimiter(DEFAULT_LIMITS);
@@ -55,6 +55,7 @@ export class AudioSystem {
   private listeners = new Set<() => void>();
   /** Rocket motor loops, by projectile id, each on its own positional chain. */
   private flights = new Map<number, { ch: Chain; loop: { stop(): void } }>();
+  private blazes = new Map<string, { ch: Chain; loop: { stop(): void } }>();
 
   constructor() {
     this.applySettings(settings.get().audio);
@@ -95,6 +96,23 @@ export class AudioSystem {
       if (this.ambient) this.ambient.bus.gain.setTargetAtTime(this.ambience, t, 0.05);
     }
     this.listeners.forEach((fn) => fn());
+  }
+
+  private critterVoices = 0;
+  /**
+   * Wildlife call at `s` (world/critters.ts): quiet, positional, scaled by the Ambience volume, only within 20 m,
+   * at most 4 at once so a scattering flock doesn't swamp the mix.
+   */
+  critter(s: { kind: string; x: number; y: number; z: number }) {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.kit || this.muted || this.ambience <= 0) return;
+    if (dist(s, this.listener) > 20 || this.critterVoices >= 4) return;
+    this.critterVoices++;
+    this.spatial(s, 0.6 * this.ambience, `critter_${s.kind}`, (out, t) => {
+      const len = critterCall(this.kit!, out, t, s.kind);
+      setTimeout(() => { this.critterVoices--; }, (len + 0.1) * 1000);
+      return len;
+    });
   }
 
   /** Create/resume the AudioContext. Must run inside a user gesture (browser autoplay policy). */
@@ -219,7 +237,24 @@ export class AudioSystem {
     air.connect(wbp).connect(wind).connect(bus);
     air.start();
 
-    this.ambient = { bus, lp, waves, wind };
+    // Rain (sudden-death storm): a hiss of drops plus a low wash; silent until the storm starts.
+    const rain = ctx.createGain();
+    rain.gain.value = 0;
+    const rhp = ctx.createBiquadFilter();
+    rhp.type = 'bandpass'; rhp.frequency.value = 4200; rhp.Q.value = 0.3;
+    const drops = loop(5, false);
+    drops.connect(rhp).connect(rain);
+    const wash = ctx.createGain();
+    wash.gain.value = 0.5;
+    const rlp = ctx.createBiquadFilter();
+    rlp.type = 'lowpass'; rlp.frequency.value = 900;
+    const brown2 = loop(8, true);
+    brown2.connect(rlp).connect(wash).connect(rain);
+    lfo(0.07, 0.15, wash.gain);
+    rain.connect(bus);
+    drops.start(); brown2.start();
+
+    this.ambient = { bus, lp, waves, wind, rain };
     this.nextAmbientAt = ctx.currentTime + 6 + Math.random() * 8;
   }
 
@@ -229,6 +264,11 @@ export class AudioSystem {
 
   /** Debug (?debug=1): play any cue directly, bypassing the event mapping. */
   debugPlay(cue: Cue) {
+    this.play(cue);
+  }
+
+  /** HUD alerts (bunker threat alarm, generator ping): 2D, through the usual effects bus and volume settings. */
+  alert(cue: Cue) {
     this.play(cue);
   }
 
@@ -275,6 +315,34 @@ export class AudioSystem {
     }
   }
 
+  /** Per frame: crackle loops on the (up to) three burning things nearest the listener, within earshot. */
+  fires(list: { id: string; pos: Vec3 }[]) {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.kit) return;
+    const near = list.map((f) => ({ f, d: dist(f.pos, this.listener) })).filter((x) => x.d < 45).sort((a, b) => a.d - b.d).slice(0, 3);
+    const seen = new Set<string>();
+    for (const { f, d } of near) {
+      seen.add(f.id);
+      let b = this.blazes.get(f.id);
+      if (!b) {
+        const ch = this.chain(f.pos, d);
+        ch.input.gain.value = 0.8;
+        b = { ch, loop: fireLoop(this.kit, ch.input) };
+        this.blazes.set(f.id, b);
+        this.count('fireLoop');
+      }
+      const p = b.ch.panner;
+      p.positionX.value = f.pos.x; p.positionY.value = f.pos.y; p.positionZ.value = f.pos.z;
+      b.ch.air.frequency.value = distanceCutoff(d);
+    }
+    for (const [id, b] of this.blazes) {
+      if (seen.has(id)) continue;
+      b.loop.stop();
+      setTimeout(() => this.releaseChain(b.ch), 1600);
+      this.blazes.delete(id);
+    }
+  }
+
   /** Feed every snapshot in order (events are per snapshot). */
   snapshot(s: Snapshot) {
     const cues = this.director.update(s);
@@ -308,7 +376,8 @@ export class AudioSystem {
     this.reverbSend.gain.setTargetAtTime(env.inBunker ? 0.5 : 0.06, now, 0.15);
     const a = this.ambient!;
     a.waves.gain.setTargetAtTime(0.5 * waveLevel(env.shoreDist) * (env.inBunker ? 0.35 : 1), now, 0.5);
-    a.wind.gain.setTargetAtTime(env.inBunker ? 0.012 : 0.035, now, 0.5);
+    a.wind.gain.setTargetAtTime((env.storm ? 0.11 : 0.035) * (env.inBunker ? 0.35 : 1), now, env.storm ? 2 : 0.5);
+    a.rain.gain.setTargetAtTime(env.storm ? (env.inBunker ? 0.03 : 0.12) : 0, now, env.storm ? 2.5 : 0.5);
     a.lp.frequency.setTargetAtTime(env.inBunker ? 500 : 20000, now, 0.15);
 
     if (env.alive && env.hp < 30 && env.hp > 0) {
@@ -331,6 +400,13 @@ export class AudioSystem {
   private play(cue: Cue) {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running' || !this.kit) return;
+    let delay = 0;
+    if (cue.sound === 'thunder' && cue.pos) {
+      // Thunder fills the sky (2D), arrives d/343 s after the flash, a sharp crack when close, a rumble far off.
+      const td = dist(cue.pos, this.listener);
+      delay = Math.min(4, td / 343);
+      cue = { ...cue, pos: null, gain: cue.gain * Math.max(0.25, Math.min(1, 40 / (td + 10))), kind: td < 45 ? 'near' : 'far' };
+    }
     const d = cue.pos ? dist(cue.pos, this.listener) : 0;
     const key = cue.sound === 'shot' ? `shot_${cue.kind}` : cue.sound;
     const level = audibility(cue.gain, cue.pos, this.listener);
@@ -339,7 +415,7 @@ export class AudioSystem {
     if (!adm.ok) return;
     if (adm.evict !== null) this.stopVoice(adm.evict);
     // Tiny start offset on repeated world sounds so simultaneous shots don't phase-lock.
-    const t = ctx.currentTime + (cue.own || !cue.pos ? 0.005 : 0.005 + Math.random() * 0.012);
+    const t = ctx.currentTime + delay + (cue.own || !cue.pos ? 0.005 : 0.005 + Math.random() * 0.012);
     let len: number;
     let input: GainNode;
     if (cue.pos) {
@@ -352,7 +428,7 @@ export class AudioSystem {
       input = ctx.createGain();
       input.gain.value = cue.gain;
       input.connect(UI_SOUNDS.has(cue.sound) ? this.uiBus : this.sfxBus);
-      len = playRecipe(this.kit, input, t, cue, d) + 0.1;
+      len = playRecipe(this.kit, input, t, cue, d) + 0.1 + delay;
       setTimeout(() => input.disconnect(), (len + 0.3) * 1000);
     }
     this.voices.set(adm.id, input);

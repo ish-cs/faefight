@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
-import { bunkerSlitBoxes, bunkerWallBoxes, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
+import { bunkerSlitBoxes, bunkerWallBoxes, harborBackdropFrame, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
+import { registerDistanceCull } from './lod';
 import { buildCenter, paintedTopMaterial } from './center';
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrierProp, containerCover, containerLite, reefer, rtg } from './mapProps';
@@ -16,7 +17,6 @@ import { type Footprint, islandSurface, makeRng, yardTopTex } from './textures';
 
 const UNLIT_BOOST = 2.6;
 const QUAY_DEPTH = 14; // how far the quay walls go below y=0 (never visible past the water)
-const CHANNEL = 14; // water between the playable disc and the off-island backdrop quay
 const TYRE = new THREE.TorusGeometry(0.34, 0.13, 8, 14);
 
 function labelSprite(text: string, bg: string): THREE.Sprite {
@@ -36,6 +36,8 @@ function labelSprite(text: string, bg: string): THREE.Sprite {
   m.color.setScalar(UNLIT_BOOST);
   const s = new THREE.Sprite(m);
   s.scale.set(1.5, 0.375, 1);
+  // a 1.5 m label is a few unreadable pixels past ~90 m: one draw (own texture) saved per far label
+  s.userData.lod = registerDistanceCull(s, 90, { center: s.position, radius: 1 });
   return s;
 }
 
@@ -105,7 +107,7 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   const root = new THREE.Group();
   root.name = 'islands';
   const collidables: THREE.Object3D[] = [];
-  const dress = new StaticBatch(); // non-colliding decoration
+  const dress = new StaticBatch({ stress: true }); // non-colliding decoration
   const solid = new StaticBatch(); // bunker walls + barriers: match sim colliders exactly
   const M = mats();
   const n = map.length;
@@ -240,9 +242,9 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   if (yard) gapCranes(dress, map, groundY, def.center);
   distantIslands(dress, map);
 
-  const bunkers = solid.build(root, 'bunkers');
+  const bunkers = solid.build(root, 'bunkers', { chunked: true });
   collidables.push(...bunkers);
-  dress.build(root, 'dressing');
+  dress.build(root, 'dressing', { chunked: true });
   return { collidables, root };
 }
 
@@ -250,13 +252,8 @@ type Rng = ReturnType<typeof makeRng>;
 type At = (x: number, y: number, z: number, ry?: number) => THREE.Matrix4;
 type Frame = { at: At; z0: number; z1: number; depth: number; hw: number; top: number };
 
-/** Backdrop quay behind an island (local +Z): front edge z0, half-width hw, deck at `top` (also used for grass/gulls). */
-export function backdropFrame(isl: IslandLayout, n: number) {
-  const ring = Math.hypot(isl.center.x, isl.center.z);
-  const z0 = isl.radius + CHANNEL;
-  const hw = Math.max(25, Math.min(60, (ring + z0) * Math.sin(Math.PI / n) - 8));
-  return { z0, hw, top: isl.groundY + 0.2 };
-}
+/** Backdrop quay behind an island (local +Z): front edge z0, half-width hw, deck at `top`. The sim needs it too: the harbor crane there is solid. */
+export const backdropFrame = harborBackdropFrame;
 
 /** backdropFrame plus the island-frame transform and depth, for the builders below. */
 function frameOf(L: THREE.Matrix4, isl: IslandLayout, n: number): Frame {

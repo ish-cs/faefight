@@ -181,25 +181,28 @@ class DebrisPool {
 }
 
 /** Budgets: hard caps keep a multi-piece collapse from flooding the GPU or the frame. */
-export const PARTICLE_CAPS = { dust: 1400, sparks: 800, debris: 420 };
+export const PARTICLE_CAPS = { dust: 1400, sparks: 800, debris: 420, flames: 900 };
 
-/** Impact + destruction particles: 3 draw calls total (dust, sparks, debris). */
+/** Impact + destruction + fire particles: 4 draw calls total (dust, sparks, debris, flames). */
 export class Particles {
   readonly root = new THREE.Group();
   readonly dust = new SpritePool(PARTICLE_CAPS.dust, false, 'fx:dust');
   readonly sparks = new SpritePool(PARTICLE_CAPS.sparks, true, 'fx:sparks');
   readonly debris = new DebrisPool(PARTICLE_CAPS.debris);
+  /** Fire tongues (additive): their own pool so a burning base can't starve gunfire sparks. */
+  readonly flames = new SpritePool(PARTICLE_CAPS.flames, true, 'fx:flames');
 
   constructor() {
     this.root.name = 'pieceParticles';
-    this.root.add(this.dust.sprite, this.sparks.sprite, this.debris.mesh);
+    this.root.add(this.dust.sprite, this.sparks.sprite, this.debris.mesh, this.flames.sprite);
   }
 
   update(dt: number) {
     this.dust.update(dt);
     this.sparks.update(dt);
     this.debris.update(dt);
+    this.flames.update(dt);
   }
 
-  get live() { return this.dust.live + this.sparks.live + this.debris.live; }
+  get live() { return this.dust.live + this.sparks.live + this.debris.live + this.flames.live; }
 }

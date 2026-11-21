@@ -6,3 +6,7 @@ test-results
 playwright-report
 docs
 tests
+.env*
+.autoimprove
+scripts
+.train

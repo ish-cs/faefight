@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import type { MatchEvent, Projectile, Vec3, WeaponKind } from '../sim/types';
+import { Casings } from './world/casings';
 import type { Particles } from './world/particles';
 
 /**
@@ -33,6 +34,8 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3
 
 export class GunFx {
   readonly root = new THREE.Group();
+  /** Spent cases that stay on the ground (ring buffer, capped per quality: set `casings.limit`). */
+  readonly casings = new Casings();
   private tracers: Tracer[] = [];
   private tracerGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);
   private muzzleLight = new THREE.PointLight(0xffb060, 0, 9, 2);
@@ -58,6 +61,7 @@ export class GunFx {
 
   constructor(private particles: Particles, private gunPoint: GunPointFn) {
     this.root.name = 'gunFx';
+    this.root.add(this.casings.mesh);
     for (let i = 0; i < TRACER_POOL; i++) {
       const mat = new THREE.MeshBasicNodeMaterial({ color: new THREE.Color(0xfff2a8).multiplyScalar(UNLIT_BOOST), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
       const mesh = new THREE.Mesh(this.tracerGeo, mat);
@@ -84,7 +88,7 @@ export class GunFx {
   warmUp(extra: THREE.Material[] = []) {
     const g = new THREE.Group();
     const y = -40;
-    const mats: THREE.Material[] = [this.tracers[0].mat, this.rocketMat, this.flameMat, this.grenadeMat, this.chargeMat, this.ledMat, ...extra];
+    const mats: THREE.Material[] = [this.casings.mesh.material as THREE.Material, this.tracers[0].mat, this.rocketMat, this.flameMat, this.grenadeMat, this.chargeMat, this.ledMat, ...extra];
     mats.forEach((m, i) => {
       const mesh = new THREE.Mesh(this.grenadeGeo, m);
       mesh.position.set(i * 0.2, y, 0);
@@ -94,7 +98,8 @@ export class GunFx {
     this.root.add(g);
     this.warmGroup = g;
     this.warmFrames = 0;
-    const { dust, sparks, debris } = this.particles;
+    const { dust, sparks, debris, flames } = this.particles;
+    flames.spawn(0, y, 0, 0, 0, 0, 0.5, 0.1, 0.1, 1, 1, 1, 0.01, 0, 0);
     dust.spawn(0, y, 0, 0, 0, 0, 0.5, 0.1, 0.1, 1, 1, 1, 0.01, 0, 0);
     sparks.spawn(0, y, 0, 0, 0, 0, 0.5, 0.1, 0.1, 1, 1, 1, 0.01, 0, 0);
     debris.spawn(0, y, 0, 0, 0, 0, 0.01, 0.01, 0.01, BRASS, 0.5, y - 1);
@@ -151,9 +156,8 @@ export class GunFx {
       const rl = Math.hypot(rx, rz) || 1;
       const s = rr(1.6, 2.6);
       const shotgun = weapon === 'shotgun';
-      debris.spawn(eject.x, eject.y, eject.z, (rx / rl) * s + rr(-0.3, 0.3) - dir.x * 0.4, rr(1.6, 2.6), (rz / rl) * s + rr(-0.3, 0.3) - dir.z * 0.4,
-        shotgun ? 0.022 : 0.011, shotgun ? 0.022 : 0.011, shotgun ? 0.06 : weapon === 'rifle' ? 0.045 : 0.028,
-        shotgun ? SHELL_RED : BRASS, rr(1.2, 1.8), from.y - 1.6, R() * 6);
+      this.casings.spawn(eject.x, eject.y, eject.z, (rx / rl) * s + rr(-0.3, 0.3) - dir.x * 0.4, rr(1.6, 2.6), (rz / rl) * s + rr(-0.3, 0.3) - dir.z * 0.4,
+        shotgun ? 0.06 : weapon === 'rifle' ? 0.045 : 0.028, shotgun ? 0.011 : 0.0055, shotgun ? SHELL_RED : BRASS, from.y - 1.6);
     }
     if (weapon === 'rocket') return;
     this.tracer(muzzle, to, by === myId);
@@ -256,6 +260,7 @@ export class GunFx {
     const now = performance.now();
     const dt = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
+    this.casings.update(dt);
     for (const t of this.tracers) {
       if (!t.live) continue;
       const travelled = ((now - t.born) / 1000) * TRACER_SPEED;
