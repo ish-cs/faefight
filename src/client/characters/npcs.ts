@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { lods } from '../world/lod';
 import { npcLook } from './body';
 import { bodyLod, CHAR_LOD } from './avatar';
 import { loadCharacters, makeBody, type Body, type CharacterAssets } from './loader';
@@ -85,7 +86,7 @@ class Npc {
   update(dt: number, t: number, camDist: number, onScreen: boolean, target: THREE.Vector3 | null, near: boolean) {
     const lod = bodyLod(camDist, this.lod);
     if (lod !== this.lod) { this.lod = lod; this.body.lods.forEach((m, i) => { m.visible = i === lod; }); }
-    for (const m of this.body.lods) m.castShadow = camDist < CHAR_LOD.shadowBodyM;
+    for (const m of this.body.lods) m.castShadow = camDist < CHAR_LOD.shadowBodyM * lods.scale;
     if (!onScreen || camDist > ACTIVE_RANGE) { this.skipped += dt; return; }
     dt += this.skipped;
     this.skipped = 0;

@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PLAYER } from '../../sim/constants';
 import { buildBody, lookKey, type Look, type Lod } from './body';
 import { bodyMaterial } from './charMaterials';
+import { measureClipSpeeds } from './locomotion';
 
 /**
  * Loads the CC0 Quaternius SWAT rig (see public/assets/characters/CREDITS.md) once, for its skeleton and animation
@@ -30,6 +31,8 @@ export type CharacterAssets = {
   footY: number;
   /** Gun holder transform relative to the right wrist bone (grip frame → bone local). */
   gripLocal: THREE.Matrix4;
+  /** Ground speed (m/s, on screen) each locomotion clip's feet imply (locomotion.ts), for no-skate playback. */
+  speeds: Map<string, number>;
 };
 
 const BASE = `${import.meta.env.BASE_URL}assets/characters/`;
@@ -126,7 +129,8 @@ export function prepareAssets(gltf: { scene: THREE.Object3D; animations: THREE.A
   const holders = new Set<THREE.Object3D>();
   for (const m of meshes) { if (m.parent && m.parent !== probe) holders.add(m.parent); m.removeFromParent(); (m as THREE.Mesh).geometry.dispose(); }
   for (const h of holders) if (!h.children.length && !(h as THREE.Bone).isBone) h.removeFromParent(); // the emptied mesh groups (bone-end nodes stay)
-  return { template: probe, rig, clips, scale, footY: bounds.min.y, gripLocal };
+  const speeds = measureClipSpeeds(probe, clips, scale);
+  return { template: probe, rig, clips, scale, footY: bounds.min.y, gripLocal, speeds };
 }
 
 /**
@@ -152,6 +156,7 @@ export function rigOf(root: THREE.Object3D): Rig {
 }
 
 const bodyGeo = new Map<string, THREE.BufferGeometry>();
+const noRaycast = () => {};
 
 /** One look's skinned geometry at a detail level, built once and shared by everyone wearing it. */
 export function bodyGeometry(rig: Rig, look: Look, lod: Lod): THREE.BufferGeometry {
@@ -192,6 +197,9 @@ export function makeBody(assets: CharacterAssets, look: Look, team: number | nul
     m.castShadow = true;
     m.receiveShadow = true;
     m.visible = lod === 0;
+    // Never raycast the skinned triangles (CPU-skinning every vertex: ~1 ms/frame for 8 players). Aim and hover rays
+    // hit the avatar's capsule hitbox (Avatar.hitbox); hit detection itself is sim-side.
+    m.raycast = noRaycast;
     model.add(m);
     return m;
   });

@@ -91,7 +91,7 @@ function fullMaterial(team: number | null, dirtAmt: number) {
   camo = mix(camo, c3(pal.light), smoothstep(0.6, 0.63, nA.y)) as V3;
   camo = mix(camo, c3(pal.black), smoothstep(0.68, 0.71, nB.x)) as V3;
   // --- weave: a fine plain weave, faded out before it can alias
-  const a = P.x.add(P.z).mul(1300), b = P.y.mul(1300);
+  const a = P.x.add(P.z).mul(2400), b = P.y.mul(2400);
   const weave = sin(a).mul(sin(b));
   const fade = float(1).sub(smoothstep(0.7, 2.2, fwidth(a).add(fwidth(b))));
   const seam = surf.y;
