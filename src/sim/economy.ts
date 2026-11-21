@@ -155,6 +155,23 @@ export function grantLockedGuns(player: PlayerState): void {
 }
 
 /**
+ * What every spawn hands out, at match start and on each respawn: locked guns, then a pistol with one spare
+ * mag (so nobody starts or comes back unarmed), with the pistol selected.
+ */
+export function grantSpawnLoadout(player: PlayerState): void {
+  grantLockedGuns(player);
+  if (!player.inv.weapons.pistol) {
+    if (addKind(player.hotbar, 'pistol') < 0) {
+      console.warn(`grantSpawnLoadout: hotbar full, player ${player.id} spawns without a pistol`);
+      return;
+    }
+    player.inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag };
+  }
+  const at = player.hotbar.indexOf('pistol');
+  if (at >= 0) { player.selected = at; player.equipped = 'pistol'; }
+}
+
+/**
  * Buying at a particular counter: the home shop (any island's NPC) or a potion seller each sell only
  * their own stock. `genLevels` is passed through for generator upgrades.
  */

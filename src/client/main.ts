@@ -14,7 +14,7 @@ import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
-import { moveForAim } from './aim';
+import { adoptSpawnLook, moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { reloadClock } from './firstPerson';
 import { ChatUi } from './chatUi';
@@ -125,7 +125,7 @@ type Backend = {
   pause?(paused: boolean): void;
   debug?: {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
-    eliminate(playerId: number): void; kill(playerId: number): void;
+    eliminate(playerId: number): void; kill(playerId: number): void; clearLoadout(id?: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
   };
@@ -176,6 +176,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
+      clearLoadout: (id) => send({ type: 'debug', cmd: 'clearLoadout', id }),
     },
     close() {
       worker.onmessage = null;
@@ -951,10 +952,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const kick = e.data.kick as { pitch: number; yaw: number } | undefined;
       if (e.type === 'shot' && e.data.by === humanId && kick && !first) input.addKick(kick.pitch, kick.yaw);
     }
+    // Respawned: the sim turned me to face out of my bunker's front door. Snap camera + aim to it once.
+    if (adoptSpawnLook(input, s.events, humanId)) console.info(`[main] respawn: facing front door (yaw ${input.yaw.toFixed(2)})`);
     audio.snapshot(s);
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
-      if (me) { input.yaw = me.yaw; input.selected = me.selected; }
+      if (me) { input.yaw = me.yaw; input.pitch = me.pitch; input.selected = me.selected; }
       input.enabled = !dead;
       menu.remove(); // the loading screen still covers the game until warm-up is done
       canvas.focus();

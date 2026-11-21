@@ -23,6 +23,7 @@ test('V toggles first person (persisted) with a viewmodel', async ({ page }) => 
 
   // Stand at home with a rifle out.
   const humanId = await dbg<number>(page, 'humanId');
+  await dbg(page, 'clearLoadout'); // blank-slate hotbar: no spawn pistol
   const me = (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!;
   const home = (await dbg<Isl[]>(page, 'map'))[me.island];
   await dbg(page, 'teleport', home.center.x, home.center.z);

@@ -36,6 +36,7 @@ function step() {
   const tickInputs = new Map<number, PlayerInput>();
   const moves = new Map<number, MoveCmd[]>();
   for (const [id, acc] of inputs) {
+    if (!acc.started) continue; // nothing sent yet: the sim keeps the player's spawn facing
     const input = acc.take();
     tickInputs.set(id, input);
     const q = moveQueues.get(id);
@@ -127,6 +128,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         else if (msg.cmd === 'eliminate') match.debugEliminate(msg.playerId);
         else if (msg.cmd === 'kill') match.debugKill(msg.playerId);
         else if (msg.cmd === 'give') match.debugGive(msg.id ?? humanId, msg.inv);
+        else if (msg.cmd === 'clearLoadout') match.debugClearLoadout(msg.id ?? humanId);
         break;
     }
   } catch (err) {

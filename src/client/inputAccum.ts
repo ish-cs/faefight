@@ -9,8 +9,11 @@ import { NO_INPUT, type PlayerInput } from '../sim/types';
 export class InputAccumulator {
   private held: PlayerInput = { ...NO_INPUT };
   private pending: Partial<PlayerInput> = {};
+  /** False until the first sample arrives: there's nothing to take yet (the sim then keeps the spawn look). */
+  started = false;
 
   push(input: PlayerInput) {
+    this.started = true;
     this.held = input;
     const p = this.pending;
     if (input.jump) p.jump = true;

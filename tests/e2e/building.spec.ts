@@ -36,6 +36,7 @@ async function start(page: Page) {
   // ...and clicks reach the game canvas only once the loading overlay has gone.
   await expect.poll(() => page.evaluate(() => document.elementFromPoint(640, 360)?.tagName), { timeout: 30_000 }).toBe('CANVAS');
   const humanId = await dbg<number>(page, 'humanId');
+  await dbg(page, 'clearLoadout'); // blank-slate hotbar: no spawn pistol
   const me = (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!;
   const map = await dbg<Isl[]>(page, 'map');
   // Keep the crosshair on window.__aimT every frame (yaw/pitch from the camera to the target), and log

@@ -102,6 +102,7 @@ test('combat QoL: ammo warnings, auto-reload, R on a full gun, Shift+click bulk 
   const errors: string[] = [];
   watchErrors('P', page, errors);
   const humanId = await startSolo(page);
+  await dbg(page, 'clearLoadout'); // blank-slate hotbar: no spawn pistol
   const me = async () => (await snapOf(page)).players.find((p) => p.id === humanId)!;
   await page.locator('canvas.game').click();
 
@@ -157,6 +158,7 @@ test('end screen: match summary with per-player stats and awards', async ({ page
   const errors: string[] = [];
   watchErrors('P', page, errors);
   const humanId = await startSolo(page);
+  await dbg(page, 'clearLoadout'); // blank-slate hotbar: no spawn pistol
   // Earn a little and build a piece so there's something to award.
   const me = async () => (await snapOf(page)).players.find((p) => p.id === humanId)!;
   const home = (await dbg<Isl[]>(page, 'map'))[(await me()).island];

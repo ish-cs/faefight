@@ -19,6 +19,7 @@ test('a dropped rifle shows its model, glow and a name + ammo label nearby', asy
   await page.goto('/?debug=1');
   await page.getByTestId('play-easy').click();
   await expect(page.getByTestId('cash')).toHaveText(/\$\d+/, { timeout: 60_000 });
+  await dbg(page, 'clearLoadout'); // blank-slate hotbar: no spawn pistol
   await dbg(page, 'give', { weapons: { rifle: { mag: 5, spare: 15 } } });
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', 'rifle');
   // Out in the open on the home island.

@@ -37,7 +37,8 @@ test('120 ms RTT: own shots are predicted, echoes are not shown twice', async ({
   await a.getByTestId('start-match').click();
   await expect.poll(async () => (await dbg<Snap | null>(b, 'snapshot'))?.players.length ?? 0, { timeout: 30_000 }).toBe(2);
 
-  // Host hands Bob a rifle; Bob picks it.
+  // Host hands Bob a rifle; Bob picks it. No spawn pistol: the focus click below would fire it and skew the count.
+  await dbg(a, 'clearLoadout', 2);
   await dbg(a, 'give', { weapons: { rifle: { mag: 25, spare: 50 } } }, 2);
   const meB = async () => (await dbg<Snap>(b, 'snapshot')).players.find((p) => p.id === 2)!;
   await expect.poll(async () => (await meB()).hotbar.indexOf('rifle'), { timeout: 10_000 }).toBeGreaterThanOrEqual(0);

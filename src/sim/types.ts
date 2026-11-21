@@ -135,7 +135,7 @@ export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3
 export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number } };
 
 export type MatchEventType =
-  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
+  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped' | 'spawn'
   | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 

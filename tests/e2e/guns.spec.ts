@@ -32,6 +32,7 @@ test('rocket launcher: buy it, blow up a steel wall; ADS zooms', async ({ page }
   await expect.poll(async () => (await dbg<{ drawCalls: number }>(page, 'renderInfo')).drawCalls, { timeout: 15_000 }).toBeGreaterThan(10);
 
   const humanId = await dbg<number>(page, 'humanId');
+  await dbg(page, 'clearLoadout'); // blank-slate hotbar: no spawn pistol
   const me = async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!;
   const home = (await dbg<Isl[]>(page, 'map'))[(await me()).island];
 

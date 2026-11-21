@@ -4,6 +4,20 @@ import { add, forward, right, rotateY, scale, v3, yawOf } from './vec';
 
 export type Doorway = { center: Vec3; yaw: number; width: number };
 export type Bunker = { center: Vec3; facingYaw: number; doorways: Doorway[] };
+
+/** The front doorway is doorways[0]: it faces along facingYaw (out toward the island front / map center). */
+export const FRONT_DOOR = 0;
+export const frontDoor = (b: Bunker): Doorway => {
+  const d = b.doorways[FRONT_DOOR];
+  if (!d) throw new Error('frontDoor: bunker has no doorways');
+  return d;
+};
+/** Yaw that looks from `from` through the centre of the bunker's front doorway (falls back to facingYaw on top of it). */
+export function spawnYaw(b: Bunker, from: Vec3): number {
+  const d = frontDoor(b).center;
+  const dx = d.x - from.x, dz = d.z - from.z;
+  return Math.hypot(dx, dz) < 1e-6 ? b.facingYaw : yawOf({ x: dx, z: dz });
+}
 export type IslandLayout = {
   index: number;
   center: Vec3;

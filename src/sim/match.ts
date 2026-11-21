@@ -1,10 +1,10 @@
-import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
+import { buyAt, collect, grantSpawnLoadout, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, SEAL } from './constants';
-import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
+import { emptyHotbar, equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
-import { buildMapDef, type IslandLayout, type MapDef } from './map';
+import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
@@ -98,7 +98,9 @@ export class Match implements MatchApi {
       const id = i + 1;
       const name = cfg.isBot && isPlaceholderBotName(cfg.name) ? nickname(nameRng, taken) : cfg.name;
       const p = newPlayer(id, name, cfg.isBot, i, map[i].spawn);
-      p.yaw = map[i].bunker.facingYaw;
+      grantSpawnLoadout(p);
+      p.yaw = spawnYaw(map[i].bunker, p.pos);
+      p.pitch = 0;
       this.s.players.set(id, p);
       physics.addPlayer(id, p.pos);
       if (cfg.isBot && opts.makeBot) {
@@ -167,7 +169,9 @@ export class Match implements MatchApi {
         continue;
       }
       const bot = this.bots.get(p.id);
-      const input = bot ? bot.think(this.botView(p)) : inputs.get(p.id) ?? NO_INPUT;
+      // No input from a human (none sent yet, e.g. right after spawning): do nothing, but keep looking where
+      // they look (the spawn facing), not at yaw 0.
+      const input = bot ? bot.think(this.botView(p)) : inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
       this.applyInput(p, input, now, cmds);
     }
 
@@ -260,6 +264,15 @@ export class Match implements MatchApi {
     mergeInventory(p.inv, { ...emptyInventory(), ...inv });
     const overflow = syncFromInventory(p.hotbar, p.inv);
     if (overflow.length) console.warn(`debugGive: hotbar full, ${overflow.join(', ')} carried without a slot`);
+  }
+
+  /** Tests: take away the spawn loadout (guns + hotbar) for a blank-slate inventory. Cash is kept. */
+  debugClearLoadout(playerId: number): void {
+    const p = this.mustPlayer(playerId);
+    p.inv.weapons = {};
+    p.hotbar = emptyHotbar();
+    p.selected = 0;
+    p.equipped = 'fists';
   }
 
   debugSetHp(playerId: number, hp: number): void {
