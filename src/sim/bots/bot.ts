@@ -301,7 +301,12 @@ export class Bot {
     } else if (enemy) {
       const r = this.aim.track(now, dt, eye, add(enemy.pos, v3(0, CHEST, 0)), enemy.id, cur);
       look = r;
-      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist);
+      // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
+      // unless they're the one shooting at me.
+      const w = WEAPONS[me.equipped];
+      const scratch = this.difficulty !== 'easy' && ctx.enemyDist > w.falloff.end * this.P.drive.fireRangeMult &&
+        !(this.mem.lastHurtBy === enemy.id && now - this.mem.lastHurtAt < 3);
+      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist) && !scratch;
     } else if (nade) {
       look = turnToward(cur, nade, TURN_RATE, dt);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
