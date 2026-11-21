@@ -79,6 +79,16 @@ export class ImpostorBaker {
 
   get pending() { return this.queue.length; }
 
+  /**
+   * Bake everything queued now (map build, behind the loading screen): the impostor materials then exist before
+   * the shader warm-up, so no impostor pipeline compiles mid-match.
+   */
+  flush(gpu: THREE.WebGPURenderer, environment: THREE.Texture | null) {
+    const t0 = performance.now(), n = this.queue.length;
+    while (this.queue.length) this.step(gpu, environment);
+    if (n) console.info(`[world/impostor] baked ${n} impostor atlases in ${Math.round(performance.now() - t0)} ms`);
+  }
+
   /** Bake at most one queued model (call once per frame). */
   step(gpu: THREE.WebGPURenderer, environment: THREE.Texture | null) {
     const job = this.queue.shift();

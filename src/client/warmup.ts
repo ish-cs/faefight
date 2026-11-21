@@ -42,12 +42,25 @@ export async function warmUp(r: Renderer, loop: WarmLoop, fpv: Viewmodel, onStep
 
   // Show everything: hidden pools (tracers, particles, flashes), culled/empty instanced meshes, far islands.
   const forced: THREE.Object3D[] = [], culled: THREE.Object3D[] = [];
+  // empty instanced meshes (critter species before they spawn, thinned scatter, impostor chunks) draw nothing, so
+  // nothing would compile their pipelines until mid-match: give each one instance for the warm-up
+  const empty: { o: THREE.InstancedMesh | THREE.Mesh; count: number }[] = [];
   r.scene.traverse((o) => {
     if (NEVER_DRAWN.test(o.name)) return;
     if (!o.visible) forced.push(o);
     if (o.frustumCulled) culled.push(o);
+    if ((o as THREE.InstancedMesh).isInstancedMesh && (o as THREE.InstancedMesh).count === 0) empty.push({ o: o as THREE.InstancedMesh, count: 0 });
+    const g = (o as THREE.Mesh).geometry as THREE.InstancedBufferGeometry | undefined;
+    if (g?.isInstancedBufferGeometry && g.instanceCount === 0) empty.push({ o: o as THREE.Mesh, count: -1 });
   });
-  const force = () => { for (const o of forced) o.visible = true; for (const o of culled) o.frustumCulled = false; };
+  const force = () => {
+    for (const o of forced) o.visible = true;
+    for (const o of culled) o.frustumCulled = false;
+    for (const e of empty) {
+      if (e.count === 0) (e.o as THREE.InstancedMesh).count = 1;
+      else ((e.o as THREE.Mesh).geometry as THREE.InstancedBufferGeometry).instanceCount = 1;
+    }
+  };
   force();
 
   let compiled = 0;
@@ -88,6 +101,11 @@ export async function warmUp(r: Renderer, loop: WarmLoop, fpv: Viewmodel, onStep
     r.scene.remove(props);
     for (const o of forced) o.visible = false;
     for (const o of culled) o.frustumCulled = true;
+    for (const e of empty) { // only where the owner didn't set a real count meanwhile (critters spawn during warm frames)
+      const g = (e.o as THREE.Mesh).geometry as THREE.InstancedBufferGeometry;
+      if (e.count === 0) { if ((e.o as THREE.InstancedMesh).count === 1) (e.o as THREE.InstancedMesh).count = 0; }
+      else if (g.instanceCount === 1) g.instanceCount = 0;
+    }
   }
   await loop.frames(1);
   onStep(0.9, 'Warming up the GPU');
