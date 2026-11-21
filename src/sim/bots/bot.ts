@@ -78,6 +78,32 @@ const MEDKIT_AT: Record<Difficulty, number> = { easy: 35, medium: 45, hard: 55, 
  */
 const BUNKER_OUT = SEAL.exitRadius + 0.8;
 
+/**
+ * Drive to win (Medium/Hard/PRO; easy players stay calmer). Grouped so they can move into BotParams.
+ * - offenseAt / offenseCash: from this time, or once this much money (carried + banked) is in hand with a gun,
+ *   the bot is on an offensive plan: buy bridge + walls, cross, fight to the bunker, seal.
+ * - push: added to bridge/attack/seal scores while on offense; shopForPush: shop score when the plan buys push gear.
+ * - plinkRange: past this a fight across water isn't worth a goal (shots still go out in passing); on the same
+ *   island the bot closes in instead (maxRange caps its preferred range, sprinting while the gap is > sprintGap).
+ * - reengageSec: a retreat (disengage/heal) lasts at most this long unless I'm still being hit or very low.
+ * - guardFreshSec: guarding home only for an intruder seen on my island this recently.
+ * - collectCarried: once carrying what the push needs, the generator only matters past this much cash.
+ */
+export const DRIVE = {
+  offenseAt: { easy: Infinity, medium: 300, hard: 240, pro: 240 } as Record<Difficulty, number>,
+  offenseCash: { easy: Infinity, medium: 3 * PIECES.wood.price, hard: 3 * PIECES.metal.price, pro: 3 * PIECES.metal.price } as Record<Difficulty, number>,
+  push: 0.35,
+  shopForPush: 0.75,
+  plinkRange: 30,
+  maxRange: 20,
+  sprintGap: 8,
+  reengageSec: 20,
+  reengageHp: 0.3,
+  guardFreshSec: 4,
+  collectCarried: 200,
+};
+const PUSH_GEAR: ShopItem[] = ['pistol', 'ammo', 'scaffold', 'wood', 'metal', 'steel', 'charge'];
+
 /** What a goal wants this tick; aiming at enemies, weapons and safety are layered on top by think(). */
 type Act = {
   dir: Vec3 | null;
@@ -93,6 +119,8 @@ type Act = {
   jump?: boolean;
   /** Skip the don't-step-toward-water check (climbing a tower in the tide). */
   raw?: boolean;
+  /** Sprint even with an enemy in sight (closing the distance). */
+  approach?: boolean;
 };
 const IDLE: Act = { dir: null };
 
@@ -145,6 +173,7 @@ export class Bot {
   /** Top of a ramp I threw down in a fight (high ground), while it lasts. */
   private perch: { ramp: Vec3; pos: Vec3; until: number } | null = null;
   private fightSince: number | null = null;
+  private retreatSince: number | null = null;
   private lastPieceAt = -Infinity;
   private slots: Slot[] | null = null;
   private buildMemo: { at: number; total: number; b: Partial<Record<PieceKind, number>> | undefined } | null = null;
@@ -219,6 +248,8 @@ export class Bot {
       const next = this.pick(ctx);
       if (next !== this.goal) this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
       this.goal = next;
+      if (next === 'disengage' || next === 'heal') this.retreatSince ??= now;
+      else this.retreatSince = null;
       if (next !== 'fight') this.fightSince = null;
       else if (this.fightSince === null) this.fightSince = now;
       this.nextScoreAt = now + RESCORE_SEC[this.difficulty] * (0.75 + 0.5 * this.rng());
@@ -300,7 +331,7 @@ export class Bot {
     }
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
-      sprint: !!act.sprint && (!enemy || this.goal === 'disengage'),
+      sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
       // Same spread rules as players: aim down sights for anything past close range.
@@ -789,14 +820,70 @@ export class Bot {
 
   private pick(c: Ctx): Goal {
     if (this.trapped(c)) return 'defend';
-    let best: Goal = c.homeReach || !c.reach ? 'collect' : 'attack', bestScore = -Infinity;
+    let best: Goal = (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     for (const g of GOALS) {
-      const base = this.score(g, c);
+      const base = this.drive(g, c, this.score(g, c));
       if (base <= 0 && g !== best) continue;
       const s = base + (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
       if (s > bestScore) { bestScore = s; best = g; }
     }
     return best;
+  }
+
+  /** On an offensive plan: gun in hand and either the money for a few walls or enough time gone by. */
+  private offensive(c: Ctx): boolean {
+    const me = c.me;
+    if (c.view.suddenDeath || !ownsGun(me.inv)) return false;
+    return c.view.now >= DRIVE.offenseAt[this.difficulty] || me.inv.cash + me.vault.cash >= DRIVE.offenseCash[this.difficulty];
+  }
+
+  /**
+   * Seek the win (not for easy players): stay home only for a real threat, retreat only while losing and not for
+   * long, don't trade shots across the water, and once on offense put bridge/attack/seal (and the shopping for them)
+   * ahead of chores.
+   */
+  private drive(g: Goal, c: Ctx, s: number): number {
+    if (this.difficulty === 'easy') return s;
+    const { view, me } = c;
+    const now = view.now;
+    switch (g) {
+      case 'guard': {
+        const i = this.intruder(c);
+        const onIsland = !!i && now - i.t < DRIVE.guardFreshSec && dist2D(i.pos, c.home.center) < c.home.radius;
+        return onIsland ? s : 0;
+      }
+      case 'disengage': case 'heal': {
+        const long = this.retreatSince !== null && now - this.retreatSince > DRIVE.reengageSec;
+        const stillHit = now - this.mem.lastHurtAt < 3;
+        return long && !stillHit && me.hp / 100 > DRIVE.reengageHp ? 0 : s;
+      }
+      case 'fight': {
+        if (!c.enemy) return s;
+        const sameIsland = islandAt(view.map, c.enemy.pos) === c.on;
+        return !sameIsland && c.enemyDist > DRIVE.plinkRange ? 0 : s;
+      }
+    }
+    if (!this.offensive(c)) return s;
+    switch (g) {
+      case 'bridge': case 'attack': case 'seal': return s > 0 ? s + DRIVE.push : s;
+      case 'shop': {
+        if (!c.homeReach) return s;
+        const plan = this.plan(c);
+        const push = plan.items.find((i) => PUSH_GEAR.includes(i));
+        return push && !this.buyBlocked(push) ? Math.max(s, DRIVE.shopForPush) : s;
+      }
+      case 'collect': {
+        const stored = view.generators[c.home.index];
+        const geared = (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c) && sealKit(me.inv) >= c.openDoors.length;
+        return geared && stored < DRIVE.collectCarried ? Math.min(s, 0.2) : s;
+      }
+      case 'fortify': return this.t.builder >= BT.fortEarlyBuilder ? s * 0.5 : 0;
+      case 'cut': return this.crossing(c) ? s : s * 0.4;
+      // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
+      case 'bank': return this.insuranceDue(me) > 0 || c.danger ? s : s * 0.5;
+      case 'loot': return s * 0.6;
+    }
+    return s;
   }
 
   private act(g: Goal, c: Ctx): Act {
@@ -1212,7 +1299,9 @@ export class Bot {
     }
     const to = norm(flat(sub(e.pos, me.pos)));
     const gun = bestGun(me.inv, c.enemyDist);
-    const want = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
+    const pref = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
+    // Skilled players close in rather than trade shots from afar.
+    const want = this.difficulty === 'easy' ? pref : Math.min(pref, DRIVE.maxRange);
     const side = scale(right(yawOf(to)), this.strafeSign * (want < 2 ? 0.3 : 1));
     const sameIsland = islandAt(c.view.map, e.pos) === c.on;
 
@@ -1234,12 +1323,15 @@ export class Bot {
     const gapM = c.enemyDist - want;
     const radial = Math.abs(gapM) < 2 ? 0 : Math.sign(gapM);
     const dir = add(scale(to, radial), side);
+    const rush = this.difficulty !== 'easy' && gapM > DRIVE.sprintGap;
     // Chasing across water needs a route; otherwise just strafe in place.
     if (radial > 0 && !sameIsland) {
       const wp = this.nav.routeTo(e.pos);
-      if (wp) return { dir: norm(add(norm(flat(sub(wp, me.pos))), scale(side, 0.5))) };
+      if (wp) return { dir: norm(add(norm(flat(sub(wp, me.pos))), scale(side, 0.5))), sprint: rush, approach: rush };
       return { dir: norm(side) };
     }
+    // Closing a big gap: mostly straight at them, a little weave.
+    if (rush) return { dir: norm(add(to, scale(side, 0.35))), sprint: true, approach: true };
     return { dir: norm(dir) };
   }
 
