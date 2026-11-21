@@ -256,6 +256,7 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   if (yard) gapCranes(dress, map, groundY, def.center);
   distantIslands(dress, map);
 
+  const slabs: THREE.Mesh[] = [];
   {
     const top = new THREE.Mesh(mergeGeometries(tops, false)!, topMat);
     top.name = 'islandTops';
@@ -264,11 +265,14 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
     wall.name = 'quayWalls';
     wall.receiveShadow = true;
     root.add(top, wall);
-    collidables.push(top, wall);
+    slabs.push(top, wall);
   }
   const bunkers = solid.build(root, 'bunkers', { chunked: true });
-  // camera/aim rays test raycast-only per-cell splits, not the one map-wide draw (raycastProxy.ts)
-  for (const m of bunkers) for (const p of raycastProxies(m, 24)) { if (p !== m) root.add(p); collidables.push(p); }
+  // camera/aim rays test raycast-only per-cell splits, not the map-wide merged draws (raycastProxy.ts): the merged
+  // island tops/walls (8 × 384 tris) and bunker walls (3.5k) were tested whole by 2–3 rays every frame
+  for (const m of [...slabs, ...bunkers]) {
+    for (const p of raycastProxies(m, 24)) { if (p !== m) root.add(p); collidables.push(p); }
+  }
   dress.build(root, 'dressing', { chunked: true });
   return { collidables, root };
 }
