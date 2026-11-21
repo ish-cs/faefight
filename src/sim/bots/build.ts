@@ -3,7 +3,7 @@ import type { Bunker, IslandLayout } from '../map';
 import { isSealed } from '../seal';
 import type { Difficulty, PieceKind, PieceState, Vec3 } from '../types';
 import { add, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
-import { LANE_OFFSET, lane, laneAt } from './nav';
+import { LANE_OFFSET, lane, laneAt, type Lane } from './nav';
 import type { Traits } from './personality';
 
 /**
@@ -190,13 +190,12 @@ export function fumble(pos: Vec3, rotY: number, rng: () => number): { pos: Vec3;
   return { pos: v3(pos.x + Math.cos(a) * r, pos.y, pos.z + Math.sin(a) * r), rotY: rotY + (rng() - 0.5) * 1.6 };
 }
 
-/** Which side of a lane (+1 right, -1 left) faces the nearest third island: that's where flank fire comes from. */
-export function flankSide(map: IslandLayout[], from: number, to: number): number {
-  const l = lane(map, from, to);
+/** Which side of a lane (+1 right, -1 left) faces the nearest other island: that's where flank fire comes from. */
+export function flankSide(map: IslandLayout[], l: Lane): number {
   const mid = laneAt(l, l.length / 2);
   let best = Infinity, side = 1;
   for (const isl of map) {
-    if (isl.index === from || isl.index === to) continue;
+    if (isl.index === l.from || isl.index === l.to) continue;
     const d = dist2D(isl.center, mid);
     if (d >= best) continue;
     best = d;

@@ -243,7 +243,9 @@ describe('bridge craft (real physics)', () => {
     for (let i = 0; i < 120 * 30 && !crossed; i++) {
       snap = m.tick(new Map());
       walls = snap.pieces.filter((p) => p.owner === 1 && p.kind === 'wood' && islandAt(m.map, p.pos) < 0);
-      crossed = islandAt(m.map, snap.players[0].pos) === 1;
+      // Across: on the rival's island, or on the center island (map origin) when that was the shorter bridge.
+      const me = snap.players[0].pos;
+      crossed = islandAt(m.map, me) === 1 || Math.hypot(me.x, me.z) < 12;
     }
     const decks = snap.pieces.filter((p) => p.owner === 1 && p.kind === 'scaffold');
     console.log(`bridge: ${decks.length} decks, ${walls.length} side walls, crossed ${crossed}`);

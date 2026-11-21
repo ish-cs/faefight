@@ -1052,9 +1052,9 @@ export class Bot {
     const out = mirror ? l.length - shore - f.s : f.s - shore;
     const lastWall = this.lastWallS.get(key) ?? -Infinity;
     const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
-    if (wall && toRival && BUILD_SKILL[this.difficulty].bridgeCover && this.wallsOnBridge && out > BT.bridgeWallFrom && Math.abs(f.s - lastWall) >= BT.bridgeWallEvery) {
+    if (wall && BUILD_SKILL[this.difficulty].bridgeCover && this.wallsOnBridge && out > BT.bridgeWallFrom && Math.abs(f.s - lastWall) >= BT.bridgeWallEvery) {
       this.lastWallS.set(key, f.s);
-      const side = flankSide(c.view.map, c.home.index, to) * (mirror ? -1 : 1);
+      const side = flankSide(c.view.map, l);
       const p = add(at(-1.6), scale(right(yawOf(l.dir)), side * 0.85));
       const act = this.place(c, wall, v3(p.x, c.me.pos.y, p.z), yawOf(l.dir) + Math.PI / 2, ahead);
       if (act) return act;
