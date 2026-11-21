@@ -47,6 +47,8 @@ type Frame = {
   lookOf?(id: number): { yaw: number; pitch: number } | null;
   /** Follow from their eyes (first person) instead of over their shoulder; toggled with the camera key (V). */
   firstPerson?: boolean;
+  /** The followed player was just killed: stay on them, looking at the killer (viewed.ts BodyCam: the killcam fallback). */
+  killcam?: { victim: number; killer: number | null } | null;
 };
 
 /**
@@ -66,6 +68,10 @@ export class Spectator {
   private pendingCycle = false;
   private follow: ThirdPersonCamera;
   private tmp = new THREE.Vector3();
+  private tmp2 = new THREE.Vector3();
+  /** Where the followed player was last drawn (a killcam holds on that spot once they're gone). */
+  private lastAt = new THREE.Vector3();
+  private killcamOn = false;
   private banner = document.createElement('div');
 
   constructor(parent: HTMLElement, cam: THREE.PerspectiveCamera, blockers: () => THREE.Object3D[], canvas: HTMLElement, private enabled: () => boolean) {
@@ -141,6 +147,20 @@ export class Spectator {
       this.mode = 'free';
       this.pos.copy(f.cam.position); // take off from where the follow camera was
     }
+    const kc = f.killcam && this.mode === 'follow' && f.killcam.victim === this.followId ? f.killcam : null;
+    this.killcamOn = !!kc;
+    if (kc) {
+      // Body cam (killcam fallback): over the victim's body, turned toward whoever killed them.
+      const at = f.posOf(kc.victim, this.tmp) ?? this.lastAt;
+      const k = kc.killer !== null ? f.posOf(kc.killer, this.tmp2) : null;
+      const yaw = k ? Math.atan2(-(k.x - at.x), -(k.z - at.z)) : f.yaw;
+      this.firstPerson = false;
+      this.follow.update(at, yaw, -0.12, f.dt);
+      const name = (id: number) => f.players.find((p) => p.id === id)?.name ?? `#${id}`;
+      const text = kc.killer !== null ? `KILLCAM — ${name(kc.victim)} was killed by ${name(kc.killer)}` : `KILLCAM — ${name(kc.victim)} died`;
+      if (this.banner.textContent !== text) this.banner.textContent = text;
+      return;
+    }
     if (this.mode === 'follow' && (this.followId === null || !order.includes(this.followId))) {
       // The followed player died: next living one, else free fly from here.
       if (order.length) this.followId = order[0];
@@ -148,6 +168,7 @@ export class Spectator {
     }
 
     const target = this.mode === 'follow' && this.followId !== null ? f.posOf(this.followId, this.tmp) : null;
+    if (target) this.lastAt.copy(target);
     this.firstPerson = !!target && !!f.firstPerson;
     if (target) {
       // Their view: their own aim, from their eyes (V) or over their shoulder.
@@ -176,6 +197,6 @@ export class Spectator {
 
   /** Debug/e2e view of the spectator. */
   info() {
-    return { active: this.active, mode: this.mode, followId: this.followId, firstPerson: this.firstPerson, pos: { x: this.pos.x, y: this.pos.y, z: this.pos.z } };
+    return { active: this.active, mode: this.mode, followId: this.followId, firstPerson: this.firstPerson, killcam: this.killcamOn, pos: { x: this.pos.x, y: this.pos.y, z: this.pos.z } };
   }
 }

@@ -116,6 +116,9 @@ export class SoundDirector {
     this.lastTickSec = null;
   }
 
+  /** Spectating: hear the game as the viewed player (their hits, footsteps and gun as "own"). */
+  setViewed(id: number) { this.humanId = id; }
+
   update(s: Snapshot): Cue[] {
     const out: Cue[] = [];
     const me = s.players.find((p) => p.id === this.humanId) ?? null;

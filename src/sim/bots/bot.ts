@@ -19,6 +19,7 @@ import {
   type Needs, type ShopStyle,
 } from './plans';
 import type { BotView, OtherStatus } from './view';
+import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, type ScoreRow } from './introspect';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
@@ -214,6 +215,10 @@ export class Bot {
   private view!: BotView;
   /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
   private readonly centerMinded: boolean;
+  /** Spectator introspection (introspect.ts): set only while someone watches this bot; decisions never read it. */
+  probe: BrainProbe | null = null;
+  /** Last goal switches (introspect.ts decision log): one small entry per switch. */
+  readonly switches: GoalSwitch[] = [];
 
   constructor(readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality) {
     this.personality = personality ?? rollPersonality(rng);
@@ -239,6 +244,10 @@ export class Bot {
   get currentTarget(): number | null { return this.targetId; }
   /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
   get planScores(): { goal: string; score: number }[] { return this.lastScores; }
+  /** Start / stop recording decisions for a spectator (read-only: never changes what the bot does). */
+  watch(on: boolean) { this.probe = on ? this.probe ?? new BrainProbe(this) : null; }
+  /** What it's thinking, for the brain inspector (starts recording if it wasn't). */
+  debugBrain(): BrainDigest { this.watch(true); return debugBrain(this); }
 
   think(view: BotView): PlayerInput {
     const me = view.self;
@@ -270,7 +279,10 @@ export class Bot {
     this.coverTrigger(ctx);
     if (now >= this.nextScoreAt) {
       const next = this.pick(ctx);
-      if (next !== this.goal) this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
+      if (next !== this.goal) {
+        this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
+        noteSwitch(this.switches, this.probe, this.lastScores, now, this.goal, next);
+      }
       this.goal = next;
       if (next === 'disengage' || next === 'heal') this.retreatSince ??= now;
       else this.retreatSince = null;
@@ -374,6 +386,7 @@ export class Bot {
     if (act.build) {
       this.lastPieceAt = now;
     }
+    this.probe?.acted(act, look, fire);
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
@@ -907,17 +920,21 @@ export class Bot {
   }
 
   private pick(c: Ctx): Goal {
-    if (this.trapped(c)) return 'defend';
+    if (this.trapped(c)) { this.probe?.decided(c, null, 'defend'); return 'defend'; }
+    const rows: ScoreRow[] | null = this.probe ? [] : null;
     let best: Goal = (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
-      const base = this.drive(g, c, this.score(g, c));
-      if (base <= 0 && g !== best) continue;
-      const s = base + (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
+      const raw = this.score(g, c), base = this.drive(g, c, raw);
+      if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
+      const noise = (this.rng() - 0.5) * NOISE[this.difficulty], sticky = g === this.goal ? STICKY : 0;
+      const s = base + noise + sticky;
+      rows?.push({ goal: g, raw, base, noise, sticky, score: s });
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
     }
     this.lastScores = scored.sort((a, b) => b.score - a.score).slice(0, 4);
+    if (rows) this.probe!.decided(c, rows, best);
     return best;
   }
 
@@ -1008,6 +1025,7 @@ export class Bot {
 
   /** Walk toward dest via the route planner; null dir once within `arrive` m (or when no route exists). */
   private goTo(dest: Vec3, arrive = ARRIVE): Act {
+    if (this.probe) this.probe.dest = dest;
     const self = this.view.self;
     if (dist2D(self.pos, dest) <= arrive) return IDLE;
     const home = this.view.map[self.island];

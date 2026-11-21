@@ -8,7 +8,8 @@ const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
 
 type P = { id: number; alive: boolean };
 type Snap = { time: number; players: P[] };
-type KcInfo = { active: boolean; started: boolean; reason: string; plan: { duration: number } | null; frames: number };
+type KcInfo = { active: boolean; started: boolean; reason: string; plan: { duration: number } | null; frames: number; killer: number | null };
+type Spec = { active: boolean; mode: string; followId: number | null; killcam: boolean };
 
 const SHOTS = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.E2E_SHOTS;
 
@@ -62,5 +63,38 @@ test('dying shows the killcam from the killer, it ends before the respawn; Space
   expect((await dbg<KcInfo>(page, 'killcam')).reason).toBe('skipped');
   await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);
 
+  expect(errors).toEqual([]);
+});
+
+test("spectating: the followed player's death plays the same killer-view killcam, then you keep following", async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/?debug=1');
+  await page.getByTestId('bots-2').click();
+  await page.getByTestId('play-medium').click();
+  await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });
+  const me = await dbg<number>(page, 'humanId');
+  await expect.poll(async () => (await dbg<KcInfo>(page, 'killcam')).frames, { timeout: 15_000 }).toBeGreaterThan(90);
+
+  // Out of the match (no killer: no killcam), spectate and follow the first bot.
+  await dbg(page, 'eliminate', me);
+  await page.getByTestId('spectate').click();
+  await page.locator('canvas.game').focus();
+  await page.keyboard.press('Digit1');
+  await expect.poll(async () => (await dbg<Spec>(page, 'spectator')).mode).toBe('follow');
+  const followed = (await dbg<Spec>(page, 'spectator')).followId!;
+  const other = (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id !== me && p.id !== followed)!.id;
+
+  // The other bot "kills" it: the killer-view replay plays (not the body cam fallback).
+  await dbg(page, 'kill', followed, other);
+  const kc = page.getByTestId('killcam');
+  await expect(kc).toBeVisible({ timeout: 5_000 });
+  expect((await dbg<KcInfo>(page, 'killcam')).killer).toBe(other);
+  expect((await dbg<Spec>(page, 'spectator')).killcam).toBe(false);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/qol2-killcam-spectator.png` });
+  await expect(kc).toBeHidden({ timeout: 5_000 });
+  expect((await dbg<Spec>(page, 'spectator')).mode).toBe('follow');
   expect(errors).toEqual([]);
 });

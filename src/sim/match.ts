@@ -48,6 +48,8 @@ export class Match implements MatchApi {
   private stats = new MatchStats();
 
   private bots = new Map<number, BotBrain>();
+  /** Events from debug actions taken between ticks, emitted with the next tick. */
+  private debugEvents: MatchEvent[] = [];
   private rng: Rng;
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
@@ -60,8 +62,6 @@ export class Match implements MatchApi {
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
   private feed: FeedLine[] = [];
-  /** Events from debug calls made between ticks, emitted with the next tick. */
-  private debugEvents: MatchEvent[] = [];
   readonly map: IslandLayout[];
   private center: CenterState = newCenterState();
   private cosmetics: Cosmetics;
@@ -265,6 +265,8 @@ export class Match implements MatchApi {
     if (!this.practice) throw new Error('Match.practiceCommand: not a practice match');
     this.practice.command(cmd);
   }
+  /** A seat's bot brain (null for humans), for read-only spectator introspection (bots/introspect.ts). */
+  botBrain(id: number): BotBrain | null { return this.bots.get(id) ?? null; }
 
   /** Hand a seat to a bot (e.g. a friend disconnected). */
   setBot(playerId: number, difficulty: Difficulty): void {
@@ -410,7 +412,7 @@ export class Match implements MatchApi {
   /** Kill (if alive) and eliminate for good: no respawn. The win check runs on the next tick. */
   debugEliminate(playerId: number): void {
     const p = this.mustPlayer(playerId);
-    this.events.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
+    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false));
     if (p.eliminated) return;
     p.eliminated = true;
     p.respawnAt = null;
@@ -428,6 +430,7 @@ export class Match implements MatchApi {
     this.syncHand(p);
     // Sights need a gun in hand and no reload; aiming rules out sprinting (see move).
     p.ads = input.ads && p.alive && p.equipped !== 'fists' && p.reloadUntil === 0;
+    if (input.view !== undefined) p.view = input.view === 1 ? 1 : 0;
 
     if (cmds) {
       for (const c of cmds) {

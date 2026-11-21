@@ -10,6 +10,7 @@ import { Recorder } from '../sim/replay/recorder';
 import { metaOf, type ReplayKind, type ReplayOp } from '../sim/replay/format';
 import type { FromWorker, ToWorker } from './protocol';
 import { packMatch, unpackMatch } from '../net/matchCheckpoint';
+import { BRAIN_HZ, type BrainDigest } from '../sim/bots/introspect';
 
 const post = (m: FromWorker, transfer: Transferable[] = []) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m, transfer);
 
@@ -63,6 +64,27 @@ const inputs = new Map<number, InputAccumulator>();
 // Numbered movement commands per human (client prediction): see moveQueue.ts.
 const moveQueues = new Map<number, MoveQueue>();
 
+/** Bots being spectated: only these carry a brain probe (read-only; never in the recording). */
+let brainWatch: number[] = [];
+type Inspectable = { watch?(on: boolean): void; debugBrain?(): BrainDigest };
+let brainTick = 0;
+
+function setBrainWatch(ids: number[]) {
+  if (!match) return;
+  for (const id of brainWatch) if (!ids.includes(id)) (match.botBrain(id) as Inspectable | null)?.watch?.(false);
+  brainWatch = ids;
+}
+
+function postBrains() {
+  if (!match || !brainWatch.length || ++brainTick % Math.round(TICK_HZ / BRAIN_HZ) !== 0) return;
+  const digests: BrainDigest[] = [];
+  for (const id of brainWatch) {
+    const b = match.botBrain(id) as Inspectable | null;
+    if (b?.debugBrain) digests.push(b.debugBrain());
+  }
+  if (digests.length) post({ type: 'brains', digests });
+}
+
 function pushInput(playerId: number, input: PlayerInput, cmds?: MoveCmd[]) {
   const acc = inputs.get(playerId);
   if (!acc) return; // unknown or botified ids are ignored
@@ -83,6 +105,7 @@ function step() {
   const snap = runTick(tickInputs, moves);
   lastTick = snap.tick;
   post({ type: 'snapshot', snap });
+  postBrains();
 }
 
 function startLoop() {
@@ -179,6 +202,9 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         moveQueues.set(msg.playerId, new MoveQueue());
         match.setHuman(msg.playerId);
         recordOp({ k: 'setHuman', id: msg.playerId });
+        break;
+      case 'brainWatch':
+        setBrainWatch(msg.ids.filter((id) => Number.isInteger(id)).slice(0, 8));
         break;
       case 'pause':
         paused = msg.paused;
