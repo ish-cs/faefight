@@ -1,4 +1,4 @@
-import type { CenterIsland, IslandLayout, StaticBox } from '../map';
+import type { CenterIsland, DockDef, IslandLayout, StaticBox } from '../map';
 import type { Placement } from '../building';
 import type { PieceKind, PieceState, PlayerState, StormSnap, Vec3 } from '../types';
 
@@ -48,6 +48,8 @@ export type BotView = {
    * blow. `radius`: blast radius (0 for crates). Absent in hand-made test views.
    */
   hazards?: { id: number; kind: 'barrel' | 'propane' | 'crate'; pos: Vec3; center: Vec3; radius: number; fusing: boolean }[];
+  /** Wooden pier sections still standing (public: anyone sees them); explosions break them. Absent in hand-made views. */
+  docks?: readonly DockDef[];
   /** Clear line of fire from my eye to this point (bullets pass firing slits)? */
   clearShot?(to: Vec3): boolean;
   /** Positions of loot bags within sight range. */

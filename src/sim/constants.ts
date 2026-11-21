@@ -245,7 +245,7 @@ export const MAP = {
 export const DOCK = {
   width: 3, chunk: 2, maxLen: 8, minLen: 4, minWater: 6, deck: 0.3, lip: 0.05, hp: 300,
   blast: {
-    rocket: [420, 2.5], grenade: [220, 2.5], charge: [900, 1.4], barrel: [320, 3], propane: [280, 3],
+    rocket: [420, 2.5], grenade: [320, 2.5], charge: [900, 1.4], barrel: [320, 3], propane: [280, 3],
   } as Record<string, [number, number]>,
 };
 

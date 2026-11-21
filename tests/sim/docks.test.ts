@@ -81,10 +81,11 @@ describe('breaking piers', () => {
     expect(m.debugGroundAt(d.center.x, d.center.z)).toBeNull();
   });
 
-  test('a grenade takes two, a charge one; the island core never breaks', async () => {
+  test('a grenade on the planks breaks a section, one in the air only chips it; a charge breaks one; the island core never breaks', async () => {
     const m = await match();
     const d = m.def.docks!.find((x) => x.island === 1 && x.row === 1)!;
-    m.debugExplode('grenade', top(d));
+    // A grenade two metres over the deck only chips it; one on the planks goes through.
+    m.debugExplode('grenade', v3(d.center.x, d.center.y + d.half.y + 2, d.center.z));
     expect(tick(m, 0.2).last.docks ?? []).toEqual([]);
     m.debugExplode('grenade', top(d));
     expect(tick(m, 0.2).last.docks).toEqual([d.id]);

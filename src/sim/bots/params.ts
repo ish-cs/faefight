@@ -29,6 +29,13 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  * - siegeDist: camping a sealed bunker this far out from its weakest doorway; siegeAfterDeath: how long after the
  *   owner's death the camp holds without seeing them; siegeScore: attack score while camping.
  * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
+ * Wooden piers (sim/docks.ts):
+ * - dockShot: odds, per roll (every dockRollSec while it's on), of blowing out the pier section an enemy stands on
+ *   (or the one under the piece they hide behind) with a rocket or grenade instead of shooting them;
+ *   dockDefend: added when it's my own island's pier (an attacker crossing toward me);
+ *   dockMinRange: never closer than this to the section (my own blast).
+ *   Pushing over a pier with a broken section needs nothing extra: the bridge lane runs along the pier, so the gap
+ *   is where the bridge's next scaffold goes.
  * - stallSec / stallDist / stallBanSec: goal watchdog (a goal with no progress for stallSec is dropped for
  *   stallBanSec; moving stallDist counts as progress).
  */
@@ -56,6 +63,10 @@ export type DriveParams = {
   stallDist: number;
   stallBanSec: number;
   fireRangeMult: number;
+  dockShot: Record<Difficulty, number>;
+  dockDefend: number;
+  dockMinRange: number;
+  dockRollSec: number;
 };
 
 /**
@@ -143,6 +154,10 @@ export const DRIVE: DriveParams = {
   stallDist: 2.5,
   stallBanSec: 20,
   fireRangeMult: 2,
+  dockShot: D(0.15, 0.45, 0.65, 0.85),
+  dockDefend: 0.3,
+  dockMinRange: 6,
+  dockRollSec: 1,
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
@@ -218,6 +233,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sealAway', [0, 0.8]], ['drive.sealAwayTarget', [0, 1.5]], ['drive.emptyHomeSec', [3, 20]],
   ['drive.sealRaceM', [10, 60]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]],
+  ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
   ['buildSkill.*.peekOut', [0.3, 3]],

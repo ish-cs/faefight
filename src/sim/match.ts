@@ -771,6 +771,7 @@ export class Match implements MatchApi {
       hazards: this.hazards.list.filter((h) => h.st !== 2 && dist(h.pos, eye) <= SIGHT_RANGE).map((h) => ({
         id: h.def.id, kind: h.def.kind, pos: clone(h.pos), center: this.hazards.center(h), radius: isExplosive(h.def.kind) ? HAZARD[h.def.kind].radius : 0, fusing: h.st === 1,
       })),
+      docks: this.docks.standing(),
       clearShot: (to) => {
         const d = dist(eye, to);
         const dir = norm(sub(to, eye));
