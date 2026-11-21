@@ -7,6 +7,7 @@ import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type PlayerInput, type PlayerState, type Snapshot, type Vec3 } from '../../src/sim/types';
 import { add, dist, dist2D, forward, scale, v3, yawOf } from '../../src/sim/vec';
 import { sanitizeInput } from '../../src/net/sanitize';
+import { newMoveState, stepMove } from '../../src/sim/movement';
 
 describe('grappling hook item', () => {
   test(`costs $${GRAPPLE.price} for ${GRAPPLE.uses} uses in one hotbar slot`, () => {
@@ -38,6 +39,35 @@ describe('grappling hook item', () => {
     expect(sanitizeInput({ ...NO_INPUT, grapple: true })!.grapple).toBe(true);
     expect('grapple' in sanitizeInput({ ...NO_INPUT, grapple: 1 })!).toBe(false);
     expect(sanitizeInput({ ...NO_INPUT, shop: { buy: 'grapple' } })!.shop).toEqual({ buy: 'grapple' });
+  });
+});
+
+describe('rope pull (movement.ts, shared with client prediction)', () => {
+  const body = { movePlayer: (d: Vec3) => ({ pos: d, grounded: false }) };
+  const cmd = { seq: 1, moveX: 0, moveZ: 0, yaw: 0, jump: false, sprint: false };
+  test('reels toward the point, never mutates the pull object it was given, lets go on arrival', () => {
+    const pull = { x: 0, y: 0, z: -20, left: GRAPPLE.pullSec };
+    const m = { pos: v3(), vel: v3(), mv: { ...newMoveState(), pull } };
+    let landed = 0;
+    for (let i = 0; i < 90 && m.mv.pull; i++) {
+      const at = m.pos;
+      landed += stepMove(m, cmd, 1 / 30, { movePlayer: (d) => body.movePlayer(v3(at.x + d.x, at.y + d.y, at.z + d.z)) }).landingSpeed;
+    }
+    expect(pull.left).toBe(GRAPPLE.pullSec);
+    expect(m.mv.pull).toBeUndefined();
+    expect(m.pos.z).toBeLessThan(-17);
+    expect(m.vel.y).toBeGreaterThan(0); // the little pop up onto the ledge
+    expect(Math.abs(m.vel.z)).toBeLessThan(GRAPPLE.pullSpeed * 0.5);
+    expect(landed).toBe(0);
+  });
+
+  test('a yank ignores the victim\'s own movement and jump', () => {
+    const m = { pos: v3(), vel: v3(), mv: { ...newMoveState(), grounded: true, pull: { x: 10, y: 0.6, z: 0, left: GRAPPLE.yankSec, yank: true as const } } };
+    const at = () => m.pos;
+    stepMove(m, { ...cmd, moveZ: 1, jump: true, sprint: true }, 1 / 30, { movePlayer: (d) => body.movePlayer(v3(at().x + d.x, at().y + d.y, at().z + d.z)) });
+    expect(m.mv.pull?.yank).toBe(true);
+    expect(m.vel.x).toBeGreaterThan(GRAPPLE.yankSpeed * 0.9);
+    expect(m.pos.z).toBeCloseTo(0, 6);
   });
 });
 

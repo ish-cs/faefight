@@ -210,8 +210,10 @@ function stepPull(m: Mover, cmd: MoveCmd, moving: boolean, dt: number, body: Mov
   if (!pl.yank && cmd.jump) { delete mv.pull; return false; }
   const dx = pl.x - m.pos.x, dy = pl.y - m.pos.y, dz = pl.z - m.pos.z;
   const d = Math.hypot(dx, dy, dz);
-  pl.left -= dt;
-  if (d <= (pl.yank ? GRAPPLE.yankStop : GRAPPLE.arriveDist) || pl.left <= EPS) {
+  // A fresh object, never mutated in place: prediction shares it with snapshots and render-time part steps.
+  const left = pl.left - dt;
+  mv.pull = { ...pl, left };
+  if (d <= (pl.yank ? GRAPPLE.yankStop : GRAPPLE.arriveDist) || left <= EPS) {
     delete mv.pull;
     if (pl.yank) { m.vel.x *= GRAPPLE.yankKeep; m.vel.y = Math.min(m.vel.y, 0); m.vel.z *= GRAPPLE.yankKeep; }
     else if (d <= GRAPPLE.arriveDist) {
