@@ -927,7 +927,8 @@ export class Bot {
       const base = Math.max(this.score(g, c), g === step && SAFE_STEPS.has(g) ? 0.05 : 0);
       if (base <= 0 && g !== best) continue;
       const bias = GOAL_BIAS[g];
-      const s = base + (bias ? this.params[bias] : 0) + (g === step ? STEP_BONUS + this.params.stepPush : 0) +
+      // The storm outranks any plan step: staying inside the ring is survival.
+      const s = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' ? STEP_BONUS + this.params.stepPush : 0) +
         (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }

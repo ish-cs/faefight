@@ -243,7 +243,8 @@ export class Brain {
     }
 
     // ---- upgrade guns.
-    if (!inp.gun) {
+    // In sudden death the shop is usually out in the storm: survive with what I have.
+    if (!inp.gun && !inp.suddenDeath) {
       add('upgrade', 3, 'I have no gun', [
         { label: 'collect cash', act: 'collect', done: total >= WEAPONS.pistol.price },
         { label: 'buy a pistol', act: 'shop', done: inp.gun },

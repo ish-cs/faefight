@@ -17,9 +17,9 @@ export type AimProfile = {
 };
 
 export const AIM: Record<Difficulty, AimProfile> = {
-  easy: { reactSec: 0.8, coneRad: 14 * DEG, turnRate: 4, maxTurn: 6, recoilComp: 0.25, farGrow: 1, lagSec: 0.2 },
-  medium: { reactSec: 0.5, coneRad: 8 * DEG, turnRate: 6, maxTurn: 8, recoilComp: 0.6, farGrow: 0.9, lagSec: 0.15 },
-  hard: { reactSec: 0.24, coneRad: 3 * DEG, turnRate: 11, maxTurn: 11, recoilComp: 0.85, farGrow: 0.8, lagSec: 0.12 },
+  easy: { reactSec: 0.8, coneRad: 14 * DEG, turnRate: 4, maxTurn: 6, recoilComp: 0.25, farGrow: 1.1, lagSec: 0.24 },
+  medium: { reactSec: 0.5, coneRad: 8 * DEG, turnRate: 6, maxTurn: 8, recoilComp: 0.6, farGrow: 1, lagSec: 0.18 },
+  hard: { reactSec: 0.24, coneRad: 3 * DEG, turnRate: 11, maxTurn: 11, recoilComp: 0.85, farGrow: 0.9, lagSec: 0.14 },
   // Human pro: ~0.2 s reaction, ~2° error that tightens to ~1.4° while tracking (still misses at range),
   // fast smooth tracking, flicks capped at ~690°/s, near-perfect spray control.
   // Still human at range: error grows past 20 m and against a strafing target.

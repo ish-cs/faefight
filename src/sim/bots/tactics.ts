@@ -10,7 +10,7 @@ import type { BotParams } from './params';
 export const DODGE_SKILL: Record<Difficulty, { amount: number; notice: number; jump: number; jitter: number }> = {
   easy: { amount: 0.3, notice: 0.9, jump: 0.2, jitter: 0.2 },
   medium: { amount: 0.6, notice: 0.55, jump: 0.5, jitter: 0.5 },
-  hard: { amount: 0.9, notice: 0.3, jump: 0.85, jitter: 0.85 },
+  hard: { amount: 0.8, notice: 0.35, jump: 0.75, jitter: 0.8 },
   pro: { amount: 1, notice: 0.2, jump: 1, jitter: 1 },
 };
 export type DodgeSkill = (typeof DODGE_SKILL)[Difficulty];
