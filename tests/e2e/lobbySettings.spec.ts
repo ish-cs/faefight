@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU); // starts a match
 
 type Snap = { players: { id: number; island: number; inv: { cash: number } }[] };
 
