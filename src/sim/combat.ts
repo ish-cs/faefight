@@ -16,7 +16,8 @@ export type CombatCtx = {
   explosives: Explosive[];
   nextId(): number;
   onPieceDestroyed(id: number): void;
-  onKill(victim: number, killer: number | null): void;
+  /** `cause`: the HitInfo weapon of the killing hit ('storm', 'lightning', a gun...). */
+  onKill(victim: number, killer: number | null, cause?: string): void;
   /** Whether a player stands on something (spread); defaults to "vertical speed is small". */
   grounded?(id: number): boolean;
   /** A blast pushed this player (velocity change, m/s). */
@@ -75,7 +76,7 @@ export function applyPlayerDamage(
   if (target.hp <= 0) {
     target.hp = 0;
     target.shield = 0;
-    ctx.onKill(target.id, attackerId);
+    ctx.onKill(target.id, attackerId, opts.weapon);
   }
   return out;
 }

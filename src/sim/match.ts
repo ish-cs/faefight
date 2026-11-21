@@ -1,7 +1,7 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, SEAL } from './constants';
+import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMap, type IslandLayout } from './map';
@@ -12,6 +12,7 @@ import { HitboxHistory, LAG_COMP, rayPlayer } from './lagComp';
 import { newMoveState, stepMove, type MoveCmd } from './movement';
 import { adsMoveCmd, adsSpeed } from './gunplay';
 import { unsupportedPieces } from './support';
+import { addStrike, stormRate, stormSnap, tickStorm } from './storm';
 import { newPlayer } from './player';
 import { isPlaceholderBotName, nickname } from './names';
 import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
@@ -72,7 +73,7 @@ export class Match implements MatchApi {
   potionShops: PotionShop[] = defaultPotionShops();
 
   private constructor(readonly map: IslandLayout[], private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
-    this.s = newMatchState(map);
+    this.s = newMatchState(map, setup.seed ?? 1);
     this.sealed = map.map(() => false);
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
@@ -115,9 +116,11 @@ export class Match implements MatchApi {
         if (dv.y > 0 && p.mv) { p.mv.grounded = false; p.mv.airTime = 1; }
       },
       castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
-      onKill: (victim, killer) => {
+      onKill: (victim, killer, cause) => {
         this.kills.push({ victim, killer });
-        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer));
+        // Only environment causes go on the kill event (death recap / feed); weapon kills are told by the killer.
+        const env = killer === null && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
+        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env));
       },
     };
   }
@@ -160,6 +163,7 @@ export class Match implements MatchApi {
 
     this.events.push(...tickExplosives(this.ctx, now));
     this.collapseUnsupported(now);
+    if (this.s.storm) this.events.push(...tickStorm(this.ctx, this.s.storm, now));
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
@@ -221,6 +225,18 @@ export class Match implements MatchApi {
     this.physics.addPiece(piece);
     this.sealDirty = true;
     return id;
+  }
+
+  /** Jump the match clock (tests/e2e: e.g. straight to sudden death). Nothing in between is simulated. */
+  debugSetTime(t: number): void {
+    if (!Number.isFinite(t) || t < 0) throw new Error(`debugSetTime: bad time ${t}`);
+    this.s.time = t;
+  }
+
+  /** Announce a lightning strike at (x, z), landing STORM.telegraphSec from now (needs the storm running). */
+  debugStrike(x: number, z: number): void {
+    if (!this.s.storm) throw new Error('debugStrike: no storm before sudden death');
+    addStrike(this.s.storm, x, z, this.s.time + STORM.telegraphSec);
   }
 
   debugTeleport(playerId: number, pos: Vec3): void {
@@ -481,6 +497,7 @@ export class Match implements MatchApi {
       loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE).map((b) => clone(b.pos)),
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
+      storm: this.s.storm ? { ...stormSnap(this.s.storm, this.s.time), rate: stormRate(this.s.storm, this.s.time) } : null,
       potionShops: this.potionShops.map((sh) => clone(sh.pos)),
       groundAt: (x, z) => this.physics.isGroundAt(x, z),
       canPlace: (kind, pos, rotY) => validatePlacement(this.physics, kind, pos, rotY, self.pos),
@@ -500,6 +517,7 @@ export class Match implements MatchApi {
       sealed: this.sealed,
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
+      storm: this.s.storm ? stormSnap(this.s.storm, this.s.time) : null,
       winner: this.s.winner,
       potionShops: this.potionShops,
       events: this.events,

@@ -168,8 +168,8 @@ export const LIFECYCLE = {
   invulnSec: 3,
   /** Spawn protection: lasts while inside your bunker (max this long), then invulnSec after leaving. */
   spawnProtectMaxSec: 15,
+  /** Sudden death: generators stop, every bunker seals for good, and the storm closes in (STORM). */
   suddenDeathAt: 900,
-  tideRate: 0.05,
   lootPickupRadius: 1.5,
   /** Dropped items land this far in front of you (just past pickup reach)... */
   dropAhead: 1.8,
@@ -180,6 +180,34 @@ export const LIFECYCLE = {
   /** Landing faster than this (m/s, ≈3 m drop) hurts; damage per m/s above it. */
   safeFallSpeed: 8,
   fallDmgPerSpeed: 8,
+};
+
+/**
+ * Sudden-death storm: a ring that starts `startPad` m beyond the farthest island edge, closes linearly on the
+ * map centre over `shrinkSec`, then holds `finalRadius`. Outside it you lose `dps0 + dpsRamp·t` hp each
+ * second (t = seconds since sudden death, capped at dpsMax), straight to hp like falls. Lightning: one strike
+ * every `strikeGap` s (shrinking to `strikeGapMin`), shown `telegraphSec` before it lands, hurting players
+ * within `boltRadius` (boltDmg at the centre, linear falloff). Most land in the storm (`playerStrikeFrac`
+ * of those near someone standing in it); `edgeStrikeFrac` land up to `edgeStrikeDepth` m inside the edge.
+ * Neither the storm nor lightning touches building pieces.
+ */
+export const STORM = {
+  startPad: 12,
+  shrinkSec: 180,
+  finalRadius: 12,
+  dps0: 2,
+  dpsRamp: 0.08,
+  dpsMax: 20,
+  telegraphSec: 1,
+  strikeGap: 2.2,
+  strikeGapMin: 0.9,
+  boltRadius: 4,
+  boltDmg: 55,
+  edgeStrikeFrac: 0.25,
+  edgeStrikeDepth: 6,
+  playerStrikeFrac: 0.4,
+  /** How far into the storm the random strikes reach past the ring. */
+  zoneDepth: 35,
 };
 
 export const SEAL = { cell: 0.25, half: 8, blockHeight: 1.3, exitRadius: 4 };

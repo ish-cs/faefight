@@ -120,6 +120,8 @@ describe('snapshot codec', () => {
     // A busy moment: rockets and grenades in the air.
     s.projectiles = Array.from({ length: 8 }, (_, i) => ({ id: 500 + i, kind: i % 2 ? 'rocket' : 'grenade', pos: v3(i * 3.33333, 9.87654, 1.11111), vel: v3(30.123, -1.5, 4.444) }));
     s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
+    // Sudden death: the storm ring and a burst of telegraphed lightning.
+    s.storm = { x: 0, z: 0, r: 63.27, strikes: Array.from({ length: 4 }, (_, i) => ({ x: 40.12 + i, z: -12.34 * i, at: 1023.433 + i * 0.7 })) };
     enc.push(s);
     enc.take(1);
     enc.push({ ...s, tick: 2 });
@@ -130,6 +132,7 @@ describe('snapshot codec', () => {
     const s = snap(1, Array.from({ length: 60 }, (_, i) => ({ ...steel(), id: i })));
     s.projectiles = Array.from({ length: 8 }, (_, i) => ({ id: 500 + i, kind: i % 2 ? 'rocket' : 'grenade', pos: v3(i * 3.33333, 9.87654, 1.11111), vel: v3(30.123, -1.5, 4.444) }));
     s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
+    s.storm = { x: 0, z: 0, r: 63.27, strikes: Array.from({ length: 4 }, (_, i) => ({ x: 40.12 + i, z: -12.34 * i, at: 1023.433 + i * 0.7 })) };
     enc.push(s);
     const full = wire.encode(1, enc.take(1, true));
     expect(full.byteLength).toBeLessThan(6 * 1024);
@@ -137,6 +140,8 @@ describe('snapshot codec', () => {
     wire.ack(dec.ack);
     for (const p of s.players) { p.pos = v3(p.pos.x + 0.17, p.pos.y, p.pos.z - 0.11); p.vel = v3(5.1, 0, -3.3); p.yaw += 0.05; p.pitch = 0.1; }
     for (const pr of s.projectiles) pr.pos = v3(pr.pos.x + 1, pr.pos.y - 0.05, pr.pos.z + 0.15);
+    s.storm = { ...s.storm!, r: 63.25, strikes: [...s.storm!.strikes.slice(1), { x: -55.5, z: 20.25, at: 1026.233 }] };
+    s.events = [{ t: 2 / 30, type: 'lightning', data: { pos: v3(40.12, 2, 0) } }];
     enc.push({ ...s, tick: 2, time: 2 / 30 });
     const delta = wire.encode(2, enc.take(1, true));
     expect(delta.byteLength).toBeLessThan((20 * 1024) / 30);

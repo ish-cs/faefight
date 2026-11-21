@@ -134,7 +134,7 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'lightning';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -154,6 +154,8 @@ export type Snapshot = {
   sealed: boolean[];
   waterY: number;
   suddenDeath: boolean;
+  /** Sudden-death storm (null/absent before it starts). Optional so hand-built snapshots can omit it. */
+  storm?: StormSnap | null;
   winner: number | null;
   /** Potion seller NPCs (anyone may buy there). Optional so hand-built snapshots (tests, tools) can omit it. */
   potionShops?: PotionShop[];
@@ -166,6 +168,11 @@ export type Snapshot = {
 };
 
 export type PotionShop = { id: number; pos: Vec3 };
+
+/** A lightning strike due to land at (x, z) at sim time `at` (shown from `at - STORM.telegraphSec`). */
+export type StormStrike = { x: number; z: number; at: number };
+/** Sudden-death storm as clients see it: ring centre and radius, and the strikes being telegraphed. */
+export type StormSnap = { x: number; z: number; r: number; strikes: StormStrike[] };
 
 export const NO_INPUT: PlayerInput = {
   moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, fire: false, ads: false, reload: false,
