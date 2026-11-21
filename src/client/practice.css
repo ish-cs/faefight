@@ -1,0 +1,33 @@
+/* Practice range panel (practicePanel.ts): readout always on, controls when opened with O. */
+.practice {
+  position: absolute; left: 18px; top: 50%; transform: translateY(-50%); width: 264px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px; font-size: 13px; z-index: 6; pointer-events: none;
+}
+.practice.open { pointer-events: auto; background: var(--glass-strong); }
+.practice-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.practice-title { font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; font-size: 12px; color: var(--accent); }
+.practice-keys { font-size: 11px; color: var(--muted); }
+.practice-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.practice-stat { text-align: center; }
+.practice-stat .v { font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.practice-stat .k { font-size: 10px; color: var(--muted); }
+.practice-last { font-size: 12px; color: var(--muted); padding: 5px 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.05); }
+.practice-last.head { color: var(--gold); font-weight: 700; }
+.practice-seal { display: flex; flex-direction: column; gap: 6px; }
+.practice-seal-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.practice-seal-state { font-weight: 700; color: var(--text); }
+.practice-seal-state.sealed { color: var(--accent); }
+.practice-doors { display: flex; gap: 6px; }
+.practice-door {
+  flex: 1; text-align: center; padding: 4px 0; border-radius: 8px; font-size: 12px; font-weight: 700;
+  border: 1px solid var(--line); color: var(--muted);
+}
+.practice-door.blocked { color: #0b0f14; background: var(--accent); border-color: transparent; }
+.practice-controls { display: none; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+.practice.open .practice-controls { display: flex; }
+.practice-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.practice-row .btn, .practice-controls > .btn { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+.practice-seg { justify-content: space-between; margin-top: 0; }
+.menu .practice-play { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 10px 0 18px; font-size: 12px; color: var(--muted); }
+.menu .practice-play .btn { font-weight: 600; min-width: 96px; }
+.hud.practice-mode .seals { display: none; }

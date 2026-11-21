@@ -1,6 +1,7 @@
 import { BUILD } from '../sim/constants';
 import { HOTBAR_SIZE, isGunItem, isPieceItem, isPotionItem } from '../sim/hotbar';
 import type { HotbarItem, PieceKind, PlayerInput } from '../sim/types';
+import { ClickGate } from './clickGate';
 import { type Action, isAction, isHeld, keymapSuspended, slotForCode } from './keymap';
 import { settings } from './settings/store';
 
@@ -48,20 +49,35 @@ export class InputController {
   lookScale = 1;
   private keys = new Set<string>();
   private fireHeld = false;
-  /** The last pointer-lock request was refused (unsupported / denied): clicks then act without the lock. */
-  private lockRefused = false;
   /** Recoil still to be applied to the look angles (rad); fed in over a few frames. */
   private kickPitch = 0;
   private kickYaw = 0;
   private oneShot: Partial<PlayerInput> = {};
   private wheelAcc = 0;
+  /** Presses that only re-capture the pointer never act (see ClickGate). */
+  private gate = new ClickGate();
+  /** The game wants the pointer locked but the browser hasn't granted it yet (or refused, e.g. right after Esc). */
+  private wantLock = false;
+  private lockPending = false;
+  /** Raw mouse movement (no OS acceleration); turned off if the browser doesn't support it. */
+  private unadjusted = true;
 
   constructor(private canvas: HTMLCanvasElement, private hooks: InputHooks) {
     window.addEventListener('keydown', (e) => this.onKey(e, true));
     window.addEventListener('keyup', (e) => this.onKey(e, false));
-    window.addEventListener('blur', () => { this.keys.clear(); this.fireHeld = false; });
+    window.addEventListener('blur', () => { this.keys.clear(); this.fireHeld = false; this.gate.reset(); });
+    // A lock request refused (Chrome: for ~1 s after Esc, or without a user activation) is retried on
+    // the next user activation anywhere on the page. Esc is not an activation, so it doesn't retry.
+    const retry = (e: Event) => {
+      if (!this.wantLock || !this.enabled || this.locked) return;
+      if (e instanceof KeyboardEvent && e.code === 'Escape') return;
+      this.requestLock();
+    };
+    window.addEventListener('keydown', retry, { capture: true });
+    window.addEventListener('mousedown', retry, { capture: true });
     canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
     window.addEventListener('mouseup', (e) => {
+      if (this.gate.release(e.button)) return; // the release of a re-capture click: nothing to undo
       if (e.button === 0) this.fireHeld = false;
       if (e.button !== 0) this.keys.delete(`Mouse${e.button}`);
     });
@@ -77,7 +93,23 @@ export class InputController {
       }
     }, { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    document.addEventListener('pointerlockchange', () => this.hooks.lockChange(this.locked));
+    document.addEventListener('pointerlockchange', () => {
+      const locked = this.locked;
+      console.info(`[input] pointer lock ${locked ? 'gained' : 'lost'}`);
+      if (locked && !this.enabled) {
+        // A retried request landed after a panel opened: the panel needs the cursor.
+        this.wantLock = false; this.lockPending = false;
+        document.exitPointerLock();
+        return;
+      }
+      this.gate.lockChange(locked, performance.now());
+      if (locked) { this.wantLock = false; this.lockPending = false; }
+      this.hooks.lockChange(locked);
+    });
+    document.addEventListener('pointerlockerror', () => {
+      this.lockPending = false;
+      console.info('[input] pointer lock error; will retry on the next click or key press');
+    });
   }
 
   get locked() {
@@ -152,14 +184,29 @@ export class InputController {
     return settings.get().controls.sensitivity;
   }
 
+  /** Grab the pointer. Call it from the user-gesture handler that closes a UI so play resumes at once. */
   requestLock() {
     if (this.locked) return;
-    // Some browsers return a promise that rejects (e.g. too soon after Esc); that's not an error for us,
-    // but then clicks must still act (see onMouseDown) or the game would be unplayable without the lock.
-    const r = this.canvas.requestPointerLock() as unknown as Promise<void> | undefined;
-    r?.then?.(() => { this.lockRefused = false; }, () => {
-      this.lockRefused = true;
-      console.info('[input] pointer lock refused; clicks act without capturing the mouse');
+    this.wantLock = true;
+    if (this.lockPending) return;
+    this.lockPending = true;
+    let r: Promise<void> | undefined;
+    try {
+      r = this.canvas.requestPointerLock(this.unadjusted ? { unadjustedMovement: true } : undefined) as unknown as Promise<void> | undefined;
+    } catch (err) {
+      r = Promise.reject(err);
+    }
+    Promise.resolve(r).then(() => { this.lockPending = false; }, (err: unknown) => {
+      this.lockPending = false;
+      const name = (err as { name?: string } | null)?.name ?? String(err);
+      if (this.unadjusted && name === 'NotSupportedError') {
+        console.info('[input] unadjustedMovement unsupported; using plain pointer lock');
+        this.unadjusted = false;
+        this.requestLock();
+        return;
+      }
+      // Too soon after Esc / no user activation: the next click or key press retries.
+      console.info(`[input] pointer lock refused (${name}); will retry on the next click or key press`);
     });
   }
 
@@ -177,16 +224,11 @@ export class InputController {
 
   private onMouseDown(e: MouseEvent) {
     if (!this.enabled) return;
-    if (this.inventory) { this.setInventory(false); return; }
-    if (!this.locked) {
-      this.requestLock();
-      // The click that captures the mouse ("Click to capture the mouse") only captures it: it must not
-      // fire the gun in hand (a $500 rocket), place a piece or use an item.
-      if (!this.lockRefused) return;
-    }
+    if (this.inventory) { this.gate.press(e.button, false, performance.now()); this.setInventory(false); return; }
+    // The gate: a press while unlocked only re-captures; it and the grace right after never act.
+    if (!this.gate.press(e.button, this.locked, performance.now())) { if (!this.locked) this.requestLock(); return; }
     // Other buttons act like keys ('Mouse2' = right button), so the keymap can bind them (aim by default).
     if (e.button !== 0) { this.keys.add(`Mouse${e.button}`); return; }
-    if (e.button !== 0) return;
     if (this.buildMode) { this.fireHeld = true; this.hooks.place(); return; } // held = drag-build
     if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
     if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }

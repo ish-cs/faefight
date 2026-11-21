@@ -3,6 +3,7 @@ import type { MapDef } from '../../sim/map';
 import type { FirePatch, MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { FireFx } from './fireFx';
 import { ImpactMarks } from './impacts';
+import { clearNpcSpots } from '../characters/npcSpots';
 import { CosmeticLayer } from './cosmetics';
 import { Critters } from './critters';
 import type { CritterSound, V3 } from './critterSim';
@@ -69,6 +70,7 @@ export class World {
     this.clearMap();
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
+    clearNpcSpots(); // the shop/potion props below register their keepers
     const { root, collidables } = buildIslands(def, teamColors, this.scatter);
     this.scatter.build();
     this.scene.add(this.scatter.root);
@@ -102,6 +104,13 @@ export class World {
     this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
+    // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
+    // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
+    for (const r of [this.islands, this.scatter.root, this.cosmetics.root]) {
+      if (!r) continue;
+      r.updateMatrixWorld(true);
+      r.traverse((o) => { o.matrixAutoUpdate = false; o.matrixWorldAutoUpdate = false; });
+    }
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
 
@@ -142,6 +151,7 @@ export class World {
     this.pieces.sync(pieces);
     this.pieceFx.sync(pieces);
     this.fire.sync(pieces, fires);
+    this.water?.syncPieces(pieces, this.sky.camera.position);
     if (this.impacts.active) { const ids = new Set(pieces.map((p) => p.id)); this.impacts.retainPieces((id) => ids.has(id)); }
   }
 
@@ -158,7 +168,7 @@ export class World {
   render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
     const now = performance.now(), dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
-    if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
+    if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY, dt);
     if (this.critters) {
       this.critters.setQuality(this.sky.quality);
       this.critters.update(dt, this.sky.camera as THREE.PerspectiveCamera, feet as V3[], waterY);
