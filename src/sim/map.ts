@@ -281,8 +281,9 @@ function buildDocks(islands: IslandLayout[], center: CenterIsland): DockDef[] {
     const r = isl.radius, yaw = isl.bunker.facingYaw;
     const inward = forward(yaw), lat = right(yaw);
     // Where the far shore starts along the lane, and where the pier starts (just inside the rim at its outer edge).
-    const farShore = Math.hypot(target.center.x - isl.center.x, target.center.z - isl.center.z) - Math.sqrt(target.radius ** 2 - PIER_SIDE ** 2);
-    const start = Math.sqrt(r * r - (PIER_SIDE + DOCK.width / 2) ** 2) - 0.05;
+    const edge = PIER_SIDE + DOCK.width / 2;
+    const farShore = Math.hypot(target.center.x - isl.center.x, target.center.z - isl.center.z) - Math.sqrt(target.radius * target.radius - PIER_SIDE * PIER_SIDE);
+    const start = Math.sqrt(r * r - edge * edge) - 0.05;
     const len = Math.min(DOCK.maxLen, Math.floor((farShore - DOCK.minWater - start) / DOCK.chunk) * DOCK.chunk);
     if (len < DOCK.minLen) continue;
     for (let row = 0; row < len / DOCK.chunk; row++) {

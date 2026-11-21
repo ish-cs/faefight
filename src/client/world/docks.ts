@@ -21,6 +21,8 @@ const PILE_X = W / 2 - 0.15;
 /** Whole model up to this (m, high preset; LOD-scaled), a plain slab beyond, culled past FAR. */
 const NEAR = 90, FAR = 700;
 const CHUNK = 64;
+/** Boards drawn this far above the sim deck (level with the island ground): no z-fight with the coping. */
+const VIS_LIFT = 0.03;
 
 /** Deterministic little hash in [0, 1) so every client draws the same boards. */
 const h01 = (n: number) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
@@ -93,7 +95,7 @@ export class DockLayer {
     this.layers = { whole: make('whole'), scorched: make('scorched'), broken: make('broken') };
     const q = new THREE.Quaternion(), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
     for (const d of defs) {
-      const m = new THREE.Matrix4().compose(p.set(d.center.x, d.center.y + d.half.y, d.center.z), q.setFromAxisAngle(up, d.rotY), one);
+      const m = new THREE.Matrix4().compose(p.set(d.center.x, d.center.y + d.half.y + VIS_LIFT, d.center.z), q.setFromAxisAngle(up, d.rotY), one);
       let k = -1;
       for (const look of ['whole', 'scorched', 'broken'] as const) k = this.layers[look].add(m);
       this.index.set(d.id, k); // same slot in every layer (added in lockstep)
