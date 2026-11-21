@@ -2,10 +2,10 @@
 // resolution + governor off. Per preset (fresh page each): load time, avg fps, p99 frame ms, draw calls, triangles,
 // averaged over fixed camera spots. Optional same-view screenshots.
 // Needs a dev server (`pnpm vite --port 5299`); run under the heavy lock:
-//   node tests/visual/perfMatch.mjs [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
+//   node tests/visual/perfMatch.mjs [--time=870] [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
 import { chromium } from '@playwright/test';
 
-const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? d;
+const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
 const stress = Number(arg('stress', '1'));
 const presets = arg('presets', 'low,high,ultra').split(',');
 const shots = arg('shots', '');
@@ -15,6 +15,11 @@ const sampleMs = Number(arg('sample', '3000'));
 /** device pixel ratio of the page (2 = a Retina MacBook: the presets' render scale then applies) */
 const dpr = Number(arg('dpr', '1'));
 const competitive = arg('competitive', '0') === '1';
+const views = arg('views', 'base');
+/** extra URL params for both A and B (e.g. --params=upscale=0) */
+const params = arg('params', '');
+/** match time (s) to jump to before measuring (e.g. 870 = night under the day/night cycle); 0 = match start */
+const atTime = Number(arg('time', '0'));
 
 const SPOTS = [
   { name: 'harbor', at: [6, 13], look: [14, 60], pitch: 0.02 },
@@ -33,7 +38,7 @@ async function run(quality) {
   await page.addInitScript((q) => {
     try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q.q, dynamicResolution: false, competitive: q.c }, onboarding: { howToSeen: true } })); } catch { /* fresh profile */ }
   }, { q: quality, c: competitive });
-  await page.goto(`${url}/?debug=1&bots=7&gputime=1${stress > 1 ? `&stress=${stress}` : ''}`);
+  await page.goto(`${url}/?debug=1&bots=7&gputime=1${stress > 1 ? `&stress=${stress}` : ''}${params ? `&${params}` : ''}`);
   const t0 = Date.now();
   await page.getByTestId('play-easy').click();
   await page.waitForFunction(() => window.__faefight?.snapshot?.(), null, { timeout: 120_000 });
@@ -49,21 +54,36 @@ async function run(quality) {
   const yaw0 = home.bunker.facingYaw;
   const toWorld = (x, z) => ({ x: home.center.x + x * Math.cos(yaw0) + z * Math.sin(yaw0), z: home.center.z - x * Math.sin(yaw0) + z * Math.cos(yaw0) });
   const yawToward = (from, to) => { const a = toWorld(...from), b = toWorld(...to); return Math.atan2(-(b.x - a.x), -(b.z - a.z)); };
+  if (atTime > 0) { await dbg('time', atTime); await page.waitForTimeout(1500); }
   const per = [];
-  for (const s of SPOTS) {
+  // --views=extra adds 'mid' (halfway to the map centre, looking across it at the other islands and bots) and
+  // 'storm' (sudden death: rain + wall, irreversible, so it runs last)
+  const L = Math.hypot(home.center.x, home.center.z), ux = home.center.x / L, uz = home.center.z / L;
+  const spots = [...SPOTS, ...(views === 'extra' ? [
+    { name: 'mid', world: { x: ux * L * 0.45, z: uz * L * 0.45 }, yaw: Math.atan2(ux, uz), pitch: 0.0 },
+    { name: 'storm', storm: true, world: { x: ux * (L - 12), z: uz * (L - 12) }, yaw: Math.atan2(-ux, -uz), pitch: 0.04 },
+  ] : [])];
+  for (const s of spots) {
     await dbg('hp', 100000);
-    const w = toWorld(...s.at);
+    if (s.storm) { await page.evaluate(() => { window.__keepAlive = setInterval(() => window.__faefight.hp(100000), 100); }); await dbg('time', 899); await page.waitForTimeout(9000); await dbg('time', 1000); await page.waitForTimeout(1500); await dbg('hp', 100000); }
+    const w = s.world ?? toWorld(...s.at);
     await dbg('teleport', w.x, w.z);
-    await page.evaluate(([y, p]) => { window.__faefight.input.yaw = y; window.__faefight.input.pitch = p; }, [yawToward(s.at, s.look), s.pitch]);
+    await page.evaluate(([y, p]) => { window.__faefight.input.yaw = y; window.__faefight.input.pitch = p; }, [s.yaw ?? yawToward(s.at, s.look), s.pitch]);
     await page.waitForTimeout(900);
     await dbg('resetFrames');
+    await dbg('resetLatency');
+    // input latency probe: tiny alternating mouse-look moves (view stays put) → look event to GPU done
+    await page.evaluate(() => { window.__faefight.lookProbe(true); let k = 1; window.__probe = setInterval(() => { k = -k; window.dispatchEvent(new MouseEvent('mousemove', { movementX: k })); }, 8); });
     // draw calls / triangles: sampled a few times during the window (bots move, LOD changes)
     const infos = [];
     for (let i = 0; i < 4; i++) { await page.waitForTimeout(sampleMs / 4); infos.push(await dbg('renderInfo')); }
+    await page.evaluate(() => clearInterval(window.__probe));
     const f = await dbg('frames');
     const gpu = await dbg('gpuMs');
+    const lat = await dbg('latency');
+    const gfps = await page.evaluate(() => window.__faefight.gpuFps?.() ?? 0);
     per.push({
-      spot: s.name, avgMs: f.avg, p99: f.p99, cpu: f.cpuAvg, gpu: gpu.avg ?? 0,
+      spot: s.name, avgMs: f.avg, p99: f.p99, cpu: f.cpuAvg, gpu: gpu.avg ?? 0, lat: lat.gpuAvg, gfps,
       draws: infos.reduce((a, x) => a + x.drawCalls, 0) / infos.length,
       tris: infos.reduce((a, x) => a + x.triangles, 0) / infos.length,
     });
@@ -74,8 +94,8 @@ async function run(quality) {
   const avgMs = mean('avgMs');
   return {
     preset: quality, loadMs, pbr, fps: +(1000 / avgMs).toFixed(1), avgMs: +avgMs.toFixed(2), p99: +Math.max(...per.map((x) => x.p99)).toFixed(2),
-    cpuMs: +mean('cpu').toFixed(2), gpuMs: +mean('gpu').toFixed(2), draws: Math.round(mean('draws')), tris: Math.round(mean('tris')),
-    perSpot: per.map((x) => `${x.spot}:${(1000 / x.avgMs).toFixed(0)}fps/${Math.round(x.draws)}dc/${Math.round(x.tris / 1000)}kt`).join(' '),
+    cpuMs: +mean('cpu').toFixed(2), gpuMs: +mean('gpu').toFixed(2), latMs: +mean('lat').toFixed(1), gpuFps: +mean('gfps').toFixed(1), draws: Math.round(mean('draws')), tris: Math.round(mean('tris')),
+    perSpot: per.map((x) => `${x.spot}:${(1000 / x.avgMs).toFixed(0)}fps/${x.gfps.toFixed(0)}gfps/${x.gpu.toFixed(1)}gms/${x.lat.toFixed(0)}lat/${x.cpu.toFixed(1)}cms/${Math.round(x.draws)}dc/${Math.round(x.tris / 1000)}kt`).join(' '),
     errors: errors.slice(0, 5),
   };
 }
@@ -83,9 +103,9 @@ async function run(quality) {
 const rows = [];
 for (const q of presets) rows.push(await run(q));
 console.log(`\n== ${label} (stress ×${stress}) ==`);
-console.log('| preset | load s | avg fps | p99 ms | cpu ms | gpu ms | draws | tris |');
-console.log('|---|---|---|---|---|---|---|---|');
-for (const r of rows) console.log(`| ${r.preset} | ${(r.loadMs / 1000).toFixed(1)} | ${r.fps} | ${r.p99} | ${r.cpuMs} | ${r.gpuMs} | ${r.draws} | ${(r.tris / 1e6).toFixed(2)}M |`);
+console.log('| preset | load s | avg fps | p99 ms | cpu ms | gpu ms | look→GPU done ms | GPU-done fps | draws | tris |');
+console.log('|---|---|---|---|---|---|---|---|---|---|');
+for (const r of rows) console.log(`| ${r.preset} | ${(r.loadMs / 1000).toFixed(1)} | ${r.fps} | ${r.p99} | ${r.cpuMs} | ${r.gpuMs} | ${r.latMs} | ${r.gpuFps} | ${r.draws} | ${(r.tris / 1e6).toFixed(2)}M |`);
 if (rows[0]?.pbr) console.log(`textures: ${JSON.stringify(rows[0].pbr)}`);
 for (const r of rows) console.log(`${r.preset}: ${r.perSpot}${r.errors.length ? `  errors: ${JSON.stringify(r.errors)}` : ''}`);
 console.log(JSON.stringify({ label, stress, rows }));

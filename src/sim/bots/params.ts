@@ -5,7 +5,9 @@ import type { Difficulty } from '../types';
  * Tunable bot strategy (drive to win, building, the elimination pipeline), in one record so self-play training can
  * search over it. A Bot takes a BotParams (default DEFAULT_BOT_PARAMS); `flattenParams` / `withParams` give the
  * trainer flat numeric keys like `drive.push.pro`, `buildSkill.hard.coverChance` or `buildTuning.coverScore`.
- * Execution skill (reaction, aim, decision speed) is not here: it stays in aim.ts / bot.ts.
+ * Execution skill (reaction, aim error, decision speed) is not here: it stays in aim.ts / bot.ts. How the view hand
+ * moves (AimFeel), how long a bot commits to the enemy it aims at (`aim.*`) and gun handling against recoil
+ * (compensation, burst discipline: `gunSkill.*`) are here so the trainer can tune them.
  */
 
 const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ easy, medium, hard, pro });
@@ -25,10 +27,22 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  * - sealAway: seal bonus for a rival seen away from home, or not seen on their island for emptyHomeSec while I'm
  *   on it (their bunker is empty); sealAwayTarget: rival-choice
  *   bonus for such a rival while I carry a full kit and can walk to their island.
- * - sealRaceM: a rival who just died with their open bunker within this many metres is worth dropping all for.
+ * - Respawn window (5 s): a dead rival whose bunker is within sealRaceM m and that I can sprint to before they're
+ *   back (+ windowSlackSec) gets pushed: seal it with a kit (windowPush added to seal), else hold their door
+ *   (half of it added to attack). respawnCautionSec: right after my own respawn no pushes or offense (re-gear).
  * - siegeDist: camping a sealed bunker this far out from its weakest doorway; siegeAfterDeath: how long after the
  *   owner's death the camp holds without seeing them; siegeScore: attack score while camping.
  * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
+ * - sealBonus: added to the seal goal (seals win games); sealedHunt: added to attack/fight against a rival whose
+ *   bunker is sealed (each death of theirs eliminates them); sealedFocus: among visible enemies, one with a sealed
+ *   bunker counts as this many times closer when choosing whom to shoot.
+ * Wooden piers (sim/docks.ts):
+ * - dockShot: odds, per roll (every dockRollSec while it's on), of blowing out the pier section an enemy stands on
+ *   (or the one under the piece they hide behind) with a rocket or grenade instead of shooting them;
+ *   dockDefend: added when it's my own island's pier (an attacker crossing toward me);
+ *   dockMinRange: never closer than this to the section (my own blast).
+ *   Pushing over a pier with a broken section needs nothing extra: the bridge lane runs along the pier, so the gap
+ *   is where the bridge's next scaffold goes.
  * - stallSec / stallDist / stallBanSec: goal watchdog (a goal with no progress for stallSec is dropped for
  *   stallBanSec; moving stallDist counts as progress).
  */
@@ -49,6 +63,9 @@ export type DriveParams = {
   sealAwayTarget: number;
   emptyHomeSec: number;
   sealRaceM: number;
+  windowSlackSec: number;
+  windowPush: number;
+  respawnCautionSec: number;
   siegeDist: number;
   siegeAfterDeath: number;
   siegeScore: number;
@@ -56,6 +73,13 @@ export type DriveParams = {
   stallDist: number;
   stallBanSec: number;
   fireRangeMult: number;
+  sealBonus: number;
+  sealedHunt: number;
+  sealedFocus: number;
+  dockShot: Record<Difficulty, number>;
+  dockDefend: number;
+  dockMinRange: number;
+  dockRollSec: number;
 };
 
 /**
@@ -138,7 +162,43 @@ export type HookParams = {
   keepForTravel: number;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams };
+
+/**
+ * Spike traps (sim/traps.ts).
+ * - carry: traps to own (standing + carried) by skill, once `rich` cash (carried + banked) is in hand.
+ * - setScore: goal score for setting one at home (doorways first, then the wall beside the front door) in calm times.
+ * - avoidPad: keep this far (m) beyond an enemy trap's reach when walking.
+ * - shootRange: an enemy trap this close in my way (or at where I'm going), with nobody in sight: shoot it first.
+ */
+export type TrapTuning = { carry: Record<Difficulty, number>; rich: number; setScore: number; avoidPad: number; shootRange: number };
+
+/**
+ * How a bot's view moves (aim.ts Aim.look): a damped spring on yaw/pitch, capped by the skill's turn speed.
+ * - spring: natural frequency (rad/s): how fast a flick closes. Tracking lag behind a moving target ≈ 2·damping/spring s.
+ * - damping: < 1 overshoots a flick slightly and settles (PRO ≈ 5%), 1 eases in with no overshoot.
+ * - maxAccel: angular acceleration cap (rad/s²): no instant starts/stops.
+ * - driftHz: how fast the aim error wanders (OU mean reversion, 1/s): low = slow hand drift, never tick-to-tick noise.
+ * - holdSec: after losing sight of the enemy, keep looking at where they were this long before turning back to the walk.
+ */
+export type AimFeel = { spring: number; damping: number; maxAccel: number; driftHz: number; holdSec: number };
+
+/**
+ * Aim at one enemy at a time: feel per skill, plus target hysteresis.
+ * - commitSec: stay on the enemy I'm aiming at at least this long while I can still see them.
+ * - switchRatio: after that, switch only to an enemy closer than this × the current one's distance.
+ */
+export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; switchRatio: number };
+
+/**
+ * Gun handling against recoil (the sim's recoil climbs the shooter's real aim, gunplay.recoilKick), per skill. Like a
+ * strong human: pull the climb back down, tap/burst at range so recoil and bloom settle, spray up close.
+ * - recoilComp: share of each kick pulled back down on the next tick (0 = rides the climb, 1 = perfect).
+ * - burstShots: past sprayRange, an automatic gun (rifle / SMG) fires at most this many shots in a row, then
+ * - burstPause: waits this long (s) before the next burst. Within sprayRange: full auto.
+ */
+export type GunSkill = { recoilComp: number; burstShots: number; burstPause: number; sprayRange: number };
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill> };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -156,7 +216,10 @@ export const DRIVE: DriveParams = {
   sealAway: 0.25,
   sealAwayTarget: 0.6,
   emptyHomeSec: 8,
-  sealRaceM: 30,
+  sealRaceM: 60,
+  windowSlackSec: 2,
+  windowPush: 0.6,
+  respawnCautionSec: 8,
   siegeDist: 6.5,
   siegeAfterDeath: 16,
   siegeScore: 0.75,
@@ -164,6 +227,13 @@ export const DRIVE: DriveParams = {
   stallDist: 2.5,
   stallBanSec: 20,
   fireRangeMult: 2,
+  sealBonus: 0.35,
+  sealedHunt: 0.6,
+  sealedFocus: 1.6,
+  dockShot: D(0.15, 0.45, 0.65, 0.85),
+  dockDefend: 0.3,
+  dockMinRange: 6,
+  dockRollSec: 1,
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
@@ -205,7 +275,28 @@ export const HOOK: HookParams = {
   keepForTravel: 1,
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK });
+export const TRAP_TUNING: TrapTuning = { carry: D(0, 1, 2, 3), rich: 350, setScore: 0.45, avoidPad: 0.35, shootRange: 9 };
+
+export const AIM_PARAMS: AimParams = {
+  feel: {
+    easy: { spring: 8, damping: 0.95, maxAccel: 70, driftHz: 2, holdSec: 0.5 },
+    medium: { spring: 12, damping: 0.85, maxAccel: 120, driftHz: 2.5, holdSec: 0.6 },
+    hard: { spring: 22, damping: 0.75, maxAccel: 220, driftHz: 3, holdSec: 0.7 },
+    pro: { spring: 32, damping: 0.7, maxAccel: 320, driftHz: 3, holdSec: 0.8 },
+  },
+  commitSec: 0.6,
+  switchRatio: 0.6,
+};
+
+/** Easy sprays at any range (sprayRange Infinity: not tunable); better players compensate harder and burst at range. */
+export const GUN_SKILL: Record<Difficulty, GunSkill> = {
+  easy: { recoilComp: 0.25, burstShots: 30, burstPause: 0.3, sprayRange: Infinity },
+  medium: { recoilComp: 0.6, burstShots: 6, burstPause: 0.35, sprayRange: 12 },
+  hard: { recoilComp: 0.85, burstShots: 5, burstPause: 0.3, sprayRange: 14 },
+  pro: { recoilComp: 0.95, burstShots: 4, burstPause: 0.22, sprayRange: 15 },
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -246,8 +337,11 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sprintGap', [3, 15]], ['drive.reengageSec', [5, 40]], ['drive.reengageHp', [0.1, 0.6]],
   ['drive.guardFreshSec', [1, 10]], ['drive.collectCarried', [50, 500]], ['drive.steelRich', [450, 1500]],
   ['drive.sealAway', [0, 0.8]], ['drive.sealAwayTarget', [0, 1.5]], ['drive.emptyHomeSec', [3, 20]],
-  ['drive.sealRaceM', [10, 60]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
+  ['drive.sealRaceM', [10, 120]], ['drive.windowSlackSec', [0, 6]], ['drive.windowPush', [0, 1.5]],
+  ['drive.respawnCautionSec', [0, 30]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]],
+  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedFocus', [1, 3]],
+  ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
   ['buildSkill.*.peekOut', [0.3, 3]],
@@ -264,6 +358,10 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['hook.escapeHp', [0, 120]], ['hook.escapeNear', [8, 35]], ['hook.escapeMin', [6, 30]],
   ['hook.yankMin', [3, 15]], ['hook.yankMax', [15, 40]], ['hook.yankHigh', [1, 6]], ['hook.yankFalloff', [0.5, 3]],
   ['hook.yankRate', [0, 3]], ['hook.keepForTravel', [0, 2]],
+  ['trap.carry.*', [0, 3]], ['trap.rich', [100, 1200]], ['trap.setScore', [0.1, 1]], ['trap.avoidPad', [0, 1.5]], ['trap.shootRange', [3, 20]],
+  ['aim.feel.*.spring', [6, 45]], ['aim.feel.*.damping', [0.55, 1.2]], ['aim.feel.*.maxAccel', [40, 600]],
+  ['aim.feel.*.driftHz', [0.5, 8]], ['aim.feel.*.holdSec', [0, 2]], ['aim.commitSec', [0, 2]], ['aim.switchRatio', [0.3, 1]],
+  ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
 ];
 const ruleMatch = (pattern: string, key: string) => {
   const a = pattern.split('.'), b = key.split('.');

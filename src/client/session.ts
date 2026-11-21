@@ -597,7 +597,7 @@ export class HostSession {
     this.lastSnap = snap;
     if (this.tickNo % 8 === 0) this.sendViews(snap);
     this.ticks.onTick(performance.now());
-    // Quick chat (anyone's, bots' too) becomes an ordinary chat line from that player, for every client.
+    // Quick chat (humans only; bots never chat) becomes an ordinary chat line from that player, for every client.
     for (const l of quipLines(snap.events, snap.players)) this.broadcastChat(l.from, l.text);
     this.encoder.push(snap);
     const tick = this.tickNo++;

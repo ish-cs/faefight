@@ -91,30 +91,32 @@ describe('lifecycle', () => {
     expect(evs.some((e) => e.type === 'kill')).toBe(true);
   });
 
-  test('respawns at spawn after 3 s with invulnerability', async () => {
+  test('respawns at spawn after LIFECYCLE.respawnSec with invulnerability', async () => {
     const { s, physics, b, run } = await setup();
+    const R = LIFECYCLE.respawnSec;
     killPlayer(s, physics, 2, 0, false);
-    run(0, 2.9);
+    run(0, R - 0.1);
     expect(b.alive).toBe(false);
-    run(2.9, 3.1);
+    run(R - 0.1, R + 0.1);
     expect(b.alive).toBe(true);
     expect(b.hp).toBe(100);
     expect(b.pos).toEqual(map[1].spawn);
-    expect(b.invulnUntil).toBeGreaterThan(5.5);
+    expect(b.invulnUntil).toBeGreaterThan(R + 2.5);
   });
 
   test('sealed at respawn → respawns trapped; still inside after 10 s → eliminated', async () => {
     const { s, physics, b, run } = await setup();
     sealIsland(s, 1);
+    const R = LIFECYCLE.respawnSec, B = LIFECYCLE.breakoutSec;
     killPlayer(s, physics, 2, 0, false);
-    let evs = run(0, 3.2);
+    let evs = run(0, R + 0.2);
     expect(b.alive).toBe(true);
     expect(b.eliminated).toBe(false);
-    expect(b.breakoutUntil).toBeCloseTo(13, 0);
+    expect(b.breakoutUntil).toBeCloseTo(R + B, 0);
     expect(evs.some((e) => e.type === 'trapped')).toBe(true);
-    evs = run(3.2, 12.9);
+    evs = run(R + 0.2, R + B - 0.1);
     expect(b.eliminated).toBe(false);
-    evs = run(12.9, 13.2);
+    evs = run(R + B - 0.1, R + B + 0.2);
     expect(b.eliminated).toBe(true);
     expect(b.alive).toBe(false);
     expect(s.winner).toBe(1);
@@ -125,10 +127,11 @@ describe('lifecycle', () => {
   test('breaking out of the bunker within 10 s keeps you in the game', async () => {
     const { s, physics, b, run } = await setup();
     sealIsland(s, 1);
+    const R = LIFECYCLE.respawnSec;
     killPlayer(s, physics, 2, 0, false);
-    run(0, 3.2);
+    run(0, R + 0.2);
     b.pos = spot(1, 8); // walked out through a doorway they cleared
-    run(3.2, 14);
+    run(R + 0.2, R + 11);
     expect(b.eliminated).toBe(false);
     expect(b.alive).toBe(true);
     expect(b.breakoutUntil).toBeNull();
@@ -137,10 +140,11 @@ describe('lifecycle', () => {
   test('dying while trapped is final', async () => {
     const { s, physics, b, run } = await setup();
     sealIsland(s, 1);
+    const R = LIFECYCLE.respawnSec;
     killPlayer(s, physics, 2, 0, false);
-    run(0, 5);
-    killPlayer(s, physics, 2, 5, false);
-    run(5, 9);
+    run(0, R + 2);
+    killPlayer(s, physics, 2, R + 2, false);
+    run(R + 2, R + 6);
     expect(b.eliminated).toBe(true);
   });
 
@@ -150,7 +154,7 @@ describe('lifecycle', () => {
     killPlayer(s, physics, 2, 0, false);
     run(0, 2);
     s.pieces.delete(plates[0].id);
-    run(2, 3.2);
+    run(2, LIFECYCLE.respawnSec + 0.2);
     expect(b.alive).toBe(true);
     expect(b.eliminated).toBe(false);
   });
@@ -162,10 +166,11 @@ describe('lifecycle', () => {
     run(0, 5);
     expect(b.alive).toBe(true);
     expect(b.eliminated).toBe(false);
+    const back = 5 + LIFECYCLE.respawnSec;
     killPlayer(s, physics, 2, 5, false);
-    run(5, 8.2);
+    run(5, back + 0.2);
     expect(b.eliminated).toBe(false); // respawned trapped, 10 s to break out
-    run(8.2, 18.4);
+    run(back + 0.2, back + 10.4);
     expect(b.eliminated).toBe(true);
   });
 
@@ -178,7 +183,7 @@ describe('lifecycle', () => {
     expect(s.waterY).toBe(MAP.waterY);
     expect(s.storm).not.toBeNull();
     killPlayer(s, physics, 2, s.time, false);
-    run(s.time, s.time + 3.2);
+    run(s.time, s.time + LIFECYCLE.respawnSec + 0.2);
     expect(b.eliminated).toBe(true);
   });
 
@@ -187,7 +192,7 @@ describe('lifecycle', () => {
     s.forcedSeal = true;
     killPlayer(s, physics, 1, 0, true);
     killPlayer(s, physics, 2, 0, true);
-    run(0, 3.2);
+    run(0, LIFECYCLE.respawnSec + 0.2);
     expect(s.winner).toBe(-1);
   });
 });
@@ -200,7 +205,7 @@ describe('respawn spot', () => {
     s.pieces.set(wall.id, wall);
     physics.addPiece(wall);
     killPlayer(s, physics, 2, 0, false);
-    run(0, 3.2);
+    run(0, LIFECYCLE.respawnSec + 0.2);
     expect(b.alive).toBe(true);
     const hits = physics.overlapsBox(v3(b.pos.x, b.pos.y + 0.9, b.pos.z), v3(0.3, 0.85, 0.3), 0).filter((h) => h.type === 'piece');
     expect(hits).toEqual([]);
@@ -246,30 +251,32 @@ describe('anti spawn-camping', () => {
   test('respawn with a pistol and one spare mag', async () => {
     const { s, physics, b, run } = await setup();
     killPlayer(s, physics, 2, 0, false);
-    run(0, 3.2);
+    run(0, LIFECYCLE.respawnSec + 0.2);
     expect(b.inv.weapons.pistol).toEqual({ mag: 12, spare: 12 });
     expect(b.hotbar).toContain('pistol');
   });
   test('protected while inside the bunker, even long after the old 3 s window', async () => {
     const { s, physics, b, run } = await setup();
+    const R = LIFECYCLE.respawnSec;
     killPlayer(s, physics, 2, 0, false);
-    run(0, 10);
+    run(0, R + 7);
     expect(b.pos).toEqual(map[1].spawn); // still inside
-    expect(b.invulnUntil).toBeGreaterThan(10);
+    expect(b.invulnUntil).toBeGreaterThan(R + 7);
   });
   test('protection ends 3 s after leaving the bunker', async () => {
     const { s, physics, b, run } = await setup();
+    const t = LIFECYCLE.respawnSec + 2;
     killPlayer(s, physics, 2, 0, false);
-    run(0, 5);
+    run(0, t);
     b.pos = spot(1, 8);
-    run(5, 5.2);
-    expect(b.invulnUntil).toBeLessThanOrEqual(5.2 + 3.05);
-    expect(b.invulnUntil).toBeGreaterThan(7.9);
+    run(t, t + 0.2);
+    expect(b.invulnUntil).toBeLessThanOrEqual(t + 0.2 + 3.05);
+    expect(b.invulnUntil).toBeGreaterThan(t + 2.9);
   });
   test('protection is capped at 15 s even if you hide inside', async () => {
     const { s, physics, b, run } = await setup();
     killPlayer(s, physics, 2, 0, false);
-    run(0, 4);
-    expect(b.invulnUntil).toBeLessThanOrEqual(3 + 15 + 0.1);
+    run(0, LIFECYCLE.respawnSec + 1);
+    expect(b.invulnUntil).toBeLessThanOrEqual(LIFECYCLE.respawnSec + 15 + 0.1);
   });
 });

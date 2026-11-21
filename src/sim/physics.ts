@@ -18,6 +18,8 @@ export type PhysicsSave = {
   pieceKinds: [number, PieceState['kind']][];
   players: [number, number][];
   slits: number[];
+  /** Standing pier sections: dock id → collider handle. */
+  docks?: [number, number][];
   dirty: boolean;
 };
 
@@ -59,6 +61,8 @@ export class Physics {
   /** Collider handles of static structures that anchor pieces built against them (cranes). */
   private readonly anchors = new Set<number>();
   private players = new Map<number, RAPIER.Collider>();
+  /** Standing pier sections (MapDef.docks) by dock id; a broken one is removed. */
+  private docks = new Map<number, RAPIER.Collider>();
   private dirty = true;
   /** No-build zones by group ('islands', 'potion'), see building.ts. */
   private zones = new Map<string, NoBuildZone[]>();
@@ -86,6 +90,7 @@ export class Physics {
     for (const [id, c] of this.pieces) ph.pieces.set(id, same(c));
     for (const [id, k] of this.pieceKinds) ph.pieceKinds.set(id, k);
     for (const [id, c] of this.players) ph.players.set(id, same(c));
+    for (const [id, c] of this.docks) ph.docks.set(id, same(c));
     for (const h of this.slits) ph.slits.add(h);
     for (const [id, y] of this.pieceBaseY) ph.pieceBaseY.set(id, y);
     for (const h of this.anchors) ph.anchors.add(h);
@@ -103,6 +108,7 @@ export class Physics {
       pieceKinds: [...this.pieceKinds],
       players: [...this.players].map(([id, c]) => [id, c.handle]),
       slits: [...this.slits],
+      docks: [...this.docks].map(([id, c]) => [id, c.handle]),
       dirty: this.dirty,
     };
   }
@@ -123,6 +129,7 @@ export class Physics {
     for (const [id, k] of s.pieceKinds) ph.pieceKinds.set(id, k);
     for (const [id, h] of s.players) ph.players.set(id, col(h));
     for (const h of s.slits) ph.slits.add(h);
+    for (const [id, h] of s.docks ?? []) ph.docks.set(id, col(h));
     ph.dirty = s.dirty;
     return ph;
   }
@@ -171,6 +178,8 @@ export class Physics {
         ph.addStaticBox(v3(p.x, p.y + h.y, p.z), h, isl.bunker.facingYaw);
       }
     }
+    // Wooden pier sections: ground like the island (support, bridges) until an explosion breaks one (removeDock).
+    if (!Array.isArray(mapOrIslands)) for (const d of mapOrIslands.docks ?? []) ph.docks.set(d.id, ph.addStaticBox(d.center, d.half, d.rotY));
     // Harbor cranes: solid, and anchors (a piece touching one is supported, like one on the ground).
     if (Array.isArray(mapOrIslands) || mapOrIslands.template === 'harbor')
       for (const b of harborCraneBoxes(def.islands)) ph.anchors.add(ph.addStaticBox(b.center, b.half, b.rotY).handle);
@@ -207,6 +216,16 @@ export class Physics {
       .setTranslation(center.x, center.y, center.z)
       .setRotation(quatY(rotY));
     return this.track(this.world.createCollider(desc), { type: 'world' });
+  }
+
+  /** A pier section broke: open water there from now on. Unknown / already gone ids are ignored (idempotent). */
+  removeDock(id: number): void {
+    const c = this.docks.get(id);
+    if (!c) return;
+    this.entities.delete(c.handle);
+    this.world.removeCollider(c, false);
+    this.docks.delete(id);
+    this.dirty = true;
   }
 
   /** Does this oriented box touch a structural anchor (crane leg or beam)? */

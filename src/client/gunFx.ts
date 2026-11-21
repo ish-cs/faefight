@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import type { MatchEvent, Projectile, Vec3, WeaponKind } from '../sim/types';
 import { Casings } from './world/casings';
+import { dayNightState } from './world/lightUniforms';
 import type { Particles } from './world/particles';
 
 /**
@@ -34,7 +35,7 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3
 
 export class GunFx {
   readonly root = new THREE.Group();
-  /** Spent cases that stay on the ground (ring buffer, capped per quality: set `casings.limit`). */
+  /** Spent cases: bounce, lie a few seconds, shrink away (ring buffer, capped per quality: set `casings.limit`). */
   readonly casings = new Casings();
   private tracers: Tracer[] = [];
   private tracerGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);
@@ -274,9 +275,13 @@ export class GunFx {
     }
     if (this.warmGroup && ++this.warmFrames > 20) { this.root.remove(this.warmGroup); this.warmGroup = null; }
     const mk = now < this.muzzleUntil ? 1 : 0;
-    this.muzzleLight.intensity = this.muzzlePeak * mk;
+    // at night (day/night cycle) flashes light the dark surroundings harder and further
+    const nightK = 1 + 0.6 * dayNightState.night;
+    this.muzzleLight.intensity = this.muzzlePeak * mk * nightK;
+    this.muzzleLight.distance = 9 * (1 + 0.35 * dayNightState.night);
     const bk = (now - this.boomAt) / 1000;
-    this.boomLight.intensity = bk < 0.6 ? this.boomPeak * Math.exp(-bk * 7) : 0;
+    this.boomLight.intensity = bk < 0.6 ? this.boomPeak * nightK * Math.exp(-bk * 7) : 0;
+    this.boomLight.distance = 28 * (1 + 0.35 * dayNightState.night);
 
     const { dust, sparks } = this.particles;
     for (const v of this.projs.values()) {

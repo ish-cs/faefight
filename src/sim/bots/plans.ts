@@ -1,4 +1,4 @@
-import { AMMO_BOX, CHARGE, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, MAP, MEDKIT, PIECES, POTIONS, SEAL, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, MAP, MEDKIT, PIECES, TRAP, POTIONS, SEAL, WEAPONS } from '../constants';
 import { buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
 import { canAdd, countOf } from '../hotbar';
 import { uselessReason } from '../potions';
@@ -70,6 +70,8 @@ export type Needs = {
   scaffolds: number; kit: number; charge: boolean; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
   /** Carry a grappling hook: 'cross' (a crossing to make: bought before scaffolds), 'rich' (spare cash). */
   grapple?: 'cross' | 'rich';
+  /** Spike traps to carry (on top of the ones standing). */
+  traps?: number;
   /** Pieces wanted for building (fortifications, combat cover, bridge walls) on top of the seal kit. */
   build?: Partial<Record<PieceKind, number>>;
 };
@@ -124,13 +126,16 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
-  if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
-  if (!inv.weapons.rifle && cash >= WEAPONS.rifle.price) return 'rifle';
+  if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && room('smg') && cash >= WEAPONS.smg.price) return 'smg';
+  if (!inv.weapons.rifle && room('rifle') && cash >= WEAPONS.rifle.price) return 'rifle';
   if (needs.grapple && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if (needs.rocket && !inv.weapons.rocket && canAdd(p.hotbar, 'rocket') && cash >= WEAPONS.rocket.price + 200) return 'rocket';
-  if (inv.grenades < (needs.grenades ?? 0)) return cash >= GRENADE.price ? 'grenade' : null;
-  if (inv.medkits < (needs.medkits ?? 0)) return cash >= MEDKIT.price ? 'medkit' : null;
-  if (style.closeGun && !inv.weapons.shotgun && cash >= WEAPONS.shotgun.price) return 'shotgun';
+  // Extras only when there's a hotbar slot for them (a full hotbar makes the shop refuse: retrying every tick).
+  if (inv.grenades < (needs.grenades ?? 0) && room('grenade')) return cash >= GRENADE.price ? 'grenade' : null;
+  if (inv.medkits < (needs.medkits ?? 0) && room('medkit')) return cash >= MEDKIT.price ? 'medkit' : null;
+  // Spike traps for my doorways: never saved up for (nice to have, not essential).
+  if (inv.traps < (needs.traps ?? 0) && room('trap') && cash >= TRAP.price) return 'trap';
+  if (style.closeGun && !inv.weapons.shotgun && room('shotgun') && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
   if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
   // Rich: invest in the generator, then lock the favourite gun so a death doesn't leave me unarmed.

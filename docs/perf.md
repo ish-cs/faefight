@@ -1,5 +1,7 @@
 # Rendering performance: how to add content without costing frames
 
+Frame budget for every feature (ms per pass, draw/light/caster limits, measuring rules): `docs/frame-budget.md`.
+
 This is for anyone adding props, creatures or effects under `src/client/world`. The engine handles LOD, culling,
 shadow-caster filtering and the frame-time governor. Your job is to register through it instead of creating
 map-wide meshes.

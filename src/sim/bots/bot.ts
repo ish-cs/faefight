@@ -1,14 +1,17 @@
 import * as dm from '../dmath';
-import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, SEAL, STORM, WEAPONS } from '../constants';
+import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
-import type { Doorway, IslandLayout } from '../map';
+import { friendly, trapCenter } from '../traps';
+import type { DockDef, Doorway, IslandLayout } from '../map';
+import { overDock } from '../docks';
 import { NO_INPUT } from '../types';
 import type {
-  BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, VaultAction, Vec3, WeaponKind,
+  BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
 } from '../types';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
-import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
+import { isRng, mulberry32 } from '../rng';
+import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
 import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { DEFAULT_BOT_PARAMS, type BotParams } from './params';
@@ -26,10 +29,10 @@ import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, 
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'storm' | 'heal' | 'cover' | 'fortify' | 'contest';
+  | 'fight' | 'disengage' | 'storm' | 'heal' | 'cover' | 'fortify' | 'contest' | 'trap';
 const GOALS: Goal[] = [
   'storm', 'defend', 'disengage', 'cover', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'fortify', 'shop', 'heal', 'contest', 'collect',
+  'fortify', 'trap', 'shop', 'heal', 'contest', 'collect',
 ];
 /** Center gold worth a trip, and how far a bot will go out of its way for it. */
 const CONTEST_AT = 150;
@@ -60,6 +63,8 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
+/** An enemy farther than this doesn't pull my gun off what my goal is shooting at (a plug, a wall). */
+const SHOOT_AT_OVER_FOE_M = 25;
 /**
  * Explosive props. PRO bots sometimes shoot a barrel standing next to an enemy instead of the enemy (a
  * roll every BARREL_ROLL_SEC while such a shot is on, so it's a choice, not a reflex); everyone keeps out of
@@ -110,7 +115,7 @@ const HOME_GOALS = new Set<Goal>(['shop', 'bank', 'collect', 'fortify', 'defend'
 
 export { DRIVE } from './params';
 /** Goals the watchdog keeps an eye on (DriveParams.stallSec; attack gets longer: it waits at doors). */
-const STALLABLE = new Set<Goal>(['seal', 'attack', 'bridge', 'contest', 'raid', 'loot', 'shop', 'bank', 'fortify', 'cut']);
+const STALLABLE = new Set<Goal>(['seal', 'attack', 'bridge', 'contest', 'raid', 'loot', 'shop', 'bank', 'fortify', 'cut', 'trap']);
 /** Doorways per bunker. */
 const MAP_DOORS = 3;
 const TARGETED = new Set<Goal>(['seal', 'attack', 'bridge']);
@@ -123,10 +128,14 @@ type Act = {
   shootAt?: Vec3;
   /** Shoot `shootAt` even with an enemy in sight (e.g. the deck under someone crossing a bridge). */
   shootFirst?: boolean;
+  /** Looking at `face` is the job (lining up a charge on a plug): a far-off enemy doesn't pull the view away. */
+  lookFirst?: boolean;
   build?: BuildRequest;
   shop?: ShopItem;
   vault?: VaultAction;
   placeCharge?: boolean;
+  /** Set a spike trap here (sim/traps.ts). */
+  trap?: TrapRequest;
   sprint?: boolean;
   jump?: boolean;
   /** Sprint even with an enemy in sight (closing the distance). */
@@ -193,6 +202,10 @@ export class Bot {
   private slots: Slot[] | null = null;
   private buildMemo: { at: number; total: number; b: Partial<Record<PieceKind, number>> | undefined } | null = null;
   private slotBackoff = new Map<number, number>();
+  /** Spike-trap spots (trapSpots index) that wouldn't take one: left alone until then. */
+  private trapBackoff = new Map<number, number>();
+  /** Last trap I tried to set: spot index and when (a spot still empty a moment later gets backed off). */
+  private trapTry: { i: number; at: number } | null = null;
   /** Bridges: furthest deck reached per lane, islands I'm bridging to on the mirror lane (main one got cut), wall spacing. */
   private laneBest = new Map<string, number>();
   private alt = new Set<number>();
@@ -204,6 +217,10 @@ export class Bot {
   /** Telegraphed strikes already judged (easy bots notice only some), keyed by spot and time. */
   private bolts = new Map<string, boolean>();
   private wander: { to: Vec3; until: number } | null = null;
+  /** Respawn-window push on a dead rival (sealRace), and when I last came back from the dead. */
+  private window: { id: number; until: number } | null = null;
+  private respawnedAt = -Infinity;
+  private lastDeaths = 0;
   /** Goal watchdog: where I was when the current goal last made progress (moved, built, bought, shot). */
   private prog: { goal: Goal; at: number; pos: Vec3 } | null = null;
   private lastDidAt = -Infinity;
@@ -218,12 +235,24 @@ export class Bot {
   private winded = false;
   private lastScores: { goal: string; score: number }[] = [];
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
+  /** The enemy my gun is on (target hysteresis, see aimTarget) and since when; where I last saw them. */
+  private aimId: number | null = null;
+  private aimSince = 0;
+  private aimAt: Vec3 | null = null;
+  private aimLost: { at: Vec3; until: number } | null = null;
   private barrelPlan: { id: number; until: number } | null = null;
   private nextBarrelRollAt = 0;
   /** Grappling hook: what I'm about to use it for, when I next weigh it, and the last use (spectators). */
   private hookIntent: (HookIntent & { until: number }) | null = null;
   private nextHookCheck = 0;
   hookNote: { t: number; text: string } | null = null;
+  /** Blowing out a pier section under an enemy (or under the piece they hide behind): which, how, and why. */
+  private dockPlan: { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number } | null = null;
+  private nextDockRollAt = 0;
+  /** Burst discipline (params.ts gunSkill): shots fired in the current burst, and the pause after it. */
+  private burstN = 0;
+  private burstRestUntil = -Infinity;
+  private seenShotAt = -Infinity;
   private view!: BotView;
   /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
   private readonly centerMinded: boolean;
@@ -250,7 +279,12 @@ export class Bot {
       invest: t.patience > 0.75,
       buildFirst: t.builder > 0.7,
     };
-    this.aim = new Aim(AIM[difficulty], rng);
+    // Aim noise draws every tick while tracking: its own stream (seeded from the match rng's state without
+    // drawing from it), so how a bot's hand wobbles never shifts the match's other random rolls. A plain function
+    // (hand-made test rng) has no state to read: one draw seeds it.
+    const base = isRng(rng) ? rng.state.a : Math.floor(rng() * 4294967296);
+    const aimSeed = (base ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
+    this.aim = new Aim({ ...AIM[difficulty], recoilComp: P.gunSkill[difficulty].recoilComp }, mulberry32(aimSeed), P.aim.feel[difficulty]);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
@@ -260,8 +294,24 @@ export class Bot {
   get currentTarget(): number | null { return this.targetId; }
   /** Hazard id this bot is deliberately shooting to catch an enemy in the blast, if any. */
   get barrelTarget(): number | null { return this.barrelPlan?.id ?? null; }
+  /** Pier section this bot is trying to blow out from under an enemy, if any. */
+  get dockTarget(): number | null { return this.dockPlan?.id ?? null; }
   /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
   get planScores(): { goal: string; score: number }[] { return this.lastScores; }
+  /**
+   * Burst discipline against recoil and bloom: with an automatic gun past my spray range, stop after
+   * `burstShots` shots for `burstPause` s (the climb and bloom settle, then the next burst lands). Up close: full auto.
+   * Counts real shots (the sim's lastShotAt moving), so a held trigger between shots doesn't count.
+   */
+  private burstRest(now: number, me: PlayerState, dist: number): boolean {
+    const g = this.P.gunSkill[this.difficulty];
+    if (me.lastShotAt !== this.seenShotAt) { this.seenShotAt = me.lastShotAt; if (me.lastShotAt > 0) this.burstN++; }
+    if (now < this.burstRestUntil) return true;
+    if (WEAPONS[me.equipped].rps < 5 || dist <= g.sprayRange) { this.burstN = 0; return false; }
+    if (this.burstN >= g.burstShots) { this.burstN = 0; this.burstRestUntil = now + g.burstPause; return true; }
+    return false;
+  }
+
   /** Start / stop recording decisions for a spectator (read-only: never changes what the bot does). */
   watch(on: boolean) { this.probe = on ? this.probe ?? new BrainProbe(this) : null; }
   /** What it's thinking, for the brain inspector (starts recording if it wasn't). */
@@ -273,11 +323,17 @@ export class Bot {
     if (view.generators.length !== view.map.length || view.sealed.length !== view.map.length)
       throw new Error(`Bot ${this.id}: view has ${view.map.length} islands but ${view.generators.length} generators / ${view.sealed.length} seal flags`);
     const now = view.now;
-    const dt = Number.isNaN(this.lastNow) ? DT : Math.min(0.25, Math.max(0, now - this.lastNow));
+    // Match doesn't call dead bots: a gap of more than a couple of ticks means I just respawned (new body, new
+    // facing). Start the aim hand fresh instead of whipping it over the whole gap or "compensating" toward my old aim.
+    const skipped = !Number.isNaN(this.lastNow) && now - this.lastNow > 2.5 * DT;
+    if (skipped) { this.aim.reset(); this.aimId = null; this.aimLost = null; }
+    const dt = Number.isNaN(this.lastNow) || skipped ? DT : Math.max(0, now - this.lastNow);
     this.lastNow = now;
     this.mem.update(view);
     if (!me.alive) {
       this.aim.reset();
+      this.aimId = null;
+      this.aimLost = null;
       this.stuckRef = null;
       this.retreat = null;
       this.pendingBuy = null;
@@ -294,6 +350,8 @@ export class Bot {
     this.view = view;
     this.nav.begin(view);
     this.checkPurchase(me, now);
+    // Came back from a death (bots aren't ticked while dead): note it for respawnCautionSec.
+    if (me.deaths !== this.lastDeaths) { this.lastDeaths = me.deaths; this.respawnedAt = now; this.window = null; }
     this.sealRace(view);
     if (now >= this.nextScoreAt) this.chooseTarget(view);
     const ctx = this.context(view);
@@ -316,18 +374,27 @@ export class Bot {
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
+    // An enemy spike trap in my way with nobody in sight: shoot it out before walking on.
+    if (!ctx.enemy && !act.shootAt && !act.build && !act.trap) {
+      const spikes = this.trapInWay(ctx, act.dir);
+      if (spikes) act = { ...act, shootAt: spikes };
+    }
     // Never hang around inside my own bunker (one plug per door and I'm sealed in): step out.
     if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) act = { ...act, ...this.escape(ctx) };
 
     // Aim: enemies first, then whatever the goal wants to look or shoot at, else along the walk.
     const eye = eyePos(me);
     const cur: Angles = { yaw: me.yaw, pitch: me.pitch };
-    let look: Angles = cur;
+    // Every look goes through the aim hand (Aim.look: eased, speed- and acceleration-capped); `want` is where to.
+    const hand = (want: Angles, rate: number) => this.aim.look(cur, want, dt, rate);
+    let look: Angles;
     let fire = false;
     const enemy = ctx.enemy;
+    const foe = this.aimTarget(view, enemy, now);
     // Medium+ tactic: a rocket into a rival's wooden base sets it burning (fire.ts).
     const torch = enemy || this.goal === 'disengage' ? null : this.torchTarget(ctx);
-    const best = torch ? 'rocket' : bestGun(me.inv, enemy ? ctx.enemyDist : 30);
+    const dock = enemy ? this.dockShot(ctx) : null;
+    const best = torch || dock?.weapon === 'rocket' ? 'rocket' : bestGun(me.inv, enemy ? ctx.enemyDist : 30);
     const gunReady = (range: number) => {
       const w = me.equipped;
       const ammo = w === 'fists' ? null : me.inv.weapons[w];
@@ -339,32 +406,47 @@ export class Bot {
     const rope = me.mv?.pull && !me.mv.pull.yank ? me.mv.pull : null;
     let grapple = false;
     const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
-    const barrel = enemy ? this.barrelShot(ctx) : null;
+    const barrel = enemy && !dock ? this.barrelShot(ctx) : null;
     if (hook && hook.why !== 'yank') {
       const want = lookAt(eye, hook.to);
-      look = turnToward(cur, want, TURN_RATE * 1.5, dt);
+      look = hand(want, TURN_RATE * 1.5);
       grapple = angleBetween(look, want) < 0.02;
     } else if (rope && !enemy) {
-      look = turnToward(cur, lookAt(eye, rope), TURN_RATE, dt);
+      look = hand(lookAt(eye, rope), TURN_RATE);
+    } else if (dock?.weapon === 'rocket') {
+      // Blow the planks out from under them: aim at the deck at their feet (the blast catches them too), held
+      // over for the rocket's drop at that range.
+      const tof = dist2D(eye, dock.at) / ROCKET.speed;
+      const want = lookAt(eye, v3(dock.at.x, dock.at.y + 0.5 * ROCKET.gravity * tof * tof, dock.at.z));
+      look = hand(want, TURN_RATE * 1.2);
+      fire = me.equipped === 'rocket' && angleBetween(look, want) < 0.035 && gunReady(dist2D(me.pos, dock.at));
+    } else if (dock) {
+      const a = throwAngles(eye, dock.at, false);
+      if (a) {
+        look = hand(a, TURN_RATE * 1.2);
+        if (angleBetween(look, a) < 0.03 && me.busyUntil <= now) { throwGrenade = true; this.lastNadeAt = now; this.dockPlan = null; }
+      } else { this.dockPlan = null; look = hand(cur, TURN_RATE); } // no throw arc: hold the view, re-plan next tick
     } else if (barrel) {
       // Set the barrel next to them off: aim at its middle like any other shot.
-      look = turnToward(cur, lookAt(eye, barrel), TURN_RATE * 1.2, dt);
+      look = hand(lookAt(eye, barrel), TURN_RATE * 1.2);
       fire = angleBetween(look, lookAt(eye, barrel)) < 0.04 && gunReady(dist2D(me.pos, barrel));
     } else if (act.shootAt && act.shootFirst) {
-      look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
+      look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
-    } else if (enemy) {
-      const r = this.aim.track(now, dt, eye, add(enemy.pos, v3(0, CHEST, 0)), enemy.id, cur);
+    } else if (foe && !((act.shootAt || act.lookFirst) && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
+      // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
+      const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, CHEST, 0)), foe.id, cur);
       look = r;
+      const foeDist = dist2D(foe.pos, me.pos);
       // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
       // unless they're the one shooting at me.
       const w = WEAPONS[me.equipped];
-      const scratch = this.difficulty !== 'easy' && ctx.enemyDist > w.falloff.end * this.P.drive.fireRangeMult &&
-        !(this.mem.lastHurtBy === enemy.id && now - this.mem.lastHurtAt < 3);
-      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist) && !scratch;
-      if (hook?.why === 'yank' && hook.target === enemy.id && r.ready && r.onTarget) { grapple = true; fire = false; }
+      const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult &&
+        !(this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3);
+      fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !this.burstRest(now, me, foeDist);
+      if (hook?.why === 'yank' && hook.target === foe.id && r.ready && r.onTarget) { grapple = true; fire = false; }
     } else if (nade) {
-      look = turnToward(cur, nade, TURN_RATE, dt);
+      look = hand(nade, TURN_RATE);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
         throwGrenade = true;
         this.lastNadeAt = now;
@@ -372,16 +454,22 @@ export class Bot {
       }
     } else if (torch) {
       const want = lookAt(eye, torch);
-      look = turnToward(cur, want, TURN_RATE, dt);
+      look = hand(want, TURN_RATE);
       fire = me.equipped === 'rocket' && angleBetween(look, want) < 0.03 && gunReady(dist2D(me.pos, torch));
       if (fire) this.lastTorchAt = now;
     } else if (act.shootAt) {
-      look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
+      look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
     } else if (act.face) {
-      look = turnToward(cur, lookAt(eye, act.face), TURN_RATE, dt);
+      look = hand(lookAt(eye, act.face), TURN_RATE);
+    } else if (this.aimLost && !act.build) {
+      // Just lost sight of who I was shooting at: keep my eyes on where they were a moment (walking still works:
+      // movement is relative to the view), instead of whipping round to the walk direction and back.
+      look = hand(lookAt(eye, this.aimLost.at), this.aim.maxTurn);
     } else if (act.dir) {
-      look = turnToward(cur, { yaw: yawOf(act.dir), pitch: 0 }, TURN_RATE, dt);
+      look = hand({ yaw: yawOf(act.dir), pitch: 0 }, TURN_RATE);
+    } else {
+      look = hand(cur, TURN_RATE); // nothing to look at: the hand comes to rest
     }
 
     // Weapons: hold the best gun, reload when nobody is in sight.
@@ -407,7 +495,7 @@ export class Bot {
     if (dir && !dodge) dir = this.stormFence(me, view, dir);
     if (dir) dir = this.nav.safeDir(dir);
     // Never walk into (or stand in) fire: slide around burning pieces and ground fires (a lightning dodge wins).
-    const zones = view.fires ?? [];
+    const zones = this.avoidZones(view, me);
     if (zones.length && !dodge) {
       const away = steerFromFire(me.pos, dir, zones);
       if (away !== dir) dir = away && this.nav.safeDir(away);
@@ -440,7 +528,7 @@ export class Bot {
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
       (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
-    if (act.shop || act.build || act.vault || act.placeCharge || fire || throwGrenade) this.lastDidAt = now;
+    if (act.shop || act.build || act.vault || act.placeCharge || act.trap || fire || throwGrenade) this.lastDidAt = now;
     if (act.build) {
       this.lastPieceAt = now;
     }
@@ -456,7 +544,7 @@ export class Bot {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
-      vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
+      vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
       ...(grapple ? { grapple: true, build: null, shop: null } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
@@ -503,6 +591,27 @@ export class Bot {
     if ((g === 'contest' || g === 'storm') && C >= 0 && !c.centerReach) return C;
     if (HOME_GOALS.has(g) && !c.homeReach) return c.home.index;
     return null;
+  }
+
+  /**
+   * The visible enemy my gun is on. The nearest, but once on someone I stay on them at least `aim.commitSec`, then
+   * switch only to one clearly closer (`aim.switchRatio` × their distance) or when they drop out of sight. Losing
+   * sight of a living target holds my eyes on where they were for `holdSec` (the look chain in think uses it).
+   */
+  private aimTarget(view: BotView, nearest: PlayerState | null, now: number): PlayerState | null {
+    const me = view.self, A = this.P.aim;
+    let cur = this.aimId === null ? null : view.enemies.find((e) => e.id === this.aimId && e.alive) ?? null;
+    if (!cur && this.aimId !== null) {
+      const alive = view.others.find((o) => o.id === this.aimId)?.alive ?? false;
+      this.aimLost = alive && this.aimAt ? { at: this.aimAt, until: now + A.feel[this.difficulty].holdSec } : null;
+      this.aimId = null;
+    }
+    if (cur && nearest && nearest.id !== cur.id && now - this.aimSince >= A.commitSec &&
+        dist2D(nearest.pos, me.pos) < A.switchRatio * dist2D(cur.pos, me.pos)) cur = null;
+    if (!cur && nearest) { cur = nearest; this.aimId = nearest.id; this.aimSince = now; }
+    if (cur) { this.aimAt = add(cur.pos, v3(0, CHEST, 0)); this.aimLost = null; }
+    else if (this.aimLost && now >= this.aimLost.until) this.aimLost = null;
+    return cur;
   }
 
   /** Did the last purchase go through? A buy that keeps failing (e.g. nowhere to carry it) is left alone a while. */
@@ -590,23 +699,41 @@ export class Bot {
   }
 
   /**
-   * Seal race: someone just died (kill feed) and their bunker is close with its doors open while I carry the kit
-   * to plug them all: they respawn in a few seconds, so drop everything and go plug it.
+   * Respawn window: a rival is dead (kill feed / scoreboard shows when they're back) and I can sprint to their
+   * bunker before they respawn, give or take windowSlackSec: push it now. With a seal kit that's the seal race
+   * (plug their doors while they're down: they respawn trapped); without one, hold their door for the respawn.
+   * Like a strong player, not right after my own respawn (respawnCautionSec): re-gear first.
    */
   private sealRace(view: BotView) {
-    const me = view.self, now = view.now;
-    if (view.suddenDeath || sealKit(me.inv) < MAP_DOORS) return;
+    const me = view.self, now = view.now, D = this.P.drive;
+    if (this.window && (now > this.window.until || !view.others.some((o) => o.id === this.window!.id && !o.alive && !o.eliminated))) this.window = null;
+    if (view.suddenDeath || this.cautious(now)) return;
     for (const o of view.others) {
-      if (o.alive || o.eliminated || o.respawnAt === null || o.id === this.targetId || o.island === me.island) continue;
-      if (now - (this.mem.diedAt.get(o.id) ?? -Infinity) > 1) continue;
+      if (o.alive || o.eliminated || o.respawnAt === null || o.island === me.island || this.window?.id === o.id) continue;
       const isl = view.map[o.island];
-      if (view.sealed[isl.index] || dist2D(me.pos, isl.bunker.center) > this.P.drive.sealRaceM) continue;
+      const d = dist2D(me.pos, isl.bunker.center);
+      if (view.sealed[isl.index] || d > D.sealRaceM || d / PLAYER.sprint > o.respawnAt - now + D.windowSlackSec) continue;
       const n = this.nav.nodeAt(me.pos);
       if (n !== isl.index && (n < 0 || this.nav.hop(n, isl.index) === null)) continue;
+      this.window = { id: o.id, until: o.respawnAt + D.windowSlackSec };
       this.targetId = o.id;
       this.nextScoreAt = now;
       return;
     }
+  }
+
+  /** Just respawned (empty-handed): play it safe for a few seconds, no pushes. */
+  private cautious(now: number): boolean {
+    return now - this.respawnedAt < this.P.drive.respawnCautionSec;
+  }
+
+  /** Pushing a dead rival's bunker in their respawn window: who, and seconds left (spectators / debugBrain). */
+  get respawnWindow(): { id: number; left: number } | null {
+    return this.window && this.view ? { id: this.window.id, left: Math.max(0, this.window.until - this.view.now) } : null;
+  }
+  /** Am I in the respawn window on my current target? */
+  private inWindow(c: Ctx): boolean {
+    return !!this.window && !!c.rival && this.window.id === c.rival.id && !c.rival.alive;
   }
 
   /** Score every rival; keep the current one unless another is clearly better. */
@@ -641,9 +768,12 @@ export class Bot {
     }
     const rivalIsl = rival ? view.map[rival.island] : null;
     let enemy: PlayerState | null = null, enemyDist = Infinity;
+    // Shoot first at whoever's bunker is sealed (their next death eliminates them), unless someone is much closer.
+    let pickD = Infinity;
     for (const e of view.enemies) {
       const d = dist2D(e.pos, me.pos);
-      if (e.alive && d < enemyDist) { enemy = e; enemyDist = d; }
+      const eff = !view.suddenDeath && view.sealed[e.island] ? d / this.P.drive.sealedFocus : d;
+      if (e.alive && eff < pickD) { enemy = e; enemyDist = d; pickD = eff; }
     }
     const reach = !!rivalIsl && (on === rivalIsl.index || this.nav.hop(src, rivalIsl.index) !== null);
     const homeReach = node === home.index || node < 0 || this.nav.hop(node, home.index) !== null;
@@ -707,6 +837,7 @@ export class Bot {
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
+      traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
       // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
       grapple: c.bridgeTo !== null && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c) && total >= this.P.hook.crossBuyAt[this.difficulty] ? 'cross'
@@ -898,7 +1029,8 @@ export class Bot {
         const sameIsland = islandAt(view.map, c.enemy.pos) === islandAt(view.map, me.pos);
         if (!sameIsland && c.enemyDist > ENGAGE_RANGE) return 0.2;
         // Sudden death with no ammo left anywhere to buy it: fists are all there is.
-        return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression;
+        const sealedFoe = !view.suddenDeath && view.sealed[c.enemy.island] ? this.P.drive.sealedHunt : 0;
+        return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression + (gun ? sealedFoe : 0);
       }
       case 'disengage': {
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
@@ -999,12 +1131,15 @@ export class Bot {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
         // Sealed in (or about to respawn into a sealed bunker): be there to finish it.
-        if (this.sieging(c)) return this.P.drive.siegeScore + 0.2 * t.opportunism;
+        if (this.sieging(c)) return this.P.drive.siegeScore + this.P.drive.sealedHunt + 0.2 * t.opportunism;
         // Respawn window with no kit to seal: wait at their door for the unarmed respawn.
-        if (rivalDown) return gun && sealKit(me.inv) === 0 ? 0.35 + 0.3 * t.opportunism : 0.3;
+        const push = this.inWindow(c) ? this.P.drive.windowPush * 0.5 : 0;
+        if (rivalDown) return (gun && sealKit(me.inv) === 0 ? 0.35 + 0.3 * t.opportunism : 0.3) + push;
         if (!gun) return 0.1;
         const upgraded = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
-        return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution));
+        // Their bunker is sealed: every death of theirs is an elimination, so hunting them is worth the most.
+        const sealedHunt = c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive ? this.P.drive.sealedHunt : 0;
+        return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution)) + sealedHunt;
       }
       case 'seal': {
         const kit = sealKit(me.inv);
@@ -1015,7 +1150,7 @@ export class Bot {
         // Standing on their island with nobody home (not seen here lately): the door is open, plug it now.
         const empty = c.on === c.rivalIsl.index && !!c.rival && c.rival.alive && !ownerAway &&
           this.mem.recent(c.rival.id, view.now, this.P.drive.emptyHomeSec)?.island !== c.rival.island;
-        return (kit >= c.openDoors.length ? 0.6 : 0.3) + (rivalDown ? 0.5 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
+        return this.P.drive.sealBonus + (this.inWindow(c) ? this.P.drive.windowPush : 0) + (kit >= c.openDoors.length ? 0.6 : 0.3) + (rivalDown ? 0.5 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
           (ownerAway || empty ? this.P.drive.sealAway + 0.2 * t.opportunism : 0);
       }
       case 'cut': {
@@ -1048,6 +1183,11 @@ export class Bot {
         if (!this.fortWorthIt(c)) return 0;
         const next = this.nextSlot(c);
         return next ? this.P.buildTuning.fortifyScore + 0.3 * t.builder : 0;
+      }
+      case 'trap': {
+        if (view.suddenDeath || c.on !== home.index || c.danger || me.inv.traps <= 0) return 0;
+        if (this.myTraps(view).length >= TRAP.maxPerPlayer || !this.nextTrapSpot(c)) return 0;
+        return this.P.trap.setScore + 0.2 * t.builder + 0.1 * t.caution;
       }
       case 'raid': {
         if (view.suddenDeath || !gun) return 0;
@@ -1087,7 +1227,7 @@ export class Bot {
   /** On an offensive plan: gun in hand and either the money for a few walls or enough time gone by. */
   private offensive(c: Ctx): boolean {
     const me = c.me;
-    if (c.view.suddenDeath || !ownsGun(me.inv)) return false;
+    if (c.view.suddenDeath || !ownsGun(me.inv) || this.cautious(c.view.now)) return false;
     return c.view.now >= this.P.drive.offenseAt[this.difficulty] || me.inv.cash + me.vault.cash >= this.P.drive.offenseCash[this.difficulty];
   }
 
@@ -1136,6 +1276,7 @@ export class Bot {
       // The center island is where the fights are: worth going for when it pays.
       case 'contest': return s > 0 ? s + this.P.drive.push[this.difficulty] * 0.5 : s;
       case 'fortify': return this.t.builder >= this.P.buildTuning.fortEarlyBuilder ? s * 0.5 : 0;
+      case 'trap': return s * 0.6;
       case 'cut': return this.crossing(c) ? s : s * 0.4;
       // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
       case 'bank': return this.insuranceDue(me) > 0 || c.danger ? s : s * 0.5;
@@ -1162,6 +1303,7 @@ export class Bot {
       case 'disengage': return this.doDisengage(c);
       case 'cover': return this.doCover(c);
       case 'fortify': return this.doFortify(c);
+      case 'trap': return this.doTrap(c);
       case 'storm': return this.doStorm(c);
       case 'contest': return this.doContest(c);
     }
@@ -1423,9 +1565,9 @@ export class Bot {
     const facing = Math.abs(wrapAngle(c.me.yaw - lookAt(eyePos(c.me), center).yaw)) < 0.1;
     if (facing && c.me.busyUntil <= c.view.now) {
       this.retreat = { from: center, until: c.view.now + 3.5 };
-      return { dir: null, face: center, placeCharge: true };
+      return { dir: null, face: center, placeCharge: true, lookFirst: true };
     }
-    return { dir: null, face: center };
+    return { dir: null, face: center, lookFirst: true };
   }
 
   /** Occupancy grid of my bunker, rebuilt when the pieces around it change. */
@@ -1478,9 +1620,9 @@ export class Bot {
     if (spot && dist2D(spot, me.pos) > 0.3 && !(inReach && dist2D(spot, me.pos) < 0.8)) return { dir: norm(flat(sub(spot, me.pos))), face: center };
     if (useCharge) {
       const facing = Math.abs(wrapAngle(me.yaw - lookAt(eyePos(me), center).yaw)) < 0.1;
-      if (!facing || me.busyUntil > now) return { dir: null, face: center };
+      if (!facing || me.busyUntil > now) return { dir: null, face: center, lookFirst: true };
       this.hideFrom = { pos: target.pos, until: now + CHARGE.fuseSec + 0.3 };
-      return { dir: null, face: center, placeCharge: true };
+      return { dir: null, face: center, placeCharge: true, lookFirst: true };
     }
     return { dir: null, shootAt: center, shootFirst: true };
   }
@@ -1610,6 +1752,63 @@ export class Bot {
     return pick.center;
   }
 
+  /**
+   * A visible enemy standing on a pier section (or hiding behind a piece built on one): blow the section out
+   * with a rocket (or a grenade) and drop them in the water. Rolled every dockRollSec at dockShot (+ dockDefend on
+   * my own pier: an attacker crossing toward me); never from closer than dockMinRange, never a section near my feet.
+   */
+  private dockShot(c: Ctx): { at: Vec3; weapon: 'rocket' | 'grenade' } | null {
+    const { view, me } = c;
+    const e = c.enemy, docks = view.docks;
+    const D = this.P.drive;
+    if (!e || !docks?.length || D.dockShot[this.difficulty] <= 0) { this.dockPlan = null; return null; }
+    const rocket = me.inv.weapons.rocket, rockets = !!rocket && rocket.mag + rocket.spare > 0;
+    const nades = me.inv.grenades > 0 && view.now - this.lastNadeAt >= NADE_GAP;
+    if (!rockets && !nades) { this.dockPlan = null; return null; }
+    const top = (d: DockDef) => d.center.y + d.half.y;
+    // The deck just in front of their feet (a rocket at the feet would burst on their legs first, a bit higher).
+    const feet = (d: DockDef, p: Vec3) => {
+      const t = norm(flat(sub(me.pos, p)));
+      const f = v3(p.x + t.x * 0.7, top(d) + 0.05, p.z + t.z * 0.7);
+      return overDock(d, f) ? f : v3(p.x, top(d) + 0.05, p.z);
+    };
+    const onDeck = (d: DockDef, p: Vec3, pad: number) => overDock(d, p, pad) && Math.abs(p.y - top(d)) < 0.8;
+    const safe = (d: DockDef) => dist2D(d.center, me.pos) >= D.dockMinRange && !docks.some((x) => onDeck(x, me.pos, 0.5) && dist2D(x.center, d.center) < 4);
+    const plan = this.dockPlan;
+    if (plan) {
+      const d = docks.find((x) => x.id === plan.id);
+      // Still standing, still the same enemy on it (or still behind that cover), and the shot is still mine to take.
+      if (d && plan.enemy === e.id && view.now < plan.until && safe(d) && dist2D(e.pos, plan.at) < 2.5 && (plan.weapon === 'grenade' ? nades : rockets)) {
+        if (plan.why !== 'cover') plan.at = feet(d, e.pos);
+        return plan;
+      }
+      this.dockPlan = null;
+    }
+    if (view.now < this.nextDockRollAt) return null;
+    let pick: { d: DockDef; at: Vec3; why: 'under' | 'cover' | 'defend' } | null = null;
+    for (const d of docks) {
+      if (!safe(d)) continue;
+      if (onDeck(d, e.pos, 0.3)) { pick = { d, at: feet(d, e.pos), why: d.island === c.home.index ? 'defend' : 'under' }; break; }
+    }
+    if (!pick && view.clearShot && !view.clearShot(add(e.pos, v3(0, CHEST, 0)))) {
+      // Behind something built on a pier: take the planks out under that piece and the cover goes with them.
+      for (const p of view.pieces) {
+        if (dist2D(p.pos, e.pos) > 2.5) continue;
+        const d = docks.find((x) => onDeck(x, p.pos, 0.1) && safe(x));
+        if (d) { pick = { d, at: feet(d, p.pos), why: 'cover' }; break; }
+      }
+    }
+    if (!pick) return null;
+    this.nextDockRollAt = view.now + D.dockRollSec;
+    const range = dist2D(me.pos, pick.at);
+    const weapon = rockets && range <= WEAPONS.rocket.range * 0.9 ? 'rocket' : nades && range <= NADE_MAX ? 'grenade' : null;
+    const chance = D.dockShot[this.difficulty] + (pick.d.island === c.home.index ? D.dockDefend : 0);
+    if (!weapon || this.rng() >= chance) return null;
+    if (weapon === 'rocket' && view.clearShot && !view.clearShot(pick.at) && pick.why !== 'cover') return null;
+    this.dockPlan = { id: pick.d.id, enemy: e.id, at: pick.at, weapon, why: pick.why, until: view.now + 2.5 };
+    return this.dockPlan;
+  }
+
   /** Run from a fusing barrel; in a fight (outside the storm), also step out of blast range of live ones (they could be shot). */
   private hazardAvoid(c: Ctx, dir: Vec3 | null): Vec3 | null {
     const me = c.me;
@@ -1689,7 +1888,8 @@ export class Bot {
     }
 
     const gapM = c.enemyDist - want;
-    const radial = Math.abs(gapM) < 2 ? 0 : Math.sign(gapM);
+    // Hold range within a couple of metres; with fists (reach 2 m) only a step's slack, or they circle out of reach.
+    const radial = Math.abs(gapM) < (want < 2 ? 0.4 : 2) ? 0 : Math.sign(gapM);
     const dir = add(scale(to, radial), side);
     const rush = this.difficulty !== 'easy' && gapM > this.P.drive.sprintGap;
     // Chasing across water needs a route; otherwise just strafe in place.
@@ -1852,6 +2052,111 @@ export class Bot {
     if (!act) return null;
     this.perch = { ramp: v3(pos.x, me.pos.y, pos.z), pos: add(pos, scale(to, 1.0)), until: now + this.P.buildTuning.perchSec };
     return act;
+  }
+
+  /** My own spike traps standing (in sight: home is where they go, so that's all of them while I'm there). */
+  private myTraps(view: BotView): TrapNet[] {
+    return (view.traps ?? []).filter((t) => t.owner === view.self.id);
+  }
+
+  /**
+   * Where I set spike traps at home, best first: just outside each doorway (the choke points anyone sealing or
+   * raiding me must stand in), then the bunker wall either side of the front door (spikes out at whoever hugs it).
+   */
+  private trapSpots(c: Ctx): TrapRequest[] {
+    const b = c.home.bunker, out: TrapRequest[] = [];
+    for (const d of b.doorways) {
+      const p = add(d.center, scale(forward(d.yaw), 1.6));
+      const y = c.view.groundAt(p.x, p.z);
+      if (y !== null) out.push({ pos: v3(p.x, y, p.z), rotY: d.yaw, wall: false });
+    }
+    const fd = b.doorways[0];
+    if (fd) for (const side of [1, -1]) {
+      const p = add(fd.center, scale(right(fd.yaw), side * (fd.width / 2 + 0.9)));
+      out.push({ pos: v3(p.x, c.home.groundY + 1.0, p.z), rotY: fd.yaw, wall: true });
+    }
+    return out;
+  }
+
+  /** The next free trap spot that takes one (validated as placed), or null. */
+  private nextTrapSpot(c: Ctx): { req: TrapRequest; i: number } | null {
+    if (!c.view.canTrap) return null;
+    const spots = this.trapSpots(c), taken = c.view.traps ?? [];
+    for (const [i, s] of spots.entries()) {
+      if ((this.trapBackoff.get(i) ?? -Infinity) > c.view.now) continue;
+      if (taken.some((t) => dist2D(t.pos, s.pos) < TRAP.minGap + 0.4)) continue;
+      // Validated from where I'll stand to set it, not from where I am now.
+      if (c.view.canTrap(s, this.trapStand(c, s)).ok) return { req: s, i };
+    }
+    return null;
+  }
+
+  /** Where I stand to set a trap: a little out in front of it (outside the doorway / off the wall). */
+  private trapStand(c: Ctx, req: TrapRequest): Vec3 {
+    const p = add(req.pos, scale(forward(req.rotY), req.wall ? 1.6 : 1.4));
+    return v3(p.x, c.home.groundY, p.z);
+  }
+
+  /** Walk to the next trap spot and set one there. */
+  private doTrap(c: Ctx): Act {
+    const next = this.nextTrapSpot(c);
+    if (!next) { this.nextScoreAt = c.view.now; return IDLE; }
+    const { req, i } = next, now = c.view.now;
+    const stand = this.trapStand(c, req);
+    const face = req.wall ? req.pos : v3(req.pos.x, req.pos.y + 0.2, req.pos.z);
+    const walk = this.goTo(stand, 0.6);
+    if (walk.dir) return walk;
+    if (c.me.busyUntil > now) return { dir: null, face };
+    if (this.trapTry?.i === i && now - this.trapTry.at > 1) {
+      // (backoff lives here, not in nextTrapSpot: scoring and introspection must not change state)
+      // Tried a while ago and the spot is still empty: something's in the way.
+      this.trapBackoff.set(i, now + this.P.buildTuning.slotBackoffSec);
+      this.trapTry = null;
+      this.nextScoreAt = now;
+      return { dir: null, face };
+    }
+    if (this.trapTry?.i !== i) this.trapTry = { i, at: now };
+    return { dir: null, face, trap: req };
+  }
+
+  /** Fires plus every enemy spike trap I can see, as circles to keep out of. */
+  private avoidZones(view: BotView, me: PlayerState): { pos: Vec3; r: number }[] {
+    const fires = view.fires ?? [];
+    const traps = view.traps;
+    if (!traps?.length) return fires;
+    const r = TRAP.half + PLAYER.radius + this.P.trap.avoidPad;
+    const out = [...fires];
+    for (const t of traps) if (!friendly(t.owner, me)) {
+      const c = trapCenter(t);
+      out.push({ pos: t.wall ? add(c, scale(forward(t.rotY), TRAP.zone / 2)) : v3(c.x, t.pos.y, c.z), r: t.wall ? r + TRAP.zone / 2 : r });
+    }
+    return out;
+  }
+
+  /**
+   * An enemy trap within shootRange that lies along where I'm walking (or right by me when I've stopped), with a
+   * clear shot: where to aim. Destroying it beats walking the long way round a doorway.
+   */
+  private trapInWay(c: Ctx, dir: Vec3 | null): Vec3 | null {
+    const traps = c.view.traps;
+    if (!traps?.length) return null;
+    const me = c.me, R = this.P.trap.shootRange;
+    let best: Vec3 | null = null, bestD = Infinity;
+    for (const t of traps) {
+      if (friendly(t.owner, me)) continue;
+      const at = trapCenter(t);
+      const d = dist2D(at, me.pos);
+      if (d > R || d >= bestD || Math.abs(at.y - me.pos.y) > 3) continue;
+      if (dir) {
+        const rel = v3(at.x - me.pos.x, 0, at.z - me.pos.z);
+        const along = rel.x * dir.x + rel.z * dir.z;
+        const off = Math.abs(rel.x * dir.z - rel.z * dir.x);
+        if (along < 0 || off > 1.6) continue;
+      } else if (d > 3) continue;
+      if (c.view.clearShot && !c.view.clearShot(at)) continue;
+      best = at; bestD = d;
+    }
+    return best;
   }
 
   /** Walk to the next fortification slot and build it (also rebuilds pieces that got shot out). */

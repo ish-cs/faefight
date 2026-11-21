@@ -18,21 +18,28 @@ export type Inventory = {
   charges: number;
   medkits: number;
   potions: Partial<Record<PotionKind, number>>;
+  /** Spike traps carried (sim/traps.ts). */
+  traps: number;
   /** Grappling hook uses left (absent = none). One hotbar slot ('grapple') holds them all. */
   grapples?: number;
 };
 
 /** Something that occupies a hotbar slot (amounts live in the inventory). */
-export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit' | PotionKind | 'grapple';
+export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit' | PotionKind | 'trap' | 'grapple';
 
 export type GunKind = Exclude<WeaponKind, 'fists'>;
 /** `genUpgrade`: next level of your own island's generator. `lock:<gun>`: respawn with that gun from now on. */
 export type LockItem = `lock:${GunKind}`;
-export type ShopItem = PieceKind | GunKind | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind | 'genUpgrade' | LockItem | 'grapple';
+export type ShopItem = PieceKind | GunKind | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind | 'genUpgrade' | LockItem | 'trap' | 'grapple';
 export type ShopAction = { buy: ShopItem };
 export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> };
 
 export type BuildRequest = { kind: PieceKind; pos: Vec3; rotY: number; free: boolean };
+/**
+ * Place a spike trap. Floor: `pos` on the surface, `rotY` the plate's turn. Wall: `pos` on the wall face,
+ * spikes pointing along forward(rotY) (out of the wall).
+ */
+export type TrapRequest = { pos: Vec3; rotY: number; wall: boolean };
 
 export type PlayerInput = {
   moveX: number;
@@ -72,6 +79,8 @@ export type PlayerInput = {
    * then (clamped; see lagComp.ts). Absent = no rewind (bots, old clients).
    */
   viewT?: number;
+  /** Place a spike trap from the selected slot (one-shot; absent = none, so old replays decode unchanged). */
+  trap?: TrapRequest;
 };
 
 export type PlayerState = {
@@ -174,13 +183,23 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
  */
 export type HazardNet = { id: number; st: 0 | 1 | 2; hp: number };
 
+/**
+ * A spike trap as the snapshot carries it (sim/traps.ts). `wall`: on a wall, spikes along forward(rotY);
+ * else flat on a floor. `fired`: sim time the spikes last sprang (animation; -1 never). `arm`: armed from then.
+ */
+export type TrapNet = { id: number; owner: number; pos: Vec3; rotY: number; wall: boolean; hp: number; fired: number; arm: number };
+
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped' | 'spawn'
   | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning'
   /** Emote / quick-chat wheel use: data { by, id } (emotes.ts). */
   | 'wheel' | 'hazard'
   /** Grappling hook: data { by, phase: 'fire' | 'latch' | 'yank' | 'miss' | 'release', target? }. */
-  | 'grapple';
+  | 'grapple'
+  /** Spike trap: data { what: 'placed' | 'fired' | 'broken', id, pos, by / owner } (sim/traps.ts). */
+  | 'trap'
+  /** A wooden pier section broke (docks.ts): data { id, island, row, pos, rotY, by, kind }. */
+  | 'dockBroken';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -203,6 +222,12 @@ export type Snapshot = {
   broken?: number[];
   /** Hazards (barrels, tanks, crates) that are damaged, fusing or gone; absent when every one is intact. */
   hz?: HazardNet[];
+  /** Spike traps placed (absent when there are none). */
+  traps?: TrapNet[];
+  /** Ids of broken pier sections (MapDef.docks), in the order they broke; absent while every one stands. */
+  docks?: number[];
+  /** Ids of damaged (scorched) pier sections still standing; absent when none. */
+  dockHurt?: number[];
   /** Generator level (1-4) of each island, by island index. */
   genLevels: number[];
   sealed: boolean[];

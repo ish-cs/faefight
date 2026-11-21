@@ -7,6 +7,7 @@ import { mat, StaticBatch } from './geo';
 import { goldGenProp, potionProp, supplyProp } from './mapProps';
 import { mats } from './materials';
 import { type PbrName, pbrSample, worldNoise } from './pbr';
+import { applyWet } from './wetness';
 import { centerTopTex } from './textures';
 
 type Label = (text: string, bg: string) => THREE.Sprite;
@@ -23,7 +24,7 @@ export function paintedTopMaterial(name: string, painted: THREE.Texture, set: Pb
   m.normalNode = normalMap(s.normal, vec2(1, 1));
   m.roughnessNode = float(0.88).add(worldNoise(0.12, 'g').sub(0.5).mul(0.16));
   m.metalnessNode = float(0);
-  return m;
+  return applyWet(m, { puddles: true });
 }
 
 /**

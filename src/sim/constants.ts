@@ -184,7 +184,12 @@ export const LOCK_PRICE_MULT = 4;
 export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5, queueSec: 0.25 };
 
 export const LIFECYCLE = {
-  respawnSec: 3,
+  /**
+   * Death to respawn (2026-11-21: 3 → 5 s, the user's call). CI, 20 seeds: 8-bot FFAs about the same as 3 s,
+   * Hard 1v1 decided before sudden death 14 → 19/20, PRO vs Hard 75 → 85 %. 10 s gave 1-2/20 more decided
+   * FFAs but cut PRO-vs-Hard 1v1s to a 4.6 min average (16/20 under 5 min).
+   */
+  respawnSec: 5,
   /** Respawning into a sealed bunker: break out within this long or you're eliminated. */
   breakoutSec: 10,
   invulnSec: 3,
@@ -246,6 +251,22 @@ export const MAP = {
     /** Firing slits: horizontal gaps (width × y0..y1 above the floor) in each door wall segment and the back wall. */
     slit: { width: 0.6, y0: 1.35, y1: 1.53 },
   },
+};
+
+/**
+ * Wooden piers (map.ts docks, sim/docks.ts). Each player island has one, running out from its front rim along
+ * the bots' bridge lane toward the center island (2 players: toward the rival), `width` wide, in `chunk`-long
+ * sections, at most `maxLen` long and always leaving `minWater` of open water to the far shore. The deck top
+ * is level with the island ground (`lip` 0: a scaffold laid from the shore or off the pier sits flush on it; the
+ * client lifts the boards a few cm so they never z-fight the coping). Explosions break sections: `blast` per
+ * explosion kind = [damage at the section's surface, reach (m)], linear falloff to 0 at the reach. Bullets,
+ * fists, fire and the storm never hurt a pier; the island core and bunkers are never touched.
+ */
+export const DOCK = {
+  width: 3, chunk: 2, maxLen: 6, minLen: 4, minWater: 6, deck: 0.3, lip: 0, hp: 300,
+  blast: {
+    rocket: [420, 2.5], grenade: [320, 2.5], charge: [900, 1.4], barrel: [320, 3], propane: [280, 3],
+  } as Record<string, [number, number]>,
 };
 
 /** Neutral center island stations (anyone may use them). */
@@ -317,6 +338,20 @@ export const HAZARD = {
   respawnClearM: 15,
   /** Blast push (m/s) at the centre, like a weaker rocket. */
   knock: 6, knockUp: 2.5,
+} as const;
+
+/**
+ * Spike trap (sim/traps.ts): a steel plate set on a floor or wall. Anyone but its owner (and, with teams, the
+ * owner's team) who steps on it / walks right past it takes `dmg` at once as the spikes spring out; it then
+ * re-arms after `rearmSec`. A fresh one arms `armSec` after placing (no dropping it under someone's feet).
+ * `half`: plate half-size; `zone`: how far out from the plate it reaches; `blastDmg`: what a grenade / rocket
+ * / charge does to it at the centre (falls off to 0 at the blast radius).
+ */
+export const TRAP = {
+  price: 75, maxPerPlayer: 3, hp: 150, dmg: 60, armSec: 1, rearmSec: 2.5, placeSec: 0.3,
+  half: 0.5, thick: 0.08, zone: 0.5, minGap: 1.1, blastDmg: 300,
+  /** Push (m/s) the spikes give whoever they hit. */
+  knock: 2.5,
 } as const;
 
 /**
