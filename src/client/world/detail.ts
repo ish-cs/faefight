@@ -204,11 +204,18 @@ function chain(b: StaticBatch, B: THREE.Matrix4, n: number, rng: Rng) {
   }
 }
 
+/** One material per sign text (shared by every island): a new material per call made each island's copy its own draw. */
+const signMats = new Map<string, THREE.MeshStandardNodeMaterial>();
+
 function sign(b: StaticBatch, B: THREE.Matrix4, text: string, bg: string) {
   const M = mats();
   b.add(M.galv, new THREE.CylinderGeometry(0.03, 0.03, 2.2, 6), at(B, mat(0, 1.1, 0)));
-  const sm = new THREE.MeshStandardNodeMaterial({ map: signTex(text, bg), roughness: 0.6, vertexColors: true });
-  sm.name = `sign:${text}`;
+  let sm = signMats.get(`${text}|${bg}`);
+  if (!sm) {
+    sm = new THREE.MeshStandardNodeMaterial({ map: signTex(text, bg), roughness: 0.6, vertexColors: true });
+    sm.name = `sign:${text}`;
+    signMats.set(`${text}|${bg}`, sm);
+  }
   b.add(sm, new THREE.PlaneGeometry(1.4, 0.18), at(B, mat(0, 2.05, -0.035)), 0xffffff, false);
   b.add(M.dark, new THREE.BoxGeometry(1.42, 0.2, 0.02), at(B, mat(0, 2.05, -0.015)), 0x303438);
 }

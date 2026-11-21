@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { type Placement, PROP_SPEC, type PropType } from './clusters';
 import { ChunkedInstances } from './chunked';
 import { mat, merge, StaticBatch } from './geo';
-import { registerDistanceCull, releaseLods, SMALL_CASTER_LAYER } from './lod';
+import { releaseLods } from './lod';
 import { propModel } from './propModels';
 import type { Quality } from './sky';
 
@@ -18,8 +18,6 @@ import type { Quality } from './sky';
  * [{ parts: propModel(type), maxDist }], small: true, chunk: 48 })` + add/build/setTierLimit.
  */
 export const TIER_LIMIT: Record<Quality, number> = { low: 0, high: 1, ultra: 2 };
-/** dock clusters beyond this (high-preset metres, scaled per preset by lod.ts) are not drawn */
-const CLUSTER_CULL = 150;
 const _c = new THREE.Color();
 
 const _n = new THREE.Matrix3();
@@ -63,13 +61,6 @@ export class PropLayer {
   private counts = { baked: 0, instanced: 0, skipped: 0 };
   /** CPU time spent placing/baking (load-time budget) */
   private ms = 0;
-  /** non-casting baked props (PROP_SPEC.cast false): their own merged meshes, drawn in the main pass only */
-  private quiet = new StaticBatch();
-  /**
-   * casting baked props: their own chunked batch (not the island dressing's: their triangles pushed those bins over
-   * the chunk-split threshold), near shadow cascades only, culled past CLUSTER_CULL m
-   */
-  private baked = new StaticBatch();
   /** highest quality tier baked by the next place() calls (set from the preset before a map build) */
   buildTier = 2;
 
@@ -94,24 +85,15 @@ export class PropLayer {
     if (p.tier > this.buildTier) { this.counts.skipped++; return; }
     this.counts.baked++;
     _c.set(p.tint);
-    void bake; // kept for the call sites' signature; clusters bake into their own batch
-    const into = PROP_SPEC[p.type].cast ? this.baked : this.quiet;
-    for (const part of propModel(p.type, p.cell ?? 0)) into.addRaw(part.material, transformed(part.geometry, m, part.tint ? _c : null), part.cast, true);
+    // Bake straight into the island dressing batch: its bins are shared per material + shadow flags, so the dock
+    // props add triangles to meshes that draw anyway instead of ~35 extra meshes (+ their shadow draws). The
+    // chunk budget (geo.ts) keeps the bins from fanning out; small parts shrink out with distance there.
+    const into = bake;
+    for (const part of propModel(p.type, p.cell ?? 0)) into.addRaw(part.material, transformed(part.geometry, m, part.tint ? _c : null), PROP_SPEC[p.type].cast && part.cast, true);
   }
 
   /** Build the instanced meshes (call once after every place()). */
   build() {
-    const t0 = performance.now();
-    for (const mesh of this.quiet.build(this.root, 'dockQuiet', { chunked: true })) mesh.castShadow = false;
-    for (const mesh of this.baked.build(this.root, 'dock', { chunked: true })) {
-      mesh.layers.set(SMALL_CASTER_LAYER);
-      if (mesh.userData.lod) continue; // small-part chunks already distance-cull themselves
-      mesh.geometry.computeBoundingSphere();
-      const sp = mesh.geometry.boundingSphere!;
-      // map-wide leftovers (radius ≥ the cull distance) stay drawn; real chunks cull with distance
-      if (sp.radius < CLUSTER_CULL) mesh.userData.lod = registerDistanceCull(mesh, CLUSTER_CULL, { center: sp.center, radius: sp.radius });
-    }
-    this.ms += performance.now() - t0;
     for (const [type, list] of this.pending) {
       list.sort((a, b) => a.tier - b.tier); // stable: within a tier, placement order (stack bottoms first)
       // one geometry per material: instanced parts all take the instance tint
@@ -154,8 +136,6 @@ export class PropLayer {
     this.pending.clear();
     releaseLods(this.root);
     for (const o of [...this.root.children]) { if (o instanceof THREE.Mesh) o.geometry.dispose(); o.removeFromParent(); }
-    this.quiet = new StaticBatch();
-    this.baked = new StaticBatch();
     this.counts = { baked: 0, instanced: 0, skipped: 0 };
     this.ms = 0;
   }
