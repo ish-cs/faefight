@@ -17,8 +17,11 @@ export type PostOptions = {
    * - 'taau': temporal (Karis 2014 / FSR2-style): jittered, no MSAA, motion vectors (velocity MRT), history
    *   reconstruction + a 5-tap contrast-adaptive sharpen (`sharpen` 0–1). Cheaper but softer; loses sub-pixel
    *   wires and dithers foliage that relies on MSAA alpha-to-coverage.
+   * - 'cas': keeps MSAA; bilinear upscale + the same contrast-adaptive sharpen, folded into the final grade pass
+   *   (no extra full-resolution passes: FSR 1's EASU + RCAS are two more output-sized passes, ~40 % of ultra's
+   *   output-resolution GPU time at 2× DPR).
    */
-  upscale?: { mode: 'fsr' | 'taau'; scale: number; sharpen: number };
+  upscale?: { mode: 'fsr' | 'taau' | 'cas'; scale: number; sharpen: number };
 };
 
 /**
@@ -30,8 +33,24 @@ export function noVelocity(m: THREE.NodeMaterial) {
   m.mrtNode = mrt({ velocity: vec4(0, 0, 0, 0) });
 }
 
-/** live TAAU sharpen strength (debug: tweak in ?debug=1 via World.sky.grade) */
+/** live sharpen strength for 'taau' / 'cas' (debug) */
 const sharpenAmount = uniform(0.25);
+/** scene input scale (× output resolution) under 'cas', kept live by SkyLighting for dynamic resolution */
+export const upscaleInput = uniform(1);
+
+/**
+ * Contrast-adaptive 5-tap sharpen (CAS-lite) of `t` at screen uv, taps `px` apart (uv): restores the crispness an
+ * upscale/reconstruction softens, weaker where local contrast is already high so edges don't ring.
+ */
+function casSample(t: THREE.TextureNode, px: THREE.Node<'vec2'>): THREE.Node<'vec4'> {
+  const c0 = t.sample(screenUV);
+  const n = t.sample(screenUV.add(vec2(0, px.y))).rgb, s2 = t.sample(screenUV.sub(vec2(0, px.y))).rgb;
+  const e = t.sample(screenUV.add(vec2(px.x, 0))).rgb, w = t.sample(screenUV.sub(vec2(px.x, 0))).rgb;
+  const lo = min(min(min(n, s2), min(e, w)), c0.rgb), hi = n.max(s2).max(e).max(w).max(c0.rgb);
+  const contrast = luminance(hi.sub(lo)).div(luminance(hi).add(1e-3)).clamp(0, 1);
+  const k = sharpenAmount.mul(float(1).sub(contrast)).mul(0.25);
+  return vec4(c0.rgb.add(c0.rgb.mul(4).sub(n.add(s2).add(e).add(w)).mul(k)).max(0), 1);
+}
 
 /** Sun position on screen (uv, y up) + whether it's in front of the camera; SkyLighting updates these per frame. */
 export const sunScreen = { uv: uniform(new THREE.Vector2(0.5, 0.5)), front: uniform(0), aspect: uniform(16 / 9) };
@@ -76,21 +95,13 @@ export function buildPipeline(
   // TAAU: everything after this runs at output resolution on the reconstructed image; AO and bloom stay at their
   // (input-relative) resolutions and are sampled by screen uv.
   let col: THREE.Node<'vec4'> = raw;
+  if (o.upscale) sharpenAmount.value = o.upscale.sharpen;
   if (o.upscale?.mode === 'fsr') col = fsr1(raw, o.upscale.sharpen);
+  // taps one input pixel apart (bilinear between them), so the sharpen works on the scene's own detail
+  if (o.upscale?.mode === 'cas') col = casSample(raw, vec2(1, 1).div(screenSize.mul(upscaleInput)));
   if (taauOn) {
     const t = taau(raw, scenePass.getTextureNode('depth'), scenePass.getTextureNode('velocity'), camera).getTextureNode();
-    sharpenAmount.value = o.upscale!.sharpen;
-    // contrast-adaptive 5-tap sharpen (CAS-lite): restores the crispness the reconstruction filter softens,
-    // weaker where local contrast is already high so edges don't ring
-    const px = vec2(1, 1).div(screenSize); // output pixels (TAAU resolves at drawing-buffer size)
-    const c0 = t.sample(screenUV);
-    const n = t.sample(screenUV.add(vec2(0, px.y))).rgb, s2 = t.sample(screenUV.sub(vec2(0, px.y))).rgb;
-    const e = t.sample(screenUV.add(vec2(px.x, 0))).rgb, w = t.sample(screenUV.sub(vec2(px.x, 0))).rgb;
-    const lo = min(min(min(n, s2), min(e, w)), c0.rgb), hi = n.max(s2).max(e).max(w).max(c0.rgb);
-    const contrast = luminance(hi.sub(lo)).div(luminance(hi).add(1e-3)).clamp(0, 1);
-    const k = sharpenAmount.mul(float(1).sub(contrast)).mul(0.25);
-    const sharp = c0.rgb.add(c0.rgb.mul(4).sub(n.add(s2).add(e).add(w)).mul(k)).max(0);
-    col = vec4(sharp, 1);
+    col = casSample(t, vec2(1, 1).div(screenSize)); // TAAU resolves at output size: output-pixel taps
   }
 
   let aoPass: ReturnType<typeof ao> | null = null;

@@ -1740,7 +1740,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
       predicted: () => ({ active: !!predictor?.active, pos: lastRendered, seq: moveSeq, stats: predictor?.stats ?? null, pending: predictor?.pending ?? 0 }),
       frames: () => frameStats(),
-      resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; },
+      resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; gpuDoneT.length = 0; },
+      /** frames the GPU actually finished per second (true throughput; rAF fps overstates it when frames queue) */
+      gpuFps: () => (gpuDoneT.length > 1 ? ((gpuDoneT.length - 1) * 1000) / (gpuDoneT[gpuDoneT.length - 1] - gpuDoneT[0]) : 0),
       gpuMs: () => renderer.gpuStats(),
       renderScale: () => ({ dyn: governor.knobs.res, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: governor.smoothedMs }),
       pbr: () => pbrStats,
@@ -1852,7 +1854,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   };
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
-  const gpuQueue = new FrameQueue(2);
+  // ?gpuqueue=N: frames allowed in flight (0 = unbounded, A/B only)
+  const gpuQueue = new FrameQueue(Number(new URLSearchParams(location.search).get('gpuqueue') ?? 2) || Infinity);
+  const gpuDoneT: number[] = [];
   const frame = () => {
     const now = performance.now();
     // Settings → Video frame cap (rAF itself is vsync-locked; this only skips frames below it).
@@ -2085,7 +2089,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderer.render(input.yaw);
       fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
       renderer.captureInfo();
-      const gpuDone = gpuQueue.submitted(performance.now());
+      const queued = gpuQueue.submitted(performance.now());
+      const gpuDone = () => { queued(); gpuDoneT.push(performance.now()); if (gpuDoneT.length > 600) gpuDoneT.shift(); };
       (renderer.gpu.backend as { device?: { queue: { onSubmittedWorkDone(): Promise<void> } } }).device?.queue.onSubmittedWorkDone().then(gpuDone, gpuDone);
       if (input.lookEventT !== null) { latency.drawn(input.lookEventT); input.lookEventT = null; }
       if (warmLoop.left > 0 && --warmLoop.left === 0) { warmLoop.before = null; warmLoop.done?.(); }

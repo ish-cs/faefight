@@ -8,7 +8,7 @@ import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
 import { SMALL_CASTER_LAYER } from './lod';
 import { cascadeToRefresh, type CascadeCacheState, newCacheState, SHADOW_CACHE } from './shadowCache';
-import { buildPipeline, grade, type PostOptions, sunScreen } from './post';
+import { buildPipeline, grade, type PostOptions, sunScreen, upscaleInput } from './post';
 
 export type Quality = 'low' | 'high' | 'ultra';
 const QUALITIES: Quality[] = ['low', 'high', 'ultra'];
@@ -38,16 +38,15 @@ const COMPETITIVE_POST: Partial<PostOptions> = { samples: 2, bloom: false, ao: f
  * `?upscaleScale=0.7` sets the input scale.
  */
 const Q = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
-const UP_MODE = Q?.get('upscale') ?? 'fsr';
-const UP_SCALE = Number(Q?.get('upscaleScale')) || (UP_MODE === 'taau' ? 0.6 : 0.7);
+const UP_MODE = Q?.get('upscale') ?? 'cas';
+const UP_SCALE = Math.min(1, Math.max(0.4, Number(Q?.get('upscaleScale')) || (UP_MODE === 'taau' ? 0.6 : 0.7)));
 const UPSCALE_ULTRA: PostOptions['upscale'] = UP_MODE === '0' ? undefined
-  : UP_MODE === 'taau' ? { mode: 'taau', scale: Math.min(1, Math.max(0.4, UP_SCALE)), sharpen: 0.25 }
-    : { mode: 'fsr', scale: Math.min(1, Math.max(0.4, UP_SCALE)), sharpen: 0.25 };
+  : { mode: UP_MODE === 'taau' || UP_MODE === 'fsr' ? UP_MODE : 'cas', scale: UP_SCALE, sharpen: UP_MODE === 'cas' ? 0.5 : 0.25 };
 
 const PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, cascades: 2, shadowMap: 1024, shadowFar: 110, post: { samples: 4, bloom: false, ao: false } },
   high: { pixelRatio: 1.25, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true } },
-  // ultra: native Retina output, scene rendered at 0.7× (MSAA ×4) and upscaled with FSR 1 (EASU + RCAS)
+  // ultra: native Retina output, scene rendered at 0.7× (MSAA ×4) and upscaled bilinear + contrast-adaptive sharpen in the grade pass
   ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, upscale: UPSCALE_ULTRA } },
 };
 
@@ -241,6 +240,7 @@ export class SkyLighting {
     this.gpu.setPixelRatio(Math.min(2, Math.max(0.5, base * this.resScale * (t ? 1 : this.dynScale))));
     if (t && this.scenePass) {
       const s = t.scale * this.dynScale;
+      upscaleInput.value = s;
       this.scenePass.setResolutionScale(s);
       this.bloomPass?.setResolutionScale(0.5 * s);
       this.applyAoBudget();
