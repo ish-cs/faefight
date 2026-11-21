@@ -30,6 +30,7 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  * - sealRaceM: a rival who just died with their open bunker within this many metres is worth dropping all for.
  * - siegeDist: camping a sealed bunker this far out from its weakest doorway; siegeAfterDeath: how long after the
  *   owner's death the camp holds without seeing them; siegeScore: attack score while camping.
+ * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
  * - stallSec / stallDist / stallBanSec: goal watchdog (a goal with no progress for stallSec is dropped for
  *   stallBanSec; moving stallDist counts as progress).
  */
@@ -56,6 +57,7 @@ export type DriveParams = {
   stallSec: number;
   stallDist: number;
   stallBanSec: number;
+  fireRangeMult: number;
 };
 
 /**
@@ -270,6 +272,7 @@ export const DRIVE: DriveParams = {
   stallSec: 10,
   stallDist: 2.5,
   stallBanSec: 20,
+  fireRangeMult: 2,
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
@@ -345,7 +348,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.guardFreshSec', [1, 10]], ['drive.collectCarried', [50, 500]], ['drive.steelRich', [450, 1500]],
   ['drive.sealAway', [0, 0.8]], ['drive.sealAwayTarget', [0, 1.5]], ['drive.emptyHomeSec', [3, 20]],
   ['drive.sealRaceM', [10, 60]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
-  ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]],
+  ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
   ['buildSkill.*.peekOut', [0.3, 3]],
