@@ -5,6 +5,7 @@ import { FIRE, PIECES, PLAYER } from './constants';
 import type { Cosmetics } from './cosmetics';
 import { COSMETIC, type MapDef } from './map';
 import type { FirePatch, MatchEvent, PieceKind, PieceState, PlayerState, Vec3 } from './types';
+import { mulberry32, type Rng } from './rng';
 import { add, dist2D, rotateY, v3 } from './vec';
 
 /**
@@ -98,17 +99,6 @@ export function steerFromFire(pos: Vec3, dir: Vec3 | null, zones: readonly { pos
   return v3(nx / nl, 0, nz / nl);
 }
 
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 export class Fire {
   private burns = new Map<number, Burn>();
   /** Burnt out: spread can't relight these (another explosion can). */
@@ -116,11 +106,12 @@ export class Fire {
   private patches: Patch[] = [];
   private beds: Bed[] = [];
   private nextStep = 0;
-  private rng: () => number;
+  private rng: Rng; // seeded, state on the function: fork and checkpoints carry it
   /** Player burn ticks owed this step: id → who lit the fire they stand in. */
   private scorched = new Map<number, number | null>();
 
-  constructor(private readonly def: MapDef, seed: number, private readonly nextId: () => number) {
+  /** `nextId` is re-bound when the match is forked or restored from a checkpoint (Match.rebind). */
+  constructor(private readonly def: MapDef, seed: number, public nextId: () => number) {
     // Own stream: fire never shifts the bots' (or anything else's) random choices.
     this.rng = mulberry32((seed * 0x9e3779b1) ^ 0xf12e);
     if (def.template === 'harbor') {

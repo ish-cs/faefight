@@ -119,6 +119,16 @@ export class Match implements MatchApi {
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
   }
 
+  /**
+   * Re-create everything bound to this instance (combat/fire callbacks, fire's piece-id source) after the
+   * match was copied: fork() and checkpoint restore (net/matchCheckpoint.ts).
+   */
+  rebind(): void {
+    this.ctx = this.makeCtx();
+    this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
+    this.fire.nextId = () => this.s.nextId++;
+  }
+
   /** Combat's view of this match (callbacks bound to this instance: rebuilt by fork). */
   private makeCtx(): CombatCtx {
     const physics = this.physics;
@@ -177,9 +187,8 @@ export class Match implements MatchApi {
     const m = Object.create(Match.prototype) as Match;
     const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
     const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
-    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx') copy[k] = deepClone(self[k], memo);
-    m.ctx = m.makeCtx();
-    m.fireCtx = { ...m.ctx, cosmetics: m.cosmetics };
+    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
+    m.rebind();
     return m;
   }
 
