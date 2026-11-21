@@ -31,8 +31,8 @@ function deckModel(look: Look): LodPart[] {
   const M = mats();
   const b = new StaticBatch();
   const boards = Math.round(L / PITCH);
-  const fresh = [0x9c7a52, 0x8f6e47, 0xa58257, 0x86673f];
-  const burnt = [0x3b2c1f, 0x4a3726, 0x2c2219, 0x5a4430];
+  const fresh = [0x6e5034, 0x62472e, 0x785838, 0x5b4129];
+  const burnt = [0x2a1f16, 0x34271b, 0x1f1812, 0x3e2e20];
   for (let i = 0; i < boards; i++) {
     const z = -L / 2 + PITCH / 2 + i * PITCH;
     const r = h01(i + 1);
@@ -52,7 +52,7 @@ function deckModel(look: Look): LodPart[] {
     b.add(M.wood, boxUV(len * short, BOARD_T, BOARD, 0.8), mat(off + (short < 1 ? (W - len * short) / 2 - 0.02 : 0), -BOARD_T / 2, z), col);
   }
   // Stringers under the boards, along the pier: whole, or snapped off near each end.
-  const sCol = look === 'whole' ? 0x6e5434 : 0x2f241a;
+  const sCol = look === 'whole' ? 0x4a3622 : 0x221a13;
   for (const x of [-STRINGER_X, STRINGER_X]) {
     if (look === 'broken') {
       for (const end of [-1, 1]) {
@@ -68,7 +68,7 @@ function deckModel(look: Look): LodPart[] {
 function slabModel(look: Look): LodPart[] | null {
   if (look === 'broken') return null;
   const b = new StaticBatch();
-  b.add(mats().wood, boxUV(W, DOCK.deck, L, 1.5), mat(0, -DOCK.deck / 2, 0), look === 'whole' ? 0x8f6e47 : 0x3b2c1f, false);
+  b.add(mats().wood, boxUV(W, DOCK.deck, L, 1.5), mat(0, -DOCK.deck / 2, 0), look === 'whole' ? 0x66492f : 0x2a1f16, false);
   return b.take().map(({ material, geometry, cast, receive }) => ({ material, geometry, cast, receive }));
 }
 

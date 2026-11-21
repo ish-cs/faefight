@@ -33,10 +33,12 @@ export class Docks {
     for (const d of defs) this.hp.set(d.id, DOCK.hp);
   }
 
-  /** Standing sections (bots, tests). */
-  standing(): DockDef[] {
-    return this.defs.filter((d) => this.hp.has(d.id));
+  /** Standing sections (bots, tests). The same array until one breaks: callers must not change it. */
+  standing(): readonly DockDef[] {
+    if (this.up?.n !== this.broken.length) this.up = { n: this.broken.length, list: this.defs.filter((d) => this.hp.has(d.id)) };
+    return this.up.list;
   }
+  private up: { n: number; list: DockDef[] } | null = null;
 
   hpOf(id: number): number | null {
     return this.hp.get(id) ?? null;
