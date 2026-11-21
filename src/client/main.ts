@@ -26,7 +26,7 @@ import { loadingScreen as loadingOverlay } from './loading';
 import { LobbyUi } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom, type SpectateResult } from './session';
-import { HELP_TEXT, HOST_ONLY, parseCommand, unknownCommand } from './commands';
+import { HELP_TEXT, HOST_ONLY, MONEY_HOST_ONLY, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven, parseCommand, unknownCommand } from './commands';
 import { currentDevice, currentIsChromium, isMobileDevice, showComputerOnly } from './device';
 import { openHowTo } from './howTo';
 import { SnapshotBuffer } from './snapBuffer';
@@ -381,6 +381,14 @@ async function playSolo(d: Difficulty, menu: HTMLElement) {
       console.info('[main] vs bot: player handed to a bot; spectating');
       return { text: 'You are spectating. A bot plays for you this match.', handoff: true };
     },
+    // Vs bot you are the host: the cash goes through the local worker (the authoritative sim).
+    money: (amount) => {
+      if (handedOff) return 'You are spectating: no player to give cash to';
+      if (!backend.debug) throw new Error('/money: vs-bot backend has no worker debug channel');
+      backend.debug.give({ cash: amount });
+      console.info(`[main] vs bot: /money +$${amount}`);
+      return moneyGiven(amount);
+    },
     role: {
       kind: 'solo',
       playAgain: () => {
@@ -410,7 +418,7 @@ async function hostLobby(name: string, menu: HTMLElement) {
   let game: Game | null = null;
   const launch = (setupFor: (w: Worker) => { setup: MatchSetup; humanId: number }, screen: HTMLElement) => {
     const backend = workerBackend(setupFor, session);
-    startGame(backend, screen, (c) => (chat = c), { role, spectate: () => session.toggleSpectate(), get hostId() { return session.hostPlayer; } }).then((g) => { game = g; }, (err) => {
+    startGame(backend, screen, (c) => (chat = c), { role, spectate: () => session.toggleSpectate(), money: (n) => session.giveMoney(n), get hostId() { return session.hostPlayer; } }).then((g) => { game = g; }, (err) => {
       console.error('[host] failed to start', err);
       screen.remove();
       app.append(ui!.root);
@@ -445,6 +453,7 @@ async function hostLobby(name: string, menu: HTMLElement) {
     const c = parseCommand(text);
     if (!c) session.localChat(text);
     else if (c.kind === 'spectate') ui!.addChat('', session.toggleSpectate().text);
+    else if (c.kind === 'money') ui!.addChat('', c.amount === null ? MONEY_USAGE : MONEY_NOT_IN_MATCH);
     else ui!.addChat('', c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
   });
   ui.render(session.lobby.slots(), 0);
@@ -457,7 +466,7 @@ async function joinLobby(code: string, name: string, menu: HTMLElement) {
   const ui = new LobbyUi(app, code, null, () => { link.close(); location.reload(); }, (text) => {
     const c = parseCommand(text);
     if (!c) link.send({ t: 'chat', text });
-    else ui.addChat('', c.kind === 'spectate' ? HOST_ONLY : c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
+    else ui.addChat('', c.kind === 'spectate' ? HOST_ONLY : c.kind === 'money' ? MONEY_HOST_ONLY : c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
   });
   ui.render(lobby.slots, lobby.you);
   let slots = lobby.slots;
@@ -501,8 +510,8 @@ async function joinLobby(code: string, name: string, menu: HTMLElement) {
 
 /** A running game; destroy() removes every trace of it (rematch / back to lobby). */
 type Game = { destroy(): void };
-/** spectate: what /spectate does here (host / vs bot); absent for a joined friend. */
-type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult };
+/** spectate / money: what /spectate and /money do here (host / vs bot); absent for a joined friend. */
+type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult; money?: (amount: number) => string };
 
 /** Loading-screen phases for a match and their share of the bar (real progress, see loading.ts). */
 const MATCH_PHASES = { code: 15, gpu: 10, characters: 25, map: 15, shaders: 30, frames: 5 };
@@ -695,6 +704,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   function runCommand(c: NonNullable<ReturnType<typeof parseCommand>>) {
     if (c.kind === 'help') { chat.add('', HELP_TEXT); return; }
     if (c.kind === 'unknown') { chat.add('', unknownCommand(c.name)); return; }
+    if (c.kind === 'money') {
+      // Guests never send it anywhere: the host check happens before validation feedback.
+      if (!end.money) chat.add('', MONEY_HOST_ONLY);
+      else chat.add('', c.amount === null ? MONEY_USAGE : end.money(c.amount));
+      return;
+    }
     if (!end.spectate) { chat.add('', HOST_ONLY); return; }
     const r = end.spectate();
     chat.add('', r.text);

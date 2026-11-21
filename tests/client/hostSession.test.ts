@@ -111,6 +111,29 @@ describe('HostSession', () => {
     info.mockRestore();
   });
 
+  test('/money credits the host player through the worker; guests cannot trigger it', async () => {
+    const { host, link } = await hostWithFriend();
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const posted: any[] = [];
+    expect(host.giveMoney(500)).toBe('/money only works during a match');
+    expect(host.start({ postMessage: (m) => posted.push(m) }).humanId).toBe(1);
+    expect(host.giveMoney(500)).toBe('+$500 (host command)');
+    expect(posted).toContainEqual({ type: 'debug', cmd: 'give', inv: { cash: 500 }, id: 1 });
+    // Re-validated even though parseCommand already did.
+    for (const bad of [0, -1, 1.5, NaN, 100_001]) expect(host.giveMoney(bad)).toMatch(/Usage: \/money <amount>/);
+    // A guest typing it (or a forged message) never reaches the sim.
+    link.send({ t: 'chat', text: '/money 100000' });
+    link.send({ t: 'money', amount: 100000 });
+    link.send({ t: 'debug', cmd: 'give', inv: { cash: 100000 } });
+    await flush(); await flush();
+    expect(posted.filter((m) => m.type === 'debug')).toHaveLength(1);
+    // Spectating host has no player to credit.
+    host.toggleSpectate();
+    expect(host.giveMoney(500)).toMatch(/spectating/);
+    expect(posted.filter((m) => m.type === 'debug')).toHaveLength(1);
+    info.mockRestore();
+  });
+
   test('a flood of malformed messages logs only a few warnings', async () => {
     const { link } = await hostWithFriend();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
