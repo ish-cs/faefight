@@ -7,6 +7,7 @@ import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchState
 import { buildMapDef, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
+import { Fire, fireZones, type FireCtx } from './fire';
 import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
@@ -60,6 +61,9 @@ export class Match implements MatchApi {
   readonly map: IslandLayout[];
   private center: CenterState = newCenterState();
   private cosmetics: Cosmetics;
+  /** Burning pieces and ground fires (sim/fire.ts). */
+  private fire: Fire;
+  private fireCtx: FireCtx;
   /** Potion sellers: the NPC on the center island. */
   potionShops: PotionShop[];
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
@@ -77,6 +81,7 @@ export class Match implements MatchApi {
     const map = def.islands;
     this.map = map;
     this.cosmetics = new Cosmetics(def.cosmetics);
+    this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
     this.potionShops = potionShopsAt([def.center.potionShop]);
     this.s = newMatchState(map, setup.seed ?? 1);
     this.s.waterY = def.waterY;
@@ -102,6 +107,7 @@ export class Match implements MatchApi {
       }
     });
     this.ctx = this.makeCtx();
+    this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
   }
 
   /** Combat's view of this match (callbacks bound to this instance: rebuilt by fork). */
@@ -162,8 +168,9 @@ export class Match implements MatchApi {
     const m = Object.create(Match.prototype) as Match;
     const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
     const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
-    for (const k of Object.keys(self)) if (k !== 'ctx') copy[k] = deepClone(self[k], memo);
+    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx') copy[k] = deepClone(self[k], memo);
     m.ctx = m.makeCtx();
+    m.fireCtx = { ...m.ctx, cosmetics: m.cosmetics };
     return m;
   }
 
@@ -195,6 +202,8 @@ export class Match implements MatchApi {
     }
 
     this.events.push(...tickExplosives(this.ctx, now));
+    this.fire.onEvents(this.events, now, this.fireCtx);
+    this.events.push(...this.fire.tick(now, this.s.waterY, this.fireCtx, !!this.s.storm));
     this.collapseUnsupported(now);
     if (this.s.storm) this.events.push(...tickStorm(this.ctx, this.s.storm, now));
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
@@ -254,6 +263,23 @@ export class Match implements MatchApi {
   /** Every kill so far (tests/debug). */
   debugKills(): { victim: number; killer: number | null }[] {
     return this.kills;
+  }
+
+  /** Detonate a rocket / grenade / charge right here on the next tick (tests/e2e). */
+  debugExplode(kind: Explosive['kind'], pos: Vec3, owner = 0): void {
+    this.explosives.push({ id: this.s.nextId++, kind, owner, pos: clone(pos), vel: v3(0, -0.01, 0), explodeAt: this.s.time });
+  }
+
+  /** Set a piece on fire as if an explosion had (tests/e2e). Returns false if it can't burn. */
+  debugIgnite(pieceId: number, by: number | null = null): boolean {
+    const p = this.s.pieces.get(pieceId);
+    if (!p) throw new Error(`Match.debugIgnite: no piece ${pieceId}`);
+    return this.fire.ignite(p, this.s.time, by);
+  }
+
+  /** Fire state (tests/debug): ids of burning pieces and the ground fire count. */
+  debugFire(): { burning: number[]; patches: number } {
+    return { burning: [...this.s.pieces.values()].filter((p) => this.fire.isBurning(p.id)).map((p) => p.id), patches: this.fire.patchCount };
   }
 
   debugDamagePiece(pieceId: number, amount: number): void {
@@ -590,6 +616,7 @@ export class Match implements MatchApi {
       loot: [...this.s.loot.values()].filter((b) => dist(b.pos, eye) <= SIGHT_RANGE).map((b) => clone(b.pos)),
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
+      fires: fireZones(this.s.pieces.values(), this.fire.snapshotFires()),
       storm: this.s.storm ? { ...stormSnap(this.s.storm, this.s.time), rate: stormRate(this.s.storm, this.s.time) } : null,
       potionShops: this.potionShops.map((sh) => clone(sh.pos)),
       groundAt: (x, z) => this.physics.isGroundAt(x, z),
@@ -605,6 +632,7 @@ export class Match implements MatchApi {
       pieces: [...this.s.pieces.values()],
       loot: [...this.s.loot.values()],
       projectiles: projectiles(this.explosives),
+      ...(this.fire.patchCount ? { fires: this.fire.snapshotFires() } : {}),
       generators: this.s.generators,
       center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       broken: this.cosmetics.broken,

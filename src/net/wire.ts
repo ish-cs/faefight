@@ -54,6 +54,7 @@ const DICT = [
   'ack', 'grounded', 'airTime', 'storm', 'strikes', 'r', 'at', 'lightning', 'cause',
   'stamina', 'exhausted', 'sprinting', 'rest', 'stress', 'brain', 'personality', 'difficulty',
   'action', 'goal', 'reason', 'steps', 'step', 'fightOdds', 'thought',
+  'burning', 'fire',
 ];
 
 const enc = new TextEncoder();

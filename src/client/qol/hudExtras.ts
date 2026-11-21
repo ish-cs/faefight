@@ -160,7 +160,7 @@ function recapCard(r: Recap): HTMLElement {
   const head = el('div', 'qr-head');
   const icon = el('span', 'qr-icon');
   if (r.weapon && Object.hasOwn(ICONS, r.weapon)) icon.innerHTML = ICONS[r.weapon as IconKind];
-  else icon.textContent = r.weapon === 'water' ? '≈' : r.weapon === 'fall' ? '↓' : r.weapon === 'lightning' ? 'ϟ' : r.weapon === 'storm' ? '◎' : '✕';
+  else icon.textContent = r.weapon === 'water' ? '≈' : r.weapon === 'fall' ? '↓' : r.weapon === 'lightning' ? 'ϟ' : r.weapon === 'storm' ? '◎' : r.weapon === 'fire' ? '✹' : '✕';
   const title = el('div', 'qr-title', r.title);
   head.append(icon, title);
   if (r.killer) {

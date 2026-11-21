@@ -247,3 +247,37 @@ export const CENTER = {
   wellPerSec: 4,
   wellCap: 50,
 };
+
+/**
+ * Fire (sim/fire.ts). Explosions ignite flammable things inside their blast; burning pieces lose `dps` HP/s
+ * (resolved every `stepSec`) until they burn out after `burnSec` (uniform in [min, max], seeded) or break.
+ * Metal, steel and containers never burn: they are the counter to a rocket on a wooden base.
+ * After `spreadAfterSec` a burning piece rolls `spreadChance` per step for every touching flammable piece.
+ * Players touching flames take `playerDps` (shield first). Ground patches (grass, crates, palms) burn the same way.
+ */
+export const FIRE = {
+  stepSec: 0.5,
+  pieces: {
+    wood: { dps: 13, burnSec: [14, 20] },
+    scaffold: { dps: 10, burnSec: [12, 18] },
+    ramp: { dps: 10, burnSec: [12, 18] },
+    sandbags: { dps: 4, burnSec: [4, 6] },
+  } as Partial<Record<PieceKind, { dps: number; burnSec: [number, number] }>>,
+  spreadAfterSec: 3,
+  spreadChance: 0.15,
+  /** Pieces this close (m, box to box) count as touching for spread. */
+  touchEps: 0.25,
+  playerDps: 6,
+  /** How close (m) to burning surfaces a player body has to be to catch the heat. */
+  playerReach: 0.3,
+  /** Radius (m) of each source's ignition: the whole blast. */
+  igniteRadius: { rocket: ROCKET.radius, grenade: GRENADE.radius, charge: CHARGE.radius + 0.5 } as Record<'rocket' | 'grenade' | 'charge', number>,
+  patch: {
+    r: 1.4, grassSec: [8, 12] as [number, number], spreadAfterSec: 2, spreadChance: 0.12, spreadStep: 1.8, max: 40,
+    /** A patch sets touching wooden pieces alight with this chance per step (after spreadAfterSec). */
+    pieceChance: 0.12,
+  },
+  /** Storm rain (sudden death): burn timers run this many times faster, so fires go out sooner. */
+  rainMult: 2.5,
+  props: { crate: { dps: 6, sec: 10, r: 0.8 }, palm: { dps: 6, sec: 16, r: 0.7 } } as Record<'crate' | 'palm', { dps: number; sec: number; r: number }>,
+};

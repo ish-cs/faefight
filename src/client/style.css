@@ -532,3 +532,15 @@ canvas.shake { animation: screen-shake 0.55s ease-out; }
 .hud .drag-drop-hint { display: none; position: fixed; left: 0; top: 0; z-index: 50; pointer-events: none; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; letter-spacing: 0.4px; color: #0e1218; background: #ffb070; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); white-space: nowrap; }
 .hud .drag-drop-hint.on { display: block; }
 .hud .hotbar.drop-out ~ * { cursor: no-drop; }
+
+/* Fire: badge + warm vignette while flames are hurting you (damageFx.ts). */
+.burning-indicator { position: absolute; left: 50%; bottom: 23%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px 5px 10px; border-radius: 999px; background: rgba(40, 12, 0, 0.62); border: 1px solid rgba(255, 140, 50, 0.75);
+  color: #ffd2a0; font: 700 13px/1 system-ui, sans-serif; letter-spacing: 0.14em; opacity: 0; transition: opacity 0.18s; pointer-events: none; }
+.burning-indicator[data-on="1"] { opacity: 1; animation: burn-pulse 0.5s ease-in-out infinite alternate; }
+.damage-fx::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.25s;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(255, 90, 10, 0.32) 100%); }
+.damage-fx[data-burning="1"]::before { opacity: 1; }
+.burning-flame { width: 12px; height: 16px; border-radius: 50% 50% 45% 45% / 65% 65% 35% 35%;
+  background: radial-gradient(circle at 50% 70%, #fff3b0 0 20%, #ffb030 45%, #ff4a10 80%); box-shadow: 0 0 10px #ff7a20; }
+@keyframes burn-pulse { from { box-shadow: 0 0 6px rgba(255, 110, 30, 0.4); } to { box-shadow: 0 0 16px rgba(255, 110, 30, 0.9); } }
