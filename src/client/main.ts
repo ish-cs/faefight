@@ -977,9 +977,22 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     chat: (from, text) => chat.add(from, text),
     fatal: showFatal,
     reconnect: () => {
+      const r = loadRejoin();
       showFatal('Connection lost', 'Reconnecting to the host… a bot plays your seat until you are back.');
-      markAutoRejoin();
-      setTimeout(() => location.reload(), 1200);
+      // Is the host still there? If its room is gone the match is over; otherwise reload and take the seat back.
+      const hostGone = () => {
+        clearRejoin();
+        dead?.remove();
+        dead = null;
+        showFatal('Host left', 'Match over: lost the connection to the host.');
+      };
+      if (!r) { hostGone(); return; }
+      pickTransport(location.search).join(r.code).then((probe) => {
+        probe.close();
+        console.info('[rejoin] host still up; reloading to reclaim the seat');
+        markAutoRejoin();
+        location.reload();
+      }, (err) => { console.info('[rejoin] host unreachable', err); hostGone(); });
     },
   });
 
