@@ -67,7 +67,11 @@ type Raw = { base: V3; rough: F; metal: F; opts: WeatherOpts };
 /** unweathered nodes per material (not userData: Material.clone JSON-copies userData) */
 const RAW = new WeakMap<THREE.Material, Raw>();
 
+/** ?noweather (perf A/B): materials stay as built, no weathering nodes */
+const OFF = typeof location !== 'undefined' && location.search.includes('noweather');
+
 export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) {
+  if (OFF) return m;
   const raw: Raw = RAW.get(m) ?? {
     // a colorNode replaces material.color AND .map, so a textured material's map is folded into the base here
     base: (m.colorNode as V3 | null) ?? (m.map ? texture(m.map).rgb.mul(vec3(m.color.r, m.color.g, m.color.b)) : vec3(m.color.r, m.color.g, m.color.b)) as V3,
