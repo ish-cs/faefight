@@ -227,6 +227,28 @@ export class DebrisSim {
   }
 
   private tmp: number[] = [];
+  private obstacles = new Map<number, RAPIER.RigidBody>();
+
+  /**
+   * A sim-owned gameplay prop (crate, drum…) as a kinematic body: debris rests on / gets shoved by it, never the
+   * other way round. `shape`: box half extents or a Y-axis cylinder (radius, half height); `rot` = [x, y, z, w].
+   */
+  addObstacle(id: number, shape: { box?: Vec3; cyl?: { r: number; h: number } }, pos: Vec3, rot: [number, number, number, number]) {
+    const desc = shape.box ? RAPIER.ColliderDesc.cuboid(shape.box.x, shape.box.y, shape.box.z) : RAPIER.ColliderDesc.cylinder(shape.cyl!.h, shape.cyl!.r);
+    const b = this.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased()
+      .setTranslation(pos.x, pos.y, pos.z).setRotation({ x: rot[0], y: rot[1], z: rot[2], w: rot[3] }));
+    this.world.createCollider(desc.setFriction(0.8), b);
+    this.obstacles.set(id, b);
+  }
+
+  /** The gameplay prop moved (snapshot pose, eased): follow it and wake debris it may hit. */
+  moveObstacle(id: number, pos: Vec3, rot: [number, number, number, number], focus: Vec3) {
+    const b = this.obstacles.get(id);
+    if (!b) return;
+    b.setNextKinematicTranslation(pos);
+    b.setNextKinematicRotation({ x: rot[0], y: rot[1], z: rot[2], w: rot[3] });
+    for (const i of this.near(pos.x, pos.z, 1.6, this.tmp)) if (!this.props[i].body) this.activate(i, focus);
+  }
 
   /** Radial blast: wakes and flings everything within ~1.6 × the gameplay radius. */
   explosion(pos: Vec3, kind: string, focus: Vec3 = pos) {

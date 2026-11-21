@@ -6,6 +6,7 @@ import { Debris } from './debris';
 import { Boats, gullPerches, Gulls } from './dressing';
 import { defineDetailKinds } from './detail';
 import { GameProps } from './gameProps';
+import { PROP_KINDS } from '../../sim/props';
 import { Grass } from './grass';
 import { buildGroundAO } from './groundAO';
 import { Scatter } from './scatter';
@@ -92,9 +93,16 @@ export class World {
     this.cosmetics = new CosmeticLayer(def.cosmetics);
     this.scene.add(this.cosmetics.root);
     this.scene.add(this.debris.root);
-    void this.debris.build(def, this.sky.quality);
-    this.gameProps = new GameProps(def.props ?? []);
-    this.scene.add(this.gameProps.root);
+    const gameProps = this.gameProps = new GameProps(def.props ?? []);
+    this.scene.add(gameProps.root);
+    // debris collides with the gameplay props (kinematic, following their snapshot poses)
+    void this.debris.build(def, this.sky.quality).then(() => {
+      const sim = this.debris.sim;
+      if (!sim || this.gameProps !== gameProps) return;
+      for (const s of def.props ?? []) sim.addObstacle(s.id, PROP_KINDS[s.kind].shape, s.pos, s.rot);
+      const cam = this.sky.camera.position;
+      gameProps.onPose = (id, p, q) => sim.moveObstacle(id, p, [q.x, q.y, q.z, q.w], cam);
+    });
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
 

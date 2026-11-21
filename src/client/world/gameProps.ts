@@ -66,6 +66,8 @@ type Item = { meshes: THREE.InstancedMesh[]; index: number; spawn: PropSpawn; po
 export class GameProps {
   readonly root = new THREE.Group();
   private items = new Map<number, Item>();
+  /** Called with each prop's eased pose whenever it moves (client debris follows these as kinematic obstacles). */
+  onPose: ((id: number, pos: THREE.Vector3, rot: THREE.Quaternion) => void) | null = null;
 
   constructor(spawns: PropSpawn[]) {
     this.root.name = 'gameProps';
@@ -127,6 +129,7 @@ export class GameProps {
       else { it.pos.lerp(it.tPos, k); it.rot.slerp(it.tRot, k); }
       if (it.pos.distanceToSquared(it.tPos) < 1e-6 && Math.abs(it.rot.dot(it.tRot)) > 0.999999) { it.pos.copy(it.tPos); it.rot.copy(it.tRot); it.moving = false; }
       this.write(it);
+      this.onPose?.(it.spawn.id, it.pos, it.rot);
       for (const m of it.meshes) touched.add(m);
     }
     for (const m of touched) m.instanceMatrix.needsUpdate = true;

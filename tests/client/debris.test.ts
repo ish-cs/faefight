@@ -163,4 +163,21 @@ describe('debris physics manager', () => {
     expect(sim.activeCount).toBe(1);
     sim.dispose();
   });
+
+  test('gameplay props are kinematic obstacles: debris rests on a crate and falls when it is pushed away', async () => {
+    const x = isl.center.x, z = isl.center.z - 6, top = isl.groundY + 0.9;
+    const sim = await DebrisSim.create(def, [{ kind: 'can', x, y: top + DEBRIS_SPEC.can.rest, z, yaw: 0, tint: 0 }]);
+    sim.addObstacle(1, { box: { x: 0.45, y: 0.45, z: 0.45 } }, { x, y: isl.groundY + 0.45, z }, [0, 0, 0, 1]);
+    const f = focusOf(x, z);
+    sim.activate(0, f);
+    for (let i = 0; i < 60; i++) sim.step(1 / 60, f, [], MAP.waterY);
+    expect(sim.props[0].pose.y).toBeGreaterThan(top);
+    for (let i = 1; i <= 5; i++) { // yanked out from under it (an explosion)
+      sim.moveObstacle(1, { x: x + (i / 5) * 2, y: isl.groundY + 0.45, z }, [0, 0, 0, 1], f);
+      sim.step(1 / 60, f, [], MAP.waterY);
+    }
+    for (let i = 0; i < 90; i++) sim.step(1 / 60, f, [], MAP.waterY);
+    expect(sim.props[0].pose.y).toBeLessThan(isl.groundY + 0.2);
+    sim.dispose();
+  });
 });
