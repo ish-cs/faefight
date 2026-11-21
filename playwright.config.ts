@@ -11,8 +11,8 @@ const CI = !!env.CI;
 // the default headless shell loses its WebGPU device right after init.
 // CI (GitHub Linux runners, no GPU): no WebGPU adapter, so three/webgpu's WebGPURenderer falls back to
 // WebGL2, rendered in software by SwiftShader through ANGLE. Slower, so CI gets a longer test timeout.
-const launchArgs = CI
-  ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
+const launchArgs = env.E2E_CHROME_ARGS ? env.E2E_CHROME_ARGS.split(' ').filter(Boolean)
+  : CI ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
   : ['--enable-unsafe-webgpu'];
 
 export default defineConfig({
