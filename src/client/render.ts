@@ -13,6 +13,8 @@ import { PotionSellers, stall } from './world/potionSeller';
 import { loadQuality } from './world/sky';
 import { StormFx } from './world/storm';
 import { LootView, lootWarmObjects } from './lootView';
+export { lods } from './world/lod';
+export { pbrStats } from './world/pbr';
 
 export { pieceGeometry };
 import { ISLAND_COLORS } from './colors';

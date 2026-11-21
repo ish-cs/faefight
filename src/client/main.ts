@@ -34,8 +34,6 @@ import { currentDevice, currentIsChromium, isMobileDevice, showComputerOnly } fr
 import { openHowTo } from './howTo';
 import { SnapshotBuffer } from './snapBuffer';
 import { FrameGovernor } from './governor';
-import { lods } from './world/lod';
-import { pbrStats } from './world/pbr';
 import { endButtons, GameScope, type EndRole } from './rematch';
 import { Scoreboard } from './scoreboard';
 import { applyDocumentSettings } from './settings/apply';
@@ -696,7 +694,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const loadStart = performance.now();
   const mods = await loadGameModules((done, total) => loading.progress('code', done / total, 'Loading game code'));
   const THREE = mods.three;
-  const { Renderer } = mods.render, { ThirdPersonCamera } = mods.camera, { FirstPersonView } = mods.viewmodel;
+  // lods/pbrStats come through the lazy render module: a static import would pull three.js onto the phone card.
+  const { Renderer, lods, pbrStats } = mods.render, { ThirdPersonCamera } = mods.camera, { FirstPersonView } = mods.viewmodel;
   const { DamageFx } = mods.damageFx, { Hud } = mods.hud, { Spectator } = mods.spectator;
   const offCharProgress = mods.characters.onCharacterProgress((f) => loading.progress('characters', f, 'Downloading characters'));
 
