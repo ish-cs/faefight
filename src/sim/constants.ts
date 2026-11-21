@@ -166,7 +166,7 @@ export const LOCK_PRICE_MULT = 4;
 export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5 };
 
 export const LIFECYCLE = {
-  respawnSec: 3,
+  respawnSec: 10,
   /** Respawning into a sealed bunker: break out within this long or you're eliminated. */
   breakoutSec: 10,
   invulnSec: 3,
