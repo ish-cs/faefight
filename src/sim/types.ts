@@ -130,7 +130,10 @@ export type PlayerState = {
   mv?: MoveState;
 };
 
-export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number };
+/** `burning`: on fire right now (sim/fire.ts); omitted when not, so it costs nothing on the wire. */
+export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number; burning?: true };
+/** A ground fire (grass patch, or a burning crate/palm prop): small sim entity, see sim/fire.ts. */
+export type FirePatch = { id: number; kind: 'grass' | 'crate' | 'palm'; pos: Vec3 };
 /** `noPickup`: a dropped bag its dropper can't grab back until `until`. */
 export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number } };
 
@@ -150,6 +153,8 @@ export type Snapshot = {
   loot: LootBag[];
   /** In flight now (the sim always sends it; optional so older/partial snapshots stay valid). */
   projectiles?: Projectile[];
+  /** Ground fires burning now (grass, props); omitted when there are none. */
+  fires?: FirePatch[];
   generators: { island: number; stored: number }[];
   /** Center island bonus stations: cash at the gold generator, free pieces at the supply generator. */
   center?: { gold: number; bags: number; steel: number };

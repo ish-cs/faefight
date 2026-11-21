@@ -16,8 +16,11 @@ export type NetPlayer = Omit<PlayerState, Private> & Partial<Pick<PlayerState, P
 /** A live projectile on the wire: [id, kind (0 grenade, 1 charge, 2 rocket), x, y, z, vx, vy, vz]. */
 export type NetProjectile = [number, number, number, number, number, number, number, number];
 const PROJ_KINDS = ['grenade', 'charge', 'rocket'] as const;
-export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players' | 'projectiles' | 'brains'> & {
-  pieces?: PieceState[]; players: NetPlayer[]; proj?: NetProjectile[];
+/** A ground fire on the wire: [id, kind (0 grass, 1 crate, 2 palm), x, y, z]. */
+export type NetFire = [number, number, number, number, number];
+const FIRE_KINDS = ['grass', 'crate', 'palm'] as const;
+export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players' | 'projectiles' | 'brains' | 'fires'> & {
+  pieces?: PieceState[]; players: NetPlayer[]; proj?: NetProjectile[]; fire?: NetFire[];
   /** Spectators only: the followed bot's thinking. */
   brain?: BotBrainInfo;
 };
@@ -44,7 +47,7 @@ export class SnapshotEncoder {
     this.events.push(snap.events);
     this.eventTicks.push(snap.tick);
     if (this.events.length > MAX_EVENT_TICKS) { this.events.shift(); this.eventTicks.shift(); }
-    const key = snap.pieces.map((p) => `${p.id}:${Math.round(p.hp)}`).join(',');
+    const key = snap.pieces.map((p) => `${p.id}:${Math.round(p.hp)}${p.burning ? 'f' : ''}`).join(',');
     if (key !== this.piecesKey) {
       this.piecesKey = key;
       this.pieces = snap.pieces.map((p) => ({ ...p, pos: rv(p.pos), rotY: r3(p.rotY), hp: Math.round(p.hp) }));
@@ -75,6 +78,9 @@ export class SnapshotEncoder {
       const p = rv(e.pos), v = r1v(e.vel);
       return [e.id, PROJ_KINDS.indexOf(e.kind), p.x, p.y, p.z, v.x, v.y, v.z];
     });
+    // Ground fires: tiny list, only while something burns.
+    delete (out as Partial<Snapshot>).fires;
+    if (s.fires?.length) out.fire = s.fires.map((f): NetFire => { const p = rv(f.pos); return [f.id, FIRE_KINDS.indexOf(f.kind), p.x, p.y, p.z]; });
     delete (out as Partial<Snapshot>).pieces;
     if (allPieces || this.sentPiecesKey.get(forPlayerId) !== this.piecesKey) {
       this.sentPiecesKey.set(forPlayerId, this.piecesKey);
@@ -130,10 +136,11 @@ export class SnapshotDecoder {
       reloadUntil: p.reloadUntil ?? 0, reloadSec: p.reloadSec ?? 0, reloadMag: p.reloadMag ?? 0, ads: p.ads ?? false,
       stamina: p.stamina ?? p.mv?.stamina ?? 100,
     }));
-    const { proj, brain, ...rest } = n;
+    const { proj, brain, fire, ...rest } = n;
     const projectiles = (proj ?? []).map(([id, k, x, y, z, vx, vy, vz]) => ({ id, kind: PROJ_KINDS[k] ?? 'grenade', pos: { x, y, z }, vel: { x: vx, y: vy, z: vz } }));
     const out: Snapshot = { ...rest, players, pieces: this.pieces, projectiles };
     if (brain) out.brains = [brain];
+    if (fire?.length) out.fires = fire.map(([id, k, x, y, z]) => ({ id, kind: FIRE_KINDS[k] ?? 'grass', pos: { x, y, z } }));
     return out;
   }
 }

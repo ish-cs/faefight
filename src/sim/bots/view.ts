@@ -46,6 +46,8 @@ export type BotView = {
   /** Positions of loot bags within sight range. */
   loot: Vec3[];
   waterY: number;
+  /** Burning pieces and ground fires as circles to stay out of (absent in hand-made test views). */
+  fires?: { pos: Vec3; r: number }[];
   suddenDeath: boolean;
   /** Potion seller positions (anyone may buy there). */
   potionShops?: Vec3[];

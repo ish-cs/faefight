@@ -1,5 +1,6 @@
 import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, SEAL, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
+import { isFlammable, steerFromFire } from '../fire';
 import type { Doorway, IslandLayout } from '../map';
 import { NO_INPUT } from '../types';
 import type {
@@ -67,6 +68,8 @@ const NADE_MIN = 6.5, NADE_MAX = 22, NADE_GAP = 3, NADE_SEEN_SEC = 2.5;
 /** Cash (carried + banked) at which a bot stocks up on grenades / a steel seal kit. */
 const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, hard: 450, pro: 400 };
 const STEEL_RICH = 800;
+/** Torching wooden bases: rocket range window (m), one rocket per gap (s), and the cash it takes to buy in. */
+const TORCH_RANGE = [9, 45] as const, TORCH_GAP = 8, TORCH_RICH = 900;
 /** Rebuy money for after a death: pistol + a box of ammo. */
 const INSURANCE = WEAPONS.pistol.price + 25;
 /** HP at or below which a bot uses a medkit it carries. */
@@ -142,6 +145,7 @@ export class Bot {
   private towerYaw: number | null = null;
   private wander: { to: Vec3; until: number } | null = null;
   private lastNadeAt = -Infinity;
+  private lastTorchAt = -Infinity;
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
   /** Low on stamina: walk (save it for escapes) until it's back up. */
@@ -218,7 +222,9 @@ export class Bot {
     let look: Angles = cur;
     let fire = false;
     const enemy = ctx.enemy;
-    const best = bestGun(me.inv, enemy ? ctx.enemyDist : 30);
+    // Medium+ tactic: a rocket into a rival's wooden base sets it burning (fire.ts).
+    const torch = enemy || this.goal === 'disengage' ? null : this.torchTarget(ctx);
+    const best = torch ? 'rocket' : bestGun(me.inv, enemy ? ctx.enemyDist : 30);
     const gunReady = (range: number) => {
       const w = me.equipped;
       const ammo = w === 'fists' ? null : me.inv.weapons[w];
@@ -240,6 +246,11 @@ export class Bot {
         this.lastNadeAt = now;
         this.nadePlan = null;
       }
+    } else if (torch) {
+      const want = lookAt(eye, torch);
+      look = turnToward(cur, want, TURN_RATE, dt);
+      fire = me.equipped === 'rocket' && angleBetween(look, want) < 0.03 && gunReady(dist2D(me.pos, torch));
+      if (fire) this.lastTorchAt = now;
     } else if (act.shootAt) {
       look = turnToward(cur, lookAt(eye, act.shootAt), TURN_RATE, dt);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
@@ -264,6 +275,12 @@ export class Bot {
       jump = true;
     }
     if (dir && !act.raw) dir = this.nav.safeDir(dir);
+    // Never walk into (or stand in) fire: slide around burning pieces and ground fires.
+    const zones = view.fires ?? [];
+    if (zones.length) {
+      const away = steerFromFire(me.pos, dir, zones);
+      if (away !== dir) dir = away && this.nav.safeDir(away);
+    }
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
@@ -408,10 +425,38 @@ export class Bot {
     return this.scaffoldsTo(c.home.index, c.bridgeTo);
   }
 
+  /**
+   * A rival's wooden base worth a rocket (3+ flammable pieces of one owner within 5 m, none burning yet) in
+   * rocket range; returns where to aim, or null. Medium+ only, one rocket per TORCH_GAP.
+   */
+  private torchTarget(c: Ctx): Vec3 | null {
+    if (this.difficulty === 'easy') return null;
+    const me = c.me, w = me.inv.weapons.rocket;
+    if (!w || w.mag + w.spare <= 0 || c.view.now - this.lastTorchAt < TORCH_GAP) return null;
+    let best: PieceState | null = null, bestD = Infinity;
+    for (const p of c.view.pieces) {
+      if (p.owner === me.id || p.owner <= 0 || p.burning || !isFlammable(p.kind)) continue;
+      const d = dist2D(p.pos, me.pos);
+      if (d < TORCH_RANGE[0] || d > TORCH_RANGE[1] || d >= bestD) continue;
+      if (this.woodNear(c.view.pieces, p) < 3) continue;
+      best = p; bestD = d;
+    }
+    return best && v3(best.pos.x, best.pos.y + Math.min(1, PIECES[best.kind].h / 2), best.pos.z);
+  }
+
+  private woodNear(pieces: PieceState[], p: PieceState): number {
+    let n = 0;
+    for (const q of pieces) if (q.owner === p.owner && !q.burning && isFlammable(q.kind) && dist2D(q.pos, p.pos) < 5) n++;
+    return n;
+  }
+
   private needs(c: Ctx): Needs {
     const total = c.me.inv.cash + c.me.vault.cash;
     const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
+    const wooden = this.difficulty !== 'easy' && total >= TORCH_RICH &&
+      c.view.pieces.some((p) => p.owner !== c.me.id && p.owner > 0 && isFlammable(p.kind) && this.woodNear(c.view.pieces, p) >= 3);
     return {
+      rocket: wooden,
       scaffolds: this.scaffoldsNeeded(c),
       kit: c.openDoors.length,
       // A hard plug in my own doorway: only a charge gets through.

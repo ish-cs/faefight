@@ -53,6 +53,7 @@ const DICT = [
   'wood', 'metal', 'steel', 'sandbags', 'scaffold', 'ramp', 'container', 'grenade', 'charge', 'medkit', 'noPickup', 'until',
   'ack', 'grounded', 'airTime', 'stamina', 'exhausted', 'sprinting', 'rest', 'stress', 'brain', 'personality', 'difficulty',
   'action', 'goal', 'reason', 'steps', 'step', 'fightOdds', 'thought',
+  'burning', 'fire',
 ];
 
 const enc = new TextEncoder();
