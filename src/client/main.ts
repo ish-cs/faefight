@@ -1052,6 +1052,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       mapDef: () => mapDef,
       humanId: () => humanId,
       renderInfo: () => renderer.info(),
+      /** Wildlife: drawn instances per species / swarm, and live agents (incl. hidden + off-screen) per species. */
+      critters: () => {
+        const c = renderer.world.critters;
+        if (!c) return null;
+        const live: Record<string, number> = {};
+        for (const a of c.sim.agents) live[a.def.name] = (live[a.def.name] ?? 0) + 1;
+        return { drawn: c.stats(), live };
+      },
       renderer,
       chatLines: () => [...document.querySelectorAll('.chat-line')].map((n) => n.textContent),
       input,

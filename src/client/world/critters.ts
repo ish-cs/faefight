@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  abs, attribute, cameraFar, instancedDynamicBufferAttribute, cameraNear, cos, exp, float, max, min, mix, positionGeometry, positionView, sin,
+  abs, attribute, positionLocal, cameraFar, instancedDynamicBufferAttribute, cameraNear, cos, exp, float, max, min, mix, positionGeometry, positionView, sin,
   uniform, vec3, viewZToPerspectiveDepth,
 } from 'three/tsl';
 import type { MapDef } from '../../sim/map';
@@ -16,8 +16,13 @@ const isK = (kind: F, k: number) => float(1).sub(min(abs(kind.sub(k)), 1));
 /**
  * Procedural limb animation shared by every species (see critterMeshes.ts for the `limb` encoding):
  * per-instance `crit` = (gait phase, gait 0..1, pose 0..1) written by the CPU each frame.
+ *
+ * NodeMaterial applies the instance matrix BEFORE `positionNode`, so positionLocal is already placed in the world
+ * here: the limb offsets are computed in the model's own frame and turned into world space with the instance
+ * matrix's columns (a second view of the same matrix array, `mats`). Building on positionGeometry instead would
+ * drop the instance transform and draw every animal at the world origin.
  */
-function animated(name: string, water: boolean, critAttr: THREE.InstancedBufferAttribute): THREE.MeshStandardNodeMaterial {
+function animated(name: string, water: boolean, critAttr: THREE.InstancedBufferAttribute, mats: THREE.InstancedInterleavedBuffer): THREE.MeshStandardNodeMaterial {
   const m = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: name === 'jelly' ? 0.2 : 0.8, side: THREE.DoubleSide });
   m.name = `critter:${name}`;
   const limb = attribute<'vec2'>('limb', 'vec2'), crit = instancedDynamicBufferAttribute(critAttr, 'vec3') as unknown as THREE.Node<'vec3'>;
@@ -34,7 +39,9 @@ function animated(name: string, water: boolean, critAttr: THREE.InstancedBufferA
   const dxTail = sin(phase.mul(0.8)).mul(amt).mul(gait.mul(0.7).add(0.3)).mul(tail);
   const dyHead = pose.mul(amt).mul(head).negate();
   const swell = sin(phase).mul(amt).mul(0.3).mul(pulse).add(1);
-  m.positionNode = vec3(p.x.mul(fold).mul(swell).add(dxTail), p.y.add(dyLeg).add(dyWing).add(dyHead), p.z.mul(swell).add(dz));
+  const off = vec3(p.x.mul(fold.mul(swell).sub(1)).add(dxTail), dyLeg.add(dyWing).add(dyHead), p.z.mul(swell.sub(1)).add(dz));
+  const col = (k: number) => (instancedDynamicBufferAttribute(mats, 'vec4', 16, k * 4) as unknown as THREE.Node<'vec4'>).xyz;
+  m.positionNode = positionLocal.add(col(0).mul(off.x)).add(col(1).mul(off.y)).add(col(2).mul(off.z));
   if (water) underwater(m, name === 'jelly' ? 0.55 : 0.7);
   return m;
 }
@@ -51,7 +58,7 @@ function underwater(m: THREE.MeshStandardNodeMaterial, opacity: number) {
   m.depthNode = viewZToPerspectiveDepth(positionView.z.mul(max(float(1).sub(float(0.5).div(len)), 0.02)), cameraNear, cameraFar);
 }
 
-type SpeciesMesh = { def: SpeciesDef; mesh: THREE.InstancedMesh; crit: THREE.InstancedBufferAttribute; tinted: boolean };
+type SpeciesMesh = { def: SpeciesDef; mesh: THREE.InstancedMesh; crit: THREE.InstancedBufferAttribute; mats: THREE.InstancedInterleavedBuffer; tinted: boolean };
 type SwarmMesh = { def: SwarmDef; mesh: THREE.InstancedMesh; a: THREE.InstancedBufferAttribute; b: THREE.InstancedBufferAttribute };
 
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _e = new THREE.Euler();
@@ -90,7 +97,10 @@ export class Critters {
       const geo = critterGeometry(d.name).clone();
       const crit = new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3);
       crit.setUsage(THREE.DynamicDrawUsage);
-      const mesh = new THREE.InstancedMesh(geo, animated(d.name, d.mode === 'water', crit), n);
+      const mesh = new THREE.InstancedMesh(geo, undefined, n);
+      const mats = new THREE.InstancedInterleavedBuffer(mesh.instanceMatrix.array as Float32Array, 16, 1);
+      mats.setUsage(THREE.DynamicDrawUsage);
+      mesh.material = animated(d.name, d.mode === 'water', crit, mats);
       mesh.name = `critter:${d.name}`;
       mesh.count = 0;
       mesh.frustumCulled = false; // per-agent culling happens on the CPU
@@ -98,7 +108,7 @@ export class Critters {
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       const tinted = !!TINTS[d.name];
       if (tinted) mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3).fill(1), 3);
-      this.species.push({ def: d, mesh, crit, tinted });
+      this.species.push({ def: d, mesh, crit, mats, tinted });
       this.root.add(mesh);
     }
     for (const d of SWARM_DEFS) this.swarms.push(this.swarmMesh(d));
@@ -175,6 +185,7 @@ export class Critters {
       s.mesh.visible = n > 0; // no draw call for an empty species
       if (n) {
         s.mesh.instanceMatrix.needsUpdate = true;
+        s.mats.needsUpdate = true;
         s.crit.needsUpdate = true;
         if (s.mesh.instanceColor) s.mesh.instanceColor.needsUpdate = true;
       }
