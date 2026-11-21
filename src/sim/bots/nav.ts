@@ -13,6 +13,8 @@ const CARROT = 2;
 const LOOK = [0.4, 0.8];
 /** Side offset of the edge probes in safeDir (most of the body radius: the capsule hangs over a rim before it drops). */
 const EDGE = 0.25;
+/** How long safeDir keeps detouring to the same side. */
+const DETOUR_KEEP_SEC = 1.5;
 const DETOURS = [0.4, -0.4, 0.8, -0.8, 1.2, -1.2, 1.6, -1.6];
 /** Highest step the character controller climbs without jumping (autostep 0.3 m). */
 const STEP_UP = 0.35;
@@ -572,13 +574,18 @@ export class Nav {
       return floor !== null && me.y - floor <= maxDrop && !(this.view.suddenDeath && floor <= this.view.waterY + 0.05);
     }));
     // Rather a hurtful drop than being stuck up there forever.
+    // Going round something: keep going round the same side for a bit (flip-flopping at a hole goes nowhere).
+    const now = this.view.now;
+    const side = now - this.detour.at < DETOUR_KEEP_SEC ? this.detour.sign : 0;
+    const order = side ? [...DETOURS.filter((a) => Math.sign(a) === side), ...DETOURS.filter((a) => Math.sign(a) !== side)] : DETOURS;
     for (const maxDrop of [MAX_DROP, Infinity]) {
       if (ok(dir, maxDrop)) return dir;
-      for (const a of DETOURS) {
+      for (const a of order) {
         const d = rotateY(dir, a);
-        if (ok(d, maxDrop)) return d;
+        if (ok(d, maxDrop)) { this.detour = { sign: Math.sign(a), at: now }; return d; }
       }
     }
     return null;
   }
+  private detour = { sign: 0, at: -Infinity };
 }
