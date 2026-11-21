@@ -93,12 +93,21 @@ export async function runGeneration(
   const sum = new Array<number>(lambda).fill(0), cnt = new Array<number>(lambda).fill(0);
   const fsum: Record<string, number> = {}, fcnt: Record<string, number> = {};
   let duelWins = 0, duels = 0;
+  const fit = (r: MatchResult, g: number, seat: number) =>
+    seatFitness(r, seat, specs[g].maxSec) - (cfg.imitation ? cfg.imitation.weight * imitationPenalty(seatStats(r, seat), cfg.imitation.target) : 0);
+  // Control variate: in an FFA, a candidate is scored against the fixed field seats of the same game (champion,
+  // hall, legacy), so game-level luck (a sudden-death game, a seal-rich map) cancels instead of swamping the signal.
+  // (In a duel the field is the frozen opponent.)
+  const fieldMean = results.map((r, g) => {
+    const fs = plans[g].flatMap((s, seat) => ('cand' in s ? [] : [fit(r, g, seat)]));
+    return fs.length ? fs.reduce((a, b) => a + b, 0) / fs.length : 0;
+  });
   results.forEach((r, g) => plans[g].forEach((s, seat) => {
     const duel = g >= nFfa;
     const w = duel ? (cfg.duelWeight ?? 1) : 1;
-    const f = seatFitness(r, seat, specs[g].maxSec) - (cfg.imitation ? cfg.imitation.weight * imitationPenalty(seatStats(r, seat), cfg.imitation.target) : 0);
+    const f = fit(r, g, seat);
     if ('cand' in s) {
-      sum[s.cand] += w * f; cnt[s.cand] += w;
+      sum[s.cand] += w * (f - fieldMean[g]); cnt[s.cand] += w;
       if (duel) { duels++; if (r.winner === seat + 1) duelWins++; }
     } else if (!duel) { fsum[s.field] = (fsum[s.field] ?? 0) + f; fcnt[s.field] = (fcnt[s.field] ?? 0) + 1; }
   }));

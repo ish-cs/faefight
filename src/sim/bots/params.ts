@@ -466,7 +466,7 @@ const ruleMatch = (pattern: string, key: string) => {
 
 /** [min, max] per tunable flat key; every default lies inside its box (tests/sim/botParams.test.ts checks). */
 /** Keys searched only within ±fraction of their hand-tuned default (clipped to their RANGE_RULES box). */
-const SEARCH_NEAR_DEFAULT: [string, number][] = [['aim.feel.*.spring', 0.25], ['aim.feel.*.damping', 0.25], ['aim.feel.*.maxAccel', 0.25]];
+const SEARCH_NEAR_DEFAULT: [string, number][] = [['aim.feel.*.spring', 0.25], ['aim.feel.*.damping', 0.25], ['aim.feel.*.maxAccel', 0.25], ['gunSkill.*.recoilComp', 0.15]];
 
 export const PARAM_RANGES: Readonly<Record<string, [number, number]>> = Object.freeze(Object.fromEntries(
   Object.keys(flattenParams(HAND_BOT_PARAMS)).flatMap((k): [string, [number, number]][] => {

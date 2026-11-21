@@ -244,7 +244,7 @@ describe('params', () => {
 describe('no cheating: bots only see BotView', () => {
   test('bot modules import nothing that holds match state', () => {
     const dir = path.resolve(__dirname, '../../src/sim/bots');
-    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building', '../seal', '../fire', '../movement', '../dmath', '../rng', '../emotes']);
+    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building', '../seal', '../fire', '../movement', '../dmath', '../rng', '../emotes', '../traps', '../docks']);
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts'))) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8');
       for (const m of src.matchAll(/from '([^']+)'/g)) {
@@ -261,6 +261,9 @@ describe('no cheating: bots only see BotView', () => {
       // movement: only the tuning tables (how far a jump carries), never the mover itself.
       const mv = src.match(/import \{([^}]*)\} from '\.\.\/movement'/);
       if (mv) for (const name of mv[1].split(',').map((x) => x.trim()).filter(Boolean)) expect(['MOVE', 'STAMINA']).toContain(name);
+      // traps / docks: only geometry helpers (whose trap, where its centre is, is this point over a dock).
+      const tr = src.match(/import \{([^}]*)\} from '\.\.\/(traps|docks)'/);
+      if (tr) for (const name of tr[1].split(',').map((x) => x.replace(/^type /, '').trim()).filter(Boolean)) expect(['friendly', 'trapCenter', 'overDock', 'TrapPlacement']).toContain(name);
     }
   });
 

@@ -60,6 +60,9 @@ describe('self-play training harness', () => {
     expect(seal).toBeGreaterThan(assist);
     expect(assist).toBeGreaterThan(top + 1);
     expect(seatFitness(r({ ...base, huntSealedSec: 100, kitAtDoorSec: 100 } as typeof base), 0)).toBeGreaterThan(plain + 0.5);
+    // Run 5: fighting close pays; the same hits from range don't.
+    const near = seatFitness(r({ ...base, hitDists: Array(20).fill(12) }), 0), far = seatFitness(r({ ...base, hitDists: Array(20).fill(40) }), 0);
+    expect(near).toBeGreaterThan(far + 0.8);
     const passiveWinner = seatFitness(r({ ...base, place: 1, longestHomeIdle: 300, idleHome: 300 }), 0);
     const activeLoser = seatFitness(r({ ...base, place: 2, attackSec: 400, closeDmg: 150 }), 0);
     expect(activeLoser).toBeGreaterThan(passiveWinner);

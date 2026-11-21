@@ -219,6 +219,7 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
 
 const HOARD = 600, WASTE_SEC = 5;
 const ATTACK_GOALS = new Set(['attack', 'seal', 'bridge', 'raid', 'fight']);
+const ENGAGE_M = 25;
 const CLOSE_M = 20, LONG_M = 40, IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15, KIT_DOOR_M = 10;
 const dist = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
 
@@ -237,10 +238,11 @@ function freePhysics(m: Match) {
  *     else finished (set up and finish together). Shaping toward the chain: plugs at rival doors, time at a rival's
  *     open door with a full kit, time hunting a rival whose bunker is sealed, time on rival islands with wall pieces.
  *  2. Outcome (small): placement; a decisive win; reaching sudden death costs everyone.
- *  3. Activity: share of alive time attacking (attack/seal/bridge/raid/fight); damage dealt within 20 m.
+ *  3. Activity (run 5: weighted up so it isn't swamped by the seal terms): share of alive time attacking
+ *     (attack/seal/bridge/raid/fight); damage dealt within 20 m; the share of my hits landed under 25 m.
  *  4. Penalties: a geared home-sit over 60 s (strong), idling at home, plinking beyond 40 m, hoarding, wasted pieces.
  */
-export const FITNESS_W = { seal: 2.0, elim: 3.5, assist: 1.5, placement: 0.2, decisiveWin: 1.5 } as const;
+export const FITNESS_W = { seal: 2.0, elim: 3.5, assist: 1.5, placement: 0.2, decisiveWin: 1.5, attack: 1.6, close: 1.0 } as const;
 export function seatFitness(r: MatchResult, seat: number, maxSec = 18 * 60): number {
   const s = r.seats[seat];
   const n = r.seats.length;
@@ -253,7 +255,11 @@ export function seatFitness(r: MatchResult, seat: number, maxSec = 18 * 60): num
     Math.min(0.5, 0.005 * (s.huntSealedSec ?? 0)) + Math.min(0.2, 0.002 * (s.raidSec ?? 0)) + Math.min(0.1, 0.008 * (s.scaffolds ?? 0));
   const outcome = W.placement * placement + 0.01 * s.kills + (won && r.decisive ? W.decisiveWin + Math.max(0, 1 - r.time / maxSec) : 0) -
     (r.time >= LIFECYCLE.suddenDeathAt ? 0.4 : 0);
-  const activity = 0.8 * Math.min(1, (s.attackSec ?? 0) / alive) + Math.min(0.6, 0.004 * (s.closeDmg ?? 0));
+  // Fights under ENGAGE_M: the share of my hits landed that close, trusted only once I've landed a few.
+  const hits = s.hitDists?.length ?? 0;
+  const close = hits ? s.hitDists.filter((d) => d < ENGAGE_M).length / hits : 0;
+  const activity = W.attack * Math.min(1, (s.attackSec ?? 0) / alive) + Math.min(0.6, 0.004 * (s.closeDmg ?? 0)) +
+    W.close * close * Math.min(1, hits / 10);
   const homeSit = Math.min(1, Math.max(0, (s.longestHomeIdle ?? 0) - 60) / 120);
   const penalties = -1.2 * homeSit - 0.5 * Math.min(1, (s.idleHome ?? 0) / alive) -
     Math.min(0.2, 0.002 * Math.max(0, (s.longShots ?? 0) - 2 * (s.longHits ?? 0))) -
