@@ -1,6 +1,7 @@
 import type { CenterIsland, IslandLayout, StaticBox } from '../map';
 import type { Placement } from '../building';
-import type { PieceKind, PieceState, PlayerState, StormSnap, Vec3 } from '../types';
+import type { PieceKind, PieceState, PlayerState, StormSnap, TrapNet, TrapRequest, Vec3 } from '../types';
+import type { TrapPlacement } from '../traps';
 
 /** Public status of every other player (what a human would know from the HUD). */
 export type OtherStatus = {
@@ -69,4 +70,8 @@ export type BotView = {
   groundAt(x: number, z: number): number | null;
   /** Would this build request succeed for this bot right now (snap applied by caller)? */
   canPlace(kind: PieceKind, pos: Vec3, rotY: number): Placement;
+  /** Spike traps within sight range (they're in plain view). Absent in hand-made test views. */
+  traps?: TrapNet[];
+  /** Would this spike trap go here for this bot right now (from `from`, default where it stands)? Absent in hand-made test views. */
+  canTrap?(req: TrapRequest, from?: Vec3): TrapPlacement;
 };

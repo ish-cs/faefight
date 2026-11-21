@@ -256,6 +256,15 @@ export class SoundDirector {
           else if (d.what === 'break') out.push({ sound: 'hazard', kind: 'crate', pos: at, gain: 1 });
           break;
         }
+        case 'trap': {
+          // Spike trap: snaps out with a steel clang; set down / broken sound like a metal piece.
+          const at = d.pos as Vec3 | undefined;
+          if (!at) break;
+          if (d.what === 'fired') out.push({ sound: 'spikeTrigger', pos: at, gain: 1 });
+          else if (d.what === 'placed') out.push({ sound: 'spikeArm', pos: at, gain: 0.8 });
+          else if (d.what === 'broken') out.push({ sound: 'destroyed', kind: 'metal', pos: at, gain: 0.6 });
+          break;
+        }
         case 'placed': {
           const pc = s.pieces.find((p) => p.id === d.piece);
           const at = pc?.pos ?? chest(d.by);

@@ -311,6 +311,20 @@ export const HAZARD = {
 } as const;
 
 /**
+ * Spike trap (sim/traps.ts): a steel plate set on a floor or wall. Anyone but its owner (and, with teams, the
+ * owner's team) who steps on it / walks right past it takes `dmg` at once as the spikes spring out; it then
+ * re-arms after `rearmSec`. A fresh one arms `armSec` after placing (no dropping it under someone's feet).
+ * `half`: plate half-size; `zone`: how far out from the plate it reaches; `blastDmg`: what a grenade / rocket
+ * / charge does to it at the centre (falls off to 0 at the blast radius).
+ */
+export const TRAP = {
+  price: 75, maxPerPlayer: 3, hp: 150, dmg: 60, armSec: 1, rearmSec: 2.5, placeSec: 0.3,
+  half: 0.5, thick: 0.08, zone: 0.5, minGap: 1.1, blastDmg: 300,
+  /** Push (m/s) the spikes give whoever they hit. */
+  knock: 2.5,
+} as const;
+
+/**
  * Supply crate drop table (weights sum to 100). Expected value ≈ $39 per crate (ammo ≈ $10 a mag at the
  * ammo-box price, medkit $75, cash $50 mean, grenade $100, 2 sandbags $20): about 8 s of a level-1
  * generator, so a few crates per island respawning every 2 min add ~10-15% income for whoever farms them.

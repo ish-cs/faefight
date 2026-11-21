@@ -7,8 +7,9 @@ import type { Link } from '../net/transport';
 import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import type { Placement } from '../sim/building';
-import { BuildAim, type AimOutcome } from './buildAim';
-import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
+import { BuildAim, CLIENT_REACH, type AimOutcome } from './buildAim';
+import { trapAim, validateTrap } from '../sim/traps';
+import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, TRAP, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
@@ -1097,6 +1098,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   // trip): the ghost colour is always current and a click sends exactly the spot the ghost shows.
   const buildAim = new BuildAim();
   let aim: AimOutcome | null = null;
+  /** Holding a spike trap: the spot under the crosshair and whether it can go there (with why not). */
+  let trapAimOk: { ok: boolean; reason: string | null } | null = null;
+  /** Last trap click (ms): the host's count lags a moment, so the ghost holds off briefly after placing. */
+  let trapSentAt = -Infinity;
   /** Newest snapshot as received (not delayed by the interpolation buffer): busy state, pieces. */
   let latest: Snapshot | null = null;
   /** Own placements shown at once and reconciled with the host's pieces (buildPredict.ts); also paces placing. */
@@ -1211,6 +1216,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       hint.classList.toggle('inventory', open);
     },
   });
+  input.onTrapPlaced = () => { trapSentAt = performance.now(); renderer.traps.setGhost(null); };
 
   const chat = new ChatUi(app, {
     send: (text) => {
@@ -1583,7 +1589,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Spectating someone: the HUD shows their view (hotbar, ammo, cash, hp/shield/stamina, crosshair).
     const viewId = spectator.following;
     const viewed = viewId !== null ? s.players.find((p) => p.id === viewId) : undefined;
-    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory,
+    hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : trapAimOk ? trapAimOk.ok : null, buildNote: input.buildMode ? buildNote() : null,
+      trapHint: trapAimOk ? `Spike trap (${meNow?.inv.traps ?? 0})  ·  floor or wall  ·  Z/X rotate${trapAimOk.reason ? `  ·  ✕ ${trapAimOk.reason}` : ''}` : null,
+      free: input.free, inventory: input.inventory,
       stamina: predictor?.stamina ?? null, viewId, ...(viewed ? gunHud(viewed, false) : gunHud(meNow)) });
     brainX.setFollow(viewed?.isBot ? viewId : null, s.players, selfId);
     if (hud.ended && !wasEnded && !replay) spectateChosen = false; // a (new) result popped the end screen up
@@ -2018,6 +2026,27 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       } else {
         renderer.setGhost(null);
         aim = null;
+      }
+      // Spike trap ghost: floor or wall under the crosshair, validated locally with the sim's rules.
+      if (input.held === 'trap' && me.alive && predictor) {
+        const cam = renderer.camera;
+        cam.getWorldDirection(aimDir);
+        const req = trapAim(predictor.world, { x: cam.position.x, y: cam.position.y, z: cam.position.z }, { x: aimDir.x, y: aimDir.y, z: aimDir.z },
+          input.yaw + input.buildRot, CLIENT_REACH + 4);
+        const meLatest = latest?.players.find((p) => p.id === humanId) ?? me;
+        const traps = (latest ?? snap)?.traps ?? [];
+        const mine = traps.filter((t) => t.owner === humanId).length;
+        const v = req ? validateTrap(predictor.world, req, { x: feet.x, y: feet.y, z: feet.z }, traps) : null;
+        const why = !req ? 'nothing in reach' : meLatest.inv.traps <= 0 ? 'none left' : mine >= TRAP.maxPerPlayer ? `max ${TRAP.maxPerPlayer} out` : v && !v.ok ? v.reason : null;
+        const ok = !!v?.ok && why === null && now - trapSentAt > 400;
+        trapAimOk = { ok, reason: why };
+        const shown = v?.ok ? { pos: v.pos, rotY: v.rotY, wall: v.wall } : req;
+        renderer.setTrapGhost(shown, ok);
+        input.trapReq = ok && v?.ok ? { pos: v.pos, rotY: v.rotY, wall: v.wall } : null;
+      } else {
+        renderer.setTrapGhost(null);
+        input.trapReq = null;
+        trapAimOk = null;
       }
     }
 

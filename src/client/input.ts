@@ -1,6 +1,6 @@
 import { BUILD } from '../sim/constants';
 import { HOTBAR_SIZE, isGunItem, isPieceItem, isPotionItem } from '../sim/hotbar';
-import type { HotbarItem, PieceKind, PlayerInput } from '../sim/types';
+import type { HotbarItem, PieceKind, PlayerInput, TrapRequest } from '../sim/types';
 import { ClickGate } from './clickGate';
 import { type Action, isAction, isHeld, keymapSuspended, slotForCode } from './keymap';
 import { settings } from './settings/store';
@@ -40,6 +40,10 @@ export class InputController {
   selected = 0;
   /** What sits in the selected slot, per the latest snapshot (set by main each frame). */
   held: HotbarItem | null = null;
+  /** Holding a spike trap: the validated spot under the crosshair (main sets it each frame), null when it can't go there. */
+  trapReq: TrapRequest | null = null;
+  /** Called when a click places a trap from `trapReq` (ghost pulse). */
+  onTrapPlaced: (() => void) | null = null;
   /** Reorder mode: pointer released so hotbar slots can be dragged. */
   inventory = false;
   buildRot = 0;
@@ -234,6 +238,7 @@ export class InputController {
     if (this.buildMode) { this.fireHeld = true; this.hooks.place(); return; } // held = drag-build
     if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
     if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }
+    if (this.held === 'trap') { if (this.trapReq) { this.oneShot.trap = this.trapReq; this.onTrapPlaced?.(); } return; }
     if (this.held === 'medkit') { this.oneShot.useMedkit = true; return; }
     if (isPotionItem(this.held)) { this.oneShot.drink = true; return; }
     this.fireHeld = true;

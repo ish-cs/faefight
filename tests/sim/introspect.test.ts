@@ -7,7 +7,7 @@ import type { Difficulty, Snapshot } from '../../src/sim/types';
 
 const ALL_GOALS: Goal[] = [
   'storm', 'defend', 'disengage', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'shop', 'heal', 'contest', 'collect', 'cover', 'fortify',
+  'shop', 'heal', 'contest', 'collect', 'cover', 'fortify', 'trap',
 ];
 
 /** Everything that matters about where a match got to. */
