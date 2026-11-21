@@ -71,6 +71,8 @@ export type BrainInput = {
   bridgeNeed: number;
   /** My shopping plan (vault cash included) would buy a scaffold now: false = carrying all I can get, go lay it. */
   scaffoldBuy?: boolean;
+  /** Rival-choice bonus for an owner away from home while I carry a full kit (drive.sealAwayTarget). */
+  sealAwayTarget?: number;
   medkits: number;
   carried: number;
   banked: number;
@@ -303,7 +305,7 @@ export class Brain {
 
     // ---- per rival: box in / finish / raid / hunt.
     for (const r of inp.rivals) {
-      const base = rivalScore(r, p) + (r.id === inp.focus ? p.rsCommit : 0);
+      const base = rivalScore(r, p, inp.sealAwayTarget) + (r.id === inp.focus ? p.rsCommit : 0);
       // A seal window: they're down/respawning, spawn-protected at home, away, holed up inside (sealing traps them),
       // or only one doorway is left open (just finish it).
       const window = r.respawning || r.protectedNow || r.away || !!r.inBunker || (r.openDoors <= 1 && inp.kit >= r.openDoors);

@@ -147,7 +147,7 @@ export const BRAIN_SPEC = {
   rsDist: [0.05, 0.8, 0.42],
   rsRespawning: [0.2, 2, 0.9, ['opportunism', 0.4]],
   rsRecentDeath: [0, 1.5, 0.48],
-  rsSealed: [0, 1.5, 0.65, ['opportunism', 0.3]],
+  rsSealed: [0, 2, 0.9, ['opportunism', 0.3]],
   rsLowHp: [0, 1.5, 0.5, ['opportunism', 0.3]],
   rsGrudge: [0, 2, 0.7, ['vengeance', 0.6]],
   rsBusy: [0, 1.5, 0.25, ['opportunism', 0.4]],

@@ -688,7 +688,7 @@ export class Bot {
       }),
       gun: ownsGun(inv), upgraded: !!(inv.weapons.smg || inv.weapons.rifle || inv.weapons.shotgun),
       shield: (me.shield ?? 0) / 100, scaffolds: inv.pieces.scaffold ?? 0, bridgeNeed: this.scaffoldsNeeded(c), medkits: inv.medkits,
-      scaffoldBuy: this.plan(c).items.includes('scaffold'),
+      scaffoldBuy: this.plan(c).items.includes('scaffold'), sealAwayTarget: this.P.drive.sealAwayTarget,
       myWeapon: bestGun(inv, c.enemy ? c.enemyDist : 30),
       enemy: c.enemy ? { id: c.enemy.id, dist: c.enemyDist, hp: c.enemy.hp + (c.enemy.shield ?? 0), weapon: c.enemy.equipped } : null,
       armedNear: c.armedNear, underFire: !!c.fire,
