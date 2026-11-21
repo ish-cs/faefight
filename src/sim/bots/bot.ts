@@ -53,8 +53,6 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
-/** Seconds without getting closer to a loot bag before giving up on it. */
-const LOOT_GIVE_UP_SEC = 5;
 const RAID_AT = 60;
 /** Sandbags carried into sudden death to climb above the tide, bought in the last minutes before it. */
 const TOWER_BAGS = 10, TOWER_PREP_SEC = 150;
@@ -95,8 +93,6 @@ export const DRIVE = {
   offenseAt: { easy: Infinity, medium: 300, hard: 240, pro: 240 } as Record<Difficulty, number>,
   offenseCash: { easy: Infinity, medium: 3 * PIECES.wood.price, hard: 3 * PIECES.metal.price, pro: 3 * PIECES.metal.price } as Record<Difficulty, number>,
   push: 0.35,
-  /** Some doors of the target bunker already plugged and I'm within this: finishing the seal gets this bonus. */
-  finishSealNear: 14, finishSeal: 0.8,
   shopForPush: 0.75,
   plinkRange: 30,
   maxRange: 20,
@@ -178,8 +174,6 @@ export class Bot {
   private perch: { ramp: Vec3; pos: Vec3; until: number } | null = null;
   private fightSince: number | null = null;
   private retreatSince: number | null = null;
-  private lootProgress: { bag: Vec3; best: number; since: number } | null = null;
-  private badLoot: { pos: Vec3; until: number }[] = [];
   private lastPieceAt = -Infinity;
   private slots: Slot[] | null = null;
   private buildMemo: { at: number; total: number; b: Partial<Record<PieceKind, number>> | undefined } | null = null;
@@ -622,7 +616,6 @@ export class Bot {
     for (const p of c.view.loot) {
       const d = dist2D(p, c.me.pos);
       if (d >= bestD || p.y < c.view.waterY + 0.2) continue;
-      if (this.badLoot.some((b) => b.until > c.view.now && dist2D(b.pos, p) < 0.5)) continue;
       const i = islandAt(c.view.map, p);
       if (i !== c.on && !this.nav.routeTo(p)) continue;
       best = p; bestD = d;
@@ -862,8 +855,6 @@ export class Bot {
       case 'disengage': case 'heal': {
         // Retreat only when losing: still ahead of the one in front of me, keep fighting.
         if (g === 'disengage' && c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield) return 0;
-        // Shot at from far across the water: keep doing what I was doing (moving), don't run home.
-        if (g === 'disengage' && c.enemy && c.enemyDist > DRIVE.plinkRange && islandAt(view.map, c.enemy.pos) !== c.on) return s * 0.3;
         const long = this.retreatSince !== null && now - this.retreatSince > DRIVE.reengageSec;
         const stillHit = now - this.mem.lastHurtAt < 3;
         return long && !stillHit && me.hp / 100 > DRIVE.reengageHp ? 0 : s;
@@ -876,13 +867,7 @@ export class Bot {
     }
     if (!this.offensive(c)) return s;
     switch (g) {
-      case 'bridge': case 'attack': case 'seal': {
-        if (s <= 0) return s;
-        // Halfway through sealing a bunker I'm standing at: finish the job before anything but staying alive.
-        if (g === 'seal' && c.rivalIsl && c.openDoors.length < c.rivalIsl.bunker.doorways.length &&
-          dist2D(me.pos, c.rivalIsl.bunker.center) < DRIVE.finishSealNear) return s + DRIVE.finishSeal;
-        return s + DRIVE.push;
-      }
+      case 'bridge': case 'attack': case 'seal': return s > 0 ? s + DRIVE.push : s;
       case 'shop': {
         if (!c.homeReach) return s;
         const plan = this.plan(c);
@@ -1275,16 +1260,6 @@ export class Bot {
   private doLoot(c: Ctx): Act {
     const bag = this.nearestLoot(c);
     if (!bag) { this.nextScoreAt = c.view.now; return IDLE; }
-    // A bag I can't get to (on a ledge, under a deck): give up on it after a few seconds without getting closer.
-    const now = c.view.now, d = dist2D(bag, c.me.pos);
-    const lp = this.lootProgress;
-    if (!lp || dist2D(lp.bag, bag) > 0.5 || d < lp.best - 0.5) this.lootProgress = { bag, best: d, since: now };
-    else if (now - lp.since > LOOT_GIVE_UP_SEC) {
-      this.badLoot = [...this.badLoot.filter((b) => b.until > now), { pos: bag, until: now + 60 }];
-      this.lootProgress = null;
-      this.nextScoreAt = now;
-      return IDLE;
-    }
     return this.goTo(bag, 0.3);
   }
 

@@ -201,9 +201,12 @@ score layer (`Bot.drive`) on top of the goal scores makes them seek the win, sam
 - **No plinking**: a fight across water past 30 m isn't a goal (shots still go out while doing something else); on the
   same island the preferred range is capped at 20 m and a gap over 8 m is closed at a sprint with a little weave.
   Shot at from far across the water, they keep moving instead of running home.
-- **Finish a seal**: a seal already started (some of the target's doors plugged, me within 14 m) gets +0.8 so it gets
-  finished. (Tried and dropped, both made 1v1s longer: holding fire past 40 m, and pushing only at ≥ 60 HP + shield /
-  sealing only with the owner down or away.)
+
+Measured (20 seeds each, headless, heavy lock): Hard 1v1 decided before sudden death 10/20 → 16/20, median length
+15.0 → 8.5 min, hit distance 33.0 → 29.7 m, home 70 → 66 %; 8-PRO FFA 0/20 → 0/20 before sudden death, length 18.1 →
+16.4 min, home 77 → 67 %, attack share 2 → 15 %. Tried and dropped (Hard 1v1 fell to 7–8/20): holding fire past
+40 m, pushing only at ≥ 60 HP + shield, sealing only with the owner down or away, a +0.8 bonus to finish a started
+seal, damping retreats from far shooters, giving up on unreachable loot.
 - **Home only for a threat**: guard needs an intruder seen on my island in the last 4 s (defend = plugs in my doors,
   as before).
 - **Retreat only when losing**: no disengage while ahead in HP + shield of the enemy in front of me; a retreat
