@@ -168,7 +168,7 @@ export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5 };
 export const LIFECYCLE = {
   respawnSec: 3,
   /** Respawning into a sealed bunker: break out within this long or you're eliminated. */
-  breakoutSec: 10,
+  breakoutSec: 5,
   invulnSec: 3,
   /** Spawn protection: lasts while inside your bunker (max this long), then invulnSec after leaving. */
   spawnProtectMaxSec: 15,
