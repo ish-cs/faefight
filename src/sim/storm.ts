@@ -12,8 +12,9 @@ export type StormState = {
   startAt: number;
   cx: number;
   cz: number;
-  /** Radius at startAt (beyond the map edge). */
+  /** Radius at startAt (beyond the map edge), and the final circle it holds after shrinkSec. */
   r0: number;
+  rf: number;
   /** mulberry32 state of the strike stream. */
   rng: number;
   nextDamageAt: number;
@@ -23,20 +24,26 @@ export type StormState = {
   strikes: StormStrike[];
 };
 
-/** Where the ring closes in: the map centre (origin of the island ring; the centre island once maps have one). */
-export function stormCenter(_map: IslandLayout[]): { x: number; z: number } {
-  return { x: 0, z: 0 };
+/** Where the ring closes in: the centre island (`r` = its land radius; 0 = open water, e.g. bare test maps). */
+export type StormCenter = { x: number; z: number; r: number };
+
+export function stormCenterOf(center: { center: { x: number; z: number }; radius: number } | null): StormCenter {
+  return center ? { x: center.center.x, z: center.center.z, r: center.radius } : { x: 0, z: 0, r: 0 };
 }
 
-export function stormStartRadius(map: IslandLayout[]): number {
-  const c = stormCenter(map);
-  return Math.max(...map.map((i) => Math.hypot(i.center.x - c.x, i.center.z - c.z) + i.radius)) + STORM.startPad;
+export function stormStartRadius(map: IslandLayout[], c: StormCenter): number {
+  return Math.max(c.r, ...map.map((i) => Math.hypot(i.center.x - c.x, i.center.z - c.z) + i.radius)) + STORM.startPad;
+}
+
+/** The final circle: small, but always holding all of the centre island's land with a margin. */
+export function stormFinalRadius(c: StormCenter): number {
+  return Math.max(STORM.finalRadius, c.r + STORM.finalPad);
 }
 
 /** Linear close from r0 to the final circle over shrinkSec, then hold. */
-export function stormRadius(r0: number, startAt: number, now: number): number {
-  const k = Math.min(1, Math.max(0, (now - startAt) / STORM.shrinkSec));
-  return r0 + (STORM.finalRadius - r0) * k;
+export function stormRadius(st: Pick<StormState, 'r0' | 'rf' | 'startAt'>, now: number): number {
+  const k = Math.min(1, Math.max(0, (now - st.startAt) / STORM.shrinkSec));
+  return st.r0 + (st.rf - st.r0) * k;
 }
 
 /** Storm hp loss per second outside the ring, t s into it. */
@@ -44,10 +51,9 @@ export function stormDps(t: number): number {
   return Math.min(STORM.dpsMax, STORM.dps0 + STORM.dpsRamp * Math.max(0, t));
 }
 
-export function newStorm(map: IslandLayout[], startAt: number, seed: number): StormState {
-  const c = stormCenter(map);
+export function newStorm(map: IslandLayout[], c: StormCenter, startAt: number, seed: number): StormState {
   return {
-    startAt, cx: c.x, cz: c.z, r0: stormStartRadius(map),
+    startAt, cx: c.x, cz: c.z, r0: stormStartRadius(map, c), rf: stormFinalRadius(c),
     rng: (Math.imul(seed | 0, 0x9e3779b1) ^ 0x51f15e) >>> 0,
     nextDamageAt: startAt + 1, nextStrikeAt: startAt + 3, strikes: [],
   };
@@ -71,7 +77,7 @@ export function addStrike(st: StormState, x: number, z: number, at: number): voi
 }
 
 function placeStrike(ctx: CombatCtx, st: StormState, at: number): void {
-  const r = stormRadius(st.r0, st.startAt, at);
+  const r = stormRadius(st, at);
   const ring = (d: number, a: number) => addStrike(st, st.cx + Math.cos(a) * d, st.cz + Math.sin(a) * d, at);
   if (rand(st) < STORM.edgeStrikeFrac) {
     // Pressure on whoever hugs the edge: just inside the ring.
@@ -92,7 +98,7 @@ function placeStrike(ctx: CombatCtx, st: StormState, at: number): void {
 /** One sim tick of the storm: ring damage (once a second), announcing and landing lightning. */
 export function tickStorm(ctx: CombatCtx, st: StormState, now: number): MatchEvent[] {
   const out: MatchEvent[] = [];
-  const r = stormRadius(st.r0, st.startAt, now);
+  const r = stormRadius(st, now);
 
   if (now >= st.nextDamageAt) {
     st.nextDamageAt = now + 1;
@@ -121,17 +127,17 @@ export function tickStorm(ctx: CombatCtx, st: StormState, now: number): MatchEve
       if (!p.alive) continue;
       const d = Math.hypot(p.pos.x - s.x, p.pos.z - s.z);
       if (d < STORM.boltRadius)
-        out.push(...applyPlayerDamage(ctx, p, STORM.boltDmg * (1 - d / STORM.boltRadius), null, now, { weapon: 'lightning', pos: { x: s.x, y, z: s.z } }));
+        out.push(...applyPlayerDamage(ctx, p, STORM.boltDmg * (1 - d / STORM.boltRadius), null, now, { bypassShield: true, weapon: 'lightning', pos: { x: s.x, y, z: s.z } }));
     }
   }
   return out;
 }
 
 export function stormSnap(st: StormState, now: number): StormSnap {
-  return { x: st.cx, z: st.cz, r: r2(stormRadius(st.r0, st.startAt, now)), strikes: st.strikes.map((s) => ({ ...s })) };
+  return { x: st.cx, z: st.cz, r: r2(stormRadius(st, now)), rf: r2(st.rf), strikes: st.strikes.map((s) => ({ ...s })) };
 }
 
 /** How fast the ring is closing right now (m/s; 0 once it holds the final circle). */
 export function stormRate(st: StormState, now: number): number {
-  return now - st.startAt < STORM.shrinkSec ? (st.r0 - STORM.finalRadius) / STORM.shrinkSec : 0;
+  return now - st.startAt < STORM.shrinkSec ? (st.r0 - st.rf) / STORM.shrinkSec : 0;
 }

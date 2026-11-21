@@ -1,4 +1,4 @@
-import { CHARGE, DT, ECONOMY, GRENADE, MAP, PIECES, PLAYER, SEAL, STORM, WEAPONS } from '../constants';
+import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, SEAL, STORM, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import type { Doorway, IslandLayout } from '../map';
 import { NO_INPUT } from '../types';
@@ -9,7 +9,7 @@ import { add, clone, dist2D, forward, norm, right, scale, sub, v3, yawOf } from 
 import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
-import { Nav, insideBunker, islandAt, lane, laneAt, laneS, type Lane } from './nav';
+import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
   TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
@@ -20,11 +20,13 @@ import type { BotView, OtherStatus } from './view';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'storm' | 'heal';
+  | 'fight' | 'disengage' | 'storm' | 'heal' | 'contest';
 const GOALS: Goal[] = [
   'storm', 'defend', 'disengage', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'shop', 'heal', 'collect',
+  'shop', 'heal', 'contest', 'collect',
 ];
+/** Center gold worth a trip, and how far a bot will go out of its way for it. */
+const CONTEST_AT = 150;
 
 /** How often a bot reconsiders what to do, and how long it hesitates after changing plans (human thinking time). */
 const RESCORE_SEC: Record<Difficulty, number> = { easy: 1.6, medium: 1.0, hard: 0.5, pro: 0.3 };
@@ -61,6 +63,8 @@ const STORM_LEAD: Record<Difficulty, number> = { easy: 1, medium: 8, hard: 12, p
 const STORM_MARGIN: Record<Difficulty, number> = { easy: 0, medium: 3, hard: 4, pro: 4 };
 const BOLT_REACT: Record<Difficulty, number> = { easy: 0.6, medium: 0.35, hard: 0.2, pro: 0.15 };
 const EASY_DODGE = 0.4;
+/** Medium+ bots bridge to the centre island (where the storm ends) from this long before sudden death. */
+const STORM_PREP_SEC = 150;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Generator cash worth grabbing on the way out, and the level at which it is about to be wasted at the cap. */
 const COLLECT_BEFORE_LEAVING = 40, COLLECT_NEAR_CAP = 400;
@@ -109,6 +113,9 @@ type Ctx = {
   reach: boolean;
   homeReach: boolean;
   openDoors: Doorway[];
+  /** Node (island, or the center island) the next bridge goes to, and whether I can already walk to the center. */
+  bridgeTo: number | null;
+  centerReach: boolean;
   /** Someone is shooting at me or close to me right now. */
   danger: boolean;
 };
@@ -142,8 +149,13 @@ export class Bot {
   private lastNadeAt = -Infinity;
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
+  /** Low on stamina: walk (save it for escapes) until it's back up. */
+  private winded = false;
+  private lastScores: { goal: string; score: number }[] = [];
   private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
   private view!: BotView;
+  /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
+  private readonly centerMinded: boolean;
 
   constructor(readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality) {
     this.personality = personality ?? rollPersonality(rng);
@@ -159,11 +171,14 @@ export class Bot {
       invest: t.patience > 0.75,
     };
     this.aim = new Aim(AIM[difficulty], rng);
+    this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
 
   get currentGoal(): Goal { return this.goal; }
   /** Rival this bot is currently going after (player id), if any. */
   get currentTarget(): number | null { return this.targetId; }
+  /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
+  get planScores(): { goal: string; score: number }[] { return this.lastScores; }
 
   think(view: BotView): PlayerInput {
     const me = view.self;
@@ -268,11 +283,15 @@ export class Bot {
         (!enemy || ctx.enemyDist > 30) && now - this.mem.lastHurtAt > 0.5) {
       select = kit; useMedkit = true; fire = false;
     }
-    const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE);
+    // Stamina (movement.ts): like a human, stop sprinting around when winded and keep the rest for getting away.
+    if (me.stamina < 30) this.winded = true; else if (me.stamina > 70) this.winded = false;
+    const cv = view.center;
+    const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
+      (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
-      sprint: !!act.sprint && (!enemy || this.goal === 'disengage'),
+      sprint: !!act.sprint && (!enemy || this.goal === 'disengage') && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade,
       // Same spread rules as players: aim down sights for anything past close range.
@@ -310,17 +329,14 @@ export class Bot {
   // ---------------------------------------------------------------- target choice
 
   private scaffoldsTo(from: number, to: number): number {
-    const map = this.view.map;
-    const l = lane(map, from, to);
-    const left = l.length - Math.sqrt(map[to].radius ** 2 - 9) - this.nav.frontier(l).s;
-    return Math.max(1, Math.ceil(left / SCAFFOLD_STEP));
+    return this.nav.scaffoldsTo(from, to, SCAFFOLD_STEP);
   }
 
   private rivalFacts(view: BotView): RivalFacts[] {
     const me = view.self, now = view.now;
     const home = me.island;
-    const on = islandAt(view.map, me.pos);
-    const src = on >= 0 ? on : home;
+    const node = this.nav.nodeAt(me.pos);
+    const src = node >= 0 ? node : home;
     const alive = view.others.filter((o) => !o.eliminated && o.island !== home);
     const leaderKills = Math.max(0, ...view.others.map((o) => o.kills));
     return alive.map((o) => {
@@ -367,7 +383,8 @@ export class Bot {
     const home = view.map[me.island];
     if (!home) throw new Error(`Bot ${this.id}: island ${me.island} is not on the map`);
     const on = islandAt(view.map, me.pos);
-    const src = on >= 0 ? on : home.index;
+    const node = this.nav.nodeAt(me.pos);
+    const src = node >= 0 ? node : home.index;
     let rival = this.targetId === null ? null : view.others.find((o) => o.id === this.targetId && !o.eliminated) ?? null;
     if (!rival) {
       this.targetId = null;
@@ -382,15 +399,23 @@ export class Bot {
       if (e.alive && d < enemyDist) { enemy = e; enemyDist = d; }
     }
     const reach = !!rivalIsl && (on === rivalIsl.index || this.nav.hop(src, rivalIsl.index) !== null);
-    const homeReach = on === home.index || on < 0 || this.nav.hop(on, home.index) !== null;
+    const homeReach = node === home.index || node < 0 || this.nav.hop(node, home.index) !== null;
     const openDoors = rivalIsl ? rivalIsl.bunker.doorways.filter((d) => !doorBlocked(view.pieces, d)) : [];
     const danger = view.now - this.mem.lastHurtAt < 3 || (!!enemy && enemyDist < 40);
-    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, homeReach, openDoors, danger };
+    const C = this.nav.centerNode;
+    const centerReach = C >= 0 && (node === C || this.nav.hop(src, C) !== null);
+    let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
+    // Center-minded: bridge to the center island first when it isn't much further than the rival.
+    if (C >= 0 && this.centerMinded && !centerReach && !view.suddenDeath &&
+        (bridgeTo === null || this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + 2)) bridgeTo = C;
+    // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
+    if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
+    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, homeReach, openDoors, bridgeTo, centerReach, danger };
   }
 
   private scaffoldsNeeded(c: Ctx): number {
-    if (c.reach || !c.rivalIsl) return 0;
-    return this.scaffoldsTo(c.home.index, c.rivalIsl.index);
+    if (c.bridgeTo === null) return 0;
+    return this.scaffoldsTo(c.home.index, c.bridgeTo);
   }
 
   private needs(c: Ctx): Needs {
@@ -484,7 +509,7 @@ export class Bot {
       for (const p of c.view.pieces) {
         if (p.kind !== 'scaffold' || p.owner === c.me.id || laneOff(l, p.pos) > 1.5) continue;
         const s = laneS(l, p.pos);
-        if (s > bestS && s < l.length - Math.sqrt(map[home].radius ** 2 - 9) + 2) { bestS = s; best = p; }
+        if (s > bestS && s < l.length - landEdge(map[home]) + 2) { bestS = s; best = p; }
       }
       if (best) return best;
     }
@@ -506,7 +531,9 @@ export class Bot {
         if (!st) return 0;
         const d = Math.hypot(me.pos.x - st.x, me.pos.z - st.z);
         if (d > st.r) return this.difficulty === 'easy' ? 0.9 : 1.7;
-        return d > this.stormSafeR(st) ? (this.difficulty === 'easy' ? 0.4 : 1.3) : 0;
+        if (d > this.stormSafeR(st)) return this.difficulty === 'easy' ? 0.4 : 1.3;
+        // No way onto the center island yet: the ring will end there, so the bridge comes first.
+        return this.needCenterBridge(c) ? 1.2 : 0;
       }
       case 'fight': {
         if (!c.enemy) return 0;
@@ -584,11 +611,23 @@ export class Bot {
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
-        if (c.reach || !c.rivalIsl || have === 0) return 0;
-        // Bridges are one-way (see Nav.bridge): don't finish one before carrying a full seal kit.
+        if (c.bridgeTo === null || have === 0) return 0;
+        // Bridges are one-way (see Nav.bridge): don't finish one to a rival before carrying a full seal kit.
         const need = this.scaffoldsNeeded(c);
-        if (need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
-        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0);
+        const toRival = c.bridgeTo !== this.nav.centerNode;
+        if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
+        return 0.45 + 0.15 * t.aggression + (have >= need ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed + (this.stormPrep(view) ? 0.45 : 0));
+      }
+      case 'contest': {
+        const cv = view.center;
+        if (!cv || !c.centerReach || view.suddenDeath) return 0;
+        const room = me.hotbar.includes(null) || me.hotbar.includes('sandbags');
+        const supplies = cv.bags + cv.steel > 0 && room ? 0.12 + 0.05 * cv.steel : 0;
+        if (cv.gold < (this.centerMinded ? CONTEST_AT : 2.5 * CONTEST_AT) && !supplies) return 0;
+        const far = dist2D(me.pos, cv.island.center) / 150;
+        // Rich bots have better things to do than farm the middle.
+        const rich = Math.min(0.3, (me.inv.cash + me.vault.cash) / 3000);
+        return 0.1 + 0.25 * t.greed + 0.1 * t.opportunism + Math.min(cv.gold, 1000) / 2000 + supplies - far - rich - (c.danger ? 0.2 : 0);
       }
       case 'attack': {
         if (!c.reach || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
@@ -641,12 +680,15 @@ export class Bot {
   private pick(c: Ctx): Goal {
     if (this.trapped(c)) return 'defend';
     let best: Goal = c.homeReach || !c.reach ? 'collect' : 'attack', bestScore = -Infinity;
+    const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
       const base = this.score(g, c);
       if (base <= 0 && g !== best) continue;
       const s = base + (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
+      scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
     }
+    this.lastScores = scored.sort((a, b) => b.score - a.score).slice(0, 4);
     return best;
   }
 
@@ -667,6 +709,7 @@ export class Bot {
       case 'fight': return this.doFight(c);
       case 'disengage': return this.doDisengage(c);
       case 'storm': return this.doStorm(c);
+      case 'contest': return this.doContest(c);
     }
   }
 
@@ -720,12 +763,23 @@ export class Bot {
     return { ...walk, vault: { deposit: { cash } } };
   }
 
+  /** Grab the center island's gold (and free pieces, when they fit). */
+  private doContest(c: Ctx): Act {
+    const cv = c.view.center;
+    if (!cv) return IDLE;
+    const room = c.me.hotbar.includes(null) || c.me.hotbar.includes('sandbags');
+    const supplyFirst = cv.bags + cv.steel > 0 && room && (cv.gold < CONTEST_AT ||
+      dist2D(c.me.pos, cv.island.supplyGen) < dist2D(c.me.pos, cv.island.goldGen));
+    if (cv.gold < 1 && !supplyFirst) { this.nextScoreAt = c.view.now; return IDLE; }
+    return this.goTo(supplyFirst ? cv.island.supplyGen : cv.island.goldGen, 1.6);
+  }
+
   private doBridge(c: Ctx): Act {
-    if (!c.rivalIsl) return IDLE;
-    const l = lane(c.view.map, c.home.index, c.rivalIsl.index);
+    if (c.bridgeTo === null) return IDLE;
+    const l = this.nav.lane(c.home.index, c.bridgeTo);
     const f = this.nav.frontier(l);
     if (f.complete) { this.nextScoreAt = c.view.now; return IDLE; }
-    if (this.scaffoldsNeeded(c) <= 1 && sealKit(c.me.inv) < c.openDoors.length) { this.nextScoreAt = c.view.now; return IDLE; }
+    if (c.bridgeTo !== this.nav.centerNode && this.scaffoldsNeeded(c) <= 1 && sealKit(c.me.inv) < c.openDoors.length) { this.nextScoreAt = c.view.now; return IDLE; }
     const stand = laneAt(l, f.s - 1.1);
     const walk = this.goTo(stand, ARRIVE);
     if (walk.dir) return walk;
@@ -1074,7 +1128,7 @@ export class Bot {
   /** Radius I want to be inside: the ring as it will be a few seconds from now, minus a margin. */
   private stormSafeR(st: NonNullable<BotView['storm']>): number {
     const ahead = st.r - st.rate * STORM_LEAD[this.difficulty] - STORM_MARGIN[this.difficulty];
-    return Math.max(Math.min(STORM.finalRadius * 0.6, st.r), ahead);
+    return Math.max(Math.min(st.rf - 2, st.r), ahead);
   }
 
   /**
@@ -1091,19 +1145,58 @@ export class Bot {
     const d = dist2D(me.pos, ctr);
     const out = d > 0.5 ? norm(flat(sub(me.pos, ctr))) : forward(me.yaw);
     const spot = add(ctr, scale(out, Math.min(d, want)));
-    const target = islandAt(view.map, spot);
-    if (target >= 0 && (target === c.on || this.nav.routeTo(spot))) return { ...this.goTo(spot, 1), sprint: true };
+    const here = this.nav.nodeAt(me.pos);
+    const target = this.nav.nodeAt(spot);
+    if (d > want && target >= 0 && (target === here || this.nav.routeTo(spot))) return { ...this.goTo(spot, 1), sprint: true };
+    // The walkable spot closest to the centre: on my island, or one I can reach (center island included).
     let best: Vec3 | null = null, bestD = Infinity;
-    for (const isl of view.map) {
-      if (isl.index !== c.on && (c.on < 0 || this.nav.hop(c.on, isl.index) === null)) continue;
-      const toC = dist2D(isl.center, ctr);
-      const k = toC < 0.5 ? 0 : Math.max(0, toC - isl.radius + 2.5) / toC;
-      const p = v3(isl.center.x + (ctr.x - isl.center.x) * (1 - k), isl.groundY, isl.center.z + (ctr.z - isl.center.z) * (1 - k));
+    for (const n of this.nav.nodes) {
+      if (n.index !== here && (here < 0 || this.nav.hop(here, n.index) === null)) continue;
+      const toC = dist2D(n.center, ctr);
+      const k = toC < 0.5 ? 0 : Math.max(0, toC - n.radius + 2.5) / toC;
+      const p = v3(n.center.x + (ctr.x - n.center.x) * (1 - k), n.groundY, n.center.z + (ctr.z - n.center.z) * (1 - k));
       const pd = dist2D(p, ctr) + dist2D(p, me.pos) * 0.05;
       if (pd < bestD) { bestD = pd; best = p; }
     }
+    // Nothing walkable inside the ring, or no way onto the center island where it ends: bridge there
+    // (buy the decks first if I have none).
+    if ((bestD > want || this.needCenterBridge(c)) && c.bridgeTo !== null && c.bridgeTo === this.nav.centerNode) {
+      const have = me.inv.pieces.scaffold ?? 0, need = this.scaffoldsNeeded(c);
+      // Stock up in one shop visit (not one deck per trip) while still on my island.
+      const buy = have < need && c.homeReach && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
+      if (buy) return buy;
+      if (have > 0) {
+        const b = this.doBridge(c);
+        if (b.dir || b.build || b.face) return b;
+      }
+    }
     if (!best) return { dir: norm(flat(sub(ctr, me.pos))), sprint: true };
     return { ...this.goTo(best, 1), sprint: true };
+  }
+
+  /** Walk to my shop and buy scaffolds (cash from the vault if needed); null when I can't afford one. */
+  private buyDecks(c: Ctx): Act | null {
+    const me = c.me, now = c.view.now, price = PIECES.scaffold.price;
+    if (me.inv.cash < price) {
+      if (me.vault.cash < price) return null;
+      const walk = this.goTo(c.home.vault, 1.8);
+      if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > now) return walk;
+      return { ...walk, vault: { withdraw: { cash: Math.min(me.vault.cash, price * 20) } } };
+    }
+    const walk = this.goTo(c.home.shop, 2.0);
+    if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt || this.buyBlocked('scaffold')) return { ...walk, sprint: true };
+    this.nextBuyAt = now + BUY_GAP[this.difficulty];
+    return { ...walk, shop: 'scaffold' };
+  }
+
+  /** Sudden death and no walkable route onto the center island (medium+). */
+  private needCenterBridge(c: Ctx): boolean {
+    return !!c.view.storm && this.nav.centerNode >= 0 && !c.centerReach && this.stormPrep(c.view);
+  }
+
+  /** Bridging to the center island ahead of the storm (medium+, from STORM_PREP_SEC before sudden death). */
+  private stormPrep(view: BotView): boolean {
+    return this.difficulty !== 'easy' && (view.suddenDeath || view.now >= LIFECYCLE.suddenDeathAt - STORM_PREP_SEC);
   }
 
   /** Whatever I'm doing, don't walk back out toward the storm once at the edge of where I want to be (not easy). */

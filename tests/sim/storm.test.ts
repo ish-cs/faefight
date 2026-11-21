@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { Match } from '../../src/sim/match';
-import { buildMap } from '../../src/sim/map';
+import { buildMapDef } from '../../src/sim/map';
 import { LIFECYCLE, MAP, PLAYER, STORM } from '../../src/sim/constants';
-import { stormRadius, stormStartRadius, stormCenter } from '../../src/sim/storm';
+import { newStorm, stormCenterOf, stormFinalRadius, stormRadius, stormStartRadius } from '../../src/sim/storm';
 import { dist2D, v3 } from '../../src/sim/vec';
 import type { Difficulty, MatchEvent, Snapshot } from '../../src/sim/types';
 
@@ -14,19 +14,29 @@ const run = (m: Match, sec: number) => {
   for (let i = 0; i < Math.round(sec * 30); i++) { snap = m.tick(new Map()); evs.push(...snap.events); }
   return { snap, evs };
 };
-const center = stormCenter(buildMap(2));
+/** 1v1 harbor: islands at (±40, 0), the center island off to the side at (0, 30), radius 10. */
+const def2 = buildMapDef(2);
+const center = stormCenterOf(def2.center);
+const ring = (sd: number, map = def2) => newStorm(map.islands, stormCenterOf(map.center), sd, 1);
 
 describe('storm ring', () => {
-  test('starts beyond the map edge, shrinks over ~3 min, then holds the final circle', () => {
-    for (const n of [2, 5, 8]) {
-      const map = buildMap(n);
-      const r0 = stormStartRadius(map);
-      const edge = Math.max(...map.map((i) => Math.hypot(i.center.x - center.x, i.center.z - center.z) + i.radius));
-      expect(r0).toBeGreaterThan(edge);
-      expect(stormRadius(r0, SD, SD)).toBeCloseTo(r0);
-      expect(stormRadius(r0, SD, SD + STORM.shrinkSec / 2)).toBeCloseTo((r0 + STORM.finalRadius) / 2);
-      expect(stormRadius(r0, SD, SD + STORM.shrinkSec)).toBeCloseTo(STORM.finalRadius);
-      expect(stormRadius(r0, SD, SD + STORM.shrinkSec + 300)).toBeCloseTo(STORM.finalRadius);
+  test('centred on the center island; starts beyond the map edge, shrinks over ~3 min, holds a final circle over the island', () => {
+    for (const template of ['harbor', 'yard'] as const) for (const n of [2, 3, 5, 8]) {
+      const def = buildMapDef(n, template);
+      const c = stormCenterOf(def.center);
+      expect([c.x, c.z, c.r]).toEqual([def.center.center.x, def.center.center.z, def.center.radius]);
+      const st = ring(SD, def);
+      const edge = Math.max(...def.islands.map((i) => Math.hypot(i.center.x - c.x, i.center.z - c.z) + i.radius));
+      expect(st.r0).toBe(stormStartRadius(def.islands, c));
+      expect(st.r0).toBeGreaterThan(edge);
+      const rf = stormFinalRadius(c);
+      // Small, but all of the center island's land is inside it (so it's always reachable by bridge).
+      expect(rf).toBeGreaterThanOrEqual(def.center.radius + 2);
+      expect(rf).toBeLessThan(def.center.radius + 8);
+      expect(stormRadius(st, SD)).toBeCloseTo(st.r0);
+      expect(stormRadius(st, SD + STORM.shrinkSec / 2)).toBeCloseTo((st.r0 + rf) / 2);
+      expect(stormRadius(st, SD + STORM.shrinkSec)).toBeCloseTo(rf);
+      expect(stormRadius(st, SD + STORM.shrinkSec + 300)).toBeCloseTo(rf);
     }
     expect(STORM.shrinkSec).toBeGreaterThanOrEqual(150);
     expect(STORM.shrinkSec).toBeLessThanOrEqual(210);
@@ -43,19 +53,21 @@ describe('storm ring', () => {
     expect(evs.some((e) => e.type === 'suddenDeath')).toBe(true);
     expect(snap.sealed).toEqual([true, true]);
     expect(snap.waterY).toBe(MAP.waterY);
-    expect(snap.storm!.r).toBeCloseTo(stormRadius(stormStartRadius(m.map), SD, snap.time), 1);
+    expect(snap.storm!.r).toBeCloseTo(stormRadius(ring(SD), snap.time), 1);
+    expect(snap.storm!.rf).toBe(stormFinalRadius(center));
     expect([snap.storm!.x, snap.storm!.z]).toEqual([center.x, center.z]);
     ({ snap } = run(m, 120));
     expect(snap.waterY).toBe(MAP.waterY);
   });
 });
 
-/** 2 players: island 0 centre (-40, 0), island 1 centre (40, 0). Ring at SD+120 s is ~34 m. */
+/** Ring at SD+120 s is ~37 m around (0, 30): (-40, 0) is 50 m out, (24, 12) is 30 m out on island 1. */
+const OUT = v3(-40, MAP.groundY, 0), IN = v3(24, MAP.groundY, 12);
 async function outsideInside(seed = 3) {
   const m = await humans(seed);
   m.debugSetTime(SD + 120);
-  m.debugTeleport(1, v3(-40, MAP.groundY, 10)); // ~41 m out: in the storm
-  m.debugTeleport(2, v3(24, MAP.groundY, 0)); // 24 m out: safe
+  m.debugTeleport(1, OUT); // in the storm
+  m.debugTeleport(2, IN); // safe
   return m;
 }
 
@@ -66,23 +78,25 @@ describe('storm damage', () => {
     m.debugSetShield(2, 50);
     const { snap, evs } = run(m, 4);
     const r = snap.storm!.r;
-    expect(r).toBeGreaterThan(30);
-    expect(r).toBeLessThan(41);
+    expect(r).toBeGreaterThan(31);
+    expect(r).toBeLessThan(49);
     const storm = evs.filter((e) => e.type === 'hit' && e.data.weapon === 'storm');
     expect(storm.length).toBeGreaterThanOrEqual(3);
     expect(storm.every((e) => e.data.target === 1 && e.data.shieldAmount === 0 && (e.data.amount as number) > 0)).toBe(true);
     const a = snap.players.find((p) => p.id === 1)!, b = snap.players.find((p) => p.id === 2)!;
     const bolts = (id: number) => evs.filter((e) => e.type === 'hit' && e.data.weapon === 'lightning' && e.data.target === id);
     expect(a.hp).toBeLessThan(PLAYER.hp);
-    if (!bolts(1).length) expect(a.shield).toBe(50);
-    if (!bolts(2).length) { expect(b.hp).toBe(PLAYER.hp); expect(b.shield).toBe(50); }
+    // Storm and lightning both go straight to hp: shields untouched either way.
+    expect(a.shield).toBe(50);
+    expect(b.shield).toBe(50);
+    if (!bolts(2).length) expect(b.hp).toBe(PLAYER.hp);
   });
 
   test('the damage ramps up the longer the storm runs', async () => {
     const at = async (t: number) => {
       const m = await humans();
       m.debugSetTime(t);
-      m.debugTeleport(1, v3(-40, MAP.groundY, 10));
+      m.debugTeleport(1, OUT);
       m.debugSetHp(1, 100);
       const { evs } = run(m, 2.1);
       const hits = evs.filter((e) => e.type === 'hit' && e.data.weapon === 'storm' && e.data.target === 1);
@@ -102,9 +116,10 @@ describe('storm damage', () => {
 });
 
 describe('lightning', () => {
-  test('a telegraphed strike hurts players near it, never building pieces', async () => {
+  test('a telegraphed strike hurts players near it straight to hp (shield untouched), never building pieces', async () => {
     const m = await outsideInside();
-    const p2 = v3(24, MAP.groundY, 0);
+    m.debugSetShield(2, 50);
+    const p2 = IN;
     const piece = m.debugPlacePiece('wood', v3(p2.x + 1.2, MAP.groundY, p2.z), 0);
     const before = run(m, 0.1).snap;
     const hp0 = before.pieces.find((p) => p.id === piece)!.hp;
@@ -118,6 +133,8 @@ describe('lightning', () => {
     expect(evs.some((e) => e.type === 'lightning')).toBe(true);
     const hit = evs.find((e) => e.type === 'hit' && e.data.weapon === 'lightning' && e.data.target === 2);
     expect(hit).toBeTruthy();
+    expect(hit!.data.shieldAmount).toBe(0);
+    expect(snap.players.find((p) => p.id === 2)!.shield).toBe(50);
     expect(snap.players.find((p) => p.id === 2)!.hp).toBeLessThan(PLAYER.hp);
     expect(snap.pieces.find((p) => p.id === piece)!.hp).toBe(hp0);
     expect(evs.some((e) => e.type === 'pieceHit' || e.type === 'destroyed')).toBe(false);
@@ -167,7 +184,7 @@ describe('bots and the storm', () => {
   test.each(['medium', 'hard', 'pro'] as Difficulty[])('%s bots get inside the ring ahead of it and stay there', async (difficulty) => {
     const m = await Match.create({ players: [{ name: 'a', isBot: true, difficulty }, { name: 'b', isBot: true, difficulty }], seed: 5 });
     run(m, 1);
-    // Ring at SD+90 s ~ 44 m: the bunkers (55 m out) are in the storm, the island middles (40 m) just inside.
+    // Ring at SD+90 s ~49 m: the bunkers (~63 m out) are in the storm; the islands' near halves are inside.
     m.debugSetTime(SD + 90);
     let { snap } = run(m, 25);
     let outside = 0;
@@ -193,4 +210,30 @@ describe('bots and the storm', () => {
     const now = snap.players.find((p) => p.id === 1)!;
     expect(dist2D(now.pos, me.pos)).toBeGreaterThan(STORM.boltRadius * 0.6);
   }, 60_000);
+});
+
+describe('8 bots and the storm', () => {
+  // 8 players: the islands sit ~80 m from the center island, so the only land inside the late ring is the
+  // center island. Medium+ bots bridge there ahead of the storm instead of dying to it on their shore.
+  test.each([['medium', 6], ['hard', 5]] as [Difficulty, number][])('%s: the survivor ends inside the ring, nobody lost to the storm on the shore', async (difficulty, seed) => {
+    const m = await Match.create({ players: Array.from({ length: 8 }, (_, i) => ({ name: `b${i}`, isBot: true, difficulty })), seed });
+    run(m, 1);
+    for (let id = 1; id <= 8; id++) m.debugGive(id, { cash: 800 }); // what they'd have earned by 12:30
+    m.debugSetTime(SD - 160);
+    const c = m.def.center;
+    let snap = m.tick(new Map());
+    let stormKills = 0;
+    for (let i = 0; i < 30 * 420 && snap.winner === null; i++) {
+      snap = m.tick(new Map());
+      for (const e of snap.events) if (e.type === 'kill' && e.data.cause === 'storm') stormKills++;
+    }
+    expect(snap.winner, 'match ended').not.toBeNull();
+    expect(stormKills).toBeLessThanOrEqual(1);
+    const w = snap.players.find((p) => p.id === snap.winner)!;
+    expect(w.alive).toBe(true);
+    expect(Math.hypot(w.pos.x - c.center.x, w.pos.z - c.center.z)).toBeLessThan(snap.storm!.r);
+    expect(w.pos.y).toBeGreaterThan(snap.waterY + 1); // on land or a deck, not in the sea
+    // Someone actually bridged onto the center island.
+    expect(snap.pieces.filter((p) => p.kind === 'scaffold' && Math.hypot(p.pos.x - c.center.x, p.pos.z - c.center.z) < c.radius + 4).length).toBeGreaterThan(0);
+  }, 300_000);
 });

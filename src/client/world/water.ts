@@ -3,7 +3,7 @@ import {
   cameraPosition, color, cos, dot, float, max, min, mix, normalize, positionLocal, positionWorld, pow, reflect, sin, smoothstep, texture, time,
   transformNormalToView, uniform, vec2, vec3,
 } from 'three/tsl';
-import type { IslandLayout } from '../../sim/map';
+import type { MapDef } from '../../sim/map';
 import { noiseTex } from './pbr';
 import { SUN_DIR } from './sky';
 
@@ -73,7 +73,7 @@ export type Ocean = { mesh: THREE.Mesh; update(cam: THREE.Vector3, waterY: numbe
  * breaking against the quay walls, and emissive sun glints that catch bloom. Opaque on purpose: a transparent
  * pass would blend against the sky and wash out.
  */
-export function buildWater(map: IslandLayout[]): Ocean {
+export function buildWater(def: MapDef): Ocean {
   const tex = new THREE.TextureLoader().load(NORMALS_URL, undefined, undefined, (err) => console.error(`[world/water] failed to load ${NORMALS_URL}`, err));
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   const origin = uniform(new THREE.Vector3());
@@ -100,8 +100,9 @@ export function buildWater(map: IslandLayout[]): Ocean {
   const nWorld = normalize(gw.normal.add(vec3(n.x.mul(detail), 0, n.y.mul(detail))));
   mat.normalNode = transformNormalToView(nWorld);
 
-  // distance to the nearest island quay wall (stand-in for depth)
-  const rim = map.map((isl) => p.sub(uniform(new THREE.Vector2(isl.center.x, isl.center.z))).length().sub(isl.radius));
+  // distance to the nearest quay wall (player islands + the center island)
+  const discs = [...def.islands, def.center];
+  const rim = discs.map((isl) => p.sub(uniform(new THREE.Vector2(isl.center.x, isl.center.z))).length().sub(isl.radius));
   const near = max(rim.slice(1).reduce((a, b) => min(a, b), rim[0]), float(0));
   const shallow = color(0x0e8f88), mid = color(0x086c86), deep = color(0x043b5e);
   let base = mix(mix(shallow, mid, smoothstep(0, 10, near)), deep, smoothstep(8, 60, near));

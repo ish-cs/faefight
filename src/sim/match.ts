@@ -4,20 +4,23 @@ import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosiv
 import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
-import { buildMap, type IslandLayout } from './map';
-import { defaultPotionShops, potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
+import { buildMapDef, type IslandLayout, type MapDef } from './map';
+import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
+import { Cosmetics } from './cosmetics';
+import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
 import { HitboxHistory, LAG_COMP, rayPlayer } from './lagComp';
 import { newMoveState, stepMove, type MoveCmd } from './movement';
 import { adsMoveCmd, adsSpeed } from './gunplay';
 import { unsupportedPieces } from './support';
-import { addStrike, stormRate, stormSnap, tickStorm } from './storm';
+import { addStrike, stormCenterOf, stormRate, stormSnap, tickStorm } from './storm';
 import { newPlayer } from './player';
+import { MatchStats } from './stats';
 import { isPlaceholderBotName, nickname } from './names';
 import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
-import type { BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
+import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { clone, dist, dist2D, forward, norm, sub, v3 } from './vec';
 
@@ -46,6 +49,8 @@ export class Match implements MatchApi {
   private tickNo = 0;
   private events: MatchEvent[] = [];
   private explosives: Explosive[] = [];
+  /** End-screen totals (damage, seals, pieces, cash, longest life). */
+  private stats = new MatchStats();
 
   private bots = new Map<number, BotBrain>();
   private rng: () => number;
@@ -59,6 +64,11 @@ export class Match implements MatchApi {
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
   private feed: FeedLine[] = [];
+  readonly map: IslandLayout[];
+  private center: CenterState = newCenterState();
+  private cosmetics: Cosmetics;
+  /** Potion sellers: the NPC on the center island. */
+  potionShops: PotionShop[];
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
   private history = new HitboxHistory();
   private rewindT: number | null = null;
@@ -69,11 +79,15 @@ export class Match implements MatchApi {
   cloneSnapshots = true;
   /** Lag-compensated shots resolved so far, and the total rewind (tests/debug). */
   lagStats = { shots: 0, rewindSec: 0 };
-  /** Potion sellers (temporary default until the centre island lands; see potions.ts). */
-  potionShops: PotionShop[] = defaultPotionShops();
 
-  private constructor(readonly map: IslandLayout[], private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
+  private constructor(readonly def: MapDef, private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
+    const map = def.islands;
+    this.map = map;
+    this.cosmetics = new Cosmetics(def.cosmetics);
+    this.potionShops = potionShopsAt([def.center.potionShop]);
     this.s = newMatchState(map, setup.seed ?? 1);
+    this.s.waterY = def.waterY;
+    this.s.stormCenter = stormCenterOf(def.center);
     this.sealed = map.map(() => false);
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
@@ -115,7 +129,7 @@ export class Match implements MatchApi {
         p.vel.y = Math.max(p.vel.y, 0) + dv.y;
         if (dv.y > 0 && p.mv) { p.mv.grounded = false; p.mv.airTime = 1; }
       },
-      castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
+      castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, true) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
       onKill: (victim, killer, cause) => {
         this.kills.push({ victim, killer });
         // Only environment causes go on the kill event (death recap / feed); weapon kills are told by the killer.
@@ -131,8 +145,8 @@ export class Match implements MatchApi {
   ): Promise<Match> {
     const n = setup.players.length;
     if (n < 2 || n > 8) throw new Error(`Match.create: need 2..8 players, got ${n}`);
-    const map = buildMap(n);
-    return new Match(map, await Physics.create(map), setup, opts);
+    const def = buildMapDef(n, setup.map ?? 'harbor', setup.seed ?? 1);
+    return new Match(def, await Physics.create(def), setup, opts);
   }
 
   humanIds(): number[] {
@@ -165,11 +179,15 @@ export class Match implements MatchApi {
     this.collapseUnsupported(now);
     if (this.s.storm) this.events.push(...tickStorm(this.ctx, this.s.storm, now));
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
+    tickCenter(this.center, DT, !this.s.suddenDeath);
+    for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
+    this.events.push(...this.cosmetics.onEvents(this.events, now));
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
     this.updateSeals(now);
     this.remember(now);
+    this.stats.onTick(this.events, this.s.players.values(), now);
     this.history.record(now, this.s.players.values());
     return this.snapshot();
   }
@@ -186,6 +204,14 @@ export class Match implements MatchApi {
     if (!this.makeBot) throw new Error('Match.setBot: no bot factory configured');
     p.isBot = true;
     this.bots.set(playerId, this.makeBot(playerId, difficulty, this.rng));
+  }
+
+  /** A seat's human came back (reconnect grace): drop the bot; their movement numbering starts over. */
+  setHuman(playerId: number): void {
+    const p = this.mustPlayer(playerId);
+    this.bots.delete(playerId);
+    p.isBot = false;
+    if (p.mv) p.mv.ack = 0;
   }
 
   /** Pieces left with nothing holding them up fall apart (no floating bridges or walls). */
@@ -308,8 +334,25 @@ export class Match implements MatchApi {
     const isl = this.map[p.island];
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
 
-    if (input.interact)
-      for (const g of this.s.generators) if (near(this.map[g.island].generator)) collect(p, g);
+    if (input.interact) {
+      for (const g of this.s.generators) if (near(this.map[g.island].generator)) {
+        const before = p.inv.cash;
+        collect(p, g);
+        this.stats.earned(p.id, p.inv.cash - before);
+      }
+      const c = this.def.center;
+      if (near(c.goldGen)) {
+        const cash = collectGold(p, this.center);
+        if (cash > 0) {
+          this.stats.earned(p.id, cash);
+          this.events.push({ t: now, type: 'centerCollect', data: { by: p.id, station: 'gold', cash } });
+        }
+      }
+      if (near(c.supplyGen)) {
+        const got = collectSupply(p, this.center);
+        if (got.sandbags + got.steel > 0) this.events.push({ t: now, type: 'centerCollect', data: { by: p.id, station: 'supply', ...got } });
+      }
+    }
     // Shop NPCs serve anyone standing at them, on any island (vaults stay owner-only); potions only at the
     // potion seller; generator upgrades and gun locks only at your own island's shop.
     if (input.shop) {
@@ -415,8 +458,9 @@ export class Match implements MatchApi {
     const { landingSpeed } = stepMove(p as PlayerState & { mv: typeof mv }, adsMoveCmd(p, cmd), DT, { movePlayer: (d) => this.physics.movePlayer(p.id, d) },
       speedMult(p, this.s.time) * adsSpeed(p));
     mv.ack = cmd.seq;
+    p.stamina = mv.stamina;
     if (landingSpeed > LIFECYCLE.safeFallSpeed)
-      this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time, { bypassShield: true }));
+      this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time, { bypassShield: true, weapon: 'fall' }));
   }
 
   private build(p: PlayerState, req: BuildRequest, now: number) {
@@ -477,7 +521,7 @@ export class Match implements MatchApi {
       const chest = v3(o.pos.x, o.pos.y + 1.2, o.pos.z);
       const d = dist(eye, chest);
       if (d > SIGHT_RANGE) continue;
-      const hit = this.physics.raycast(eye, norm(sub(chest, eye)), d + 0.5, self.id);
+      const hit = this.physics.raycast(eye, norm(sub(chest, eye)), d + 0.5, self.id, true); // sight passes firing slits
       if (hit?.hit.type === 'player' && hit.hit.id === o.id) enemies.push(o);
     }
     return {
@@ -487,6 +531,8 @@ export class Match implements MatchApi {
       others: [...this.s.players.values()].filter((o) => o.id !== self.id)
         .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills })),
       map: this.map,
+      center: { island: this.def.center, gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
+      statics: this.def.statics,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),
       genLevels: [...this.s.genLevels],
@@ -513,6 +559,8 @@ export class Match implements MatchApi {
       loot: [...this.s.loot.values()],
       projectiles: projectiles(this.explosives),
       generators: this.s.generators,
+      center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
+      broken: this.cosmetics.broken,
       genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,
@@ -520,9 +568,42 @@ export class Match implements MatchApi {
       storm: this.s.storm ? stormSnap(this.s.storm, this.s.time) : null,
       winner: this.s.winner,
       potionShops: this.potionShops,
+      brains: this.brainInfos(),
       events: this.events,
+      // Totals only once there's a result: keeps the per-tick snapshot (and the network budget) unchanged.
+      ...(this.s.winner !== null ? { stats: this.stats.totals(this.s.players.values(), this.s.time) } : {}),
     };
     return this.cloneSnapshots ? structuredClone(s) : s;
+  }
+
+  /** Each bot's thinking for spectators (whatever the bot exposes: the brain's debug view, else its current action). */
+  private brainInfos(): BotBrainInfo[] {
+    const out: BotBrainInfo[] = [];
+    for (const [id, brain] of this.bots) {
+      const b = brain as BotBrain & Partial<{
+        personality: { archetype: string }; difficulty: Difficulty; currentGoal: string; currentTarget: number | null;
+        planScores: { goal: string; score: number }[];
+        debug: {
+          action: string; goal: string | null; reason: string; fightOdds: number | null; thought: string; stepIndex: number; step: string;
+          target: number | null; options?: { goal: string; score: number }[];
+        };
+        currentPlan: { steps: { label: string }[]; step: number } | null;
+      }>;
+      const d = b.debug;
+      const plan = b.currentPlan ?? null;
+      const action = d?.action ?? b.currentGoal ?? 'idle';
+      out.push({
+        id, personality: b.personality?.archetype ?? 'Bot', difficulty: b.difficulty ?? 'medium', action,
+        goal: d?.goal ?? null, reason: d?.reason ?? '',
+        steps: plan ? plan.steps.map((s) => s.label) : d?.step ? [d.step] : [],
+        step: plan ? plan.step : d?.step ? 0 : -1,
+        fightOdds: d?.fightOdds ?? null,
+        target: d?.target ?? b.currentTarget ?? null,
+        options: (d?.options ?? b.planScores ?? []).slice(0, 4).map((o) => ({ goal: o.goal, score: Math.round(o.score * 100) / 100 })),
+        thought: d?.thought || `Doing: ${action}`,
+      });
+    }
+    return out;
   }
 
   private mustPlayer(id: number) {

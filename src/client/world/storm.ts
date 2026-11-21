@@ -31,7 +31,8 @@ export class StormFx {
   private flashPeak = 0;
   private base: Weather;
   private storm: StormSnap | null = null;
-  private map: IslandLayout[] = [];
+  /** Land to put strike markers on: player islands and the center island. */
+  private land: { center: Vec3; radius: number; groundY: number }[] = [];
   private readonly wall: THREE.Mesh;
   private readonly wallOpacity = uniform(0);
   private readonly rain: THREE.InstancedMesh;
@@ -106,11 +107,11 @@ export class StormFx {
     scene.add(this.root);
   }
 
-  setMap(map: IslandLayout[]) { this.map = map; }
+  setMap(map: IslandLayout[], center?: { center: Vec3; radius: number; groundY: number } | null) { this.land = center ? [...map, center] : [...map]; }
 
   /** Ground height a marker sits on: island top, else the sea. */
   private groundY(x: number, z: number): number {
-    for (const isl of this.map) if (Math.hypot(x - isl.center.x, z - isl.center.z) <= isl.radius) return isl.groundY;
+    for (const isl of this.land) if (Math.hypot(x - isl.center.x, z - isl.center.z) <= isl.radius) return isl.groundY;
     return MAP.waterY;
   }
 

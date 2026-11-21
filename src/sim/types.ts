@@ -124,6 +124,8 @@ export type PlayerState = {
   /** Shots in the current burst (recoil climbs with it). */
   burst: number;
   busyUntil: number;
+  /** Stamina 0..100 (sprint "stress"; mirrors mv.stamina, which prediction replays). Sent only to its owner and their spectators. */
+  stamina: number;
   /** Movement state (grounding, coyote/jump-buffer timers, last applied command seq): see movement.ts. */
   mv?: MoveState;
 };
@@ -134,7 +136,7 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'lightning';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -149,6 +151,10 @@ export type Snapshot = {
   /** In flight now (the sim always sends it; optional so older/partial snapshots stay valid). */
   projectiles?: Projectile[];
   generators: { island: number; stored: number }[];
+  /** Center island bonus stations: cash at the gold generator, free pieces at the supply generator. */
+  center?: { gold: number; bags: number; steel: number };
+  /** Ids of broken cosmetic props (MapDef.cosmetics), in the order they broke. */
+  broken?: number[];
   /** Generator level (1-4) of each island, by island index. */
   genLevels: number[];
   sealed: boolean[];
@@ -159,12 +165,16 @@ export type Snapshot = {
   winner: number | null;
   /** Potion seller NPCs (anyone may buy there). Optional so hand-built snapshots (tests, tools) can omit it. */
   potionShops?: PotionShop[];
+  /** Host side only: every bot's current thinking. Remote spectators get just the followed bot's (net/interest.ts). */
+  brains?: BotBrainInfo[];
   events: MatchEvent[];
   /**
    * Remote clients only (net/interest.ts): players this client can't currently perceive. They stay
    * in `players` (name, alive, eliminated) with a stale position and neutral state; don't render them.
    */
   hidden?: number[];
+  /** Match totals per player: only present once the match has a result (end-screen summary). */
+  stats?: PlayerStats[];
 };
 
 export type PotionShop = { id: number; pos: Vec3 };
@@ -172,7 +182,38 @@ export type PotionShop = { id: number; pos: Vec3 };
 /** A lightning strike due to land at (x, z) at sim time `at` (shown from `at - STORM.telegraphSec`). */
 export type StormStrike = { x: number; z: number; at: number };
 /** Sudden-death storm as clients see it: ring centre and radius, and the strikes being telegraphed. */
-export type StormSnap = { x: number; z: number; r: number; strikes: StormStrike[] };
+/** `rf`: the final circle the ring closes to. */
+export type StormSnap = { x: number; z: number; r: number; rf: number; strikes: StormStrike[] };
+/** Per-player match totals for the end-screen summary (sent only once the match has a result). */
+export type PlayerStats = {
+  id: number;
+  kills: number;
+  deaths: number;
+  /** Damage dealt to other players (shield + hp). */
+  damage: number;
+  /** Bunkers sealed (credited to whoever placed the closing piece). */
+  seals: number;
+  /** Pieces placed. */
+  built: number;
+  /** Cash collected from generators. */
+  cash: number;
+  /** Longest time alive in one life (s). */
+  longestLife: number;
+  headshots: number;
+};
+
+/**
+ * What a bot is thinking (bots/bot.ts debug), for spectators: personality, goal + reason, its steps
+ * (`step` = index of the current one), fight odds (0..1, null when not fighting) and a one-line thought.
+ */
+export type BotBrainInfo = {
+  id: number; personality: string; difficulty: Difficulty; action: string;
+  goal: string | null; reason: string; steps: string[]; step: number; fightOdds: number | null; thought: string;
+  /** Rival it's going after (player id). */
+  target: number | null;
+  /** Top-scored options of its last decision, best first (why it chose this). */
+  options: { goal: string; score: number }[];
+};
 
 export const NO_INPUT: PlayerInput = {
   moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, fire: false, ads: false, reload: false,

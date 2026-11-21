@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import type { Vec3 } from '../sim/types';
+import { PLAYER } from '../sim/constants';
 import { type Action, isHeld, slotForCode } from './keymap';
 import { ThirdPersonCamera } from './camera';
 
@@ -42,6 +43,10 @@ type Frame = {
   humanId: number;
   players: { id: number; name: string; alive: boolean }[];
   posOf(id: number, out: THREE.Vector3): THREE.Vector3 | null;
+  /** The followed player's own look angles (interpolated); absent/null = use the spectator's mouse look. */
+  lookOf?(id: number): { yaw: number; pitch: number } | null;
+  /** Follow from their eyes (first person) instead of over their shoulder; toggled with the camera key (V). */
+  firstPerson?: boolean;
 };
 
 /**
@@ -53,6 +58,8 @@ export class Spectator {
   active = false;
   mode: 'free' | 'follow' = 'free';
   followId: number | null = null;
+  /** Following from the player's eyes this frame (hide their avatar). */
+  firstPerson = false;
   readonly pos = new THREE.Vector3();
   private keys = new Set<string>();
   private pendingDigit: number | null = null;
@@ -108,6 +115,7 @@ export class Spectator {
     this.keys.clear();
     this.pendingDigit = null;
     this.pendingCycle = false;
+    this.firstPerson = false;
     this.banner.style.display = 'none';
   }
 
@@ -140,8 +148,14 @@ export class Spectator {
     }
 
     const target = this.mode === 'follow' && this.followId !== null ? f.posOf(this.followId, this.tmp) : null;
+    this.firstPerson = !!target && !!f.firstPerson;
     if (target) {
-      this.follow.update(target, f.yaw, f.pitch, f.dt);
+      // Their view: their own aim, from their eyes (V) or over their shoulder.
+      const look = f.lookOf?.(this.followId!) ?? { yaw: f.yaw, pitch: f.pitch };
+      if (this.firstPerson) {
+        f.cam.position.set(target.x, target.y + PLAYER.eyeHeight, target.z);
+        f.cam.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
+      } else this.follow.update(target, look.yaw, look.pitch, f.dt);
     } else {
       const p = flyStep(this.pos, f.yaw, f.pitch, keys, f.dt);
       this.pos.set(p.x, p.y, p.z);
@@ -150,13 +164,18 @@ export class Spectator {
     }
     const who = target ? f.players.find((p) => p.id === this.followId)?.name ?? `#${this.followId}` : null;
     const text = who
-      ? `SPECTATING — following ${who}  ·  click next · 0 free fly`
+      ? `SPECTATING — following ${who}  ·  click next · V ${this.firstPerson ? 'over the shoulder' : 'first person'} · 0 free fly`
       : 'SPECTATING — free fly  ·  WASD + mouse · Space up · C down · Shift fast · 1–9/click follow';
     if (this.banner.textContent !== text) this.banner.textContent = text;
   }
 
+  /** Who the camera follows right now (null: free fly or not spectating). */
+  get following(): number | null {
+    return this.active && this.mode === 'follow' ? this.followId : null;
+  }
+
   /** Debug/e2e view of the spectator. */
   info() {
-    return { active: this.active, mode: this.mode, followId: this.followId, pos: { x: this.pos.x, y: this.pos.y, z: this.pos.z } };
+    return { active: this.active, mode: this.mode, followId: this.followId, firstPerson: this.firstPerson, pos: { x: this.pos.x, y: this.pos.y, z: this.pos.z } };
   }
 }

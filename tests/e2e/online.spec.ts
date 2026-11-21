@@ -123,7 +123,8 @@ test('host leaving shows "Host left" to the client', async ({ context }) => {
   await a.getByTestId('start-match').click();
   await expect.poll(async () => (await dbg<Snap | null>(b, 'snapshot'))?.players.length ?? 0, { timeout: 30_000 }).toBe(2);
   await a.close();
-  await expect(b.getByTestId('fatal')).toContainText('Host left', { timeout: 5_000 });
+  // The link times out (~3 s), then the client checks whether the host's room still exists before giving up.
+  await expect(b.getByTestId('fatal')).toContainText('Host left', { timeout: 15_000 });
   await b.getByText('Back to menu').click();
   await expect(b.getByTestId('host-game')).toBeVisible();
 });

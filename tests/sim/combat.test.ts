@@ -4,7 +4,7 @@ import { Physics } from '../../src/sim/physics';
 import { buildMap, type IslandLayout } from '../../src/sim/map';
 import { newPlayer } from '../../src/sim/player';
 import { add, forward, right, scale, v3 } from '../../src/sim/vec';
-import { GRENADE } from '../../src/sim/constants';
+import { GRENADE, PIECES } from '../../src/sim/constants';
 import type { PieceState, PlayerState, Vec3 } from '../../src/sim/types';
 
 let map: IslandLayout[];
@@ -103,7 +103,7 @@ describe('combat', () => {
     const evs = tryFire(ctx, a, 0);
     const e = evs.find((x) => x.type === 'pieceHit')!;
     expect(e).toBeDefined();
-    expect(e.data).toMatchObject({ piece: 9, kind: 'steel', by: 1, maxHp: 1200 });
+    expect(e.data).toMatchObject({ piece: 9, kind: 'steel', by: 1, maxHp: PIECES.steel.hp });
     expect(e.data.amount as number).toBeCloseTo(2);
     expect(e.data.hp as number).toBeCloseTo(1198);
     expect((e.data.pos as Vec3).y).toBeGreaterThan(spot(8).y);

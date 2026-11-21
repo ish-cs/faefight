@@ -17,14 +17,15 @@ export const PLAYER = {
 export type PieceSpec = { w: number; h: number; d: number; hp: number; price: number; placeSec: number };
 
 // w = width along local X, h = height, d = depth along local Z. Ramp rises along local +Z.
+// Piece HP was cut 20% (2026-11-20) so walls break a little faster.
 export const PIECES: Record<PieceKind, PieceSpec> = {
-  sandbags: { w: 2, h: 1.0, d: 0.8, hp: 150, price: 10, placeSec: 0.5 },
-  wood: { w: 2, h: 2.0, d: 0.2, hp: 250, price: 25, placeSec: 0.8 },
-  metal: { w: 2, h: 2.5, d: 0.1, hp: 500, price: 60, placeSec: 1.2 },
-  steel: { w: 2, h: 2.5, d: 0.15, hp: 1200, price: 150, placeSec: 2.0 },
-  scaffold: { w: 2, h: 0.2, d: 4, hp: 200, price: 20, placeSec: 0.6 },
-  ramp: { w: 2, h: 1.5, d: 3, hp: 200, price: 30, placeSec: 0.8 },
-  container: { w: 6, h: 2.6, d: 2.4, hp: 2500, price: 300, placeSec: 3.0 },
+  sandbags: { w: 2, h: 1.0, d: 0.8, hp: 120, price: 10, placeSec: 0.5 },
+  wood: { w: 2, h: 2.0, d: 0.2, hp: 200, price: 25, placeSec: 0.8 },
+  metal: { w: 2, h: 2.5, d: 0.1, hp: 400, price: 60, placeSec: 1.2 },
+  steel: { w: 2, h: 2.5, d: 0.15, hp: 960, price: 150, placeSec: 2.0 },
+  scaffold: { w: 2, h: 0.2, d: 4, hp: 160, price: 20, placeSec: 0.6 },
+  ramp: { w: 2, h: 1.5, d: 3, hp: 160, price: 30, placeSec: 0.8 },
+  container: { w: 6, h: 2.6, d: 2.4, hp: 2000, price: 300, placeSec: 3.0 },
 };
 
 /** Spread cone half-angles in degrees. Bloom grows per shot and recovers at `recover` deg/s. */
@@ -187,7 +188,7 @@ export const LIFECYCLE = {
  * map centre over `shrinkSec`, then holds `finalRadius`. Outside it you lose `dps0 + dpsRamp·t` hp each
  * second (t = seconds since sudden death, capped at dpsMax), straight to hp like falls. Lightning: one strike
  * every `strikeGap` s (shrinking to `strikeGapMin`), shown `telegraphSec` before it lands, hurting players
- * within `boltRadius` (boltDmg at the centre, linear falloff). Most land in the storm (`playerStrikeFrac`
+ * within `boltRadius` (boltDmg at the centre, linear falloff), straight to hp like the ring. Most land in the storm (`playerStrikeFrac`
  * of those near someone standing in it); `edgeStrikeFrac` land up to `edgeStrikeDepth` m inside the edge.
  * Neither the storm nor lightning touches building pieces.
  */
@@ -195,6 +196,8 @@ export const STORM = {
   startPad: 12,
   shrinkSec: 180,
   finalRadius: 12,
+  /** The final circle covers the centre island's land plus this margin. */
+  finalPad: 4,
   dps0: 2,
   dpsRamp: 0.08,
   dpsMax: 20,
@@ -217,5 +220,27 @@ export const MAP = {
   groundY: 2,
   waterY: 0,
   gap: 36,
-  bunker: { interior: 4, wall: 0.3, height: 2.6, doorWidth: 1.6, doorHeight: 2.2 },
+  bunker: {
+    interior: 4, wall: 0.3, height: 2.6, doorWidth: 1.6, doorHeight: 2.2,
+    /** Firing slits: horizontal gaps (width × y0..y1 above the floor) in each door wall segment and the back wall. */
+    slit: { width: 0.6, y0: 1.35, y1: 1.53 },
+  },
+};
+
+/** Neutral center island stations (anyone may use them). */
+export const CENTER = {
+  /** Stations sit this far from the island middle. */
+  stationRadius: 5,
+  /** Gold generator: twice the home generator rate, much higher cap. */
+  goldRate: ECONOMY.generatorRate * 2,
+  goldCap: 1000,
+  /** Supply generator: a free sandbag every bagSec (up to bagCap), a steel plate every steelSec (up to steelCap). */
+  supplyBagSec: 8,
+  supplyBagCap: 10,
+  supplySteelSec: 60,
+  supplySteelCap: 2,
+  /** Shield well: standing within wellRadius refills shield by wellPerSec up to wellCap. */
+  wellRadius: 1.6,
+  wellPerSec: 4,
+  wellCap: 50,
 };

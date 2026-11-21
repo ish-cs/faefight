@@ -121,7 +121,7 @@ describe('snapshot codec', () => {
     s.projectiles = Array.from({ length: 8 }, (_, i) => ({ id: 500 + i, kind: i % 2 ? 'rocket' : 'grenade', pos: v3(i * 3.33333, 9.87654, 1.11111), vel: v3(30.123, -1.5, 4.444) }));
     s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
     // Sudden death: the storm ring and a burst of telegraphed lightning.
-    s.storm = { x: 0, z: 0, r: 63.27, strikes: Array.from({ length: 4 }, (_, i) => ({ x: 40.12 + i, z: -12.34 * i, at: 1023.433 + i * 0.7 })) };
+    s.storm = { x: 0, z: 0, r: 63.27, rf: 18, strikes: Array.from({ length: 4 }, (_, i) => ({ x: 40.12 + i, z: -12.34 * i, at: 1023.433 + i * 0.7 })) };
     enc.push(s);
     enc.take(1);
     enc.push({ ...s, tick: 2 });
@@ -132,7 +132,7 @@ describe('snapshot codec', () => {
     const s = snap(1, Array.from({ length: 60 }, (_, i) => ({ ...steel(), id: i })));
     s.projectiles = Array.from({ length: 8 }, (_, i) => ({ id: 500 + i, kind: i % 2 ? 'rocket' : 'grenade', pos: v3(i * 3.33333, 9.87654, 1.11111), vel: v3(30.123, -1.5, 4.444) }));
     s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
-    s.storm = { x: 0, z: 0, r: 63.27, strikes: Array.from({ length: 4 }, (_, i) => ({ x: 40.12 + i, z: -12.34 * i, at: 1023.433 + i * 0.7 })) };
+    s.storm = { x: 0, z: 0, r: 63.27, rf: 18, strikes: Array.from({ length: 4 }, (_, i) => ({ x: 40.12 + i, z: -12.34 * i, at: 1023.433 + i * 0.7 })) };
     enc.push(s);
     const full = wire.encode(1, enc.take(1, true));
     expect(full.byteLength).toBeLessThan(6 * 1024);

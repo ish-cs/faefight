@@ -3,8 +3,9 @@ import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
 import { addKind, countOf, emptyHotbar, heldKinds, takeOut } from './hotbar';
 import type { IslandLayout } from './map';
 import type { Physics } from './physics';
+import { refillStamina, STAMINA } from './movement';
 import { isSealed } from './seal';
-import { newStorm, type StormState } from './storm';
+import { newStorm, type StormCenter, type StormState } from './storm';
 import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState, Vec3 } from './types';
 import { clone, dist, dist2D, rotateY, v3 } from './vec';
 
@@ -23,6 +24,8 @@ export type MatchStateCore = {
   storm: StormState | null;
   /** Match seed (the storm's lightning stream is derived from it). */
   seed: number;
+  /** Where the storm closes in (the centre island; Match sets it from the MapDef). */
+  stormCenter: StormCenter;
   /** Winning player id, -1 for a draw, null while the match is running. */
   winner: number | null;
   nextId: number;
@@ -41,6 +44,7 @@ export function newMatchState(map: IslandLayout[], seed = 1): MatchStateCore {
     forcedSeal: false,
     storm: null,
     seed,
+    stormCenter: { x: 0, z: 0, r: 0 },
     winner: null,
     nextId: 1,
   };
@@ -156,13 +160,15 @@ export function freeSpawnSpot(physics: Physics, isl: IslandLayout): Vec3 {
   return sp;
 }
 
-export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLayout[], now: number, dt: number): MatchEvent[] {
+export function tickLifecycle(
+  s: MatchStateCore, physics: Physics, map: IslandLayout[], now: number, dt: number,
+): MatchEvent[] {
   const out: MatchEvent[] = [];
 
   if (!s.suddenDeath && now >= LIFECYCLE.suddenDeathAt) {
     s.suddenDeath = true;
     s.forcedSeal = true;
-    s.storm = newStorm(map, LIFECYCLE.suddenDeathAt, s.seed);
+    s.storm = newStorm(map, s.stormCenter, LIFECYCLE.suddenDeathAt, s.seed);
     out.push(ev(now, 'suddenDeath', {}));
   }
 
@@ -201,6 +207,8 @@ export function tickLifecycle(s: MatchStateCore, physics: Physics, map: IslandLa
     p.hp = PLAYER.hp;
     p.shield = 0;
     p.alive = true;
+    if (p.mv) refillStamina(p.mv);
+    p.stamina = STAMINA.max;
     grantLockedGuns(p);
     // Come back with a pistol + one spare mag so a camper with a rifle isn't a guaranteed kill.
     if (!p.inv.weapons.pistol && addKind(p.hotbar, 'pistol') >= 0) p.inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag };
