@@ -19,7 +19,13 @@ const fps = (page: Page) => page.evaluate(() => new Promise<number>((res) => {
   const f = () => { n++; if (performance.now() - t0 < 3000) requestAnimationFrame(f); else res((n * 1000) / (performance.now() - t0)); };
   requestAnimationFrame(f);
 }));
-const gpu = (page: Page) => dbg<{ n: number; avg: number; p95: number }>(page, 'gpuMs');
+const gpu = async (page: Page) => {
+  await dbg(page, 'resetFrames');
+  await page.waitForTimeout(3000);
+  const g = await dbg<{ n: number; avg: number; p95: number }>(page, 'gpuMs');
+  return `gpu avg ${g.avg.toFixed(2)} ms p95 ${g.p95.toFixed(2)} ms (n ${g.n})`;
+};
+const yawTo = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.atan2(-(b.x - a.x), -(b.z - a.z));
 const aim = (page: Page, yaw: number, pitch: number) => page.evaluate(([y, p]) => {
   const input = (window as unknown as { __faefight: { input: { yaw: number; pitch: number } } }).__faefight.input;
   input.yaw = y; input.pitch = p;
@@ -31,7 +37,7 @@ test('impact and fire screenshots', async ({ page }) => {
   test.setTimeout(240_000);
   await page.addInitScript(() => localStorage.setItem('faefight.map', 'harbor'));
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto('/?debug=1');
+  await page.goto('/?debug=1&gputime=1');
   await page.getByTestId('play-medium').click();
   await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });
   await expect.poll(async () => (await dbg<{ drawCalls: number }>(page, 'renderInfo')).drawCalls, { timeout: 15_000 }).toBeGreaterThan(10);
@@ -45,22 +51,25 @@ test('impact and fire screenshots', async ({ page }) => {
 
   await dbg(page, 'give', { weapons: { rifle: { mag: 25, spare: 200 } } });
   await page.locator('canvas.game').click();
-  await page.keyboard.press('Digit1');
+  const slot = async () => (await dbg<{ players: { id: number; hotbar: (string | null)[] }[] }>(page, 'snapshot')).players.find((p) => p.id === humanId)!.hotbar.indexOf('rifle');
+  await expect.poll(slot, { timeout: 5000 }).toBeGreaterThanOrEqual(0);
+  await page.keyboard.press(`Digit${(await slot()) + 1}`);
   await page.keyboard.press('KeyV'); // first person
   await page.waitForTimeout(500);
 
   // 1. The bunker's back wall (concrete), from 5 m.
-  const s1 = from(home.bunker.center, -7.4, 0.5);
+  const s1 = from(home.bunker.center, -5.4, 0.5);
   await dbg(page, 'teleport', s1.x, s1.z);
   await aim(page, yaw, 0.05);
   await page.waitForTimeout(800);
   const fps0 = await fps(page);
+  const gpu0 = await gpu(page);
   for (let i = 0; i < 26; i++) await shoot(yaw + (((i * 7) % 13) - 6) * 0.045, -0.08 + ((i * 5) % 9) * 0.03);
   await aim(page, yaw, 0.05);
   await page.waitForTimeout(700);
   await page.screenshot({ path: `${DIR}/impact-walls-${TAG}.png` });
   const fps1 = await fps(page);
-  console.log(`[shots:${TAG}] fps same view, clean ${fps0.toFixed(1)} -> after 26 hits ${fps1.toFixed(1)}`);
+  console.log(`[shots:${TAG}] same view, clean: ${fps0.toFixed(1)} fps, ${gpu0}; after 26 hits: ${fps1.toFixed(1)} fps, ${await gpu(page)}`);
 
   // 2. The ground: concrete slab, gravel path and sand bed toward the island middle.
   const s2 = from(home.center, 1.5, -2);
@@ -80,7 +89,7 @@ test('impact and fire screenshots', async ({ page }) => {
   const s3 = from(home.center, -4 + 5, 6 + 2.5);
   await dbg(page, 'teleport', s3.x, s3.z);
   await page.waitForTimeout(3500);
-  await aim(page, yaw + Math.PI + 0.45, -0.5);
+  await aim(page, yawTo(s3, c), -0.42);
   await page.waitForTimeout(600);
   await page.screenshot({ path: `${DIR}/impact-crater.png` });
 
@@ -100,11 +109,12 @@ test('impact and fire screenshots', async ({ page }) => {
   const blast = from(fc, 4.6, 0);
   await dbg(page, 'explode', 'grenade', blast.x, blast.z, 0.3);
   const fpsIdle = await fps(page);
+  const gpuIdle = await gpu(page);
   await page.waitForTimeout(4500);
   await page.screenshot({ path: `${DIR}/fire-fort.png` });
   const fpsFire = await fps(page);
   const burning = (await dbg<{ pieces: { burning?: boolean }[] }>(page, 'snapshot')).pieces.filter((p) => p.burning).length;
-  console.log(`[shots] fort view fps: before blast ${fpsIdle.toFixed(1)}, ${burning} pieces burning ${fpsFire.toFixed(1)}; gpu ${JSON.stringify(await gpu(page))}`);
+  console.log(`[shots] fort view: before blast ${fpsIdle.toFixed(1)} fps, ${gpuIdle}; ${burning} pieces burning ${fpsFire.toFixed(1)} fps, ${await gpu(page)}`);
   await page.keyboard.press('KeyV'); // third person: the fort and the player
   await page.waitForTimeout(5000);
   await page.screenshot({ path: `${DIR}/fire-fort-late.png` });

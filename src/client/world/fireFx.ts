@@ -78,7 +78,7 @@ export class FireFx {
       const k = q * (dist > NEAR ? 0.5 : 1);
       const area = Math.max(0.5, Math.min(1.6, (s.w * s.h) / 4));
       const piece = s.kind === 'piece';
-      const fRate = (s.kind === 'grass' ? 22 : s.kind === 'palm' ? 26 : piece ? 30 * area : 14) * k;
+      const fRate = (s.kind === 'grass' ? 34 : s.kind === 'palm' ? 34 : piece ? 40 * area : 20) * k;
       s.acc[0] += fRate * dt; s.acc[1] += (piece ? 5 : 3) * k * dt; s.acc[2] += (piece ? 4 : 2.5) * k * dt;
       const c = Math.cos(s.rotY), sn = Math.sin(s.rotY);
       const at = (lx: number, ly: number, lz: number, out: number[]) => {
@@ -88,15 +88,15 @@ export class FireFx {
       const p = [0, 0, 0];
       for (; s.acc[0] >= 1; s.acc[0]--) {
         this.spot(s, p, at);
-        const big = s.kind === 'grass' ? 0.7 : 1;
-        const warm = rr(0.42, 0.68);
-        flames.spawn(p[0], p[1], p[2], rr(-0.25, 0.25), rr(0.9, 2.0), rr(-0.25, 0.25), rr(0.45, 0.85), rr(0.32, 0.55) * big, 0.06, 1, warm, warm * 0.3, 0.85, -2.2, 1);
+        const big = s.kind === 'grass' ? 0.8 : 1;
+        const warm = rr(0.38, 0.62);
+        flames.spawn(p[0], p[1], p[2], rr(-0.25, 0.25), rr(1.0, 2.2), rr(-0.25, 0.25), rr(0.5, 0.95), rr(0.6, 1.0) * big, 0.18, 1, warm, warm * 0.25, 0.9, -2.4, 1);
       }
       for (; s.acc[1] >= 1; s.acc[1]--) {
         const top = s.kind === 'palm' ? s.h : s.h * rr(0.7, 1);
         at(rr(-s.w / 3, s.w / 3), top, rr(-s.d / 3, s.d / 3), p);
         const g = rr(0.13, 0.22);
-        dust.spawn(p[0], p[1], p[2], rr(-0.2, 0.2), rr(1, 1.6), rr(-0.2, 0.2), rr(3, 4.5), rr(0.4, 0.6), rr(2, 2.8), g, g * 0.95, g * 0.9, 0.5, -0.35, 0.6);
+        dust.spawn(p[0], p[1], p[2], rr(-0.2, 0.2), rr(1, 1.6), rr(-0.2, 0.2), rr(3, 4.5), rr(0.6, 0.9), rr(2.4, 3.4), g, g * 0.95, g * 0.9, 0.62, -0.35, 0.6);
       }
       for (; s.acc[2] >= 1; s.acc[2]--) {
         this.spot(s, p, at);
