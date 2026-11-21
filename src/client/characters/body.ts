@@ -571,7 +571,7 @@ function addHead(B: BodyBuilder, look: Look, D: Detail, J: Joints, headW: BoneW)
   if (D.face > 1) {
     B.add(new THREE.CircleGeometry(0.0011, 6), { m: irisM(0.0004).multiply(new THREE.Matrix4().makeTranslation(-0.0016, 0.0019, 0)), color: 0xffffff, kind: K.glint, w: headW, mirror: true });
     // upper + lower lids (skin shells over the eyeball)
-    B.add(sphere(12, 4, 0, Math.PI * 0.4), { m: M4(eyeC, new THREE.Euler(0.9, 0, 0), R * 1.12), color: skinDark, kind: K.skin, w: headW, mirror: true });
+    B.add(sphere(12, 4, 0, Math.PI * 0.4), { m: M4(eyeC, new THREE.Euler(0.72, 0, 0), R * 1.12), color: skinDark, kind: K.skin, w: headW, mirror: true });
     B.add(sphere(12, 3, Math.PI * 0.68, Math.PI * 0.32), { m: M4(eyeC, new THREE.Euler(-0.35, 0, 0), R * 1.1), color: look.skin, kind: K.skin, w: headW, mirror: true });
     // brows
     const b0 = f(V(0.17, 0.27, 1)).addScaledVector(nrm(f(V(0.17, 0.27, 1))), 0.002), b1 = f(V(0.6, 0.29, 0.8)).addScaledVector(nrm(f(V(0.6, 0.29, 0.8))), 0.001);
@@ -631,11 +631,13 @@ function headShade(g: THREE.BufferGeometry, skin: number, f: (d: THREE.Vector3, 
     let ao = 0;
     for (const s of [-1, 1]) {
       const dx = u.x - s * eyeDir.x, dy = u.y - eyeDir.y - 0.04, dz = u.z - eyeDir.z;
-      ao += 0.32 * Math.exp(-(dx * dx + dy * dy * 1.4 + dz * dz) / 0.02);
+      ao += 0.5 * Math.exp(-(dx * dx + dy * dy * 1.4 + dz * dz) / 0.025);
     }
-    ao += 0.3 * sstep(-0.55, -0.95, u.y) * sstep(-0.4, 0.4, u.z); // under the jaw
+    ao += 0.4 * sstep(-0.55, -0.95, u.y) * sstep(-0.4, 0.4, u.z); // under the jaw
+    ao += 0.25 * Math.max(0, 1 - Math.hypot(Math.abs(u.x) - 0.2, u.y + 0.33, u.z - 0.93) / 0.18); // beside the nose
+    ao += 0.15 * sstep(0.2, -0.3, u.z) * sstep(0.3, 1, Math.abs(u.x)); // sides of the head
     const cheek = Math.max(0, 1 - Math.hypot(Math.abs(u.x) - 0.55, u.y + 0.25, u.z - 0.75) / 0.35) * 0.7 + Math.max(0, 1 - Math.hypot(u.x, u.y + 0.3, u.z - 1) / 0.25) * 0.5;
-    c.copy(base).lerp(red, Math.min(1, cheek)).multiplyScalar(1 - Math.min(0.5, ao));
+    c.copy(base).lerp(red, Math.min(1, cheek * 1.3)).multiplyScalar(1 - Math.min(0.55, ao));
     out.push(c.r, c.g, c.b);
   }
   return out;

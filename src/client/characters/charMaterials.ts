@@ -128,7 +128,7 @@ function fullMaterial(team: number | null, dirtAmt: number) {
   m.colorNode = col;
 
   let rough = float(0.86) as F; // fabric
-  rough = mix(rough, float(0.5).add(nB.x.mul(0.15)), is(K.skin)) as F;
+  rough = mix(rough, float(0.6).add(nB.x.mul(0.12)), is(K.skin)) as F;
   rough = mix(rough, float(0.55).add(scuff.mul(0.25)).add(nC.x.mul(0.1)), is(K.leather)) as F;
   rough = mix(rough, float(0.34).add(nB.y.mul(0.2)).sub(wear.mul(0.12)), is(K.metal)) as F;
   rough = mix(rough, float(0.62).add(nB.x.mul(0.12)), is(K.polymer)) as F;
