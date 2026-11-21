@@ -116,7 +116,7 @@ export type RivalFacts = {
 };
 
 /** Desirability of going after this rival; higher is better. Personality only shifts weights. */
-export function rivalScore(f: RivalFacts, t: Traits): number {
+export function rivalScore(f: RivalFacts, t: Traits, sealAwayTarget = 0.6): number {
   let s = 1;
   s -= f.reach ? 0 : Math.min(2, f.scaffolds * 0.06 * (1.2 - 0.4 * t.aggression));
   s -= (f.dist / 100) * (0.25 + 0.35 * t.aggression);
@@ -130,7 +130,7 @@ export function rivalScore(f: RivalFacts, t: Traits): number {
   if (f.onMyIsland) s += 0.5 + 0.6 * t.caution;
   if (f.away && !f.sealed) s += 0.35 * t.opportunism;
   // Kit in hand, owner out and their island in walking reach: seal the empty bunker.
-  if (f.kit && f.away && f.reach && !f.sealed) s += 0.6;
+  if (f.kit && f.away && f.reach && !f.sealed) s += sealAwayTarget;
   return s;
 }
 

@@ -8,8 +8,9 @@ import type {
 } from '../types';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import { AIM, Aim, angleBetween, lookAt, turnToward, wrapAngle, type Angles } from './aim';
-import { BUILD_SKILL, BUILD_TUNING as BT, flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
+import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
+import { DEFAULT_BOT_PARAMS, type BotParams } from './params';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
@@ -74,9 +75,8 @@ const WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
 const COLLECT_BEFORE_LEAVING = 40, COLLECT_NEAR_CAP = 400;
 /** Grenades: throw range (outside the blast), minimum gap between throws, how stale a sighting may be. */
 const NADE_MIN = 6.5, NADE_MAX = 22, NADE_GAP = 3, NADE_SEEN_SEC = 2.5;
-/** Cash (carried + banked) at which a bot stocks up on grenades / a steel seal kit. */
+/** Cash (carried + banked) at which a bot stocks up on grenades (steel seal kit: DriveParams.steelRich). */
 const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, hard: 450, pro: 400 };
-const STEEL_RICH = 550;
 /** Torching wooden bases: rocket range window (m), one rocket per gap (s), and the cash it takes to buy in. */
 const TORCH_RANGE = [9, 45] as const, TORCH_GAP = 8, TORCH_RICH = 900;
 /** Rebuy money for after a death: pistol + a box of ammo. */
@@ -89,41 +89,11 @@ const MEDKIT_AT: Record<Difficulty, number> = { easy: 35, medium: 45, hard: 55, 
  */
 const BUNKER_OUT = SEAL.exitRadius + 0.8;
 
-/**
- * Drive to win (Medium/Hard/PRO; easy players stay calmer). Grouped so they can move into BotParams.
- * - offenseAt / offenseCash: from this time, or once this much money (carried + banked) is in hand with a gun,
- *   the bot is on an offensive plan: buy bridge + walls, cross, fight to the bunker, seal.
- * - push: added to bridge/attack/seal scores while on offense; shopForPush: shop score when the plan buys push gear.
- * - plinkRange: past this a fight across water isn't worth a goal (shots still go out in passing); on the same
- *   island the bot closes in instead (maxRange caps its preferred range, sprinting while the gap is > sprintGap).
- * - reengageSec: a retreat (disengage/heal) lasts at most this long unless I'm still being hit or very low.
- * - guardFreshSec: guarding home only for an intruder seen on my island this recently.
- * - collectCarried: once carrying what the push needs, the generator only matters past this much cash.
- */
-export const DRIVE = {
-  offenseAt: { easy: Infinity, medium: 330, hard: 300, pro: 180 } as Record<Difficulty, number>,
-  offenseCash: { easy: Infinity, medium: 3 * PIECES.wood.price, hard: 3 * PIECES.metal.price, pro: 3 * PIECES.wood.price } as Record<Difficulty, number>,
-  push: { easy: 0, medium: 0.25, hard: 0.25, pro: 0.35 } as Record<Difficulty, number>,
-  shopForPush: 0.75,
-  plinkRange: 30,
-  maxRange: { easy: Infinity, medium: 20, hard: 20, pro: 24 } as Record<Difficulty, number>,
-  sprintGap: 8,
-  reengageSec: 20,
-  reengageHp: 0.3,
-  guardFreshSec: 4,
-  collectCarried: 200,
-};
-/** Goal watchdog: how long a goal may go without progress, how far counts as progress, how long it's dropped. */
-const STALL_SEC: Partial<Record<Goal, number>> = {
-  seal: 8, attack: 15, bridge: 10, contest: 10, raid: 10, loot: 8, shop: 10, bank: 8, fortify: 10, cut: 12,
-};
-const STALL_DIST = 2.5, STALL_BAN_SEC = 20;
-/** Camping a sealed bunker: this far out from the doorway (outside a grenade's reach of the door). */
-const SIEGE_DIST = 6.5, SIEGE_AFTER_DEATH = 16;
+export { DRIVE } from './params';
+/** Goals the watchdog keeps an eye on (DriveParams.stallSec; attack gets longer: it waits at doors). */
+const STALLABLE = new Set<Goal>(['seal', 'attack', 'bridge', 'contest', 'raid', 'loot', 'shop', 'bank', 'fortify', 'cut']);
 /** Doorways per bunker. */
 const MAP_DOORS = 3;
-/** A rival who just died with their bunker this close (m) is worth a seal race. */
-const SEAL_RACE_M = 30;
 const TARGETED = new Set<Goal>(['seal', 'attack', 'bridge']);
 const PUSH_GEAR: ShopItem[] = ['pistol', 'ammo', 'scaffold', 'wood', 'metal', 'steel', 'charge'];
 
@@ -233,7 +203,11 @@ export class Bot {
   /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
   private readonly centerMinded: boolean;
 
-  constructor(readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality) {
+  /** `params`: tunable strategy (params.ts); the hand-tuned defaults unless a trainer passes its own. */
+  constructor(
+    readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality,
+    private readonly P: BotParams = DEFAULT_BOT_PARAMS,
+  ) {
     this.personality = personality ?? rollPersonality(rng);
     this.t = this.personality.traits;
     const t = this.t;
@@ -519,7 +493,7 @@ export class Bot {
       if (o.alive || o.eliminated || o.respawnAt === null || o.id === this.targetId || o.island === me.island) continue;
       if (now - (this.mem.diedAt.get(o.id) ?? -Infinity) > 1) continue;
       const isl = view.map[o.island];
-      if (view.sealed[isl.index] || dist2D(me.pos, isl.bunker.center) > SEAL_RACE_M) continue;
+      if (view.sealed[isl.index] || dist2D(me.pos, isl.bunker.center) > this.P.drive.sealRaceM) continue;
       const n = this.nav.nodeAt(me.pos);
       if (n !== isl.index && (n < 0 || this.nav.hop(n, isl.index) === null)) continue;
       this.targetId = o.id;
@@ -532,7 +506,7 @@ export class Bot {
   private chooseTarget(view: BotView) {
     let best: number | null = null, bestScore = -Infinity, cur = -Infinity;
     for (const f of this.rivalFacts(view)) {
-      const s = rivalScore(f, this.t) + (this.rng() - 0.5) * NOISE[this.difficulty] -
+      const s = rivalScore(f, this.t, this.P.drive.sealAwayTarget) + (this.rng() - 0.5) * NOISE[this.difficulty] -
         ((this.targetBan.get(f.id) ?? -Infinity) > view.now ? 1.5 : 0);
       if (f.id === this.targetId) cur = s;
       if (s > bestScore) { bestScore = s; best = f.id; }
@@ -625,7 +599,7 @@ export class Bot {
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
-      steel: skilled && total >= STEEL_RICH,
+      steel: skilled && total >= this.P.drive.steelRich,
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
     };
@@ -646,27 +620,27 @@ export class Bot {
   private computeBuildNeeds(c: Ctx, total: number): Partial<Record<PieceKind, number>> | undefined {
     const { me, view } = c;
     if (view.suddenDeath || !ownsGun(me.inv)) return undefined;
-    const t = this.t, sk = BUILD_SKILL[this.difficulty];
+    const t = this.t, sk = this.P.buildSkill[this.difficulty];
     const b: Partial<Record<PieceKind, number>> = {};
-    // Hotbar room: a new kind takes a slot; always leave BT.freeSlots open for guns, heals and the like.
+    // Hotbar room: a new kind takes a slot; always leave this.P.buildTuning.freeSlots open for guns, heals and the like.
     let free = me.hotbar.filter((k) => k === null).length;
     const add1 = (k: PieceKind, n = 1) => {
       if (n <= 0) return;
-      if (!b[k] && !me.hotbar.includes(k)) { if (free <= BT.freeSlots) return; free--; }
+      if (!b[k] && !me.hotbar.includes(k)) { if (free <= this.P.buildTuning.freeSlots) return; free--; }
       b[k] = (b[k] ?? 0) + n;
     };
-    if (total >= BT.fortReserve * (1 - t.builder) && this.fortWorthIt(c))
+    if (total >= this.P.buildTuning.fortReserve * (1 - t.builder) && this.fortWorthIt(c))
       for (const [i, s] of this.fortSlots().entries())
         if (!slotBuilt(view.pieces, s) && (this.slotBackoff.get(i) ?? -Infinity) <= view.now) add1(s.kind);
-    const walls = Math.round(BT.coverCarry[this.difficulty] * (0.4 + t.builder));
+    const walls = Math.round(this.P.buildTuning.coverCarry[this.difficulty] * (0.4 + t.builder));
     const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
     // Cover walls of the kind I already carry for plugs (one hotbar slot), metal once rich.
-    const wall: PieceKind = me.hotbar.includes('metal') || (skilled && total >= BT.metalCoverAt) ? 'metal' : 'wood';
+    const wall: PieceKind = me.hotbar.includes('metal') || (skilled && total >= this.P.buildTuning.metalCoverAt) ? 'metal' : 'wood';
     add1(wall, walls);
     const scaffolds = this.scaffoldsNeeded(c);
-    if (sk.bridgeCover && this.wallsOnBridge && scaffolds >= 2 * BT.scaffoldsPerBridgeWall)
-      add1(wall, Math.floor(scaffolds / BT.scaffoldsPerBridgeWall));
-    if (sk.highGround && total >= BT.rampAt && t.builder >= 0.3) add1('ramp');
+    if (sk.bridgeCover && this.wallsOnBridge && scaffolds >= 2 * this.P.buildTuning.scaffoldsPerBridgeWall)
+      add1(wall, Math.floor(scaffolds / this.P.buildTuning.scaffoldsPerBridgeWall));
+    if (sk.highGround && total >= this.P.buildTuning.rampAt && t.builder >= 0.3) add1('ramp');
     return b;
   }
 
@@ -675,17 +649,17 @@ export class Bot {
    * getting there first. Real builders fortify anyway.
    */
   private fortWorthIt(c: Ctx): boolean {
-    if (this.t.builder >= BT.fortEarlyBuilder) return true;
+    if (this.t.builder >= this.P.buildTuning.fortEarlyBuilder) return true;
     const rivals = c.view.others.filter((o) => !o.eliminated).length;
-    return rivals >= BT.fortMinRivals && !c.reach && sealKit(c.me.inv) >= c.openDoors.length;
+    return rivals >= this.P.buildTuning.fortMinRivals && !c.reach && sealKit(c.me.inv) >= c.openDoors.length;
   }
 
   /** My share of the home fortification plan (easy players misplace some of it for good). */
   private fortSlots(): Slot[] {
     if (this.slots) return this.slots;
     const view = this.view, home = view.self.island;
-    const sk = BUILD_SKILL[this.difficulty];
-    this.slots = fortShare(fortPlan(view.map, home, this.t), this.t, this.difficulty).map((s) => {
+    const sk = this.P.buildSkill[this.difficulty];
+    this.slots = fortShare(fortPlan(view.map, home, this.t), this.t, this.difficulty, this.P.buildSkill).map((s) => {
       if (s.after !== undefined || this.rng() >= sk.misplace) return s;
       const f = fumble(s.pos, s.rotY, this.rng);
       return { ...s, pos: f.pos, rotY: f.rotY };
@@ -908,7 +882,7 @@ export class Bot {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
         // Sealed in (or about to respawn into a sealed bunker): be there to finish it.
-        if (this.sieging(c)) return 0.75 + 0.2 * t.opportunism;
+        if (this.sieging(c)) return this.P.drive.siegeScore + 0.2 * t.opportunism;
         // Respawn window with no kit to seal: wait at their door for the unarmed respawn.
         if (rivalDown) return gun && sealKit(me.inv) === 0 ? 0.35 + 0.3 * t.opportunism : 0.3;
         if (!gun) return 0.1;
@@ -921,8 +895,11 @@ export class Bot {
         const near = c.on === c.rivalIsl.index && dist2D(me.pos, c.rivalIsl.bunker.center) < 15;
         const ownerAway = !!c.rival && c.rival.alive && this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)?.island !== c.rival.island &&
           !!this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC);
+        // Standing on their island with nobody home (not seen here lately): the door is open, plug it now.
+        const empty = c.on === c.rivalIsl.index && !!c.rival && c.rival.alive && !ownerAway &&
+          this.mem.recent(c.rival.id, view.now, this.P.drive.emptyHomeSec)?.island !== c.rival.island;
         return (kit >= c.openDoors.length ? 0.6 : 0.3) + (rivalDown ? 0.5 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
-          (ownerAway ? 0.25 + 0.2 * t.opportunism : 0);
+          (ownerAway || empty ? this.P.drive.sealAway + 0.2 * t.opportunism : 0);
       }
       case 'cut': {
         if (!gun || c.on !== home.index || view.suddenDeath) return 0;
@@ -943,14 +920,14 @@ export class Bot {
         const cv = this.cover;
         if (!cv || (c.enemy && c.enemyDist < 5)) return 0;
         // Winning the trade (they're much lower): push the kill instead of hiding.
-        if (c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield - BT.pushLead) return 0;
-        return BT.coverScore + 0.1 * t.builder;
+        if (c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield - this.P.buildTuning.pushLead) return 0;
+        return this.P.buildTuning.coverScore + 0.1 * t.builder;
       }
       case 'fortify': {
         if (view.suddenDeath || c.on !== home.index || c.danger || !gun || this.intruder(c)) return 0;
         if (!this.fortWorthIt(c)) return 0;
         const next = this.nextSlot(c);
-        return next ? BT.fortifyScore + 0.3 * t.builder : 0;
+        return next ? this.P.buildTuning.fortifyScore + 0.3 * t.builder : 0;
       }
       case 'raid': {
         if (view.suddenDeath || !gun) return 0;
@@ -986,7 +963,7 @@ export class Bot {
   private offensive(c: Ctx): boolean {
     const me = c.me;
     if (c.view.suddenDeath || !ownsGun(me.inv)) return false;
-    return c.view.now >= DRIVE.offenseAt[this.difficulty] || me.inv.cash + me.vault.cash >= DRIVE.offenseCash[this.difficulty];
+    return c.view.now >= this.P.drive.offenseAt[this.difficulty] || me.inv.cash + me.vault.cash >= this.P.drive.offenseCash[this.difficulty];
   }
 
   /**
@@ -1001,39 +978,39 @@ export class Bot {
     switch (g) {
       case 'guard': {
         const i = this.intruder(c);
-        const onIsland = !!i && now - i.t < DRIVE.guardFreshSec && dist2D(i.pos, c.home.center) < c.home.radius;
+        const onIsland = !!i && now - i.t < this.P.drive.guardFreshSec && dist2D(i.pos, c.home.center) < c.home.radius;
         return onIsland ? s : 0;
       }
       case 'disengage': case 'heal': {
         // Retreat only when losing: still ahead of the one in front of me, keep fighting.
         if (g === 'disengage' && c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield) return 0;
-        const long = this.retreatSince !== null && now - this.retreatSince > DRIVE.reengageSec;
+        const long = this.retreatSince !== null && now - this.retreatSince > this.P.drive.reengageSec;
         const stillHit = now - this.mem.lastHurtAt < 3;
-        return long && !stillHit && me.hp / 100 > DRIVE.reengageHp ? 0 : s;
+        return long && !stillHit && me.hp / 100 > this.P.drive.reengageHp ? 0 : s;
       }
       case 'fight': {
         if (!c.enemy) return s;
         const sameIsland = islandAt(view.map, c.enemy.pos) === c.on;
-        return !sameIsland && c.enemyDist > DRIVE.plinkRange ? 0 : s;
+        return !sameIsland && c.enemyDist > this.P.drive.plinkRange ? 0 : s;
       }
     }
     if (!this.offensive(c)) return s;
     switch (g) {
-      case 'bridge': case 'attack': case 'seal': return s > 0 ? s + DRIVE.push[this.difficulty] : s;
+      case 'bridge': case 'attack': case 'seal': return s > 0 ? s + this.P.drive.push[this.difficulty] : s;
       case 'shop': {
         if (!c.homeReach) return s;
         const plan = this.plan(c);
         const push = plan.items.find((i) => PUSH_GEAR.includes(i));
-        return push && !this.buyBlocked(push) ? Math.max(s, DRIVE.shopForPush) : s;
+        return push && !this.buyBlocked(push) ? Math.max(s, this.P.drive.shopForPush) : s;
       }
       case 'collect': {
         const stored = view.generators[c.home.index];
         const geared = (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c) && sealKit(me.inv) >= c.openDoors.length;
-        return geared && stored < DRIVE.collectCarried ? Math.min(s, 0.2) : s;
+        return geared && stored < this.P.drive.collectCarried ? Math.min(s, 0.2) : s;
       }
       // The center island is where the fights are: worth going for when it pays.
-      case 'contest': return s > 0 ? s + DRIVE.push[this.difficulty] * 0.5 : s;
-      case 'fortify': return this.t.builder >= BT.fortEarlyBuilder ? s * 0.5 : 0;
+      case 'contest': return s > 0 ? s + this.P.drive.push[this.difficulty] * 0.5 : s;
+      case 'fortify': return this.t.builder >= this.P.buildTuning.fortEarlyBuilder ? s * 0.5 : 0;
       case 'cut': return this.crossing(c) ? s : s * 0.4;
       // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
       case 'bank': return this.insuranceDue(me) > 0 || c.danger ? s : s * 0.5;
@@ -1145,7 +1122,7 @@ export class Bot {
     const best = this.laneBest.get(key) ?? -Infinity;
     if (toRival && !mirror && f.s < best - 3) {
       this.laneBest.set(key, f.s);
-      if (BUILD_SKILL[this.difficulty].altRoute) { this.alt.add(to); this.nextScoreAt = now; return IDLE; }
+      if (this.P.buildSkill[this.difficulty].altRoute) { this.alt.add(to); this.nextScoreAt = now; return IDLE; }
     }
     if (!mirror) this.laneBest.set(key, Math.max(best, f.s));
     const stand = at(-1.1);
@@ -1158,7 +1135,7 @@ export class Bot {
     const out = mirror ? l.length - shore - f.s : f.s - shore;
     const lastWall = this.lastWallS.get(key) ?? -Infinity;
     const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
-    if (wall && BUILD_SKILL[this.difficulty].bridgeCover && this.wallsOnBridge && out > BT.bridgeWallFrom && Math.abs(f.s - lastWall) >= BT.bridgeWallEvery) {
+    if (wall && this.P.buildSkill[this.difficulty].bridgeCover && this.wallsOnBridge && out > this.P.buildTuning.bridgeWallFrom && Math.abs(f.s - lastWall) >= this.P.buildTuning.bridgeWallEvery) {
       this.lastWallS.set(key, f.s);
       const side = flankSide(c.view.map, l);
       const p = add(at(-1.6), scale(right(yawOf(l.dir)), side * 0.85));
@@ -1169,7 +1146,7 @@ export class Bot {
     // Butt the new deck against the end of the last one (it sits level with whatever its near end attaches to).
     // Nothing fits (e.g. a gap shorter than a deck, something in the way): look again now and then, not every tick.
     const st = this.bridgeStuck?.key === key ? this.bridgeStuck : null;
-    if (st && now - st.triedAt < BT.bridgeRetrySec) return { dir: null, face: ahead };
+    if (st && now - st.triedAt < this.P.buildTuning.bridgeRetrySec) return { dir: null, face: ahead };
     for (const k of [2.0, 2.1, 2.2, 2.3, 2.4, 2.6]) {
       const p = at(k);
       const pos = v3(p.x, c.me.pos.y, p.z);
@@ -1182,10 +1159,10 @@ export class Bot {
     else {
       st.triedAt = now;
       // Stuck a while: skilled players go round on the other lane; anyone else leaves it for now.
-      if (now - st.since > BT.bridgeStuckSec) {
+      if (now - st.since > this.P.buildTuning.bridgeStuckSec) {
         this.bridgeStuck = null;
-        if (toRival && !mirror && BUILD_SKILL[this.difficulty].altRoute) this.alt.add(to);
-        else { this.alt.delete(to); this.bridgeHoldUntil = now + BT.bridgeHoldSec; }
+        if (toRival && !mirror && this.P.buildSkill[this.difficulty].altRoute) this.alt.add(to);
+        else { this.alt.delete(to); this.bridgeHoldUntil = now + this.P.buildTuning.bridgeHoldSec; }
         this.nextScoreAt = now;
       }
     }
@@ -1206,7 +1183,7 @@ export class Bot {
     if (this.sieging(c) && c.on === c.rivalIsl.index) {
       const hp = (d: Doorway) => doorPieces(c.view.pieces, d).reduce((n, p) => n + p.hp, 0);
       const door = b.doorways.reduce((a, d) => (hp(d) < hp(a) ? d : a));
-      const spot = add(door.center, scale(forward(door.yaw), SIEGE_DIST));
+      const spot = add(door.center, scale(forward(door.yaw), this.P.drive.siegeDist));
       const walk = this.goTo(spot, 1.2);
       return walk.dir ? walk : { dir: null, face: v3(door.center.x, door.center.y + CHEST, door.center.z) };
     }
@@ -1250,7 +1227,7 @@ export class Bot {
   private sieging(c: Ctx): boolean {
     if (!c.rival || !c.rivalIsl || !c.view.sealed[c.rivalIsl.index] || c.view.suddenDeath) return false;
     const now = c.view.now;
-    if (now - (this.mem.diedAt.get(c.rival.id) ?? -Infinity) < SIEGE_AFTER_DEATH) return true;
+    if (now - (this.mem.diedAt.get(c.rival.id) ?? -Infinity) < this.P.drive.siegeAfterDeath) return true;
     const s = this.mem.recent(c.rival.id, now, 10);
     return !!s && s.island === c.rivalIsl.index;
   }
@@ -1489,7 +1466,7 @@ export class Bot {
     const gun = bestGun(me.inv, c.enemyDist);
     const pref = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
     // Skilled players close in rather than trade shots from afar.
-    const want = this.difficulty === 'easy' ? pref : Math.min(pref, DRIVE.maxRange[this.difficulty]);
+    const want = this.difficulty === 'easy' ? pref : Math.min(pref, this.P.drive.maxRange[this.difficulty]);
     const side = scale(right(yawOf(to)), this.strafeSign * (want < 2 ? 0.3 : 1));
     const sameIsland = islandAt(c.view.map, e.pos) === c.on;
 
@@ -1511,7 +1488,7 @@ export class Bot {
     const gapM = c.enemyDist - want;
     const radial = Math.abs(gapM) < 2 ? 0 : Math.sign(gapM);
     const dir = add(scale(to, radial), side);
-    const rush = this.difficulty !== 'easy' && gapM > DRIVE.sprintGap;
+    const rush = this.difficulty !== 'easy' && gapM > this.P.drive.sprintGap;
     // Chasing across water needs a route; otherwise just strafe in place.
     if (radial > 0 && !sameIsland) {
       const wp = this.nav.routeTo(e.pos);
@@ -1535,7 +1512,7 @@ export class Bot {
 
   /** Busy placing, or still between two pieces of a sequence (better players chain them tighter). */
   private building(c: Ctx, kind?: PieceKind): boolean {
-    const gap = BUILD_SKILL[this.difficulty].gap;
+    const gap = this.P.buildSkill[this.difficulty].gap;
     return c.me.busyUntil > c.view.now || c.view.now < this.lastPieceAt + (kind ? PIECES[kind].placeSec : 0) + gap;
   }
 
@@ -1568,7 +1545,7 @@ export class Bot {
     const cv = this.cover;
     if (cv) {
       if (c.enemy?.id === cv.threatId) { cv.threat = clone(c.enemy.pos); cv.lastContact = now; }
-      if (now - cv.lastContact > BT.coverForgetSec) { this.cover = null; this.nextScoreAt = now; }
+      if (now - cv.lastContact > this.P.buildTuning.coverForgetSec) { this.cover = null; this.nextScoreAt = now; }
     }
     const by = this.mem.lastHurtBy;
     if (by === null || by === me.id || now - this.mem.lastHurtAt > 1.0) return;
@@ -1577,17 +1554,17 @@ export class Bot {
     if (!from) return;
     if (this.cover?.threatId === by) { this.cover.threat = from; this.cover.lastContact = now; return; }
     if (now < this.coverRollAt) return;
-    this.coverRollAt = now + BT.coverRetrySec;
+    this.coverRollAt = now + this.P.buildTuning.coverRetrySec;
     if (dist2D(from, me.pos) < 5 || !this.wallKind(c)) return;
     // Skilled players only build when they're losing the trade; a shooter they're well ahead of gets pushed.
     const shooter = view.enemies.find((e) => e.id === by);
     const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
-    if (skilled && shooter && shooter.hp + shooter.shield < me.hp + me.shield - BT.pushLead) return;
+    if (skilled && shooter && shooter.hp + shooter.shield < me.hp + me.shield - this.P.buildTuning.pushLead) return;
     const eye = add(from, v3(0, PLAYER.eyeHeight, 0)), chest = add(me.pos, v3(0, CHEST, 0));
     if (view.pieces.some((p) => dist2D(p.pos, me.pos) < 4 && shields(p, eye, chest))) return;
     const spot = this.coverFrom(c, { pos: from });
-    if (spot && dist2D(spot, me.pos) < BT.coverNearSpot) return;
-    const sk = BUILD_SKILL[this.difficulty];
+    if (spot && dist2D(spot, me.pos) < this.P.buildTuning.coverNearSpot) return;
+    const sk = this.P.buildSkill[this.difficulty];
     if (this.rng() >= sk.coverChance * Math.min(1, 0.55 + this.t.builder)) return;
     this.cover = {
       threatId: by, threat: from, lastContact: now, startAt: now + sk.coverDelay * (0.7 + 0.6 * this.rng()), placed: 0,
@@ -1618,13 +1595,13 @@ export class Bot {
     if (!cv) { this.nextScoreAt = c.view.now; return IDLE; }
     const { me, view } = c;
     const now = view.now;
-    const sk = BUILD_SKILL[this.difficulty];
+    const sk = this.P.buildSkill[this.difficulty];
     const face = add(cv.threat, v3(0, CHEST, 0));
     const got = this.coverWall(c, cv.threat);
     if (!got) {
       if (now < cv.startAt || this.building(c)) return c.enemy ? this.doFight(c) : { dir: null, face };
       const kind = this.wallKind(c);
-      if (!kind || cv.placed >= BT.coverMaxPieces) { this.cover = null; this.nextScoreAt = now; return IDLE; }
+      if (!kind || cv.placed >= this.P.buildTuning.coverMaxPieces) { this.cover = null; this.nextScoreAt = now; return IDLE; }
       const to = norm(flat(sub(cv.threat, me.pos)));
       // A bag already lying between us: stack the next one on it.
       const low = kind === 'sandbags' ? view.pieces.find((p) => p.kind === 'sandbags' && p.owner === me.id && dist2D(p.pos, me.pos) < 2.2 &&
@@ -1633,7 +1610,7 @@ export class Bot {
         const act = this.place(c, kind, v3(low.pos.x, me.pos.y + 0.4, low.pos.z), low.rotY, face);
         if (act) { cv.placed++; return act; }
       }
-      for (const d of BT.coverDist) {
+      for (const d of this.P.buildTuning.coverDist) {
         let pos = add(me.pos, scale(to, d)), rotY = yawOf(to);
         if (this.rng() < sk.misplace) ({ pos, rotY } = fumble(pos, rotY, this.rng));
         const act = this.place(c, kind, pos, rotY, face);
@@ -1663,14 +1640,14 @@ export class Bot {
   private highGround(c: Ctx, e: PlayerState, to: Vec3, gun: WeaponKind, sameIsland: boolean): Act | null {
     const { me, view } = c;
     const now = view.now;
-    const [lo, hi] = BT.highGroundRange;
-    if (!BUILD_SKILL[this.difficulty].highGround || (me.inv.pieces.ramp ?? 0) === 0 || !sameIsland || gun === 'fists' ||
-      c.enemyDist < lo || c.enemyDist > hi || this.fightSince === null || now - this.fightSince < BT.highGroundAfter ||
+    const [lo, hi] = this.P.buildTuning.highGroundRange;
+    if (!this.P.buildSkill[this.difficulty].highGround || (me.inv.pieces.ramp ?? 0) === 0 || !sameIsland || gun === 'fists' ||
+      c.enemyDist < lo || c.enemyDist > hi || this.fightSince === null || now - this.fightSince < this.P.buildTuning.highGroundAfter ||
       c.on < 0 || me.pos.y - view.map[c.on].groundY > 0.3 || e.pos.y - me.pos.y > 1 || this.building(c)) return null;
     const pos = add(me.pos, scale(to, 2.1));
     const act = this.place(c, 'ramp', pos, yawOf(to) + Math.PI, add(e.pos, v3(0, CHEST, 0)));
     if (!act) return null;
-    this.perch = { ramp: v3(pos.x, me.pos.y, pos.z), pos: add(pos, scale(to, 1.0)), until: now + BT.perchSec };
+    this.perch = { ramp: v3(pos.x, me.pos.y, pos.z), pos: add(pos, scale(to, 1.0)), until: now + this.P.buildTuning.perchSec };
     return act;
   }
 
@@ -1689,7 +1666,7 @@ export class Bot {
     if (this.building(c, slot.kind)) return { dir: null, face };
     const act = this.place(c, slot.kind, slot.pos, slot.rotY, face);
     if (act) return act;
-    this.slotBackoff.set(i, view.now + BT.slotBackoffSec);
+    this.slotBackoff.set(i, view.now + this.P.buildTuning.slotBackoffSec);
     this.nextScoreAt = view.now;
     return { dir: null, face };
   }
@@ -1833,17 +1810,17 @@ export class Bot {
    * a while and think again, like a player giving up on a dead end.
    */
   private watchdog(now: number, me: PlayerState) {
-    const limit = STALL_SEC[this.goal];
+    const limit = !STALLABLE.has(this.goal) ? undefined : this.P.drive.stallSec * (this.goal === 'attack' ? 1.5 : 1);
     // Getting set for the storm (decks to the center, buying them) is never given up.
     if (limit === undefined || this.stormPrep(this.view)) { this.prog = null; return; }
     const p = this.prog;
-    if (!p || p.goal !== this.goal || dist2D(p.pos, me.pos) > STALL_DIST || this.lastDidAt > p.at) {
+    if (!p || p.goal !== this.goal || dist2D(p.pos, me.pos) > this.P.drive.stallDist || this.lastDidAt > p.at) {
       this.prog = { goal: this.goal, at: now, pos: clone(me.pos) };
       return;
     }
     if (now - p.at < limit) return;
-    this.goalBan.set(this.goal, now + STALL_BAN_SEC);
-    if (this.targetId !== null && TARGETED.has(this.goal)) this.targetBan.set(this.targetId, now + STALL_BAN_SEC);
+    this.goalBan.set(this.goal, now + this.P.drive.stallBanSec);
+    if (this.targetId !== null && TARGETED.has(this.goal)) this.targetBan.set(this.targetId, now + this.P.drive.stallBanSec);
     this.prog = null;
     this.nextScoreAt = now;
   }
