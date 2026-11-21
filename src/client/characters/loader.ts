@@ -27,6 +27,13 @@ export type CharacterAssets = {
 const BASE = `${import.meta.env.BASE_URL}assets/characters/`;
 // Only CC0-licensed rigs (the pack's other soldier is listed CC-BY on poly.pizza, so it's left out).
 // More variants with the same skeleton can be appended; clips are taken from the first.
+const MATERIAL_LOOK: Record<string, { roughness: number; metalness: number }> = {
+  Swat: { roughness: 0.88, metalness: 0 }, // cotton/poly uniform
+  Swat_Black: { roughness: 0.46, metalness: 0.08 }, // vest, pads, boots, helmet
+  Skin: { roughness: 0.62, metalness: 0 },
+  Visor: { roughness: 0.12, metalness: 0.35 },
+};
+
 const FILES: { url: string; uniformMaterial: string }[] = [
   { url: `${BASE}swat/swat.glb`, uniformMaterial: 'Swat' },
 ];
@@ -78,10 +85,12 @@ async function load(): Promise<CharacterAssets> {
       if (!m.isSkinnedMesh) return;
       m.castShadow = true;
       m.receiveShadow = true; // self-shadowing + standing in crane/container shadow grounds them in the scene
-      // Flat-coloured low-poly materials: matte cloth/skin reads more natural than the exported gloss.
+      // Per-material response instead of the exported uniform gloss: matte fabric uniform, satin skin, slightly
+      // specular nylon/polymer gear, glossy visor.
       for (const mat of (Array.isArray(m.material) ? m.material : [m.material]) as THREE.MeshStandardMaterial[]) {
-        mat.roughness = Math.max(mat.roughness, 0.75);
-        mat.metalness = 0;
+        const look = MATERIAL_LOOK[mat.name] ?? { roughness: Math.max(mat.roughness, 0.75), metalness: 0 };
+        mat.roughness = look.roughness;
+        mat.metalness = look.metalness;
       }
     });
     if (!g.scene.getObjectByName(HAND_BONE)) throw new Error(`[characters] ${FILES[i].url} has no ${HAND_BONE} bone`);

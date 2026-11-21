@@ -22,7 +22,7 @@ import type { BotParams } from './params';
  */
 export type GoalKind =
   | 'seal' | 'finish' | 'upgrade' | 'heal' | 'retreat' | 'bank' | 'fortify' | 'center' | 'defend' | 'raid' | 'hunt';
-export type BrainEvent = 'died' | 'targetGone' | 'targetSealed' | 'bridgeCut' | 'targetBusy' | 'homeThreat' | 'goalDone' | 'losingFight';
+export type BrainEvent = 'stuck' | 'died' | 'targetGone' | 'targetSealed' | 'bridgeCut' | 'targetBusy' | 'homeThreat' | 'goalDone' | 'losingFight';
 
 export type StepInfo = { label: string; act: Goal; done: boolean };
 
@@ -65,6 +65,8 @@ export type BrainInput = {
   /** Doorways my carried pieces can plug. */
   kit: number;
   scaffolds: number;
+  /** Scaffolds the next bridge I'd build still needs (it may go to the center island first); 0 = none to build. */
+  bridgeNeed: number;
   medkits: number;
   carried: number;
   banked: number;
@@ -117,6 +119,8 @@ export function fightOdds(inp: BrainInput): number {
 
 const KIT_NAME = (n: number, rich: boolean) => `${n} ${rich ? 'steel/metal' : 'wood'} plug${n === 1 ? '' : 's'}`;
 const pct = (x: number) => `${Math.round(100 * x)}%`;
+/** Seconds a retreat or a heal-at-home may last before the bot goes back in (a human doesn't hide forever). */
+const REENGAGE_SEC = 20;
 
 export class Brain {
   goal: BrainGoal | null = null;
@@ -124,6 +128,14 @@ export class Brain {
   private last: { target: number | null; sealed: boolean; reach: boolean; busy: boolean; threat: boolean; losing: boolean } | null = null;
   /** Events seen this match (debug/tests). */
   readonly history: { t: number; event: BrainEvent }[] = [];
+  /** A goal (kind + target) that got the bot stuck, set aside until `until`. */
+  private banned: { kind: GoalKind; target: number | null; until: number } | null = null;
+
+  /** The current goal isn't making progress (stuck): drop it for `sec` and re-plan. */
+  giveUp(now: number, sec: number) {
+    if (this.goal) this.banned = { kind: this.goal.kind, target: this.goal.target, until: now + sec };
+    this.notify('stuck', now);
+  }
 
   constructor(private readonly rng: () => number) {}
 
@@ -197,6 +209,8 @@ export class Brain {
   private candidates(inp: BrainInput, p: BotParams): BrainGoal[] {
     const out: BrainGoal[] = [];
     const add = (kind: GoalKind, utility: number, reason: string, steps: StepInfo[], target: number | null = null) => {
+      const b = this.banned;
+      if (b && b.kind === kind && b.target === target && inp.now < b.until) return;
       const step = steps.findIndex((s) => !s.done);
       out.push({ kind, target, reason, utility, since: inp.now, steps, step: step < 0 ? steps.length : step });
     };
@@ -209,7 +223,8 @@ export class Brain {
     // Running from a gun at close range just gets me shot in the back: only flee from distance, or when hurt.
     const losing = visible && odds < p.fleeOdds && (inp.enemy!.dist > 12 || inp.hp < 0.5) && !(inp.enemy!.dist < 3 && inp.myWeapon !== 'fists');
     const spent = (visible || inp.underFire) && inp.hp < p.lowHp;
-    if (losing || spent) {
+    // A retreat is a breather, not a new home: back in after REENGAGE_SEC unless the losing fight is still in my face.
+    if ((losing || spent) && !(this.goal?.kind === "retreat" && inp.now - this.goal.since > REENGAGE_SEC && !visible)) {
       const why = !inp.gun ? `no gun vs ${inp.enemy?.weapon ?? 'a gun'}` : spent ? `${pct(inp.hp)} HP` : `I'd lose this (${pct(odds)} odds${inp.armedNear > 1 ? `, ${inp.armedNear} on me` : ''})`;
       add('retreat', p.planRetreat * (1 + (p.fleeOdds - odds) + (spent ? p.lowHp - inp.hp : 0)), why, [
         { label: 'break line of sight', act: 'disengage', done: !visible && !inp.underFire },
@@ -219,7 +234,7 @@ export class Brain {
     }
 
     // ---- heal / shield up when hurt and nobody is on me.
-    if (inp.hp < p.healHp && !visible && !inp.suddenDeath) {
+    if (inp.hp < p.healHp && !visible && !inp.suddenDeath && !(this.goal?.kind === "heal" && inp.now - this.goal.since > REENGAGE_SEC && inp.medkits === 0)) {
       add('heal', p.planHeal * (1 + 2 * (p.healHp - inp.hp)), `${pct(inp.hp)} HP${inp.medkits ? ', I have a medkit' : ''}`, [
         { label: 'get out of sight', act: 'disengage', done: !inp.underFire },
         { label: 'buy a medkit', act: 'shop', done: inp.medkits > 0 || total < 75 || !home },
@@ -281,10 +296,10 @@ export class Brain {
       const toBridge = (label: string) => [
         { label: 'get a gun', act: 'shop' as Goal, done: inp.gun },
         homeClear,
-        // Death drops everything carried: bank what the trip doesn't need before leaving home.
-        { label: 'bank spare cash before leaving', act: 'bank' as Goal, done: !home || r.reach && inp.on === r.island || inp.bankable < 100 && inp.insuranceDue === 0 },
+        // Standing at my vault with spare cash: two seconds to bank it before the trip (death drops what I carry).
+        { label: 'bank spare cash (the vault is right here)', act: 'bank' as Goal, done: !(home && inp.nearVault && inp.bankable >= 150) },
         // Scaffolds I can afford now; with no cash, lay what I carry and come back for more.
-        { label: `carry ${r.scaffolds} scaffolds`, act: 'shop' as Goal, done: r.reach || inp.scaffolds >= r.scaffolds || (inp.scaffolds > 0 && total < PIECES.scaffold.price) },
+        { label: `carry ${r.scaffolds} scaffolds`, act: 'shop' as Goal, done: r.reach || inp.scaffolds >= (inp.bridgeNeed || r.scaffolds) || (inp.scaffolds > 0 && total < PIECES.scaffold.price) },
         { label, act: 'bridge' as Goal, done: r.reach },
       ];
       const kitStep = { label: `get a seal kit (${KIT_NAME(r.openDoors, total >= 3 * PIECES.metal.price)})`, act: 'shop' as Goal, done: inp.kit >= r.openDoors };

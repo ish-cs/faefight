@@ -111,5 +111,21 @@ describe('sanitizeClientMsg', () => {
   });
   test('unknown types are dropped', () => {
     expect(sanitizeClientMsg({ t: 'admin', cmd: 'win' })).toBeNull();
+    // Host-only /money never has a wire message: a guest forging one is dropped.
+    expect(sanitizeClientMsg({ t: 'money', amount: 500 })).toBeNull();
+    expect(sanitizeClientMsg({ t: 'debug', cmd: 'give', inv: { cash: 500 } })).toBeNull();
+  });
+});
+
+describe('lag compensation and ack fields', () => {
+  test('viewT survives only as a finite number', () => {
+    expect(sanitizeInput({ viewT: 12.5 })!.viewT).toBe(12.5);
+    expect('viewT' in sanitizeInput({ viewT: NaN })!).toBe(false);
+    expect('viewT' in sanitizeInput({ viewT: '1' })!).toBe(false);
+  });
+  test('snapshot acks are positive integers or dropped', () => {
+    expect(sanitizeClientMsg({ t: 'input', input: {}, cmds: [], ack: 42 })).toMatchObject({ ack: 42 });
+    expect(sanitizeClientMsg({ t: 'input', input: {}, cmds: [], ack: -1 })).not.toHaveProperty('ack');
+    expect(sanitizeClientMsg({ t: 'input', input: {}, cmds: [], ack: 1.5 })).not.toHaveProperty('ack');
   });
 });

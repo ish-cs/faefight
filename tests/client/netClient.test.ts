@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import { InputAccumulator } from '../../src/client/inputAccum';
 import { SnapshotBuffer } from '../../src/client/snapBuffer';
 import { NO_INPUT } from '../../src/sim/types';
@@ -88,5 +88,17 @@ describe('SnapshotBuffer', () => {
     expect(out.length).toBeGreaterThan(0);
     expect(out.at(-1)!.snap.time).toBeLessThanOrEqual(39 / 15);
     expect(out.every((r) => r.intervalMs <= 250)).toBe(true);
+  });
+});
+
+describe('InputAccumulator: lag compensation time', () => {
+  test('a fire tap between sends keeps the view time it was fired at', () => {
+    const acc = new InputAccumulator();
+    acc.push({ ...NO_INPUT, fire: true, viewT: 3.25 });
+    acc.push({ ...NO_INPUT });
+    const got = acc.take();
+    expect(got.fire).toBe(true);
+    expect(got.viewT).toBe(3.25);
+    expect(acc.take().viewT).toBeUndefined();
   });
 });

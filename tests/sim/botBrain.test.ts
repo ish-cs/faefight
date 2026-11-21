@@ -95,7 +95,7 @@ describe('brain: goals for a reason, steps, re-planning', () => {
   });
   const input = (now: number, rivals: BrainInput['rivals'], over: Partial<BrainInput> = {}): BrainInput => ({
     now, suddenDeath: false, hp: 1, shield: 0, home: 0, on: 0, rivals, gun: true, upgraded: true, myWeapon: 'rifle',
-    kit: 3, scaffolds: 0, medkits: 0, carried: 0, banked: 100, insuranceDue: 0, bankable: 0, focus: null, nearVault: false, canClearHome: true, intruder: false, homeSealed: false,
+    kit: 3, scaffolds: 0, bridgeNeed: 0, medkits: 0, carried: 0, banked: 100, insuranceDue: 0, bankable: 0, focus: null, nearVault: false, canClearHome: true, intruder: false, homeSealed: false,
     homePlugged: false, incomingBridge: false, killedBy: null, seller: false, wantShields: false, endgame: false,
     enemy: null, armedNear: 0, underFire: false, ...over,
   });
@@ -254,7 +254,7 @@ describe('no cheating: bots only see BotView', () => {
   });
 
   test('a bot reads only BotView fields, and only enemies it can see', async () => {
-    const keys = new Set(['now', 'self', 'enemies', 'others', 'map', 'pieces', 'generators', 'genLevels', 'sealed', 'hurt', 'shots', 'feed', 'loot', 'waterY', 'suddenDeath', 'potionShops', 'groundAt', 'canPlace']);
+    const keys = new Set(['now', 'self', 'enemies', 'others', 'map', 'center', 'statics', 'pieces', 'generators', 'genLevels', 'sealed', 'hurt', 'shots', 'feed', 'loot', 'waterY', 'suddenDeath', 'potionShops', 'groundAt', 'canPlace']);
     const touched = new Set<string>();
     const m = await Match.create({ players: Array.from({ length: 4 }, () => ({ name: '', isBot: true, difficulty: 'pro' as const })), seed: 9 }, {
       makeBot: (id, d, rng) => {
@@ -365,7 +365,7 @@ describe('no hiding at home', () => {
       const m = await Match.create({ players: [{ name: '', isBot: true, difficulty: 'pro' }, { name: '', isBot: true, difficulty: 'pro' }], seed },
         { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.set(id, b); return b; } });
       let snap = m.tick(new Map());
-      const alive = new Map<number, number>(), near = new Map<number, number>();
+      const alive = new Map<number, number>(), near = new Map<number, number>(), acts = new Map<string, number>();
       for (let i = 0; i < 5 * 60 * TICK_HZ && snap.winner === null; i++) {
         snap = m.tick(new Map());
         for (const p of snap.players) {
@@ -375,12 +375,12 @@ describe('no hiding at home', () => {
           const d = bots.get(p.id)!.debug;
           // A reason to be there: defending home, breaking out, or getting out of my own bunker.
           const reason = p.breakoutUntil !== null || d.action === 'defend' || d.goal === 'defend' || snap.sealed[p.island];
-          if (!reason && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) < 8) near.set(p.id, (near.get(p.id) ?? 0) + 1);
+          if (!reason && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) < 8) { near.set(p.id, (near.get(p.id) ?? 0) + 1); acts.set(`${d.action}/${d.goal}`, (acts.get(`${d.action}/${d.goal}`) ?? 0) + 1); }
         }
       }
       for (const [id, n] of alive) {
         const share = (near.get(id) ?? 0) / n;
-        console.log(`seed ${seed} #${id}: ${(100 * share).toFixed(0)}% of the time near own bunker`);
+        console.log(`seed ${seed} #${id}: ${(100 * share).toFixed(0)}% of the time near own bunker`, JSON.stringify([...acts].sort((x, y) => y[1] - x[1]).slice(0, 5)));
         expect(share).toBeLessThan(0.25);
       }
     }

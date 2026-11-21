@@ -1,7 +1,9 @@
+import { buildMapDef } from '../../src/sim/map';
 import { beforeAll, describe, expect, test } from 'vitest';
 import type { HostSession as HostSessionT } from '../../src/client/session';
 import { LoopbackTransport } from '../../src/net/loopback';
 import { NET_VERSION } from '../../src/net/protocol';
+import { WireDecoder, wireHeader } from '../../src/net/wire';
 import { newPlayer } from '../../src/sim/player';
 import type { MatchEvent, PieceState, Snapshot } from '../../src/sim/types';
 import { v3 } from '../../src/sim/vec';
@@ -13,7 +15,7 @@ beforeAll(async () => {
 });
 
 const flush = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)); };
-const MAP = [] as never[];
+const MAP = buildMapDef(3);
 
 function fakeWorker() {
   const posted: any[] = [];
@@ -62,7 +64,8 @@ describe('HostSession rematch', () => {
     bob.got.length = 0;
     host.onMap(MAP, [0, 1, 2]);
     await flush();
-    expect(bob.got).toEqual([{ t: 'start', map: MAP, playerId: 2, island: 1 }]);
+    expect(bob.got.filter((m) => m.t === 'start')).toEqual([{ t: 'start', map: MAP, playerId: 2, island: 1 }]);
+    expect(bob.got.filter((m) => m.t === 'rejoin')).toHaveLength(1); // a fresh reconnect token per match
     expect(bob.isClosed()).toBe(false);
   });
 
@@ -90,6 +93,8 @@ describe('HostSession rematch', () => {
     await flush();
     const msgs = bob.got.filter((m) => m.t === 'snap');
     expect(msgs).toHaveLength(1);
+    expect(wireHeader(msgs[0].b).baseSeq).toBe(0); // a full snapshot, not a delta against the old match
+    msgs[0].s = new WireDecoder().decode(msgs[0].b);
     expect(msgs[0].s.tick).toBe(1);
     expect(msgs[0].s.pieces).toEqual([]);
     expect(msgs[0].s.events).toEqual([]);

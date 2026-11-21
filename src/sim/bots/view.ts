@@ -1,4 +1,4 @@
-import type { IslandLayout } from '../map';
+import type { CenterIsland, IslandLayout, StaticBox } from '../map';
 import type { Placement } from '../building';
 import type { PieceKind, PieceState, PlayerState, Vec3 } from '../types';
 
@@ -28,6 +28,10 @@ export type BotView = {
   enemies: PlayerState[];
   others: OtherStatus[];
   map: IslandLayout[];
+  /** Neutral center island and what its bonus stations hold (absent in hand-made test views). */
+  center?: { island: CenterIsland; gold: number; bags: number; steel: number };
+  /** Built-in indestructible cover (obstacles for walking). */
+  statics?: StaticBox[];
   pieces: PieceState[];
   /** Uncollected cash sitting at each island's generator, indexed by island. */
   generators: number[];

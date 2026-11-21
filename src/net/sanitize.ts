@@ -131,6 +131,7 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     moveSlot: moveSlot(x.moveSlot),
     useMedkit: bool(x.useMedkit),
     drink: bool(x.drink),
+    ...(typeof x.viewT === 'number' && Number.isFinite(x.viewT) ? { viewT: x.viewT } : {}),
   };
 }
 
@@ -163,12 +164,19 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
     case 'hello': {
       if (typeof x.name !== 'string' || typeof x.version !== 'number') return null;
       const name = cleanName(x.name);
-      return name ? { t: 'hello', name, version: x.version } : null;
+      if (!name) return null;
+      const rejoin = typeof x.rejoin === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(x.rejoin) ? x.rejoin : undefined;
+      return rejoin ? { t: 'hello', name, version: x.version, rejoin } : { t: 'hello', name, version: x.version };
+    }
+    case 'pong': {
+      return Number.isInteger(x.n) && (x.n as number) > 0 ? { t: 'pong', n: x.n as number } : null;
     }
     case 'input': {
       const input = sanitizeInput(x.input);
       const cmds = x.cmds === undefined ? [] : moveCmds(x.cmds);
-      return input && cmds ? { t: 'input', input, cmds } : null;
+      if (!input || !cmds) return null;
+      const ack = Number.isInteger(x.ack) && (x.ack as number) > 0 && (x.ack as number) <= MAX_SEQ ? (x.ack as number) : undefined;
+      return ack === undefined ? { t: 'input', input, cmds } : { t: 'input', input, cmds, ack };
     }
     case 'preview': {
       const req = buildReq(x.req);

@@ -1,5 +1,29 @@
 # FAEFight
 
+<p align="center">
+  <img src="docs/media/hero-firefight.jpg" width="100%" alt="Over-the-shoulder firefight at the Palmera Freight pier">
+</p>
+
+**2–8 players, one island each.** Build bridges and walls, push across the water, and seal every enemy bunker before they seal yours. Fights play out on a realistic tropical harbor of cranes, containers, and piers, against friends or bots with their own personalities. Runs in Chrome, no install: **[faefight.vercel.app](https://faefight.vercel.app)**
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/rocket-steel-wall.jpg" alt="Rocket hitting a steel wall"><br><sub>A rocket slams into a steel wall.</sub></td>
+    <td width="50%"><img src="docs/media/scaffold-bridge.jpg" alt="Fight on a scaffold bridge"><br><sub>Brawling over a scaffold bridge.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/container-rifleman.jpg" alt="Rifleman on a shipping container"><br><sub>High ground on a shipping container.</sub></td>
+    <td width="50%"><img src="docs/media/storm.jpg" alt="Sudden death storm"><br><sub>Sudden death: the storm closes in.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/center-island.jpg" alt="Center island shop"><br><sub>The center island and its shops.</sub></td>
+    <td width="50%"><img src="docs/media/container-yard.jpg" alt="Container yard island"><br><sub>A container-yard island across the water.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/media/harbor-detail.jpg" alt="Four harbor views"><br><sub>Around the harbor.</sub></td>
+  </tr>
+</table>
+
 Third-person island shooter in the browser. Each player starts on their own harbor island. Earn cash, buy guns and walls, bridge over to the enemy, and seal their spawn bunker. A sealed player who dies doesn't respawn. Last one standing wins.
 
 ## Run
@@ -9,7 +33,17 @@ pnpm i
 pnpm dev        # http://localhost:5173
 ```
 
-Pick a bot difficulty on the menu, then click the game to capture the mouse.
+Pick a map and a bot difficulty on the menu, then click the game to capture the mouse.
+
+## Maps
+
+- **Harbor**: the original ring of harbor islands, 36 m apart.
+- **Container Yard**: smaller islands 26 m apart, with fixed container stacks as cover and high ground.
+- **Random**: a different map than the last one, every match.
+
+Every map has a neutral **center island**, reachable only by bridging to it. Anyone can use its stations: a gold generator (twice the normal rate, up to $1000, first come first served), a supply generator (free sandbags, and now and then a steel plate), a shield well (stand in it to refill shield up to 50) and the potion seller. Built-in cover (containers, concrete barriers) can't be destroyed; barrels, crates, fences, palms, lamps and bollards break when shot or blown up.
+
+Every bunker wall has narrow firing slits at chest height: you can shoot and see through them, but nobody (and no grenade or rocket) gets through, and they never count as a way out for sealing.
 
 ## Controls
 
@@ -64,6 +98,18 @@ When the match ends (or you're eliminated) the end screen offers **Spectate** (E
 
 ![Scoreboard](docs/screens/scoreboard.png) ![Spectating](docs/screens/spectate.png) ![End screen with Rematch](docs/screens/end-rematch-host.png)
 
+### Quality of life
+
+- **Invite link**: the lobby's *Copy invite link* gives `…/?join=CODE`; opening it fills the code and focuses your name (a remembered name makes it one click).
+- **Reconnect**: if a friend's connection drops (or their tab reloads) mid-match, a bot plays their seat for 20 s; joining the same code from the same tab takes it back (the menu offers it).
+- **Death recap**: who killed you, with what, from how far, headshot or not, the damage you took in the last 10 s by source, and what your killer had left.
+- **Match summary** on the end screen: kills, deaths, damage, seals, pieces built, cash collected and longest life per player, plus MVP / Builder / Sealer / Sharpshooter.
+- **Compass** over the timer: every island (owner's name, SEALED / OUT), your home bunker, the potion seller and the direction you were just shot from.
+- **Connection**: online, the scoreboard has a Ping column and the host's tick health; a small warning shows when your link stalls.
+- **Pause**: vs bots, Esc stops the simulation (online it only opens the menu).
+- **Combat**: low-ammo warning under the crosshair, ammo counts on every gun slot (amber: no spare mags, red: empty), an empty gun reloads by itself; in the shop Shift+click buys 5 of a building piece and **B** / *↻* re-buys the last item.
+- **Remembered**: vs-bot difficulty and bot count (1–7), the host's lobby seat layout, the last shop item; camera mode lives in Settings.
+
 ## Develop
 
 ```bash
@@ -75,3 +121,12 @@ pnpm build   # typecheck + production build
 - `src/sim/` is the pure TypeScript game simulation (Rapier physics, 30 Hz), with no DOM or Three.js.
 - `src/client/` is the Three.js renderer, input and HUD. The simulation runs in a Web Worker.
 - Design: `docs/superpowers/specs/2026-11-19-faefight-design.md`
+
+### Netcode and performance
+
+- Online matches are host-authoritative: the host's worker runs the sim, friends get snapshots.
+- Snapshots are binary and delta-compressed against the newest one each friend acknowledged (`src/net/wire.ts`), after the anti-cheat interest filter. A friend gets 30 Hz while their stream fits 32 KB/s, else 15 Hz (`src/net/snapRate.ts`).
+- Your own movement is predicted and reconciled. Your own shots (flash, tracer, sound, hitmarker when the spread can't miss) show the frame you fire; the host's confirmation doesn't replay them (`src/client/shotPredict.ts`).
+- Lag compensation: the host resolves your hitscan shots against where the targets were on your screen, rewinding at most 0.4 s (`src/sim/lagComp.ts`).
+- Simulated network for testing: add `&rtt=120&jitter=20&loss=0.02` to a `?net=local` URL (`src/net/netSim.ts`).
+- Measurements: `BENCH=1 npx vitest run tests/net --silent=false` (snapshot bytes, host cost, hit registration under latency). For client frame times, run `PERF=1 pnpm e2e tests/e2e/perf.spec.ts`.

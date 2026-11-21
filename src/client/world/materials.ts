@@ -1,5 +1,8 @@
 import * as THREE from 'three/webgpu';
-import { awningTex, barkTex, burlapTex, concreteTex, corrNormal, corrTex, frondTex, leafBlobTex, seawallTex, steelTex, woodTex } from './textures';
+import { color, cos, float, mix, positionLocal, positionWorld, sin, smoothstep, step, texture, time, uv, vec2, vec3, vertexColor } from 'three/tsl';
+import { MAP } from '../../sim/constants';
+import { applyPbr, pbrMaterial, pbrSample, worldNoise } from './pbr';
+import { awningTex, barkTex, chainTex, frondTex, leafBlobTex, seawallTex } from './textures';
 
 type Opts = ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0];
 const std = (name: string, o: Opts) => {
@@ -8,28 +11,111 @@ const std = (name: string, o: Opts) => {
   return m;
 };
 
+/**
+ * Quay / harbor wall: concrete PBR (u from the wall's own uv in 6 m units, v from world height) tinted by the old
+ * seawall gradient so the algae + tide band sits at the waterline, wet and glossy right above the water.
+ */
+function quayWall() {
+  const m = new THREE.MeshStandardNodeMaterial({ vertexColors: true });
+  m.name = 'quayWall';
+  const y = positionWorld.y;
+  const s = pbrSample('concrete_wall', vec2(uv().x, y.div(6)), 'shift');
+  applyPbr(m, s, { lum: 0.237, tint: 0xa8a49c, macro: 0.18, normalScale: 1.2 });
+  const top = MAP.groundY;
+  const band = texture(seawallTex(), vec2(0.5, y.sub(top - 16).div(16))).rgb.div(vec3(0.7, 0.67, 0.61));
+  const wet = float(1).sub(smoothstep(0.1, 0.9, y.sub(MAP.waterY))); // splash zone above the waterline
+  m.colorNode = (m.colorNode as THREE.Node<'vec3'>).mul(band).mul(mix(float(1), float(0.62), wet));
+  m.roughnessNode = mix(m.roughnessNode as THREE.Node<'float'>, float(0.32), wet.mul(0.85));
+  return m;
+}
+
+/** Palm fronds sway: tip displacement grows with uv.y² (frond geometry runs base → tip along v). */
+function frondMaterial() {
+  const m = std('frond', { map: frondTex(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.75 });
+  const p = positionLocal; // merged static geometry: local = world
+  const ph = p.x.mul(0.23).add(p.z.mul(0.19));
+  const gust = sin(time.mul(0.37).add(p.x.mul(0.01))).mul(0.5).add(0.6);
+  const k = uv().y.mul(uv().y).mul(gust);
+  m.positionNode = p.add(vec3(sin(time.mul(1.7).add(ph)).mul(0.16), sin(time.mul(2.3).add(ph.mul(1.3))).mul(0.12), cos(time.mul(1.3).add(ph)).mul(0.14)).mul(k));
+  return m;
+}
+
 let M: ReturnType<typeof make> | null = null;
 function make() {
   return {
-    concrete: std('concrete', { map: concreteTex(), roughness: 0.92 }),
-    seawall: std('seawall', { map: seawallTex(), roughness: 0.9 }),
+    /** bunker walls, coping, cast concrete */
+    concrete: mossyBase(pbrMaterial('concrete', 'concrete_wall', { lum: 0.237, tint: 0xb4b0a8, macro: 0.15, untile: 'shift' })),
+    /** flat paving (quay slab) */
+    slab: pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1 }),
+    asphalt: pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1 }),
+    seawall: quayWall(),
     dark: std('dark', { color: 0x222426, roughness: 0.55, metalness: 0.3 }),
     rubber: std('rubber', { color: 0x262624, roughness: 0.92 }),
     galv: std('galv', { color: 0xa4abb0, metalness: 0.85, roughness: 0.38 }),
-    wood: std('wood', { map: woodTex(), roughness: 0.82 }),
-    burlap: std('burlap', { map: burlapTex(), roughness: 0.97 }),
-    steel: std('steel', { map: steelTex(), metalness: 0.75, roughness: 0.42 }),
-    frond: std('frond', { map: frondTex(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.75 }),
+    wood: pbrMaterial('wood', 'planks', { macro: 0.12, untile: false }),
+    burlap: pbrMaterial('burlap', 'linen', { lum: 0.4, tint: 0xc4a874, uvScale: 2, normalScale: 1.5, roughAdd: 0.1, metalness: 0, untile: false }),
+    steel: pbrMaterial('steel', 'steel_plate', { tint: 0xe0e4e8, gain: 4, metalness: 0.7, roughMul: 0.9, untile: 'shift' }),
+    frond: frondMaterial(),
     bark: std('bark', { map: barkTex(), roughness: 0.95 }),
-    paint: std('paint', { roughness: 0.55, metalness: 0.25 }),
+    /** painted steel (crane, drums, trims): repainted rusty-paint set, triplanar (the plain boxes have 0..1 UVs) */
+    paint: pbrMaterial('paint', 'painted_metal', { lum: 0.069, lumPow: 0.3, triplanar: 0.35, normalScale: 0.1, roughMul: 0.9, metalness: 0.2 }),
     matte: std('matte', { roughness: 0.9 }),
-    corr: std('corr', { map: corrTex(), normalMap: corrNormal(), normalScale: new THREE.Vector2(1.1, 1.1), metalness: 0.45, roughness: 0.55 }),
+    corr: pbrMaterial('corr', 'corrugated', { lum: 0.44, uvScale: [2, 1], normalScale: 1.2, metalness: 0.35, roughMul: 0.95, macro: 0.12, untile: 'shift' }),
     awning: std('awning', { map: awningTex(), roughness: 0.8, side: THREE.DoubleSide }),
     leaf: std('leaf', { map: leafBlobTex(), roughness: 0.95 }),
-    terrain: std('terrain', { roughness: 1 }),
+    /** hills / distant islands: vertex-coloured, grass-ground detail in world xz */
+    terrain: pbrMaterial('terrain', 'grass', { uvNode: positionWorld.xz.mul(0.22), lum: 0.121, untile: true, roughAdd: 0.1, metalness: 0 }),
+    rock: rockMaterial(),
+    /** loose gravel patches (world-space xz) */
+    gravel: pbrMaterial('gravel', 'gravel', { uvNode: positionWorld.xz.div(1.6), tint: 0xe2ddd5, macro: 0.15 }),
     glow: std('glow', { color: 0x0c2a10, emissive: 0x2bff5a, emissiveIntensity: 2.2, roughness: 0.4 }),
+    chain: std('chain', { map: chainTex(), alphaTest: 0.4, side: THREE.DoubleSide, metalness: 0.6, roughness: 0.5 }),
+    /** Self-lit parts whose light colour is the vertex colour (gold bars, potions, lamp heads, LEDs). */
+    lit: (() => {
+      const m = std('lit', { roughness: 0.35 });
+      m.emissiveNode = vertexColor().mul(1.6);
+      return m;
+    })(),
+    /** Shield well ring: cyan, slowly pulsing. */
+    shield: (() => {
+      const m = std('shield', { color: 0x0a2a33, roughness: 0.3 });
+      m.emissiveNode = color(0x46d8ff).mul(sin(time.mul(2.2)).mul(0.35).add(1.6)).mul(vertexColor());
+      return m;
+    })(),
+    /** Faint additive light column over the shield well (v=0 bottom → fades out at the top). */
+    beam: (() => {
+      const m = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+      m.name = 'beam';
+      const fade = float(1).sub(uv().y);
+      m.colorNode = color(0x46c8ff).mul(float(0.22).add(sin(time.mul(2.2)).mul(0.05))).mul(fade.mul(fade));
+      return m;
+    })(),
   };
 }
+
+/** Moss + damp grime creeping up the first ~30 cm of cast concrete from the quay deck (bunkers, kerbs). */
+function mossyBase(m: THREE.MeshStandardNodeMaterial) {
+  const h = positionWorld.y.sub(MAP.groundY);
+  const n = worldNoise(0.9, 'g');
+  const moss = float(1).sub(smoothstep(0.02, n.mul(0.35).add(0.08), h)).mul(step(-0.05, h)).mul(smoothstep(0.25, 0.6, worldNoise(0.35)).mul(0.6).add(0.4));
+  m.colorNode = mix(m.colorNode as THREE.Node<'vec3'>, vec3(0.07, 0.1, 0.035).mul(n.mul(0.6).add(0.7)), moss.mul(0.85));
+  m.roughnessNode = mix(m.roughnessNode as THREE.Node<'float'>, float(0.95), moss);
+  return m;
+}
+
+/** Riprap / boulders: triplanar rock, dark + glossy below the tide line, a touch of algae green near the water. */
+function rockMaterial() {
+  const m = pbrMaterial('rock', 'rock', { triplanar: 0.45, tint: 0xd8d0c4, gain: 2.6, normalScale: 1.3 });
+  const y = positionWorld.y.sub(MAP.waterY);
+  const wet = float(1).sub(smoothstep(0.15, 0.8, y));
+  const algae = float(1).sub(smoothstep(-0.2, 0.35, y)).mul(worldNoise(0.3, 'g').mul(0.8).add(0.2));
+  let c = (m.colorNode as THREE.Node<'vec3'>).mul(mix(float(1), float(0.55), wet));
+  c = mix(c, vec3(0.13, 0.17, 0.08), algae.mul(0.6));
+  m.colorNode = c;
+  m.roughnessNode = mix(m.roughnessNode as THREE.Node<'float'>, float(0.22), wet);
+  return m;
+}
+
 /** Shared static-world materials. All use vertex colours as a per-part tint (white = untinted). */
 export function mats() {
   if (!M) M = make();

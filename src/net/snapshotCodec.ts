@@ -44,7 +44,8 @@ export class SnapshotEncoder {
     }
   }
 
-  take(forPlayerId: number): NetSnapshot {
+  /** `allPieces`: always include the pieces list (the binary wire format deltas it per client instead). */
+  take(forPlayerId: number, allPieces = false): NetSnapshot {
     const s = this.latest;
     if (!s) throw new Error('SnapshotEncoder.take: nothing pushed yet');
     const since = this.sentTick.get(forPlayerId) ?? -Infinity;
@@ -64,11 +65,17 @@ export class SnapshotEncoder {
       return [e.id, PROJ_KINDS.indexOf(e.kind), p.x, p.y, p.z, v.x, v.y, v.z];
     });
     delete (out as Partial<Snapshot>).pieces;
-    if (this.sentPiecesKey.get(forPlayerId) !== this.piecesKey) {
+    if (allPieces || this.sentPiecesKey.get(forPlayerId) !== this.piecesKey) {
       this.sentPiecesKey.set(forPlayerId, this.piecesKey);
       out.pieces = this.pieces;
     }
     return out;
+  }
+
+  /** A client starts over (reconnected): its next update carries every piece and only events from now on. */
+  resync(forPlayerId: number): void {
+    this.sentPiecesKey.delete(forPlayerId);
+    if (this.latest) this.sentTick.set(forPlayerId, this.latest.tick);
   }
 
   private player(p: PlayerState, own: boolean): NetPlayer {

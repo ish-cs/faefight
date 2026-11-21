@@ -1,6 +1,6 @@
 import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, WEAPONS } from '../sim/constants';
 import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
-import type { IslandLayout } from '../sim/map';
+import type { CenterIsland, IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem, isPotionItem } from '../sim/hotbar';
 import type { GunKind, HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
 import { dist2D } from '../sim/vec';
@@ -17,6 +17,12 @@ const LABEL: Record<string, string> = {
   ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit',
   shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
 };
+
+function supplyPrompt(c: Snapshot['center']): string {
+  if (!c || c.bags + c.steel === 0) return 'Supplies: restocking…';
+  const parts = [c.bags ? `${c.bags} sandbags` : '', c.steel ? `${c.steel} steel` : ''].filter(Boolean);
+  return `E  Take ${parts.join(' + ')}`;
+}
 
 /**
  * Shop price; a generator upgrade's depends on your generator's level (0 once maxed); an ammo box costs
@@ -79,7 +85,8 @@ export type HudContext = {
   scoped?: boolean;
 };
 export type HudActions = {
-  buy(item: ShopItem): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void;
+  /** `bulk`: Shift+click (buy several of a building piece). */
+  buy(item: ShopItem, bulk?: boolean): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void;
   /** Hotbar slot clicked. */
   select(slot: number): void;
   /** Hotbar slot dragged onto another. */
@@ -91,6 +98,7 @@ export type HudActions = {
 export class Hud {
   readonly root = el('div', 'hud');
   private map: IslandLayout[] = [];
+  private centerIsland: CenterIsland | null = null;
   private humanId = 0;
   private me: PlayerState | null = null;
   private snap: Snapshot | null = null;
@@ -164,14 +172,16 @@ export class Hud {
     for (const c of ['t', 'b', 'l', 'r', 'hm']) this.crosshair.append(el('i', c));
     this.crosshair.dataset.testid = 'crosshair';
     this.reloadRing.dataset.testid = 'reload-ring';
+    this.fps.dataset.testid = 'fps';
     this.scope.dataset.testid = 'scope';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
       this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
     parent.append(this.root);
   }
 
-  setMap(map: IslandLayout[], humanId: number, humanIsland: number) {
+  setMap(map: IslandLayout[], humanId: number, humanIsland: number, center: CenterIsland | null = null) {
     this.map = map;
+    this.centerIsland = center;
     this.humanId = humanId;
     this.seals.replaceChildren(...map.map((isl) => {
       const chip = el('div', 'seal-chip');
@@ -278,7 +288,7 @@ export class Hud {
   }
 
   /** Prompt/near-station state is computed here from the snapshot so main stays thin. */
-  nearStation(): 'shop' | 'potions' | 'vault' | 'generator' | null {
+  nearStation(): 'shop' | 'potions' | 'vault' | 'generator' | 'gold' | 'supply' | null {
     const me = this.me;
     if (!me || !me.alive) return null;
     const own = this.map[me.island];
@@ -287,14 +297,31 @@ export class Hud {
     if (own && dist2D(own.vault, me.pos) <= r) return 'vault';
     if (this.snap?.potionShops?.some((sh) => dist2D(sh.pos, me.pos) <= r && Math.abs(sh.pos.y - me.pos.y) < 2)) return 'potions';
     if (this.map.some((m) => dist2D(m.generator, me.pos) <= r)) return 'generator';
+    const c = this.centerIsland;
+    if (c && dist2D(c.goldGen, me.pos) <= r) return 'gold';
+    if (c && dist2D(c.supplyGen, me.pos) <= r) return 'supply';
     return null;
   }
 
   update(snap: Snapshot, ctx: HudContext) {
     this.snap = snap;
-    const me = snap.players.find((p) => p.id === this.humanId) ?? null;
+    const found = snap.players.find((p) => p.id === this.humanId) ?? null;
+    // After /spectate mid-match our old player is bot-driven: it's not "us" any more, so no player widgets.
+    const me = found && !found.isBot ? found : null;
     this.me = me;
-    if (!me) return;
+    // No player of our own (spectating host): player widgets hidden, match info and the end screen still live.
+    this.root.classList.toggle('no-player', !me);
+    if (!me) {
+      this.center.style.display = 'none';
+      this.heal.style.display = 'none';
+      this.drinkBox.style.display = 'none';
+      this.sealedBanner.style.display = 'none';
+      this.updateMatchInfo(snap, -1);
+      const end = endState(snap.winner, 0, false, snap.players);
+      if (end) this.showEnd(snap, end);
+      this.tickFeed();
+      return;
+    }
     const inv = me.inv;
 
     this.hpFill.style.width = `${Math.max(0, me.hp)}%`;
@@ -307,8 +334,10 @@ export class Hud {
     const near = snap.generators
       .map((g) => ({ g, d: dist2D(this.map[g.island].generator, me.pos) }))
       .filter((x) => x.d <= 10).sort((a, b) => a.d - b.d)[0];
-    this.gen.style.display = near ? '' : 'none';
-    if (near) {
+    const cg = this.centerIsland && snap.center && dist2D(this.centerIsland.goldGen, me.pos) <= 10 ? snap.center : null;
+    this.gen.style.display = near || cg ? '' : 'none';
+    if (cg && !near) setText(this.gen, `Gold generator  $${Math.floor(cg.gold)}`);
+    else if (near) {
       const lv = snap.genLevels?.[near.g.island] ?? 1;
       setText(this.gen, `${near.g.island === me.island ? 'Your generator' : `${ISLAND_NAMES[near.g.island % 8]} generator`}  $${Math.floor(near.g.stored)} · Lv${lv}`);
     }
@@ -316,7 +345,9 @@ export class Hud {
     const station = this.nearStation();
     const promptText = isPieceItem(me.hotbar[ctx.selected]) ? '' :
       station === 'shop' ? 'E  Shop' : station === 'potions' ? 'E  Potion seller' : station === 'vault' ? 'E  Vault' :
-      station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` : '';
+      station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` :
+      station === 'gold' ? `E  Collect $${Math.floor(snap.center?.gold ?? 0)}` :
+      station === 'supply' ? supplyPrompt(snap.center) : '';
     setText(this.prompt, promptText);
     this.prompt.style.display = promptText && !this.panelKind ? '' : 'none';
 
@@ -350,22 +381,7 @@ export class Hud {
     this.reloadRing.style.display = rl === null ? 'none' : '';
     if (rl !== null) this.reloadRing.style.setProperty('--p', `${Math.round(rl * 360)}deg`);
 
-    const left = LIFECYCLE.suddenDeathAt - snap.time;
-    setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
-    this.timer.classList.toggle('sd', snap.suddenDeath);
-    setText(this.banner, snap.suddenDeath ? `Tide rising · water ${snap.waterY.toFixed(1)} m` : left < 60 ? 'Sudden death soon' : '');
-    this.banner.style.display = this.banner.textContent ? '' : 'none';
-
-    Array.from(this.seals.children).forEach((chip, i) => {
-      const sealed = !!snap.sealed[i];
-      const out = !!snap.players.find((p) => p.island === i)?.eliminated;
-      chip.classList.toggle('sealed', sealed && !out);
-      chip.classList.toggle('out', out);
-      setText(chip.querySelector('.state') as HTMLElement, chipState(sealed, out));
-      // Other islands are labelled with their owner's name (a leaver's seat stays theirs, now bot-run).
-      const owner = i === me.island ? null : snap.players.find((p) => p.island === i);
-      if (owner) setText(chip.querySelector('.name') as HTMLElement, owner.name);
-    });
+    this.updateMatchInfo(snap, me.island);
     const ownSealed = !!snap.sealed[me.island];
     const trapped = me.alive && me.breakoutUntil != null;
     setText(this.sealedBanner, trapped
@@ -387,25 +403,47 @@ export class Hud {
     if (!buildKind) this.center.classList.remove('small');
 
     const end = endState(snap.winner, this.humanId, me.eliminated, snap.players);
-    if (end) {
-      // Re-shown when the match result changes (e.g. eliminated mid-match, then someone wins).
-      const key = `${end.state}|${snap.winner}`;
-      if (this.endScreen.dataset.key !== key) {
-        this.endScreen.dataset.key = key;
-        this.endScreen.dataset.state = end.state;
-        this.endScreen.dataset.testid = 'end-screen';
-        const btn = el('button', 'btn', 'Back to menu');
-        btn.onclick = () => this.act.backToMenu();
-        const buttons = el('div', 'end-buttons');
-        buttons.append(...(this.act.endButtons?.(snap.winner !== null) ?? [btn]));
-        this.endScreen.replaceChildren(el('div', 'end-title', end.title), el('div', 'end-sub', end.sub), buttons);
-        this.endScreen.style.display = 'flex';
-      }
-    }
+    if (end) this.showEnd(snap, end);
 
     if (this.panelKind === 'shop' || this.panelKind === 'potions') this.renderShop();
     else if (this.panelKind === 'vault') this.refreshVault();
     this.tickFeed();
+  }
+
+  /** Timer, tide banner and the island chips (myIsland -1 = none of them is yours). */
+  private updateMatchInfo(snap: Snapshot, myIsland: number) {
+    const left = LIFECYCLE.suddenDeathAt - snap.time;
+    setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
+    this.timer.classList.toggle('sd', snap.suddenDeath);
+    setText(this.banner, snap.suddenDeath ? `Tide rising · water ${snap.waterY.toFixed(1)} m` : left < 60 ? 'Sudden death soon' : '');
+    this.banner.style.display = this.banner.textContent ? '' : 'none';
+
+    Array.from(this.seals.children).forEach((chip, i) => {
+      const sealed = !!snap.sealed[i];
+      const out = !!snap.players.find((p) => p.island === i)?.eliminated;
+      chip.classList.toggle('sealed', sealed && !out);
+      chip.classList.toggle('out', out);
+      setText(chip.querySelector('.state') as HTMLElement, chipState(sealed, out));
+      // Other islands are labelled with their owner's name (a leaver's seat stays theirs, now bot-run).
+      const owner = i === myIsland ? null : snap.players.find((p) => p.island === i);
+      if (owner) setText(chip.querySelector('.name') as HTMLElement, owner.name);
+    });
+  }
+
+  private showEnd(snap: Snapshot, end: NonNullable<ReturnType<typeof endState>>) {
+    // Re-shown when the match result changes (e.g. eliminated mid-match, then someone wins).
+    const key = `${end.state}|${snap.winner}`;
+    if (this.endScreen.dataset.key !== key) {
+      this.endScreen.dataset.key = key;
+      this.endScreen.dataset.state = end.state;
+      this.endScreen.dataset.testid = 'end-screen';
+      const btn = el('button', 'btn', 'Back to menu');
+      btn.onclick = () => this.act.backToMenu();
+      const buttons = el('div', 'end-buttons');
+      buttons.append(...(this.act.endButtons?.(snap.winner !== null) ?? [btn]));
+      this.endScreen.replaceChildren(el('div', 'end-title', end.title), el('div', 'end-sub', end.sub), buttons);
+      this.endScreen.style.display = 'flex';
+    }
   }
 
   get ended() {
@@ -435,13 +473,16 @@ export class Hud {
       } else if (e.type === 'suddenDeath') {
         this.addFeed('Sudden death: generators stopped, tide rising', true);
       } else if (e.type === 'hit') {
-        if (e.data.by === this.humanId && e.data.target !== this.humanId) {
-          this.crosshair.classList.toggle('head', e.data.part === 'head');
-          this.flash(this.crosshair, 'hit');
-        }
+        if (e.data.by === this.humanId && e.data.target !== this.humanId && !e.data.echo) this.hitmarker(e.data.part === 'head');
         if (e.data.target === this.humanId) this.flash(this.damage, 'on');
       }
     }
+  }
+
+  /** Crosshair hitmarker (also shown straight away for a predicted hit). */
+  hitmarker(head: boolean) {
+    this.crosshair.classList.toggle('head', head);
+    this.flash(this.crosshair, 'hit');
   }
 
   private flash(node: HTMLElement, cls: string) {
@@ -503,6 +544,8 @@ export class Hud {
     if (!me) return;
     if (rebuild || !this.panel.querySelector('.shop-grid')) {
       const grid = el('div', 'shop-grid');
+      const info = el('div', 'shop-info', 'Hover an item for details');
+      info.dataset.testid = 'shop-info';
       const section = (title: string, items: ShopItem[]) => {
         const row = el('div', 'shop-row');
         row.setAttribute('role', 'group');
@@ -523,7 +566,11 @@ export class Hud {
           const lock = el('span', 'ilock');
           lock.innerHTML = LOCK_ICON;
           b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
-          b.onclick = () => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item); };
+          b.onclick = (e) => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item, e.shiftKey); };
+          // The name/details show in the panel's info bar (never clipped by the panel edge).
+          const show = () => { setText(info, b.dataset.name ?? ''); info.classList.add('on'); };
+          const hide = () => info.classList.remove('on');
+          b.onmouseenter = show; b.onfocus = show; b.onmouseleave = hide; b.onblur = hide;
           row.append(b);
         }
         grid.append(el('div', 'shop-section', title), row);
@@ -537,7 +584,7 @@ export class Hud {
         // Lock cards only show up once you own (or have locked) that gun.
         section('Upgrades', ['genUpgrade', ...GUNS.map(lockItem)]);
       }
-      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid);
+      this.panel.replaceChildren(this.header(this.panelKind === 'potions' ? 'Potion seller' : 'Shop'), el('div', 'panel-cash'), grid, info);
       // Focus the panel (not a card, so no tooltip pops up): Tab or an arrow key then walks the cards.
       this.panel.tabIndex = -1;
       this.panel.onkeydown = (e) => this.shopArrows(e);

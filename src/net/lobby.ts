@@ -57,6 +57,14 @@ export class Lobby {
     return i;
   }
 
+  /** A reconnecting friend's seat now belongs to their new link. False unless seat i is a (non-host) human. */
+  rebind(i: number, peerId: string): boolean {
+    const s = this.seats[i];
+    if (!s || s.kind !== 'human' || s.isHost || this.seatOf(peerId) !== null) return false;
+    this.seats[i] = { ...s, peerId };
+    return true;
+  }
+
   /**
    * Host edits a seat. Seat 0 is locked. A human seat may only be set to 'open' (kick).
    * Open/bot seats may become open or bot. Humans arrive only via addHuman.
@@ -93,13 +101,39 @@ export class Lobby {
     return true;
   }
 
-  /** Seat i → players[i]. Throws if any seat is still open or there are fewer than 2 seats. */
+  /** Host watches instead of playing (still hosts and runs the sim): its seat gets no player/island. */
+  setHostSpectator(on: boolean) {
+    const h = this.seats[0];
+    if (h.kind !== 'human') throw new Error('Lobby: seat 0 is not the host');
+    if (on) h.spectator = true; else delete h.spectator;
+  }
+
+  hostSpectating(): boolean {
+    const h = this.seats[0];
+    return h.kind === 'human' && !!h.spectator;
+  }
+
+  /**
+   * Player id per seat once the match starts (null = the spectating host, who has no player).
+   * Seats that play are numbered 1, 2, … in seat order, so a spectating host shifts everyone down one.
+   */
+  playerIds(): (number | null)[] {
+    let next = 1;
+    return this.seats.map((s) => (s.kind === 'human' && s.spectator ? null : next++));
+  }
+
+  /** Seats that will get a player (every seat except a spectating host). */
+  playerCount(): number {
+    return this.seats.length - (this.hostSpectating() ? 1 : 0);
+  }
+
+  /** Playing seat k → players[k] (a spectating host is skipped). Throws if any seat is still open or fewer than 2 would play. */
   toMatchSetup(): MatchSetup {
-    if (this.seats.length < MIN_SEATS) throw new Error(`Need at least ${MIN_SEATS} seats to start`);
+    if (this.playerCount() < MIN_SEATS) throw new Error(`Need at least ${MIN_SEATS} players to start`);
     const open = this.seats.findIndex((s) => s.kind === 'open');
     if (open >= 0) throw new Error(`Seat ${open + 1} is still open; fill it with a bot or wait for a player`);
     return {
-      players: this.seats.map((s) => {
+      players: this.seats.filter((s) => !(s.kind === 'human' && s.spectator)).map((s) => {
         if (s.kind === 'human') return { name: s.name, isBot: false };
         if (s.kind === 'bot') return { name: s.name ?? '', isBot: true, difficulty: s.difficulty };
         throw new Error('unreachable: open seat');

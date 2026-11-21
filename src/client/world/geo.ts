@@ -90,4 +90,11 @@ export class StaticBatch {
     this.bins.clear();
     return out;
   }
+
+  /** Merged geometry per material without creating meshes (instanced props build their own). */
+  take(): { material: THREE.Material; geometry: THREE.BufferGeometry; cast: boolean; receive: boolean }[] {
+    const out = [...this.bins].map(([material, parts]) => ({ material, geometry: merge(parts), ...this.flags.get(material)! }));
+    this.bins.clear();
+    return out;
+  }
 }

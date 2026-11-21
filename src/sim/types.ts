@@ -59,6 +59,12 @@ export type PlayerInput = {
   useMedkit: boolean;
   /** Start drinking the potion in the selected slot. */
   drink: boolean;
+  /**
+   * Lag compensation: the sim time of the world this player was looking at when they fired (their
+   * interpolated view of everyone else). The host resolves their shots against hitboxes rewound to
+   * then (clamped; see lagComp.ts). Absent = no rewind (bots, old clients).
+   */
+  viewT?: number;
 };
 
 export type PlayerState = {
@@ -128,7 +134,7 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -143,6 +149,10 @@ export type Snapshot = {
   /** In flight now (the sim always sends it; optional so older/partial snapshots stay valid). */
   projectiles?: Projectile[];
   generators: { island: number; stored: number }[];
+  /** Center island bonus stations: cash at the gold generator, free pieces at the supply generator. */
+  center?: { gold: number; bags: number; steel: number };
+  /** Ids of broken cosmetic props (MapDef.cosmetics), in the order they broke. */
+  broken?: number[];
   /** Generator level (1-4) of each island, by island index. */
   genLevels: number[];
   sealed: boolean[];
@@ -157,9 +167,29 @@ export type Snapshot = {
    * in `players` (name, alive, eliminated) with a stale position and neutral state; don't render them.
    */
   hidden?: number[];
+  /** Match totals per player: only present once the match has a result (end-screen summary). */
+  stats?: PlayerStats[];
 };
 
 export type PotionShop = { id: number; pos: Vec3 };
+
+/** Per-player match totals for the end-screen summary (sent only once the match has a result). */
+export type PlayerStats = {
+  id: number;
+  kills: number;
+  deaths: number;
+  /** Damage dealt to other players (shield + hp). */
+  damage: number;
+  /** Bunkers sealed (credited to whoever placed the closing piece). */
+  seals: number;
+  /** Pieces placed. */
+  built: number;
+  /** Cash collected from generators. */
+  cash: number;
+  /** Longest time alive in one life (s). */
+  longestLife: number;
+  headshots: number;
+};
 
 export const NO_INPUT: PlayerInput = {
   moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, fire: false, ads: false, reload: false,

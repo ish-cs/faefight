@@ -2,8 +2,20 @@ import * as THREE from 'three/webgpu';
 import type { PotionShop } from '../../sim/types';
 
 /**
- * PLACEHOLDER potion seller: a robed figure behind a small counter with a glowing blue flask above.
- * Driven by `snapshot.potionShops`; the map/world art for the centre-island NPC can replace this.
+ * Potion stalls the static map art already draws (the center island's seller, world/center.ts). Set by
+ * World.setMap; PotionSellers skips any shop standing on one so there is exactly one NPC per shop.
+ */
+let builtIn: { x: number; z: number }[] = [];
+let builtInVersion = 0;
+export function setBuiltInPotionStalls(points: { x: number; z: number }[]) {
+  builtIn = points.map((p) => ({ x: p.x, z: p.z }));
+  builtInVersion++;
+}
+const isBuiltIn = (p: { x: number; z: number }) => builtIn.some((b) => Math.hypot(b.x - p.x, b.z - p.z) < 0.5);
+
+/**
+ * Fallback potion seller for shops without map art (e.g. a debug-placed shop): a robed figure behind a
+ * small counter with a glowing blue flask above. Driven by `snapshot.potionShops`.
  */
 export class PotionSellers {
   private stalls = new Map<number, THREE.Group>();
@@ -14,13 +26,14 @@ export class PotionSellers {
 
   sync(shops: PotionShop[] | undefined) {
     const list = shops ?? [];
-    const key = list.map((s) => `${s.id}:${s.pos.x.toFixed(2)},${s.pos.y.toFixed(2)},${s.pos.z.toFixed(2)}`).join('|');
+    const key = `${builtInVersion}#` + list.map((s) => `${s.id}:${s.pos.x.toFixed(2)},${s.pos.y.toFixed(2)},${s.pos.z.toFixed(2)}`).join('|');
     if (key === this.key) return;
     this.key = key;
     for (const g of this.stalls.values()) this.scene.remove(g);
     this.stalls.clear();
     this.flasks = [];
     for (const s of list) {
+      if (isBuiltIn(s.pos)) continue;
       const g = stall();
       g.position.set(s.pos.x, s.pos.y, s.pos.z);
       this.scene.add(g);
