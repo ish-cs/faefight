@@ -24,7 +24,7 @@ export class Pool {
         this.idle.push(w);
         this.pump();
       });
-      w.on('error', (e) => { throw new Error(`Pool: worker crashed: ${e.message}`); });
+      w.on('error', (e: Error) => { throw new Error(`Pool: worker crashed: ${e.message}`); });
       this.workers.push(w);
       this.idle.push(w);
     }

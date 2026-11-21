@@ -6,6 +6,8 @@ playwright-report/
 .claude/
 .vitest/
 .vercel
+.env*
+.autoimprove/
 .train/
 .train-run.log
 .train-run.err

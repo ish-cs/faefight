@@ -8,9 +8,13 @@ import { CharacterSystem, type Motion } from './characters/avatar';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
+import { preloadPbr } from './world/pbr';
 import { PotionSellers, stall } from './world/potionSeller';
+import { loadQuality } from './world/sky';
 import { StormFx } from './world/storm';
 import { LootView, lootWarmObjects } from './lootView';
+export { lods } from './world/lod';
+export { pbrStats } from './world/pbr';
 
 export { pieceGeometry };
 import { ISLAND_COLORS } from './colors';
@@ -40,6 +44,8 @@ export class Renderer {
   /** Display-rate playback of other players: adaptive clock + per-player Hermite tracks (interp.ts). */
   private clock = new RenderClock();
   private tracks = new Map<number, PlayerTrack>();
+  /** Interpolation clock source (s). Replays swap in their own (paused / 0.25–8×); default wall time. */
+  clockNow: () => number = () => performance.now() / 1000;
   private playT: number | null = null;
   /** The local player's predicted render state (predict.ts), when prediction is running. */
   private local: { pos: Vec3; vel: Vec3 } | null = null;
@@ -99,6 +105,7 @@ export class Renderer {
   static async create(canvas: HTMLCanvasElement): Promise<Renderer> {
     const r = new Renderer(canvas);
     await r.gpu.init();
+    await preloadPbr(r.gpu, loadQuality()); // compressed PBR maps in place before any material samples them
     r.characters.camera = r.camera;
     r.world = new World(r.gpu, r.scene, r.camera, r.collidables); // tone mapping, pixel ratio, shadows, sky
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
@@ -154,7 +161,7 @@ export class Renderer {
 
   /** Every snapshot as soon as it arrives (before any event delay): drives player interpolation. */
   ingest(snap: Snapshot) {
-    this.clock.push(snap.time, performance.now() / 1000);
+    this.clock.push(snap.time, this.clockNow());
     if (snap.time > this.newestSim) this.newestSim = snap.time;
     for (const p of snap.players) {
       let tr = this.tracks.get(p.id);
@@ -170,7 +177,13 @@ export class Renderer {
 
   /** Advance the interpolation clock; call once per frame before reading positions. */
   beginFrame() {
-    this.playT = this.clock.advance(performance.now() / 1000);
+    this.playT = this.clock.advance(this.clockNow());
+  }
+
+  /** Forget interpolation history (replay seek: sim time jumps, possibly backwards). */
+  resetInterp() {
+    this.clock = new RenderClock();
+    this.tracks.clear();
   }
 
   /**
@@ -210,6 +223,7 @@ export class Renderer {
   private onEvent(e: MatchEvent) {
     if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
+    if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
     if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {
@@ -358,6 +372,9 @@ export class Renderer {
   private aimList: THREE.Object3D[] = [];
   private motionOf = (id: number, out: Motion) => this.playerMotion(id, out);
 
+  /** Debug/screenshots only (?debug=1 harness): pin the camera at `pos` looking at `look`, overriding the game camera. */
+  debugView: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
+
   render(localYaw: number) {
     this.potionSellers.frame(performance.now());
     const now = performance.now();
@@ -384,6 +401,7 @@ export class Renderer {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
+    if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
     this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();

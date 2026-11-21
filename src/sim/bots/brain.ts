@@ -43,6 +43,8 @@ export type RivalInfo = RivalFacts & {
   island: number; name: string; openDoors: number; generator: number; guarded: boolean;
   /** Seen spawn-protected, or just respawned at home: a seal window. */
   protectedNow: boolean;
+  /** Seen inside their own bunker recently: sealing them in now traps them (escape countdown). */
+  inBunker?: boolean;
 };
 
 export type EnemyInfo = { id: number; dist: number; hp: number; weapon: WeaponKind };
@@ -291,7 +293,9 @@ export class Brain {
     // ---- per rival: box in / finish / raid / hunt.
     for (const r of inp.rivals) {
       const base = rivalScore(r, p) + (r.id === inp.focus ? p.rsCommit : 0);
-      const window = r.respawning || r.protectedNow || r.away;
+      // A seal window: they're down/respawning, spawn-protected at home, away, holed up inside (sealing traps them),
+      // or only one doorway is left open (just finish it).
+      const window = r.respawning || r.protectedNow || r.away || !!r.inBunker || (r.openDoors <= 1 && inp.kit >= r.openDoors);
       // Leaving home with a plugged doorway is half a seal on myself: clear it first.
       const homeClear = { label: 'clear my own doorway first', act: 'defend' as Goal, done: !inp.homePlugged };
       const toBridge = (label: string) => [
@@ -320,7 +324,12 @@ export class Brain {
           { label: `plug ${r.name}'s doors`, act: 'seal', done: r.sealed },
         ], r.id);
       }
-      if (r.sealed)
+      if (r.sealed && inp.suddenDeath)
+        // Sudden death: everyone is sealed and squeezed into the ring; hunt them there, not on their island.
+        add('finish', p.planElim * (base + 0.3) * 1.3 - r.dist / 300, `sudden death: ${r.name} is the closest to finish`, [
+          { label: `hunt ${r.name} down in the ring`, act: 'attack', done: false },
+        ], r.id);
+      else if (r.sealed)
         add('finish', p.planElim * (base + 0.3) * (inp.endgame ? 1.3 : 1), `${r.name} is sealed: one kill eliminates them`, [
           ...toBridge(`bridge to ${r.name}'s island`),
           { label: `cross to ${r.name}'s island`, act: 'attack', done: inp.on === r.island },

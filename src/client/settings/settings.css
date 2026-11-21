@@ -103,7 +103,7 @@
 :root[data-crosshair="circle"] .hud .crosshair.build::before { background: none; border-color: var(--accent); }
 
 /* ---- FPS counter / damage numbers toggles ---- */
-:root[data-fps="off"] .hud .fps { display: none; }
+:root[data-fps="off"] .hud .fps, :root[data-fps="off"] .hud .fps-detail { display: none !important; }
 :root[data-dmgnums="off"] .dmg-number { display: none; }
 
 /* ---- menu settings button + key help ---- */

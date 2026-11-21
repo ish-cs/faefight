@@ -239,7 +239,7 @@ describe('params', () => {
 describe('no cheating: bots only see BotView', () => {
   test('bot modules import nothing that holds match state', () => {
     const dir = path.resolve(__dirname, '../../src/sim/bots');
-    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building']);
+    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building', '../seal']);
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts'))) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8');
       for (const m of src.matchAll(/from '([^']+)'/g)) {

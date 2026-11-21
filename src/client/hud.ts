@@ -160,6 +160,8 @@ export class Hud {
   private watchTag = el('div', 'watch-tag');
   private brain = el('div', 'brain-panel glass');
   private brainSig = '';
+  /** Shift+F3 perf detail under the counter (frame/GPU ms, draw calls, triangles, governor rung). */
+  private fpsDetail = el('div', 'fps-detail');
   private panel = el('div', 'panel');
   private panelKind: 'shop' | 'potions' | 'vault' | null = null;
   private vaultCash!: HTMLInputElement;
@@ -201,12 +203,14 @@ export class Hud {
     this.crosshair.dataset.testid = 'crosshair';
     this.reloadRing.dataset.testid = 'reload-ring';
     this.fps.dataset.testid = 'fps';
+    this.fpsDetail.dataset.testid = 'fps-detail';
+    this.fpsDetail.style.display = 'none';
     this.scope.dataset.testid = 'scope';
     this.stormWarn.dataset.testid = 'storm-warn';
     this.stormWarn.append(el('div', 'storm-warn-sub', 'Sudden death · get inside the ring'));
     this.stormVignette.dataset.testid = 'storm-vignette';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
-      this.sealedBanner, this.stormVignette, this.stormWarn, this.damage, this.endScreen, this.fps, this.panel, this.brain);
+      this.sealedBanner, this.stormVignette, this.stormWarn, this.damage, this.endScreen, this.fps, this.fpsDetail, this.panel, this.brain);
     parent.append(this.root);
   }
 
@@ -443,6 +447,12 @@ export class Hud {
 
   setFps(n: number) {
     setText(this.fps, `${Math.round(n)} fps`);
+  }
+
+  /** Perf detail lines (null hides them). */
+  setFpsDetail(lines: string[] | null) {
+    this.fpsDetail.style.display = lines ? '' : 'none';
+    if (lines) setText(this.fpsDetail, lines.join('\n'));
   }
 
   get panelOpen() {
