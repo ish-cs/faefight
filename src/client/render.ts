@@ -119,6 +119,8 @@ export class Renderer {
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
     r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
+    // a body killed in the air ragdolls down onto the island under it, or the sea
+    r.characters.floorAt = (x, z) => r.world.impacts.surf?.groundAt(x, z)?.y ?? r.waterY;
     r.resize();
     return r;
   }
@@ -269,7 +271,7 @@ export class Renderer {
   }
 
   private onEvent(e: MatchEvent) {
-    if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
+    if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
     if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
     if ((e.type === 'shot' || e.type === 'explosion') && this.curr)
@@ -485,7 +487,7 @@ export class Renderer {
     if (snap) for (const p of snap.players) {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
       const m = motion(p.id, this.motion);
-      if (m) { this.feet[nf].copy(m.pos); nf++; }
+      if (m) { this.feet[nf].copy(m.pos); nf++; if (!this.replay) this.world.footprints.step(p.id, m.pos); }
     }
     if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
     this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];

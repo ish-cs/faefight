@@ -13,6 +13,7 @@ import { buildBeach, dressHarbor, dressIslandDetail, scatterHarbor, scatterIslan
 import { dressBackdrop, dressIsland } from './dressing';
 import type { Scatter } from './scatter';
 import { pbrAlbedo, pbrSample, worldNoise } from './pbr';
+import { applyWet } from './wetness';
 import { type Footprint, islandSurface, makeRng, yardTopTex } from './textures';
 
 const UNLIT_BOOST = 2.6;
@@ -80,7 +81,7 @@ function islandTopMaterial(R: number) {
   m.roughnessNode = mix(rough, float(0.7), ov.a.mul(0.6)).clamp(0.03, 1);
   m.metalnessNode = float(0);
   m.aoNode = mix(float(1), float(0.8), max(gk.mul(0.6), mk.g));
-  return m;
+  return applyWet(m, { puddles: true });
 }
 
 export type IslandsOut = { collidables: THREE.Object3D[]; root: THREE.Group };

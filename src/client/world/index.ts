@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
 import type { FirePatch, HazardNet, MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { FireFx } from './fireFx';
+import { Footprints } from './footprints';
 import { ImpactMarks } from './impacts';
 import { clearNpcSpots } from '../characters/npcSpots';
 import { CosmeticLayer } from './cosmetics';
@@ -38,6 +39,8 @@ export class World {
   readonly impacts = new ImpactMarks(this.pieceFx.particles);
   /** Flames, smoke, embers, charring and the fire light for burning pieces and ground fires. */
   readonly fire = new FireFx(this.pieceFx.particles, this.pieces);
+  /** Boot prints on sand / gravel / wet docks (render.ts feeds each walker's feet). */
+  readonly footprints = new Footprints();
   private water: Ocean | null = null;
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
@@ -61,7 +64,7 @@ export class World {
     this.sky = new SkyLighting(gpu, scene, camera);
     SUN_FOR_BAKE.dir.copy(SUN_DIR);
     installQualityToggle(this.sky);
-    scene.add(this.pieces.root, this.pieceFx.root, this.impacts.mesh, this.fire.light);
+    scene.add(this.pieces.root, this.pieceFx.root, this.impacts.mesh, this.fire.light, this.footprints.mesh);
     collidables.push(...this.pieces.proxies);
     this.pieces.onProxiesChanged = () => {
       for (let i = collidables.length - 1; i >= 0; i--) if (collidables[i].name.startsWith('pieceHull:')) collidables.splice(i, 1);
@@ -83,6 +86,8 @@ export class World {
     this.collidables.push(...collidables);
     const map = def.islands;
     this.impacts.setMap(def);
+    this.footprints.clear();
+    this.footprints.surfaces = this.impacts.surf;
     this.water = buildWater(def);
     this.scene.add(this.water.mesh);
     // The ambient env map is deliberately hazy/desaturated (for shading); at grazing angles it turned the far sea
@@ -198,6 +203,7 @@ export class World {
     this.pieceFx.update(now);
     this.impacts.setQuality(this.sky.quality);
     this.impacts.update();
+    this.footprints.update();
     this.fire.setQuality(this.sky.quality);
     this.fire.update(Math.min(0.05, dt), this.sky.camera);
     this.hazards?.update(now, this.pieceFx.particles);
