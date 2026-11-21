@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import { BURST_RESET_SEC, HEAD, PLAYER, WEAPONS } from './constants';
 import type { MoveCmd } from './movement';
 import type { PlayerState, WeaponKind } from './types';
@@ -65,7 +66,7 @@ export function recoilKick(kind: WeaponKind, n: number, seed: number): { pitch: 
   const r = WEAPONS[kind].recoil;
   if (r.up === 0 && r.side === 0) return { pitch: 0, yaw: 0 };
   const pitch = r.up * (1 + r.upGrow * Math.min(n, 10)) * (0.9 + 0.2 * hash01(seed, n, 1));
-  const sway = Math.sin(n * 0.9 + 0.6) * 0.6;
+  const sway = dm.sin(n * 0.9 + 0.6) * 0.6;
   const jitter = (hash01(seed, n, 2) * 2 - 1) * 0.4;
   const yaw = r.side * (r.sideBias / Math.max(r.side, 1e-6) + sway + jitter);
   return { pitch: pitch * DEG, yaw: yaw * DEG };
@@ -109,7 +110,7 @@ export function reloadTime(kind: WeaponKind, magNow: number, spare = Infinity): 
 export function coneOffset(coneDeg: number, u1: number, u2: number): { yaw: number; pitch: number } {
   const r = coneDeg * DEG * u1;
   const a = u2 * Math.PI * 2;
-  return { yaw: Math.cos(a) * r, pitch: Math.sin(a) * r };
+  return { yaw: dm.cos(a) * r, pitch: dm.sin(a) * r };
 }
 
 // ---- reload choreography -------------------------------------------------------------------------

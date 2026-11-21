@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import { PLAYER } from './constants';
 import type { Vec3 } from './types';
 
@@ -123,7 +124,7 @@ const AIR_CAP = 1;
 
 /** Wished horizontal velocity for move axes in the yaw frame (three.js yaw: 0 looks toward -Z). */
 export function wishVelocity(moveX: number, moveZ: number, yaw: number, sprint: boolean): { x: number; z: number } {
-  const s = Math.sin(yaw), c = Math.cos(yaw);
+  const s = dm.sin(yaw), c = dm.cos(yaw);
   // forward(yaw) = (-s, 0, -c), right(yaw) = (c, 0, -s)
   let x = -s * moveZ + c * moveX, z = -c * moveZ - s * moveX;
   const l = Math.hypot(x, z);

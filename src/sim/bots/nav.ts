@@ -57,7 +57,7 @@ export const laneAt = (l: Lane, s: number): Vec3 => add(l.origin, scale(l.dir, s
 export const laneS = (l: Lane, p: Vec3) => (p.x - l.origin.x) * l.dir.x + (p.z - l.origin.z) * l.dir.z;
 const laneOff = (l: Lane, p: Vec3) => Math.abs((p.x - l.origin.x) * l.dir.z - (p.z - l.origin.z) * l.dir.x);
 /** Distance along a lane from a node center to where its land ends. */
-export const landEdge = (n: { radius: number }) => Math.sqrt(n.radius ** 2 - LANE_OFFSET ** 2);
+export const landEdge = (n: { radius: number }) => Math.sqrt(n.radius * n.radius - LANE_OFFSET * LANE_OFFSET);
 
 /** Player island under p (center island and water: -1). */
 export function islandAt(map: IslandLayout[], p: Vec3): number {

@@ -1,3 +1,4 @@
+import * as dm from './dmath';
 import {
   CHARGE, DT, GRENADE, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
 } from './constants';
@@ -32,8 +33,8 @@ const ev = (t: number, type: MatchEvent['type'], data: Record<string, unknown>):
 export const eyePos = (p: PlayerState): Vec3 => v3(p.pos.x, p.pos.y + PLAYER.eyeHeight, p.pos.z);
 
 export const aimDir = (yaw: number, pitch: number): Vec3 => {
-  const c = Math.cos(pitch);
-  return v3(-Math.sin(yaw) * c, Math.sin(pitch), -Math.cos(yaw) * c);
+  const c = dm.cos(pitch);
+  return v3(-dm.sin(yaw) * c, dm.sin(pitch), -dm.cos(yaw) * c);
 };
 
 /**
@@ -47,8 +48,8 @@ export function pelletDir(yaw: number, pitch: number, coneDeg: number, seed: num
   if (i > 0 && n > 1) {
     const a = (2 * Math.PI * (i - 1)) / (n - 1) + (hash01(seed, i, 13) - 0.5) * 0.5;
     const r = ringDeg * DEG * (0.75 + 0.5 * hash01(seed, i, 14));
-    y += Math.cos(a) * r;
-    pt += Math.sin(a) * r;
+    y += dm.cos(a) * r;
+    pt += dm.sin(a) * r;
   }
   return aimDir(y, pt);
 }

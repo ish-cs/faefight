@@ -1,3 +1,4 @@
+import * as dm from '../dmath';
 import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, SEAL, STORM, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
@@ -442,7 +443,7 @@ export class Bot {
   private scaffoldsTo(from: number, to: number): number {
     if (this.alt.has(to) && from === this.view.self.island && to < this.view.map.length) {
       const f = this.mirrorFrontier(to);
-      return Math.max(1, Math.ceil((f.s - Math.sqrt(this.view.map[to].radius ** 2 - 9)) / SCAFFOLD_STEP));
+      return Math.max(1, Math.ceil((f.s - Math.sqrt(this.view.map[to].radius * this.view.map[to].radius - 9)) / SCAFFOLD_STEP));
     }
     return this.nav.scaffoldsTo(from, to, SCAFFOLD_STEP);
   }
@@ -462,7 +463,7 @@ export class Bot {
   private scanMirror(to: number): { l: Lane; s: number; complete: boolean } {
     const map = this.view.map, home = this.view.self.island;
     const l = lane(map, to, home);
-    for (let s = l.length - Math.sqrt(map[home].radius ** 2 - 9) + 2; s >= 0; s -= 0.25) {
+    for (let s = l.length - Math.sqrt(map[home].radius * map[home].radius - 9) + 2; s >= 0; s -= 0.25) {
       const p = laneAt(l, s);
       if (this.view.groundAt(p.x, p.z) === null) return { l, s: s + 0.25, complete: false };
       if (islandAt(map, p) === to) return { l, s, complete: true };
@@ -1170,7 +1171,7 @@ export class Bot {
     const ahead = at(4);
     if (c.me.busyUntil > now) return { dir: null, face: ahead };
     // Long bridge: a wall along the deck edge facing the nearest third island (flank fire), walkway left free.
-    const shore = Math.sqrt(c.home.radius ** 2 - 9);
+    const shore = Math.sqrt(c.home.radius * c.home.radius - 9);
     const out = mirror ? l.length - shore - f.s : f.s - shore;
     const lastWall = this.lastWallS.get(key) ?? -Infinity;
     const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
@@ -1238,7 +1239,7 @@ export class Bot {
       const front = b.doorways[0];
       const base = add(front.center, scale(forward(front.yaw), 7));
       const a = this.rng() * 2 * Math.PI, r = this.rng() * 3;
-      this.wander = { to: add(base, v3(Math.cos(a) * r, 0, Math.sin(a) * r)), until: now + 3 + this.rng() * 2 };
+      this.wander = { to: add(base, v3(dm.cos(a) * r, 0, dm.sin(a) * r)), until: now + 3 + this.rng() * 2 };
     }
     return this.goTo(this.wander.to, 1.0);
   }
@@ -1432,7 +1433,7 @@ export class Bot {
       // Thrown by hand: as accurate as this player's aim.
       const cone = AIM[this.difficulty].coneRad * (low ? 0.5 : 1);
       const r = this.rng() * cone, th = this.rng() * 2 * Math.PI;
-      this.nadePlan = { yaw: a.yaw + Math.cos(th) * r, pitch: a.pitch + Math.sin(th) * r, until: now + 1.2 };
+      this.nadePlan = { yaw: a.yaw + dm.cos(th) * r, pitch: a.pitch + dm.sin(th) * r, until: now + 1.2 };
       return this.nadePlan;
     }
     return null;
@@ -1839,7 +1840,7 @@ export class Bot {
       const away = d > 0.3 ? norm(v3(me.pos.x - b.x, 0, me.pos.z - b.z)) : forward(me.yaw + Math.PI / 2);
       const inside = (dir: Vec3) => Math.hypot(me.pos.x + dir.x * 3 - st.x, me.pos.z + dir.z * 3 - st.z) < st.r - 1;
       for (const a of [0, 0.8, -0.8, 1.4, -1.4]) {
-        const dir = a ? norm(v3(away.x * Math.cos(a) - away.z * Math.sin(a), 0, away.x * Math.sin(a) + away.z * Math.cos(a))) : away;
+        const dir = a ? norm(v3(away.x * dm.cos(a) - away.z * dm.sin(a), 0, away.x * dm.sin(a) + away.z * dm.cos(a))) : away;
         if (inside(dir)) return dir;
       }
       return away;
@@ -1900,7 +1901,7 @@ export function throwAngles(eye: Vec3, to: Vec3, low: boolean): Angles | null {
   const d = dist2D(eye, to), dy = to.y - eye.y;
   const yaw = lookAt(eye, to).yaw;
   const heightAt = (pitch: number) => {
-    const vx = GRENADE.throwSpeed * Math.cos(pitch), vy = GRENADE.throwSpeed * Math.sin(pitch) + 3;
+    const vx = GRENADE.throwSpeed * dm.cos(pitch), vy = GRENADE.throwSpeed * dm.sin(pitch) + 3;
     const tt = d / vx;
     return { y: vy * tt - (PLAYER.gravity * tt * (tt + DT)) / 2, t: tt, falling: vy - PLAYER.gravity * tt < 0 };
   };

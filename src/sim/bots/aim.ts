@@ -1,3 +1,4 @@
+import * as dm from '../dmath';
 import { aimDir } from '../combat';
 import type { Difficulty, Vec3 } from '../types';
 import { sub, yawOf } from '../vec';
@@ -29,16 +30,16 @@ const WOBBLE_RATE = 6;
 export type Angles = { yaw: number; pitch: number };
 export type AimResult = Angles & { ready: boolean; onTarget: boolean };
 
-export const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+export const wrapAngle = (a: number) => dm.atan2(dm.sin(a), dm.cos(a));
 
 export function lookAt(from: Vec3, to: Vec3): Angles {
   const d = sub(to, from);
-  return { yaw: yawOf(d), pitch: Math.atan2(d.y, Math.hypot(d.x, d.z)) };
+  return { yaw: yawOf(d), pitch: dm.atan2(d.y, Math.hypot(d.x, d.z)) };
 }
 
 export function angleBetween(a: Angles, b: Angles): number {
   const u = aimDir(a.yaw, a.pitch), v = aimDir(b.yaw, b.pitch);
-  return Math.acos(Math.min(1, Math.max(-1, u.x * v.x + u.y * v.y + u.z * v.z)));
+  return dm.acos(Math.min(1, Math.max(-1, u.x * v.x + u.y * v.y + u.z * v.z)));
 }
 
 /** Rotate toward `want` at most `rate` rad/s. */
@@ -71,23 +72,23 @@ export class Aim {
     this.lastSeen = now;
     if (now >= this.nextErrAt) {
       const a = this.rng() * 2 * Math.PI, r = Math.sqrt(this.rng());
-      this.errGoal = { yaw: Math.cos(a) * r, pitch: Math.sin(a) * r };
+      this.errGoal = { yaw: dm.cos(a) * r, pitch: dm.sin(a) * r };
       this.nextErrAt = now + 0.25 + 0.2 * this.rng();
       if (fresh) this.err = { ...this.errGoal };
     }
-    const w = 1 - Math.exp(-WOBBLE_RATE * dt);
+    const w = 1 - dm.exp(-WOBBLE_RATE * dt);
     this.err = { yaw: this.err.yaw + (this.errGoal.yaw - this.err.yaw) * w, pitch: this.err.pitch + (this.errGoal.pitch - this.err.pitch) * w };
 
     const tracked = now - this.seenAt;
     const cone = this.p.coneRad * (1 - TIGHTEN * Math.min(1, tracked / TIGHTEN_SEC));
     const exact = lookAt(eye, point);
     const want = { yaw: exact.yaw + this.err.yaw * cone, pitch: exact.pitch + this.err.pitch * cone };
-    const t = 1 - Math.exp(-this.p.turnRate * dt);
+    const t = 1 - dm.exp(-this.p.turnRate * dt);
     const lim = this.p.maxTurn * dt;
     const clampStep = (x: number) => Math.max(-lim, Math.min(lim, x * t));
     const aim = { yaw: cur.yaw + clampStep(wrapAngle(want.yaw - cur.yaw)), pitch: cur.pitch + clampStep(want.pitch - cur.pitch) };
     const range = Math.hypot(point.x - eye.x, point.y - eye.y, point.z - eye.z);
-    const tolerance = cone + Math.atan2(0.6, Math.max(range, 0.1));
+    const tolerance = cone + dm.atan2(0.6, Math.max(range, 0.1));
     this.last = { yaw: aim.yaw, pitch: aim.pitch };
     return { ...aim, ready: tracked >= this.p.reactSec - 1e-9, onTarget: angleBetween(aim, exact) <= tolerance };
   }

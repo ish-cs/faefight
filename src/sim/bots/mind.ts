@@ -1,3 +1,4 @@
+import * as dm from '../dmath';
 import type { Vec3 } from '../types';
 import { clone, v3 } from '../vec';
 import { islandAt } from './nav';
@@ -38,7 +39,7 @@ export class Memory {
     const dt = Number.isNaN(this.lastNow) ? 0 : Math.max(0, now - this.lastNow);
     this.lastNow = now;
     if (dt > 0) {
-      const k = 0.5 ** (dt / GRUDGE_HALF_LIFE);
+      const k = dm.exp(-Math.LN2 * dt / GRUDGE_HALF_LIFE); // 0.5^(dt/half-life)
       for (const [id, g] of this.grudge) {
         if (g * k < 0.5) this.grudge.delete(id);
         else this.grudge.set(id, g * k);
