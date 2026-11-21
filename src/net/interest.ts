@@ -1,6 +1,6 @@
 import { PIECES, PLAYER } from '../sim/constants';
 import { emptyInventory } from '../sim/economy';
-import { bunkerWallBoxes, type IslandLayout } from '../sim/map';
+import { bunkerWallBoxes, type Box, type IslandLayout } from '../sim/map';
 import type { MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
 import { add, rotateY, v3 } from '../sim/vec';
 import type { NetPlayer, NetSnapshot } from './snapshotCodec';
@@ -90,8 +90,12 @@ export class InterestManager {
   /** Total time spent in apply(), for perf logging. */
   costMs = 0;
 
-  constructor(private readonly map: IslandLayout[]) {
-    this.statics = map.flatMap((isl) => bunkerWallBoxes(isl.bunker).map((b) => obb(b.center, b.half, b.rotY)));
+  /** `cover`: the map's built-in indestructible cover boxes (they hide players too). */
+  constructor(private readonly map: IslandLayout[], cover: Box[] = []) {
+    this.statics = [
+      ...map.flatMap((isl) => bunkerWallBoxes(isl.bunker).map((b) => obb(b.center, b.half, b.rotY))),
+      ...cover.map((b) => obb(b.center, b.half, b.rotY)),
+    ];
     this.occluders = this.statics;
   }
 

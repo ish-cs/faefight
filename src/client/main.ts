@@ -11,9 +11,9 @@ import { BuildAim, type AimOutcome } from './buildAim';
 import { DT, HEAD, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
-import type { IslandLayout } from '../sim/map';
+import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
-import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type Snapshot } from '../sim/types';
+import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { reloadClock } from './firstPerson';
@@ -23,7 +23,7 @@ import { InputAccumulator } from './inputAccum';
 import { InputController } from './input';
 import { ACTIONS, activeKeymap, bindingLabel, isAction, type Action } from './keymap';
 import { loadingScreen as loadingOverlay } from './loading';
-import { LobbyUi } from './lobbyUi';
+import { LobbyUi, MapPicker } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom, type SpectateResult } from './session';
 import { HELP_TEXT, HOST_ONLY, MONEY_HOST_ONLY, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven, parseCommand, unknownCommand } from './commands';
@@ -40,6 +40,13 @@ import { VerticalSmoother } from './interp';
 import type { Predictor } from './predict';
 import { MAX_CMDS_PER_MSG } from '../net/sanitize';
 import { SealAnnouncer } from './announce';
+import { BULK_PIECES, BuyQueue } from './qol/combatQol';
+import { netStatus, QolHud } from './qol/hudExtras';
+import { addInviteButton } from './qol/invite';
+import { botCountControl, prepareJoin, rememberDifficulty } from './qol/menu';
+import { loadPrefs, savePrefs, seatPrefsOf } from './qol/prefs';
+import { clearRejoin, loadRejoin, markAutoRejoin, saveRejoin, touchRejoin } from './qol/rejoin';
+import { isPieceItem } from '../sim/hotbar';
 import { aimDirection, ShotPredictor } from './shotPredict';
 
 const app = document.getElementById('app')!;
@@ -49,6 +56,9 @@ const AIM_RANGE = 120;
 const REDUNDANT_CMDS = 2;
 const NAME_KEY = 'faefight.name';
 const NAME_MAX = 16;
+const MAP_KEY = 'faefight.map';
+/** Last map played vs bots this page session: Random never repeats it. */
+let lastBotMap: MapTemplate | null = null;
 /** Created at load so M-mute works from the menu; the AudioContext itself starts on the first click/key. */
 const audio = new AudioSystem();
 
@@ -87,12 +97,14 @@ function keyHelp(): string {
 // ---------------------------------------------------------------------------------------------
 
 type GameSink = {
-  map(map: IslandLayout[], humanId: number, island: number): void;
+  map(def: MapDef, humanId: number, island: number): void;
   snapshot(snap: Snapshot): void;
   preview(result: Placement, key: number): void;
   chat(from: string, text: string): void;
   /** The match can't continue (host left / worker died). */
   fatal(title: string, detail: string): void;
+  /** Guest: the link dropped without the host ending the match; try to take the seat back. */
+  reconnect?(): void;
 };
 
 type Backend = {
@@ -107,6 +119,8 @@ type Backend = {
   chat(text: string): void;
   /** Stop delivering to the sink (game torn down for a rematch / back to lobby). Remote: the link stays open. */
   close(): void;
+  /** Vs bot only: stop / restart the simulation (pause card). */
+  pause?(paused: boolean): void;
   debug?: {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
@@ -148,6 +162,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     input: (input, cmds) => send({ type: 'input', input, cmds }),
     preview: (req, key) => send({ type: 'preview', playerId: humanId, req, key }),
     chat: (text) => session?.localChat(text),
+    pause: session ? undefined : (paused) => send({ type: 'pause', paused }),
     /** Vs bot /spectate: a bot takes over the local player. */
     handOff: () => send({ type: 'botify', playerId: humanId }),
     debug: {
@@ -191,7 +206,13 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
       };
       early.forEach(handle);
       link.onMessage((raw) => handle(raw as HostMsg));
-      link.onClose(() => { if (!closed && !disposed) { closed = true; sink.fatal('Host left', 'Match over: lost the connection to the host.'); } });
+      link.onClose(() => {
+        if (closed || disposed) return;
+        closed = true;
+        // No goodbye from the host: maybe just our connection. With a fresh rejoin token, try to take the seat back.
+        if (sink.reconnect && loadRejoin()) sink.reconnect();
+        else sink.fatal('Host left', 'Match over: lost the connection to the host.');
+      });
     },
     input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds, ack: wire.ack || undefined }); },
     preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
@@ -221,6 +242,11 @@ function showMenu() {
   status.dataset.testid = 'menu-status';
   const lockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach((x) => (x.disabled = true));
   const unlockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach((x) => (x.disabled = false));
+  const bots = botCountControl();
+  const mapSel = new MapPicker(storedMapChoice(), 'menu-map', (c) => localStorage.setItem(MAP_KEY, c));
+  const mapRow = document.createElement('div');
+  mapRow.className = 'map-row';
+  mapRow.append('Map', mapSel.root);
   for (const d of ['easy', 'medium', 'hard', 'pro'] as Difficulty[]) {
     const b = document.createElement('button');
     b.className = `btn${d === 'medium' ? ' primary' : ''}`;
@@ -228,8 +254,9 @@ function showMenu() {
     b.dataset.testid = `play-${d}`;
     b.onclick = () => {
       lockMenu();
-      status.textContent = 'Loading…';
-      playSolo(d, menu).catch((err) => {
+      const choice = mapSel.value as MapChoice;
+      status.textContent = choice === 'random' ? 'Loading…' : `Loading ${MAP_NAMES[choice]}…`;
+      playSolo(d, choice, menu, bots.count()).catch((err) => {
         console.error('[main] failed to start', err);
         status.textContent = `Failed to start: ${err?.message ?? err}`;
       });
@@ -295,7 +322,7 @@ function showMenu() {
     if (!code) { status.textContent = 'Invite codes are 6 letters/digits, e.g. K7Q2MX.'; codeIn.focus(); return; }
     lockMenu();
     status.textContent = `Joining ${code}…`;
-    joinLobby(code, name(), menu).catch((err) => {
+    joinLobby(code, name(), menu, rejoin?.code === code ? rejoin.token : undefined).catch((err) => {
       console.warn('[join] failed', err);
       showJoinError(menu, err instanceof JoinError ? err.message : `Could not join: ${err?.message ?? err}`);
     });
@@ -315,10 +342,13 @@ function showMenu() {
   const menuBtns = document.createElement('div');
   menuBtns.className = 'menu-btns';
   menuBtns.append(howBtn, settingsButton());
-  card.append(play, online, status, menuBtns, keys);
+  rememberDifficulty(play);
+  card.append(mapRow, play, bots.root, online, status, menuBtns, keys);
   menu.append(card);
   app.append(menu);
   if (!currentIsChromium()) menu.append(chromeBanner());
+  // ?join=CODE link / reconnect offer: fill the form (after it's in the page, so focus works).
+  const rejoin = prepareJoin({ online, nameIn, codeIn, joinBtn, status });
 }
 
 /** First-ever launch: How to play opens by itself (once the loading screen is gone), then never again. */
@@ -345,6 +375,12 @@ function chromeBanner(): HTMLElement {
   return b;
 }
 
+
+function storedMapChoice(): MapChoice {
+  const v = localStorage.getItem(MAP_KEY);
+  return v === 'random' || (MAP_TEMPLATES as string[]).includes(v ?? '') ? (v as MapChoice) : 'harbor';
+}
+
 /** Full-screen "starting…" card shown while a rematch tears down the old game and builds the new one. */
 function loadingScreen(text: string): HTMLElement {
   const el = document.createElement('div');
@@ -358,12 +394,15 @@ function loadingScreen(text: string): HTMLElement {
   return el;
 }
 
-/** Vs bot. Play again = same difficulty on a fresh worker. */
-async function playSolo(d: Difficulty, menu: HTMLElement) {
+/** Vs `bots` opponents (1-7) on the chosen map (Random: a different map than the last one played). Play again keeps difficulty, map choice and bot count. */
+async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bots = 1) {
+  const map = resolveMapChoice(choice, lastBotMap);
+  lastBotMap = map;
+  const urlBots = DEBUG ? Number(new URLSearchParams(location.search).get('bots')) : 0;
   const backend = workerBackend(() => ({
-    // ?debug=1&bots=N (1-7) fills more seats for perf testing
-    setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: DEBUG ? Math.min(7, Math.max(1, Number(new URLSearchParams(location.search).get('bots')) || 1)) : 1 },
-      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))] },
+    // ?debug=1&bots=N (1-7) overrides the menu's bot count (perf testing)
+    setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: Math.min(7, Math.max(1, urlBots || bots)) },
+      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map },
     humanId: 1,
   }), null);
   let game: Game | null = null;
@@ -390,7 +429,7 @@ async function playSolo(d: Difficulty, menu: HTMLElement) {
       kind: 'solo',
       playAgain: () => {
         game?.destroy();
-        playSolo(d, loadingScreen('Starting a new match…')).catch((err) => {
+        playSolo(d, choice, loadingScreen('Starting a new match…'), bots).catch((err) => {
           console.error('[main] play again failed', err);
           toast(`Could not restart: ${err?.message ?? err}`);
         });
@@ -408,9 +447,15 @@ function showJoinError(menu: HTMLElement, message: string) {
 async function hostLobby(name: string, menu: HTMLElement) {
   let ui: LobbyUi | null = null;
   const session = await HostSession.create(pickTransport(location.search), name, {
-    lobby: (slots) => ui?.render(slots, 0),
+    lobby: (slots, map) => ui?.render(slots, 0, map),
     chat: (from, text) => { chat?.add(from, text); ui?.addChat(from, text); },
+    net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; },
   });
+  // Last lobby's seat layout (bots + open seats), so a new session starts where the last one left off.
+  for (const [i, seat] of (loadPrefs().seats ?? []).entries()) {
+    if (i + 1 >= session.lobby.slots().length) session.addSeat();
+    if (seat.kind === 'bot') session.setSeat(i + 1, { kind: 'bot', difficulty: seat.difficulty });
+  }
   let chat: ChatUi | null = null;
   let game: Game | null = null;
   const launch = (setupFor: (w: Worker) => { setup: MatchSetup; humanId: number }, screen: HTMLElement) => {
@@ -444,7 +489,8 @@ async function hostLobby(name: string, menu: HTMLElement) {
     addSeat: () => session.addSeat(),
     removeSeat: (i) => session.removeSeat(i),
     kick: (i) => session.kick(i),
-    start: () => launch((w) => session.start(w), ui!.root),
+    setMap: (c) => { session.setMap(c); localStorage.setItem(MAP_KEY, c); },
+    start: () => { savePrefs({ seats: seatPrefsOf(session.lobby.slots()) }); launch((w) => session.start(w), ui!.root); },
     back: () => location.reload(),
   }, () => location.reload(), (text) => {
     const c = parseCommand(text);
@@ -453,19 +499,24 @@ async function hostLobby(name: string, menu: HTMLElement) {
     else if (c.kind === 'money') ui!.addChat('', c.amount === null ? MONEY_USAGE : MONEY_NOT_IN_MATCH);
     else ui!.addChat('', c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
   });
-  ui.render(session.lobby.slots(), 0);
+  session.setMap(storedMapChoice());
+  addInviteButton(ui.root, session.code);
   console.info(`[host] room ${session.code} open`);
 }
 
-async function joinLobby(code: string, name: string, menu: HTMLElement) {
-  const { link, lobby } = await joinRoom(pickTransport(location.search), code, name);
+async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?: string) {
+  const { link, lobby } = await joinRoom(pickTransport(location.search), code, name, rejoin).catch((err) => {
+    clearRejoin(); // the seat is gone (grace over / match ended / host left): no more offers
+    throw err;
+  });
   menu.remove();
-  const ui = new LobbyUi(app, code, null, () => { link.close(); location.reload(); }, (text) => {
+  const ui = new LobbyUi(app, code, null, () => { clearRejoin(); link.close(); location.reload(); }, (text) => {
     const c = parseCommand(text);
     if (!c) link.send({ t: 'chat', text });
     else ui.addChat('', c.kind === 'spectate' ? HOST_ONLY : c.kind === 'money' ? MONEY_HOST_ONLY : c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
   });
-  ui.render(lobby.slots, lobby.you);
+  ui.render(lobby.slots, lobby.you, lobby.map);
+  addInviteButton(ui.root, code);
   let slots = lobby.slots;
   let phase: 'lobby' | 'starting' | 'game' | 'over' = 'lobby';
   let early: HostMsg[] = [];
@@ -486,18 +537,22 @@ async function joinLobby(code: string, name: string, menu: HTMLElement) {
   link.onClose(() => { if (phase === 'lobby') ui.error('The host closed the lobby.'); });
   link.onMessage((raw) => {
     const m = raw as HostMsg;
+    // Connection quality + reconnect bookkeeping, in any phase.
+    if (m.t === 'ping') { link.send({ t: 'pong', n: m.n }); return; }
+    if (m.t === 'net') { netStatus.rtt = m.rtt; netStatus.host = m.host; return; }
+    if (m.t === 'rejoin') { saveRejoin({ code, token: m.token, name }); return; }
     if (phase === 'over') return;
     if (phase === 'starting') { early.push(m); return; }
     if (phase === 'game') {
       // The game's backend handles everything else; the host restarting or returning to the lobby is ours.
       if (m.t === 'start') { game?.destroy(); game = null; launch(m, loadingScreen('Host started a rematch…')); }
-      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; app.append(ui.root); ui.render(m.slots, m.you); }
+      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; app.append(ui.root); ui.render(m.slots, m.you, m.map); }
       return;
     }
-    if (m.t === 'lobby') { slots = m.slots; ui.render(m.slots, m.you); }
+    if (m.t === 'lobby') { slots = m.slots; ui.render(m.slots, m.you, m.map); }
     else if (m.t === 'chat') ui.addChat(m.from, m.text);
     else if (m.t === 'ended') { phase = 'over'; ui.error(m.reason === 'host-left' ? 'The host closed the lobby.' : `Removed from lobby (${m.reason}).`); }
-    else if (m.t === 'start') launch(m, ui.root);
+    else if (m.t === 'start') { ui.loading(m.map.name); launch(m, ui.root); }
   });
 }
 
@@ -600,6 +655,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let adsWas = false;
 
   let map: IslandLayout[] = [];
+  let mapDef: MapDef | null = null;
   let humanId = 0;
   /** No player of our own this match (spectating host, or handed to a bot via /spectate). */
   let watching = false;
@@ -645,18 +701,30 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     void canvas.offsetWidth;
     canvas.classList.add('shake');
   });
+  /** Leaving on purpose: no reconnect offer afterwards. */
+  const leave = () => { clearRejoin(); location.reload(); };
+  // Shop buys go through a paced queue: Shift+click buys several pieces, one per sim tick.
+  const buys = new BuyQueue();
+  const buyItem = (item: ShopItem, bulk = false) => {
+    buys.add(item, bulk && isPieceItem(item) ? BULK_PIECES : 1);
+    if (qol.lastBuy !== item) { qol.lastBuy = item; savePrefs({ lastBuy: item }); }
+  };
   const hud = new Hud(app, {
-    buy: (item) => input.queue({ shop: { buy: item } }),
+    buy: (item, bulk) => buyItem(item, bulk),
     vault: (a) => input.queue({ vault: a }),
     closePanel,
-    backToMenu: () => location.reload(),
+    backToMenu: leave,
     endButtons: (over) => endButtons(end.role, over, {
       spectate: () => { spectateChosen = true; hud.setEndVisible(false); input.enabled = !dead; canvas.focus(); input.requestLock(); },
-      backToMenu: () => location.reload(),
+      backToMenu: leave,
     }),
     select: (i) => input.select(i),
     moveSlot: (from, to) => input.queue({ moveSlot: { from, to } }),
   });
+  const online = backend.buffered || !!onChat;
+  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item) }, { online, isHost: !!onChat });
+  qol.lastBuy = loadPrefs().lastBuy;
+  let rejoinTouchedAt = 0;
 
   const input = new InputController(canvas, {
     interact: () => {
@@ -667,7 +735,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     place: () => { placeWantedAt = performance.now(); tryPlace(); },
     lockChange: (locked) => {
       if (locked) {
-        wasLocked = true; paused?.remove(); paused = null; hint.style.display = 'none';
+        wasLocked = true; hidePause(); hint.style.display = 'none';
         if (input.inventory) input.setInventory(false);
         return;
       }
@@ -736,7 +804,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   const spectator = new Spectator(app, renderer.camera, () => renderer.collidables, canvas, () => input.enabled);
   const scoreboard = new Scoreboard(app);
-  const scoreOpts = () => ({ humanId, hostId: end.hostId });
+  const scoreOpts = () => ({ humanId, hostId: end.hostId, ...(online ? { ping: (id: number) => qol.pingFor(id, end.hostId), hostTick: netStatus.host } : {}) });
   window.addEventListener('keydown', (e) => {
     if (!isAction('scoreboard', e.code) || hud.panelOpen || e.target instanceof HTMLInputElement) return;
     e.preventDefault();
@@ -750,8 +818,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   hint.textContent = 'Click to capture the mouse';
   document.body.append(hint);
 
+  /** Remove the pause card; vs bot, the simulation runs again. */
+  function hidePause() {
+    if (!paused) return;
+    paused.remove();
+    paused = null;
+    backend.pause?.(false);
+  }
+
   function showPause() {
     input.enabled = false;
+    backend.pause?.(true); // vs bot: the world stops (online it can't)
     paused = document.createElement('div');
     paused.className = 'overlay';
     const card = document.createElement('div');
@@ -762,11 +839,18 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const resume = document.createElement('button');
     resume.className = 'btn';
     resume.textContent = 'Resume';
-    resume.onclick = () => { input.enabled = true; input.requestLock(); paused?.remove(); paused = null; };
+    resume.onclick = () => { input.enabled = true; input.requestLock(); hidePause(); };
+    resume.dataset.testid = 'resume';
+    paused.dataset.testid = 'pause';
     const note = document.createElement('div');
     note.style.cssText = 'font-size:12px;color:var(--muted)';
-    note.textContent = 'The match keeps running while paused.';
-    card.append(title, resume, settingsButton(), note);
+    note.textContent = backend.pause ? 'Match paused.' : 'Online matches keep running while this menu is open.';
+    const quit = document.createElement('button');
+    quit.className = 'btn';
+    quit.textContent = online ? 'Leave match' : 'Quit to menu';
+    quit.dataset.testid = 'pause-quit';
+    quit.onclick = leave;
+    card.append(title, resume, settingsButton(), quit, note);
     paused.append(card);
     document.body.append(paused);
   }
@@ -778,8 +862,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     chat.enabled = false;
     chat.close();
     if (document.pointerLockElement) document.exitPointerLock();
-    paused?.remove();
-    paused = null;
+    hidePause();
     dead = document.createElement('div');
     dead.className = 'overlay';
     dead.dataset.testid = 'fatal';
@@ -794,7 +877,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const back = document.createElement('button');
     back.className = 'btn primary';
     back.textContent = 'Back to menu';
-    back.onclick = () => location.reload();
+    back.onclick = leave;
     card.append(title, note, back);
     dead.append(card);
     document.body.append(dead);
@@ -804,6 +887,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   // same E press from immediately re-opening the panel we just closed.
   window.addEventListener('keydown', (e) => {
     if (!hud.panelOpen) return;
+    // B in the shop: buy the last item again.
+    if (e.code === 'KeyB' && !e.repeat && qol.lastBuy && !(e.target instanceof HTMLInputElement)) { e.preventDefault(); buyItem(qol.lastBuy, e.shiftKey); return; }
     if (e.code === 'Escape' || (isAction('interact', e.code) && !(e.target instanceof HTMLInputElement))) {
       e.preventDefault();
       e.stopPropagation();
@@ -879,20 +964,30 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     hud.update(s, { selected: input.selected, ghostOk: input.buildMode ? ghostState() : null, buildNote: input.buildMode ? buildNote() : null, free: input.free, inventory: input.inventory, ...gunHud(meNow) });
     if (hud.ended && !wasEnded) spectateChosen = false; // a (new) result popped the end screen up
     scoreboard.update(s, scoreOpts());
+    qol.onSnapshot(s, input.selected);
+    if (backend.buffered) {
+      // Guest: keep the rejoin record fresh while the match runs; a finished match has nothing to rejoin.
+      if (s.winner !== null) clearRejoin();
+      else if (performance.now() - rejoinTouchedAt > 2000) { rejoinTouchedAt = performance.now(); touchRejoin(); }
+    }
     chat.enabled = !hud.ended && !dead && !hud.panelOpen;
     if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
   };
 
   backend.connect({
-    map: (m, id, island) => {
-      map = m;
+    map: (def, id, island) => {
+      mapDef = def;
+      map = def.islands;
       humanId = id;
-      renderer.setMap(map, humanId);
-      loading.progress('map', 1, 'Building islands');
+      console.info(`[main] map: ${def.name} (${def.template}, ${map.length} islands)`);
+      loading.progress('map', 0, `Loading ${def.name}`);
+      renderer.setMap(def, humanId);
+      loading.progress('map', 1, `Building ${def.name}`);
       maybeWarm();
       watching = id === 0;
       if (id === 0) {
         // Spectating host: no player of our own; start the free-fly camera high over the islands.
+        const m = map;
         const cx = m.reduce((a, i) => a + i.center.x, 0) / m.length, cz = m.reduce((a, i) => a + i.center.z, 0) / m.length;
         const r = Math.max(...m.map((i) => Math.hypot(i.center.x - cx, i.center.z - cz) + i.radius));
         renderer.camera.position.set(cx, m[0].groundY + r * 0.55, cz + r * 1.05);
@@ -900,15 +995,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         input.pitch = -0.45;
       } else
       // Client-side prediction of our own movement (same movement code + a local collision world).
-      import('./predict').then(({ Predictor: P }) => P.create(m, id)).then((p) => { predictor = p; },
+      import('./predict').then(({ Predictor: P }) => P.create(def, id)).then((p) => { predictor = p; },
         (err) => console.error('[predict] could not start; falling back to server positions', err));
-      hud.setMap(map, humanId, island);
+      hud.setMap(map, humanId, island, def.center);
+      qol.setMap(map, humanId, island);
       audio.setMap(map, humanId);
     },
     snapshot: (s) => {
       // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
       predictor?.onSnapshot(s);
       latest = s;
+      if (buffer) qol.onNetSnapshot();
       shots.reconcile(s.events, humanId, performance.now());
       if (buildPending && s.events.some((e) => e.type === 'placed' && (e.data as { by?: number }).by === humanId)) buildPending = null;
       renderer.ingest(s);
@@ -918,6 +1015,24 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     preview: (result, key) => { debugPreviews.get(key)?.(result); debugPreviews.delete(key); },
     chat: (from, text) => chat.add(from, text),
     fatal: showFatal,
+    reconnect: () => {
+      const r = loadRejoin();
+      showFatal('Connection lost', 'Reconnecting to the host… a bot plays your seat until you are back.');
+      // Is the host still there? If its room is gone the match is over; otherwise reload and take the seat back.
+      const hostGone = () => {
+        clearRejoin();
+        dead?.remove();
+        dead = null;
+        showFatal('Host left', 'Match over: lost the connection to the host.');
+      };
+      if (!r) { hostGone(); return; }
+      pickTransport(location.search).join(r.code).then((probe) => {
+        probe.close();
+        console.info('[rejoin] host still up; reloading to reclaim the seat');
+        markAutoRejoin();
+        location.reload();
+      }, (err) => { console.info('[rejoin] host unreachable', err); hostGone(); });
+    },
   });
 
   if (DEBUG) {
@@ -925,6 +1040,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       ...(backend.debug ?? {}),
       snapshot: () => snap,
       map: () => map,
+      mapDef: () => mapDef,
       humanId: () => humanId,
       renderInfo: () => renderer.info(),
       renderer,
@@ -1046,6 +1162,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Movement: the raw (camera-frame) move axes become numbered fixed-step commands. The sim and
     // our predictor apply exactly the same commands; between steps the predictor extrapolates
     // with the live input so a key press shows on the very next frame.
+    const nextBuy = buys.take(now);
+    if (nextBuy) input.queue({ shop: { buy: nextBuy } });
     let sample = input.sample();
     if (sample.jump) jumpLatch = true;
     const liveCmd = (seq: number): MoveCmd => ({ seq, moveX: sample.moveX, moveZ: sample.moveZ, yaw: input.yaw, jump: jumpLatch, sprint: sample.sprint });
@@ -1146,6 +1264,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         nextSendAt = Math.max(nextSendAt + 1000 / backend.inputHz, now - 1000 / backend.inputHz);
       }
     }
+    const cp = renderer.camera.position;
+    qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
     damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     fpv.applyShake(dt); // visual only: the aim ray above was taken without it
     renderer.render(input.yaw);

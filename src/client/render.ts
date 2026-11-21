@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { GENERATOR_MAX_LEVEL, PLAYER } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
-import type { IslandLayout } from '../sim/map';
+import type { IslandLayout, MapDef } from '../sim/map';
 import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
 import { CharacterSystem, type Motion } from './characters/avatar';
 import { GunFx } from './gunFx';
@@ -122,10 +122,11 @@ export class Renderer {
     this.local = null;
   }
 
-  setMap(map: IslandLayout[], humanId: number) {
-    this.map = map;
+  setMap(def: MapDef, humanId: number) {
+    this.map = def.islands;
     this.humanId = humanId;
-    this.world.setMap(map, ISLAND_COLORS);
+    this.world.setMap(def, ISLAND_COLORS);
+    const map = def.islands;
     this.gunFx.warmUp([this.boomMat]);
     for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);
     const h = PROP_HALF.generator;
@@ -181,6 +182,7 @@ export class Renderer {
     this.curr = snap;
     this.waterY = snap.waterY;
     this.world.syncPieces(snap.pieces);
+    this.world.syncCosmetics(snap.broken ?? []);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
     this.snapArrived = performance.now();
@@ -203,6 +205,8 @@ export class Renderer {
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
     if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
+    } else if (e.type === 'cosmeticBroken') {
+      this.world.cosmeticEvent(e);
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : e.data.kind === 'rocket' ? 3.6 : 4);

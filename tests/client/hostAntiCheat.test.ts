@@ -3,7 +3,7 @@ import type { HostSession as HostSessionT } from '../../src/client/session';
 import { LoopbackTransport } from '../../src/net/loopback';
 import { NET_VERSION } from '../../src/net/protocol';
 import { WireDecoder } from '../../src/net/wire';
-import { buildMap } from '../../src/sim/map';
+import { buildMapDef } from '../../src/sim/map';
 import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type Snapshot } from '../../src/sim/types';
 import { add, rotateY, v3 } from '../../src/sim/vec';
@@ -118,8 +118,9 @@ describe('HostSession anti-cheat', () => {
     const { t, h } = await host();
     const f = await friend(t, h, 'Bob');
     startWithWorker(h);
-    const map = buildMap(2);
-    h.onMap(map, [0, 1]);
+    const def = buildMapDef(2);
+    const map = def.islands;
+    h.onMap(def, [0, 1]);
     // Host (id 1) hides in its bunker's back corner; Bob (id 2) stands on his island.
     const b = map[0].bunker;
     const corner = add(b.center, rotateY(v3(1.5, 0, 1.5), b.facingYaw));

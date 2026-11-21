@@ -4,7 +4,7 @@
  * Used by tests/visual/shots.mjs to produce docs/screens/piece-damage.png and piece-destroy.png.
  */
 import { PIECES } from '../../src/sim/constants';
-import { buildMap } from '../../src/sim/map';
+import { buildMapDef } from '../../src/sim/map';
 import type { MatchEvent, PieceKind, PieceState, Snapshot } from '../../src/sim/types';
 import { Renderer } from '../../src/client/render';
 
@@ -12,8 +12,9 @@ const canvas = document.getElementById('c') as HTMLCanvasElement;
 const label = document.getElementById('label')!;
 const tiersEl = document.getElementById('tiers')!;
 const r = await Renderer.create(canvas);
-const map = buildMap(2);
-r.setMap(map, 0);
+const def = buildMapDef(2);
+const map = def.islands;
+r.setMap(def, 0);
 const C = map[0].center, GY = map[0].groundY;
 
 let pieces: PieceState[] = [];

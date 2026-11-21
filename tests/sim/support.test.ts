@@ -28,7 +28,8 @@ describe('structural support', () => {
   test('breaking the scaffold attached to the shore drops the rest of the bridge', async () => {
     m = await Match.create(humans);
     isl = m.map[0];
-    const yaw = isl.bunker.facingYaw, f = forward(yaw), r = right(yaw);
+    // Sideways off the island: straight ahead the bridge would reach the center island and stay up.
+    const yaw = isl.bunker.facingYaw + Math.PI / 2, f = forward(yaw), r = right(yaw);
     const lane = (d: number) => add(add(isl.center, scale(f, d)), scale(r, 3));
     const a = place('scaffold', lane(20), v3(lane(23).x, isl.groundY, lane(23).z), yaw);
     const b = place('scaffold', lane(23), v3(lane(27).x, isl.groundY + 0.2, lane(27).z), yaw, 0.2);

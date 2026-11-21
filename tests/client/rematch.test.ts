@@ -1,3 +1,4 @@
+import { buildMapDef } from '../../src/sim/map';
 import { beforeAll, describe, expect, test } from 'vitest';
 import type { HostSession as HostSessionT } from '../../src/client/session';
 import { LoopbackTransport } from '../../src/net/loopback';
@@ -14,7 +15,7 @@ beforeAll(async () => {
 });
 
 const flush = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)); };
-const MAP = [] as never[];
+const MAP = buildMapDef(3);
 
 function fakeWorker() {
   const posted: any[] = [];
@@ -63,7 +64,8 @@ describe('HostSession rematch', () => {
     bob.got.length = 0;
     host.onMap(MAP, [0, 1, 2]);
     await flush();
-    expect(bob.got).toEqual([{ t: 'start', map: MAP, playerId: 2, island: 1 }]);
+    expect(bob.got.filter((m) => m.t === 'start')).toEqual([{ t: 'start', map: MAP, playerId: 2, island: 1 }]);
+    expect(bob.got.filter((m) => m.t === 'rejoin')).toHaveLength(1); // a fresh reconnect token per match
     expect(bob.isClosed()).toBe(false);
   });
 

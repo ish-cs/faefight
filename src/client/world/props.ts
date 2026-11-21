@@ -51,7 +51,7 @@ const frondGeo = (() => {
   return g;
 })();
 
-export function palm(b: StaticBatch, B: THREE.Matrix4, rng: Rng, h = 9, lean = 2) {
+export function palm(b: StaticBatch, B: THREE.Matrix4, rng: Rng, h = 9, lean = 2, nutMat: THREE.Material | null = null) {
   const M = mats();
   const pts: THREE.Vector3[] = [];
   for (let i = 0; i <= 6; i++) { const t = i / 6; pts.push(V(lean * t * t, t * h, 0)); }
@@ -73,7 +73,7 @@ export function palm(b: StaticBatch, B: THREE.Matrix4, rng: Rng, h = 9, lean = 2
     b.add(M.frond, frondGeo, at(B, mat(top.x, top.y, top.z, 0, (k / n) * Math.PI * 2 + rng.rr(-0.2, 0.2), rng.rr(-0.35, 0.25), s, s, s, 'YZX')),
       new THREE.Color().setHSL(0.22 + rng.rr(-0.03, 0.03), 0.5, rng.rr(0.45, 0.6)));
   }
-  for (let k = 0; k < 4; k++) b.add(M.matte, new THREE.SphereGeometry(0.13, 8, 6), at(B, mat(top.x + rng.rr(-0.2, 0.2), top.y - 0.25, top.z + rng.rr(-0.2, 0.2))), 0x4b3a1f);
+  for (let k = 0; k < 4; k++) b.add(nutMat ?? M.matte, new THREE.SphereGeometry(0.13, 8, 6), at(B, mat(top.x + rng.rr(-0.2, 0.2), top.y - 0.25, top.z + rng.rr(-0.2, 0.2))), 0x4b3a1f);
 }
 
 /** Ship-to-shore gantry crane. Legs straddle local origin; boom reaches toward local -Z by `out` metres. */
@@ -162,12 +162,12 @@ export function pallet(b: StaticBatch, B: THREE.Matrix4) {
 // the enemy), +Z = toward the island's own centre. Everything stays inside ±half extents.
 
 /** Generator: 1.2 × 1.4 × 1.2. Yellow diesel set on a skid, louvres, control panel with green glow. */
-export function generatorProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3) {
+export function generatorProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3, body = 0xd9a521, lid = 0xc49419) {
   const M = mats();
   const W = h.x * 2, H = h.y * 2, D = h.z * 2;
   b.add(M.dark, box(W, 0.1, D), at(B, mat(0, 0.05, 0)), 0x555555);
-  b.add(M.paint, box(W - 0.06, 1.0, D - 0.1), at(B, mat(0, 0.6, 0)), 0xd9a521);
-  b.add(M.paint, box(W - 0.02, 0.06, D - 0.06), at(B, mat(0, 1.13, 0)), 0xc49419); // lid
+  b.add(M.paint, box(W - 0.06, 1.0, D - 0.1), at(B, mat(0, 0.6, 0)), body);
+  b.add(M.paint, box(W - 0.02, 0.06, D - 0.06), at(B, mat(0, 1.13, 0)), lid); // lid
   for (const sx of [-1, 1]) for (let k = 0; k < 7; k++) b.add(M.dark, box(0.02, 0.04, D - 0.4), at(B, mat(sx * (W / 2 - 0.02), 0.32 + k * 0.1, 0)), 0x2a2a2a);
   // radiator grille at the back (-Z)
   b.add(M.dark, box(W - 0.3, 0.7, 0.03), at(B, mat(0, 0.62, -D / 2 + 0.035)), 0x333333);
@@ -205,10 +205,11 @@ export function vaultProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3) {
   }
 }
 
-/** Shopkeeper (0.6 × 1.8 × 0.6 collider) + a cantilevered awning on a pole inside the collider, overhead only. */
-export function shopProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3) {
+export type KeeperLook = { skin: number; shirt: number; pants: number; apron: number; hat: number };
+
+/** Standing NPC (≈0.5 × 1.7 × 0.4), feet at local origin, facing +Z with forearms reaching forward. */
+export function keeper(b: StaticBatch, B: THREE.Matrix4, { skin, shirt, pants, apron, hat }: KeeperLook) {
   const M = mats();
-  const skin = 0x8d5a3b, shirt = 0xe9e4d6, pants = 0x3b4252, apron = 0x2f6f73;
   const limb = (a: THREE.Vector3, c: THREE.Vector3, r: number, col: number) => {
     const d = c.clone().sub(a);
     const g = new THREE.CapsuleGeometry(r, Math.max(0.01, d.length()), 4, 10);
@@ -225,12 +226,18 @@ export function shopProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3) {
   b.add(M.matte, new THREE.CapsuleGeometry(0.155, 0.36, 6, 14), at(B, mat(0, 1.1, 0.012, 0, 0, 0, 1.22, 1, 0.82)), apron);
   limb(V(0, 1.42, 0), V(0, 1.5, 0), 0.05, skin);
   b.add(M.matte, new THREE.SphereGeometry(0.105, 18, 14), at(B, mat(0, 1.6, 0.01, 0, 0, 0, 1, 1.12, 1.06)), skin);
-  b.add(M.matte, new THREE.SphereGeometry(0.115, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), at(B, mat(0, 1.63, 0.01)), 0x222222);
-  b.add(M.matte, box(0.17, 0.015, 0.1), at(B, mat(0, 1.65, 0.13)), 0x222222);
+  b.add(M.matte, new THREE.SphereGeometry(0.115, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), at(B, mat(0, 1.63, 0.01)), hat);
+  b.add(M.matte, box(0.17, 0.015, 0.1), at(B, mat(0, 1.65, 0.13)), hat);
   for (const s of [-1, 1]) {
     limb(V(s * 0.2, 1.4, 0), V(s * 0.24, 1.12, 0.06), 0.055, shirt);
     limb(V(s * 0.24, 1.12, 0.06), V(s * 0.12, 1.05, 0.24), 0.045, skin);
   }
+}
+
+/** Shopkeeper (0.6 × 1.8 × 0.6 collider) + a cantilevered awning on a pole inside the collider, overhead only. */
+export function shopProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3) {
+  const M = mats();
+  keeper(b, B, { skin: 0x8d5a3b, shirt: 0xe9e4d6, pants: 0x3b4252, apron: 0x2f6f73, hat: 0x222222 });
   // pole (inside the collider, behind the keeper) + cantilevered striped awning toward +Z
   const pz = -h.z + 0.05;
   b.add(M.galv, cyl(0.035, 2.75, 8), at(B, mat(0, 1.375, pz)));

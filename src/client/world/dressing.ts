@@ -43,8 +43,8 @@ function pebbleFringe(b: StaticBatch, B: THREE.Matrix4, e: Ellipse, rng: Rng, n:
   for (let i = 0; i < n; i++) {
     const a = rng.rr(0, Math.PI * 2), r = rng.rr(r0, r1);
     const s = rng.rr(0.018, 0.045) * (rng.rnd() < 0.08 ? 1.8 : 1);
-    b.add(mats().rock, pebbleGeos[i % 4], at(B, mat(e.x + Math.cos(a) * e.rx * r, s * 0.2, e.z + Math.sin(a) * e.rz * r, 0, rng.rr(0, 6), 0, s, s, s)),
-      new THREE.Color().setHSL(0.08, 0.06, rng.rr(0.7, 1.15)), false, true);
+    b.add(mats().gravel, pebbleGeos[i % 4], at(B, mat(e.x + Math.cos(a) * e.rx * r, s * 0.2, e.z + Math.sin(a) * e.rz * r, 0, rng.rr(0, 6), 0, s, s, s)),
+      new THREE.Color().setHSL(0.08, 0.04, rng.rr(0.55, 1)), false, true);
   }
 }
 

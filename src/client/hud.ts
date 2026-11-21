@@ -1,6 +1,6 @@
 import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, WEAPONS } from '../sim/constants';
 import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
-import type { IslandLayout } from '../sim/map';
+import type { CenterIsland, IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem, isPotionItem } from '../sim/hotbar';
 import type { GunKind, HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
 import { dist2D } from '../sim/vec';
@@ -17,6 +17,12 @@ const LABEL: Record<string, string> = {
   ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit',
   shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
 };
+
+function supplyPrompt(c: Snapshot['center']): string {
+  if (!c || c.bags + c.steel === 0) return 'Supplies: restocking…';
+  const parts = [c.bags ? `${c.bags} sandbags` : '', c.steel ? `${c.steel} steel` : ''].filter(Boolean);
+  return `E  Take ${parts.join(' + ')}`;
+}
 
 /**
  * Shop price; a generator upgrade's depends on your generator's level (0 once maxed); an ammo box costs
@@ -79,7 +85,8 @@ export type HudContext = {
   scoped?: boolean;
 };
 export type HudActions = {
-  buy(item: ShopItem): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void;
+  /** `bulk`: Shift+click (buy several of a building piece). */
+  buy(item: ShopItem, bulk?: boolean): void; vault(a: VaultAction): void; closePanel(): void; backToMenu(): void;
   /** Hotbar slot clicked. */
   select(slot: number): void;
   /** Hotbar slot dragged onto another. */
@@ -91,6 +98,7 @@ export type HudActions = {
 export class Hud {
   readonly root = el('div', 'hud');
   private map: IslandLayout[] = [];
+  private centerIsland: CenterIsland | null = null;
   private humanId = 0;
   private me: PlayerState | null = null;
   private snap: Snapshot | null = null;
@@ -171,8 +179,9 @@ export class Hud {
     parent.append(this.root);
   }
 
-  setMap(map: IslandLayout[], humanId: number, humanIsland: number) {
+  setMap(map: IslandLayout[], humanId: number, humanIsland: number, center: CenterIsland | null = null) {
     this.map = map;
+    this.centerIsland = center;
     this.humanId = humanId;
     this.seals.replaceChildren(...map.map((isl) => {
       const chip = el('div', 'seal-chip');
@@ -279,7 +288,7 @@ export class Hud {
   }
 
   /** Prompt/near-station state is computed here from the snapshot so main stays thin. */
-  nearStation(): 'shop' | 'potions' | 'vault' | 'generator' | null {
+  nearStation(): 'shop' | 'potions' | 'vault' | 'generator' | 'gold' | 'supply' | null {
     const me = this.me;
     if (!me || !me.alive) return null;
     const own = this.map[me.island];
@@ -288,17 +297,24 @@ export class Hud {
     if (own && dist2D(own.vault, me.pos) <= r) return 'vault';
     if (this.snap?.potionShops?.some((sh) => dist2D(sh.pos, me.pos) <= r && Math.abs(sh.pos.y - me.pos.y) < 2)) return 'potions';
     if (this.map.some((m) => dist2D(m.generator, me.pos) <= r)) return 'generator';
+    const c = this.centerIsland;
+    if (c && dist2D(c.goldGen, me.pos) <= r) return 'gold';
+    if (c && dist2D(c.supplyGen, me.pos) <= r) return 'supply';
     return null;
   }
 
   update(snap: Snapshot, ctx: HudContext) {
     this.snap = snap;
-    const me = snap.players.find((p) => p.id === this.humanId) ?? null;
+    const found = snap.players.find((p) => p.id === this.humanId) ?? null;
+    // After /spectate mid-match our old player is bot-driven: it's not "us" any more, so no player widgets.
+    const me = found && !found.isBot ? found : null;
     this.me = me;
     // No player of our own (spectating host): player widgets hidden, match info and the end screen still live.
     this.root.classList.toggle('no-player', !me);
     if (!me) {
       this.center.style.display = 'none';
+      this.heal.style.display = 'none';
+      this.drinkBox.style.display = 'none';
       this.sealedBanner.style.display = 'none';
       this.updateMatchInfo(snap, -1);
       const end = endState(snap.winner, 0, false, snap.players);
@@ -318,8 +334,10 @@ export class Hud {
     const near = snap.generators
       .map((g) => ({ g, d: dist2D(this.map[g.island].generator, me.pos) }))
       .filter((x) => x.d <= 10).sort((a, b) => a.d - b.d)[0];
-    this.gen.style.display = near ? '' : 'none';
-    if (near) {
+    const cg = this.centerIsland && snap.center && dist2D(this.centerIsland.goldGen, me.pos) <= 10 ? snap.center : null;
+    this.gen.style.display = near || cg ? '' : 'none';
+    if (cg && !near) setText(this.gen, `Gold generator  $${Math.floor(cg.gold)}`);
+    else if (near) {
       const lv = snap.genLevels?.[near.g.island] ?? 1;
       setText(this.gen, `${near.g.island === me.island ? 'Your generator' : `${ISLAND_NAMES[near.g.island % 8]} generator`}  $${Math.floor(near.g.stored)} · Lv${lv}`);
     }
@@ -327,7 +345,9 @@ export class Hud {
     const station = this.nearStation();
     const promptText = isPieceItem(me.hotbar[ctx.selected]) ? '' :
       station === 'shop' ? 'E  Shop' : station === 'potions' ? 'E  Potion seller' : station === 'vault' ? 'E  Vault' :
-      station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` : '';
+      station === 'generator' ? `E  Collect $${Math.floor(near?.g.stored ?? 0)}` :
+      station === 'gold' ? `E  Collect $${Math.floor(snap.center?.gold ?? 0)}` :
+      station === 'supply' ? supplyPrompt(snap.center) : '';
     setText(this.prompt, promptText);
     this.prompt.style.display = promptText && !this.panelKind ? '' : 'none';
 
@@ -546,7 +566,7 @@ export class Hud {
           const lock = el('span', 'ilock');
           lock.innerHTML = LOCK_ICON;
           b.append(icon, el('span', 'iprice', `$${priceOf(item)}`), el('span', 'ibadge'), el('span', 'istatus'), lock);
-          b.onclick = () => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item); };
+          b.onclick = (e) => { if (b.getAttribute('aria-disabled') !== 'true') this.act.buy(item, e.shiftKey); };
           // The name/details show in the panel's info bar (never clipped by the panel edge).
           const show = () => { setText(info, b.dataset.name ?? ''); info.classList.add('on'); };
           const hide = () => info.classList.remove('on');
