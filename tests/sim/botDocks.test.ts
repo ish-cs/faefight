@@ -44,7 +44,7 @@ describe('bots use the piers', () => {
     const { m, bot } = await duel(difficulty, 'Rusher', seed);
     const home = m.map[0];
     const docks = m.def.docks!.filter((d) => d.island === pierIsland);
-    const target = docks.find((d) => d.row === (pierIsland === 0 ? 3 : 2))!;
+    const target = docks.find((d) => d.row === 2)!;
     // The bot: on its island, back from the pier (out of its own blast), facing out toward it.
     const spot = add(home.center, scale(forward(home.bunker.facingYaw), pierIsland === 0 ? 12 : home.radius - 1.5));
     place(m, 1, v3(spot.x, home.groundY + 0.05, spot.z));
@@ -77,7 +77,7 @@ describe('bots use the piers', () => {
   test('the brain inspector says what it is doing', async () => {
     const { m, bot } = await duel('pro');
     const home = m.map[0];
-    const target = m.def.docks!.find((d) => d.island === 0 && d.row === 3)!;
+    const target = m.def.docks!.find((d) => d.island === 0 && d.row === 2)!;
     const spot = add(home.center, scale(forward(home.bunker.facingYaw), 12));
     place(m, 1, v3(spot.x, home.groundY + 0.05, spot.z));
     place(m, 2, top(target));

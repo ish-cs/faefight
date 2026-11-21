@@ -89,7 +89,7 @@ describe('breaking piers', () => {
     expect(tick(m, 0.2).last.docks ?? []).toEqual([]);
     m.debugExplode('grenade', top(d));
     expect(tick(m, 0.2).last.docks).toEqual([d.id]);
-    const e = m.def.docks!.find((x) => x.island === 0 && x.row === 3)!;
+    const e = m.def.docks!.find((x) => x.island === 0 && x.row === 2)!;
     m.debugExplode('charge', top(e));
     expect(tick(m, 0.2).last.docks).toEqual([d.id, e.id]);
     const isl = m.def.islands[0];
@@ -100,7 +100,7 @@ describe('breaking piers', () => {
 
   test('a player standing on a broken section drops into the water', async () => {
     const m = await match();
-    const d = m.def.docks!.find((x) => x.island === 0 && x.row === 3)!;
+    const d = m.def.docks!.find((x) => x.island === 0 && x.row === 2)!;
     place(m, 1, top(d));
     tick(m, 0.5);
     // Under the deck, out of the charge's player reach: the fall is what kills.

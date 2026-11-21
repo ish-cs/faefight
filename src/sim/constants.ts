@@ -244,7 +244,7 @@ export const MAP = {
  * fists, fire and the storm never hurt a pier; the island core and bunkers are never touched.
  */
 export const DOCK = {
-  width: 3, chunk: 2, maxLen: 8, minLen: 4, minWater: 6, deck: 0.3, lip: 0, hp: 300,
+  width: 3, chunk: 2, maxLen: 6, minLen: 4, minWater: 6, deck: 0.3, lip: 0, hp: 300,
   blast: {
     rocket: [420, 2.5], grenade: [320, 2.5], charge: [900, 1.4], barrel: [320, 3], propane: [280, 3],
   } as Record<string, [number, number]>,
