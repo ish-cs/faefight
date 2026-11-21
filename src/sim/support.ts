@@ -13,7 +13,9 @@ function grounded(physics: Physics, p: PieceState): boolean {
   for (const local of [v3(0, 0, 0), v3(-hx, 0, -hz), v3(hx, 0, -hz), v3(-hx, 0, hz), v3(hx, 0, hz)]) {
     const w = add(p.pos, rotateY(local, p.rotY));
     // Skip the piece's own collider: the probe starts inside it and can report its own base first.
-    const below = physics.probeDown(w.x, p.pos.y + GROUND_EPS, w.z, 2 * GROUND_EPS, p.id);
+    // Solid: a base sunk more than GROUND_EPS into the island starts the probe inside the ground, which
+    // must still count as ground (a hollow probe would pass through to the island's underside and miss).
+    const below = physics.probeDown(w.x, p.pos.y + GROUND_EPS, w.z, 2 * GROUND_EPS, p.id, true);
     if (below?.hit.type === 'world') return true;
   }
   // Built against a crane leg or onto its beam: anchored like the ground.

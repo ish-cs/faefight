@@ -303,12 +303,15 @@ export class Physics {
     return this.probeDown(x, yFrom, z, maxDrop)?.y ?? null;
   }
 
-  /** Like surfaceBelow, but also reports what was hit. */
-  probeDown(x: number, yFrom: number, z: number, maxDrop: number, ignorePiece?: number): { y: number; hit: HitTarget } | null {
+  /**
+   * Like surfaceBelow, but also reports what was hit. `solid`: a start point inside a collider hits it
+   * at once (y = yFrom) instead of passing through to its far face.
+   */
+  probeDown(x: number, yFrom: number, z: number, maxDrop: number, ignorePiece?: number, solid = false): { y: number; hit: HitTarget } | null {
     this.sync();
     const ray = new RAPIER.Ray({ x, y: yFrom, z }, { x: 0, y: -1, z: 0 });
     const own = ignorePiece !== undefined ? this.pieces.get(ignorePiece) : undefined;
-    const h = this.world.castRay(ray, maxDrop, false, undefined, undefined, own, undefined,
+    const h = this.world.castRay(ray, maxDrop, solid, undefined, undefined, own, undefined,
       (c) => this.entities.get(c.handle)?.type !== 'player');
     if (!h) return null;
     return { y: yFrom - h.timeOfImpact, hit: this.entities.get(h.collider.handle) ?? { type: 'world' } };
