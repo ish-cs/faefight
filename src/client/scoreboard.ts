@@ -1,5 +1,5 @@
 import type { PlayerState, Snapshot } from '../sim/types';
-import { ISLAND_COLORS } from './colors';
+import { islandColor } from './colors';
 
 export type ScoreStatus = 'alive' | 'trapped' | 'dead' | 'eliminated' | 'spectating';
 export const STATUS_LABEL: Record<ScoreStatus, string> = {
@@ -81,7 +81,7 @@ export class Scoreboard {
       const tr = el('tr', `sb-row ${r.status}${r.isYou ? ' you' : ''}`);
       tr.dataset.testid = `score-${r.id}`;
       const dot = el('span', 'dot');
-      dot.style.background = hex(ISLAND_COLORS[r.island % 8]);
+      dot.style.background = hex(islandColor(r.island));
       const name = el('td', 'sb-name', r.name);
       if (r.isBot) name.append(el('span', 'tagpill', 'BOT'));
       if (r.isHost) name.append(el('span', 'tagpill', 'host'));

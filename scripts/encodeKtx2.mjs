@@ -42,3 +42,8 @@ for (const set of sets) {
   }
 }
 console.log(`total: ${(jpgBytes / 1048576).toFixed(1)} MB jpg → ${(ktxBytes / 1048576).toFixed(1)} MB ktx2`);
+// manifest pbr.ts reads before fetching any .ktx2 (every set/map that has a .ktx2 next to its .jpg)
+const maps = readdirSync(ROOT).filter((d) => statSync(join(ROOT, d)).isDirectory())
+  .flatMap((d) => ['albedo', 'normal', 'arm'].filter((m) => { try { return statSync(join(ROOT, d, `${m}.ktx2`)).isFile(); } catch { return false; } }).map((m) => `${d}/${m}`));
+writeFileSync(join(ROOT, 'ktx2.json'), JSON.stringify({ maps }, null, 1) + '\n');
+console.log(`manifest: ${maps.length} maps`);

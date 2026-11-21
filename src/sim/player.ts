@@ -5,9 +5,9 @@ import type { PlayerState, Vec3 } from './types';
 import { newMoveState } from './movement';
 import { clone, v3 } from './vec';
 
-export function newPlayer(id: number, name: string, isBot: boolean, island: number, pos: Vec3): PlayerState {
+export function newPlayer(id: number, name: string, isBot: boolean, island: number, pos: Vec3, startCash: number = ECONOMY.startCash): PlayerState {
   const inv = emptyInventory();
-  inv.cash = ECONOMY.startCash;
+  inv.cash = startCash;
   return {
     id, name, isBot, island,
     pos: clone(pos), vel: v3(), yaw: 0, pitch: 0,

@@ -8,7 +8,8 @@ import {
 } from './firstPerson';
 import { activeKeymap, bindingLabel, isAction } from './keymap';
 import { settings } from './settings/store';
-import { ISLAND_COLORS, type Renderer } from './render';
+import type { Renderer } from './render';
+import { islandColor } from './colors';
 import { SUN_DIR } from './world/sky';
 
 /**
@@ -271,7 +272,7 @@ export class FirstPersonView {
   private setWeapon(kind: WeaponKind, island: number) {
     if (island !== this.sleeveIsland) {
       this.sleeveIsland = island;
-      this.sleeve.color.set(ISLAND_COLORS[island % 8]).multiplyScalar(0.45).lerp(new THREE.Color(0x3a4048), 0.35);
+      this.sleeve.color.set(islandColor(island)).multiplyScalar(0.45).lerp(new THREE.Color(0x3a4048), 0.35);
     }
     if (kind === this.kind) return;
     if (this.rig) this.motion.remove(this.rig.root);

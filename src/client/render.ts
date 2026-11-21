@@ -1,3 +1,4 @@
+import { CASING_CAP } from './world/casings';
 import * as THREE from 'three/webgpu';
 import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
@@ -17,7 +18,7 @@ export { lods } from './world/lod';
 export { pbrStats } from './world/pbr';
 
 export { pieceGeometry };
-import { ISLAND_COLORS } from './colors';
+import { islandColor, setIslandPalette } from './colors';
 export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 
 /** WebGPURenderer tone-maps everything on output (per-material toneMapped is ignored), so unlit
@@ -52,7 +53,7 @@ export class Renderer {
   private motion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
   private lastFrame = performance.now();
   /** Animated player avatars (src/client/characters). */
-  readonly characters = new CharacterSystem(this.scene, (island) => ISLAND_COLORS[island % 8]);
+  readonly characters = new CharacterSystem(this.scene, (island) => islandColor(island));
   /** Loot on the ground drawn as its items, with labels nearby (lootView.ts). */
   readonly lootView = new LootView(this.scene);
   private potionSellers = new PotionSellers(this.scene);
@@ -137,7 +138,8 @@ export class Renderer {
   setMap(def: MapDef, humanId: number) {
     this.map = def.islands;
     this.humanId = humanId;
-    this.world.setMap(def, ISLAND_COLORS);
+    setIslandPalette(def.colors);
+    this.world.setMap(def, def.islands.map((isl) => islandColor(isl.index)));
     const map = def.islands;
     this.storm.setMap(map, def.center);
     this.gunFx.warmUp([this.boomMat]);
@@ -200,7 +202,7 @@ export class Renderer {
   pushSnapshot(snap: Snapshot): MatchEvent[] {
     this.curr = snap;
     this.waterY = snap.waterY;
-    this.world.syncPieces(snap.pieces);
+    this.world.syncPieces(snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
@@ -224,6 +226,8 @@ export class Renderer {
     if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
     if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
+    if ((e.type === 'shot' || e.type === 'explosion') && this.curr)
+      this.world.impactEvent(e, { pieces: this.curr.pieces, players: this.curr.players, waterY: this.waterY, broken: this.curr.broken ?? [] });
     if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {
@@ -402,13 +406,25 @@ export class Renderer {
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
     if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
+    this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
     this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }
 
-  info() {
+  /** This frame's totals (world + post + viewmodel); call after the frame's last render. */
+  captureInfo() {
     const r = this.gpu.info.render as unknown as { drawCalls?: number; calls?: number; triangles: number };
-    return { backend: this.backend, drawCalls: r.drawCalls ?? r.calls ?? 0, triangles: r.triangles };
+    this.lastInfo.drawCalls = r.drawCalls ?? r.calls ?? 0;
+    this.lastInfo.triangles = r.triangles;
+  }
+  private lastInfo = { drawCalls: 0, triangles: 0 };
+
+  /**
+   * Draw calls / triangles of the last complete frame. three resets renderer.info at the start of its own
+   * animation frame (before the game's), so reading it live mid-frame gives 0: main captures it after rendering.
+   */
+  info() {
+    return { backend: this.backend, drawCalls: this.lastInfo.drawCalls, triangles: this.lastInfo.triangles };
   }
 }

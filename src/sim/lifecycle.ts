@@ -162,13 +162,14 @@ export function freeSpawnSpot(physics: Physics, isl: IslandLayout): Vec3 {
 
 export function tickLifecycle(
   s: MatchStateCore, physics: Physics, map: IslandLayout[], now: number, dt: number,
+  suddenDeathAt: number = LIFECYCLE.suddenDeathAt,
 ): MatchEvent[] {
   const out: MatchEvent[] = [];
 
-  if (!s.suddenDeath && now >= LIFECYCLE.suddenDeathAt) {
+  if (!s.suddenDeath && now >= suddenDeathAt) {
     s.suddenDeath = true;
     s.forcedSeal = true;
-    s.storm = newStorm(map, s.stormCenter, LIFECYCLE.suddenDeathAt, s.seed);
+    s.storm = newStorm(map, s.stormCenter, suddenDeathAt, s.seed);
     out.push(ev(now, 'suddenDeath', {}));
   }
 

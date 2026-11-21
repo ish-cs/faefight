@@ -147,6 +147,42 @@ describe('snapshot codec', () => {
     expect(delta.byteLength).toBeLessThan((20 * 1024) / 30);
     expect(dec.decode(delta)).toBeTruthy();
   });
+  test('a base on fire (20 burning pieces, 16 ground fires) still fits both budgets, and burning reaches clients', () => {
+    const burningBase = () => {
+      const s = snap(1, Array.from({ length: 60 }, (_, i): PieceState => ({ ...steel(), id: i, kind: i < 20 ? 'wood' : 'steel', hp: i < 20 ? 123.456 : 960, ...(i < 20 ? { burning: true as const } : {}) })));
+      s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
+      s.fires = Array.from({ length: 16 }, (_, i) => ({ id: 900 + i, kind: i % 3 ? 'grass' as const : 'palm' as const, pos: v3(i * 1.23456, 2, -7.654321) }));
+      return s;
+    };
+    const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();
+    const s = burningBase();
+    enc.push(s);
+    const first = dec.decode(enc.take(1));
+    expect(first.pieces.filter((p) => p.burning).length).toBe(20);
+    expect(first.fires?.[1]).toEqual({ id: 901, kind: 'grass', pos: v3(1.23, 2, -7.65) });
+    // Between burn steps (pieces unchanged) the burning flags and fires fit the JSON budget. (Live play uses the
+    // binary wire below, which also carries the 2 Hz burn steps as small per-piece deltas.)
+    enc.push({ ...s, tick: 2 });
+    expect(JSON.stringify(enc.take(1)).length).toBeLessThan((60 * 1024) / 15);
+    // Binary delta wire: a burn step (20 hp changes, a fire going out) stays far under 20 KB/s at 30 Hz.
+    const enc2 = new SnapshotEncoder(), wire = new WireEncoder(), wdec = new WireDecoder();
+    const w = burningBase();
+    enc2.push(w);
+    const full = wire.encode(1, enc2.take(1, true));
+    expect(full.byteLength).toBeLessThan(6 * 1024);
+    wdec.decode(full);
+    wire.ack(wdec.ack);
+    for (const p of w.pieces) if (p.burning) p.hp -= 6.5;
+    w.fires = w.fires!.slice(1);
+    delete w.pieces[0].burning;
+    enc2.push({ ...w, tick: 2, time: 2 / 30 });
+    const delta = wire.encode(2, enc2.take(1, true));
+    expect(delta.byteLength).toBeLessThan((20 * 1024) / 30);
+    const got = new SnapshotDecoder().decode(wdec.decode(delta)!);
+    expect(got.fires?.length).toBe(15);
+    expect(got.pieces?.[0].burning).toBeUndefined();
+    expect(got.pieces?.[1].burning).toBe(true);
+  });
   test("every player's kills and deaths reach every client", () => {
     const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();
     const s = snap(1, []);

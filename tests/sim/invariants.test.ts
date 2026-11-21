@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { Bot } from '../../src/sim/bots/bot';
 import { LIFECYCLE, PIECES } from '../../src/sim/constants';
+import { SETTING_RANGES } from '../../src/sim/settings';
 import { DEFAULT_MAX_MATCH_SEC, floatingPieces, InvariantChecker, violationSignature, type Violation } from '../../src/sim/invariants';
 import { buildMap, type IslandLayout } from '../../src/sim/map';
 import { Match } from '../../src/sim/match';
@@ -273,7 +274,7 @@ describe('floatingPiece', () => {
 describe('neverEnds', () => {
   test('flags a run that ends with no winner past the limit', () => {
     const c = new InvariantChecker({ map });
-    expect(DEFAULT_MAX_MATCH_SEC).toBe(LIFECYCLE.suddenDeathAt + 600);
+    expect(DEFAULT_MAX_MATCH_SEC).toBe(SETTING_RANGES.suddenDeathSec.max + 600);
     expect(c.finish(snap({ time: DEFAULT_MAX_MATCH_SEC + 1 })).map(violationSignature)).toEqual(['neverEnds']);
     expect(c.violations.map((v) => v.kind)).toEqual(['neverEnds']);
   });
