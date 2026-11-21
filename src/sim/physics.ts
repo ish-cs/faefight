@@ -1,7 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { HEAD, PIECES, PLAYER } from './constants';
 import { islandNoBuildZones, potionZone, type NoBuildZone } from './building';
-import { bunkerWallBoxes, type IslandLayout } from './map';
+import { bunkerWallBoxes, harborCraneBoxes, type IslandLayout } from './map';
 import { defaultPotionShops } from './potions';
 import type { PieceState, Vec3 } from './types';
 import { v3 } from './vec';
@@ -38,6 +38,8 @@ export class Physics {
   private pieces = new Map<number, RAPIER.Collider>();
   private pieceKinds = new Map<number, PieceState['kind']>();
   private pieceBaseY = new Map<number, number>();
+  /** Collider handles of static structures that anchor pieces built against them (cranes). */
+  private readonly anchors = new Set<number>();
   private players = new Map<number, RAPIER.Collider>();
   private dirty = true;
   /** No-build zones by group ('islands', 'potion'), see building.ts. */
@@ -66,6 +68,8 @@ export class Physics {
         ph.addStaticBox(v3(p.x, p.y + h.y, p.z), h, isl.bunker.facingYaw);
       }
     }
+    // Harbor cranes: solid, and anchors (a piece touching one is supported, like one on the ground).
+    for (const b of harborCraneBoxes(map)) ph.anchors.add(ph.addStaticBox(b.center, b.half, b.rotY).handle);
     return ph;
   }
 
@@ -94,11 +98,22 @@ export class Physics {
     return [...this.zones.values()].flat();
   }
 
-  addStaticBox(center: Vec3, half: Vec3, rotY: number) {
+  addStaticBox(center: Vec3, half: Vec3, rotY: number): RAPIER.Collider {
     const desc = RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
       .setTranslation(center.x, center.y, center.z)
       .setRotation(quatY(rotY));
-    this.track(this.world.createCollider(desc), { type: 'world' });
+    return this.track(this.world.createCollider(desc), { type: 'world' });
+  }
+
+  /** Does this oriented box touch a structural anchor (crane leg or beam)? */
+  touchesAnchor(center: Vec3, half: Vec3, rotY: number): boolean {
+    this.sync();
+    let hit = false;
+    this.world.intersectionsWithShape(center, quatY(rotY), new RAPIER.Cuboid(half.x, half.y, half.z), (c) => {
+      hit = this.anchors.has(c.handle);
+      return !hit;
+    });
+    return hit;
   }
 
   addPiece(p: PieceState): void {

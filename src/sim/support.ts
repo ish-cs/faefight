@@ -16,7 +16,9 @@ function grounded(physics: Physics, p: PieceState): boolean {
     const below = physics.probeDown(w.x, p.pos.y + GROUND_EPS, w.z, 2 * GROUND_EPS, p.id);
     if (below?.hit.type === 'world') return true;
   }
-  return false;
+  // Built against a crane leg or onto its beam: anchored like the ground.
+  const center = v3(p.pos.x, p.pos.y + s.h / 2, p.pos.z);
+  return physics.touchesAnchor(center, v3(s.w / 2 + TOUCH_EPS, s.h / 2 + TOUCH_EPS, s.d / 2 + TOUCH_EPS), p.rotY);
 }
 
 /**

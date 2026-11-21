@@ -66,7 +66,10 @@ function placeAt(physics: Physics, kind: PieceKind, pos: Vec3, rotY: number, pla
     const dists = ends.map((e) => dist2D(add(pos, rotateY(e, rotY)), playerPos));
     const w = add(pos, rotateY(ends[dists[0] <= dists[1] ? 0 : 1], rotY));
     const sup = physics.probeDown(w.x, pos.y + PROBE_UP, w.z, PROBE_UP + PROBE_DOWN);
-    if (!sup || Math.abs(sup.y - pos.y) > PROBE_UP) return { ok: false, reason: 'scaffold needs a support at the near end' };
+    if (!sup || Math.abs(sup.y - pos.y) > PROBE_UP) {
+      if (anchoredAt(physics, kind, pos, rotY)) return finish(physics, kind, pos, rotY, pos.y); // off a crane leg
+      return { ok: false, reason: 'scaffold needs a support at the near end' };
+    }
     const onDeck = sup.hit.type === 'piece' && physics.pieceKind(sup.hit.id) === 'scaffold';
     restY = onDeck ? sup.y - s.h : sup.y;
   } else {
@@ -75,10 +78,24 @@ function placeAt(physics: Physics, kind: PieceKind, pos: Vec3, rotY: number, pla
     const hx = s.w / 2 - 0.1, hz = s.d / 2 - 0.1;
     const samples = [v3(0, 0, 0), v3(-hx, 0, -hz), v3(hx, 0, -hz), v3(-hx, 0, hz), v3(hx, 0, hz)];
     const ys = samples.map(below);
-    if (ys[0] === null) return { ok: false, reason: 'nothing to build on' };
-    restY = Math.max(...ys.filter((y): y is number => y !== null));
+    const ground = ys[0] === null ? null : Math.max(...ys.filter((y): y is number => y !== null));
+    // Against a crane leg with nothing (or only far) below: hold the aimed height, anchored to the crane.
+    if ((ground === null || pos.y - ground > ANCHOR_HOLD) && anchoredAt(physics, kind, pos, rotY)) restY = pos.y;
+    else if (ground === null) return { ok: false, reason: 'nothing to build on' };
+    else restY = ground;
   }
   return finish(physics, kind, pos, rotY, restY);
+}
+
+/** Above the surface below by more than this, a piece touching a crane stays at the aimed height. */
+const ANCHOR_HOLD = 0.5;
+/** Contact tolerance for counting a piece as built against an anchor (matches support's touch). */
+const ANCHOR_TOUCH = 0.06;
+
+function anchoredAt(physics: Physics, kind: PieceKind, pos: Vec3, rotY: number): boolean {
+  const s = PIECES[kind];
+  const half = v3(s.w / 2 + ANCHOR_TOUCH, s.h / 2 + ANCHOR_TOUCH, s.d / 2 + ANCHOR_TOUCH);
+  return physics.touchesAnchor(v3(pos.x, pos.y + s.h / 2, pos.z), half, rotY);
 }
 
 /** Zone and overlap checks for a piece resting at restY. */

@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
-import { bunkerWallBoxes, type IslandLayout } from '../../sim/map';
+import { bunkerWallBoxes, harborBackdropFrame, type IslandLayout } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
 import { boxUV, mat, StaticBatch } from './geo';
 import { mats } from './materials';
@@ -14,7 +14,6 @@ import { islandSurface, makeRng } from './textures';
 
 const UNLIT_BOOST = 2.6;
 const QUAY_DEPTH = 14; // how far the quay walls go below y=0 (never visible past the water)
-const CHANNEL = 14; // water between the playable disc and the off-island backdrop quay
 
 function labelSprite(text: string, bg: string): THREE.Sprite {
   const c = document.createElement('canvas');
@@ -195,12 +194,7 @@ export function buildIslands(map: IslandLayout[], teamColors: number[], scatter?
  * Harbor scenery behind each island (local +Z), separated from the playable disc by open water so nothing
  * here can be mistaken for walkable ground or cover.
  */
-export function backdropFrame(isl: IslandLayout, n: number) {
-  const ring = Math.hypot(isl.center.x, isl.center.z);
-  const z0 = isl.radius + CHANNEL;
-  const hw = Math.max(25, Math.min(60, (ring + z0) * Math.sin(Math.PI / n) - 8));
-  return { z0, hw, top: isl.groundY + 0.2 };
-}
+export const backdropFrame = harborBackdropFrame; // the sim needs it too: the crane there is solid
 
 function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof makeRng>, isl: IslandLayout, n: number, _R: number, _groundY: number, scatter?: Scatter) {
   const M = mats();
