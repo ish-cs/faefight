@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 type Snap = {
   players: { id: number; island: number; alive: boolean; locked: string[]; inv: { cash: number; weapons: Record<string, unknown> }; hotbar: (string | null)[] }[];

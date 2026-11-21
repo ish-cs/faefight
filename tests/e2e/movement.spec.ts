@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import { pressAndMeasure, release } from './predictHelpers';
+import { NEEDS_GPU, ON_CI } from './gpu';
 
-const CI = !!(globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.CI;
+test.skip(ON_CI, NEEDS_GPU);
 
 type V = { x: number; y: number; z: number };
 type Pred = { active: boolean; pos: V | null; seq: number; stats: { reconciles: number; snaps: number; lastError: number } | null; pending: number };
@@ -47,10 +48,7 @@ test('vs bot: movement is predicted locally — W moves you on the next frame, a
   await page.keyboard.up('KeyW');
   const f = await dbg<Frames>(page, 'frames');
   console.info(`[movement] frame ms over ${f.n} frames: avg ${f.avg.toFixed(2)} p50 ${f.p50.toFixed(2)} p95 ${f.p95.toFixed(2)} p99 ${f.p99.toFixed(2)} max ${f.max.toFixed(2)}`);
-  // Frame pacing needs a GPU: CI renders WebGL2 in software (SwiftShader), where 60 fps isn't possible.
-  if (!CI) {
-    expect(f.n).toBeGreaterThan(120);
-    expect(f.p50).toBeLessThan(1000 / 55); // ≥ 60 fps (vsync-limited) on this machine
-  }
+  expect(f.n).toBeGreaterThan(120);
+  expect(f.p50).toBeLessThan(1000 / 55); // ≥ 60 fps (vsync-limited) on this machine
   expect(errors, errors.join('\n')).toEqual([]);
 });

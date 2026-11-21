@@ -35,7 +35,7 @@ const IGNORE = [/^docs\//, /^concept\//, /\.md$/, /^tests\/(sim|client|net)\//, 
 // Changes here can break anything: run everything.
 const FULL = [/^src\/client\/main\.ts$/, /^src\/client\/render\.ts$/, /^src\/client\/worker\.ts$/, /^src\/client\/protocol\.ts$/, /^src\/client\/gameModules\.ts$/,
   /^src\/sim\/(match|matchApi|types|constants|player|physics|map)\.ts$/, /^index\.html$/, /^package\.json$/, /^pnpm-lock\.yaml$/, /^playwright\.config\.ts$/,
-  /^vite\.config\.ts$/, /^tsconfig\.json$/, /^tests\/e2e\/predictHelpers\.ts$/];
+  /^vite\.config\.ts$/, /^tsconfig\.json$/, /^tests\/e2e\/(predictHelpers|gpu)\.ts$/];
 // File pattern → specs (names without .spec.ts).
 const MAP = [
   [/^src\/client\/audio\//, ['audio']],

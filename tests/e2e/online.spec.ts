@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { pressAndMeasure, release } from './predictHelpers';
+import { NEEDS_GPU, ON_CI } from './gpu';
 
 type Snap = { players: { id: number; name: string; isBot: boolean; pos: { x: number; y: number; z: number } }[] };
 
@@ -16,6 +17,7 @@ const SHOTS = (globalThis as { process?: { env: Record<string, string | undefine
 test.describe.configure({ mode: 'serial' });
 
 test('host + join by code, bot seat, movement, chat, leaver becomes a bot', async ({ context }) => {
+  test.skip(ON_CI, NEEDS_GPU);
   const errors: string[] = [];
   const a = await context.newPage();
   const b = await context.newPage();
@@ -109,6 +111,7 @@ test('joining a bad code shows an error with a way back', async ({ page }) => {
 });
 
 test('host leaving shows "Host left" to the client', async ({ context }) => {
+  test.skip(ON_CI, NEEDS_GPU);
   const a = await context.newPage();
   const b = await context.newPage();
   await a.goto('/?net=local&debug=1');

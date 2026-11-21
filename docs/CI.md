@@ -11,6 +11,14 @@ Runs on every push to `main`, every PR to `main`, and every push to a branch und
   `--use-angle=swiftshader --enable-unsafe-swiftshader`; WebGPU isn't available there, so three's
   `WebGPURenderer` falls back to WebGL2 on SwiftShader. Locally (no `CI`) nothing changes: real GPU, WebGPU.
 - A newer push to the same ref cancels the running workflow; every job times out after 20 min.
+- **What e2e on CI does not cover:** software rendering runs a match at ~1 fps. SwiftShader GL,
+  SwiftShader WebGPU, llvmpipe (EGL and Xvfb) and lavapipe Vulkan WebGPU were all measured on the
+  runners at 0.8–1.5 fps. So every spec that plays a match in real time is skipped on CI only, with the
+  reason in `tests/e2e/gpu.ts`: audio, building, endOfMatch, firstPerson, guns, lagNet, movement,
+  potions, settings, smoke, upgrades, plus online "host + join…" and "host leaving…" and lobbySlider
+  "/spectate in the lobby…". CI runs the menu, lobby, shop and HUD specs. **Run `pnpm e2e` locally
+  (real GPU, under the heavy lock) before asking for a merge** whenever you touched gameplay or
+  rendering. `pnpm e2e:changed` picks the relevant specs.
 
 To get a CI run before asking the steward to merge: push your work to a `ci/<name>` branch
 (`git push origin HEAD:ci/<name>`), then `gh run watch --repo ish-cs/faefight` /
