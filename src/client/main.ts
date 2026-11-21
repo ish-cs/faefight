@@ -1326,6 +1326,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     fpv.applyShake(dt); // visual only: the aim ray above was taken without it
     renderer.render(input.yaw);
     fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+    renderer.captureInfo();
     if (input.lookEventT !== null) { latency.drawn(input.lookEventT); input.lookEventT = null; }
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());

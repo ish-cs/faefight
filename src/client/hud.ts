@@ -154,7 +154,8 @@ export class Hud {
     this.speedBuff.dataset.testid = 'speed-buff';
     this.buffs.append(this.speedBuff);
     const bl = el('div', 'bl');
-    bl.append(this.buffs, this.shield, this.hp);
+    // perf detail sits in the bottom-left column above the bars: never under the kill feed / notifications
+    bl.append(this.fpsDetail, this.buffs, this.shield, this.hp);
     const br = el('div', 'br');
     br.append(this.weapon, this.extras);
     const tc = el('div', 'tc');
@@ -179,7 +180,7 @@ export class Hud {
     this.fpsDetail.style.display = 'none';
     this.scope.dataset.testid = 'scope';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
-      this.sealedBanner, this.damage, this.endScreen, this.fps, this.fpsDetail, this.panel);
+      this.sealedBanner, this.damage, this.endScreen, this.fps, this.panel);
     parent.append(this.root);
   }
 

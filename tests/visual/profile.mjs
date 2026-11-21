@@ -64,16 +64,19 @@ const total = profile.samples.length * dt;
 const top = (m, n) => [...m].sort((a, b) => b[1] - a[1]).slice(0, n);
 const perFrame = (ms) => (ms / (frames.n || 1)).toFixed(3);
 
-// --- input → render latency (synthetic look events at ~250 Hz)
-await dbg('lookProbe', true);
-await dbg('resetLatency');
-await page.evaluate(() => new Promise((res) => {
-  const id = setInterval(() => window.dispatchEvent(new MouseEvent('mousemove', { movementX: 1, movementY: 0 })), 4);
-  setTimeout(() => { clearInterval(id); res(); }, 3000);
-}));
-await page.waitForTimeout(300);
-const lat = await dbg('latency');
-await dbg('lookProbe', false);
+// --- input → render latency (synthetic look events at ~250 Hz); builds without the probe report n=0
+let lat = { n: 0, cpuAvg: 0, cpuP95: 0, gpuAvg: 0, gpuP95: 0 };
+if (await page.evaluate(() => typeof window.__faefight.lookProbe === 'function')) {
+  await dbg('lookProbe', true);
+  await dbg('resetLatency');
+  await page.evaluate(() => new Promise((res) => {
+    const id = setInterval(() => window.dispatchEvent(new MouseEvent('mousemove', { movementX: 1, movementY: 0 })), 4);
+    setTimeout(() => { clearInterval(id); res(); }, 3000);
+  }));
+  await page.waitForTimeout(300);
+  lat = await dbg('latency');
+  await dbg('lookProbe', false);
+}
 await browser.close();
 
 console.log(`\n== ${label} (${preset}, ${secs}s, ${frames.n} frames) ==`);
