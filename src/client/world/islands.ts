@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { overDock } from '../../sim/docks';
 import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
 import { bunkerSlitBoxes, bunkerWallBoxes, harborBackdropFrame, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
@@ -16,6 +17,7 @@ import type { Scatter } from './scatter';
 import { centerPlacements, islandPlacements, quayClusters, quayFrame } from './clusters';
 import type { PropLayer } from './propLayer';
 import { pbrAlbedo, pbrSample, worldNoise } from './pbr';
+import { applyWet } from './wetness';
 import { type Footprint, islandSurface, makeRng, yardTopTex } from './textures';
 
 const UNLIT_BOOST = 2.6;
@@ -83,7 +85,7 @@ function islandTopMaterial(R: number) {
   m.roughnessNode = mix(rough, float(0.7), ov.a.mul(0.6)).clamp(0.03, 1);
   m.metalnessNode = float(0);
   m.aoNode = mix(float(1), float(0.8), max(gk.mul(0.6), mk.g));
-  return m;
+  return applyWet(m, { puddles: true });
 }
 
 export type IslandsOut = { collidables: THREE.Object3D[]; root: THREE.Group };
@@ -145,6 +147,8 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
     for (let k = 0; k < fenders; k++) {
       const a = (k / fenders) * Math.PI * 2;
       const m = L.clone().multiply(mat(Math.sin(a) * (R + 0.12), groundY - 0.85, Math.cos(a) * (R + 0.12), 0, a, 0));
+      // none where the pier meets the wall (its piles and stringers are there)
+      if ((def.docks ?? []).some((d) => d.island === isl.index && overDock(d, { x: m.elements[12], z: m.elements[14] }, 0.5))) continue;
       if (yard) dress.add(M.rubber, TYRE, m.multiply(mat(0, 0, 0.06)), 0xffffff, true);
       else dress.add(M.rubber, new THREE.BoxGeometry(0.4, 1.3, 0.26), m, 0xffffff, true);
     }

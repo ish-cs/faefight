@@ -2,6 +2,7 @@ import { BUILD } from '../sim/constants';
 import { HOTBAR_SIZE, isGunItem, isPieceItem, isPotionItem } from '../sim/hotbar';
 import type { HotbarItem, PieceKind, PlayerInput, TrapRequest } from '../sim/types';
 import { ClickGate } from './clickGate';
+import { RecoilRecovery } from './recoil';
 import { type Action, isAction, isHeld, keymapSuspended, slotForCode } from './keymap';
 import { settings } from './settings/store';
 
@@ -55,9 +56,8 @@ export class InputController {
   lookLocked = false;
   private keys = new Set<string>();
   private fireHeld = false;
-  /** Recoil still to be applied to the look angles (rad); fed in over a few frames. */
-  private kickPitch = 0;
-  private kickYaw = 0;
+  /** Recoil still to be applied to the look angles (rad), and its recovery after a burst (recoil.ts). */
+  private recoil = new RecoilRecovery();
   private oneShot: Partial<PlayerInput> = {};
   private wheelAcc = 0;
   /** Presses that only re-capture the pointer never act (see ClickGate). */
@@ -137,7 +137,7 @@ export class InputController {
 
   select(i: number) {
     if (!Number.isInteger(i) || i < 0 || i >= HOTBAR_SIZE) throw new Error(`InputController.select: bad slot ${i}`);
-    if (i !== this.selected) { this.fireHeld = false; this.kickPitch = 0; this.kickYaw = 0; }
+    if (i !== this.selected) { this.fireHeld = false; this.recoil.reset(); }
     this.selected = i;
   }
 
@@ -162,23 +162,21 @@ export class InputController {
   }
 
   /**
-   * Recoil from one of my shots (the sim reports it with the shot): it moves my real aim, so I have to
-   * pull down against it. Applied over ~50 ms so it reads as a kick, not a teleport.
+   * Recoil from one of my shots (the sim reports it with the shot): it moves my real aim, so a spray climbs
+   * and I pull down against it. Applied over ~50 ms so it reads as a kick, not a teleport; after the burst
+   * part of the climb recovers by itself (recoil.ts: just my own look input, the sim is unchanged).
    */
   addKick(pitch: number, yaw: number) {
-    this.kickPitch += pitch;
-    this.kickYaw += yaw;
+    this.recoil.kick(pitch, yaw);
   }
 
-  /** Per frame: feed pending recoil into the look angles. */
+  /** Per frame: feed pending recoil (and its recovery) into the look angles. */
   applyKick(dt: number) {
-    if (this.kickPitch === 0 && this.kickYaw === 0) return;
-    const k = 1 - Math.exp(-dt * 45);
-    const dp = Math.abs(this.kickPitch) < 1e-5 ? this.kickPitch : this.kickPitch * k;
-    const dy = Math.abs(this.kickYaw) < 1e-5 ? this.kickYaw : this.kickYaw * k;
-    this.kickPitch -= dp; this.kickYaw -= dy;
-    this.yaw += dy;
-    this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch + dp));
+    const r = this.recoil;
+    r.step(dt);
+    if (r.dPitch === 0 && r.dYaw === 0) return;
+    this.yaw += r.dYaw;
+    this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch + r.dPitch));
   }
 
   get free() {
@@ -250,8 +248,10 @@ export class InputController {
     const c = settings.get().controls;
     const k = BASE_RAD_PER_PX * c.sensitivity * this.lookScale;
     if (this.lookEventT === null && (e.movementX || e.movementY)) this.lookEventT = e.timeStamp;
-    this.yaw -= e.movementX * k;
-    this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - e.movementY * k * (c.invertY ? -1 : 1)));
+    const dYaw = -e.movementX * k, dPitch = -e.movementY * k * (c.invertY ? -1 : 1);
+    this.yaw += dYaw;
+    this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch + dPitch));
+    this.recoil.mouse(dPitch, dYaw); // pulling against the climb pays its recovery off
   }
 
   private onKey(e: KeyboardEvent, down: boolean) {

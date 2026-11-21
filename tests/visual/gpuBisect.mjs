@@ -3,13 +3,14 @@
 // Run under the heavy lock:  GAME_URL=… node tests/visual/gpuBisect.mjs [--preset=high]
 import { chromium } from '@playwright/test';
 
-const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? d;
+const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
 const preset = arg('preset', 'high');
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
+const dpr = Number(arg('dpr', '1'));
 const VARIANTS = arg('variants', 'base,msaa2,msaa1,noao,nobloom,noflare,dpr1,noshadow,nograss,noocean,base2').split(',');
 
 const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
-const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: dpr });
 page.setDefaultTimeout(240_000);
 await page.addInitScript((q) => { localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q, dynamicResolution: false } })); }, preset);
 await page.goto(`${url}/?debug=1&bots=7&gputime=1`);

@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { abs, attribute, float, fract, hash, instanceIndex, max, min, mix, normalLocal, normalWorld, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
 import { MAP } from '../../sim/constants';
 import { noiseTex } from './pbr';
+import { applyWet, DRY, type WetOpts } from './wetness';
 
 type F = THREE.Node<'float'>;
 type V3 = THREE.Node<'vec3'>;
@@ -63,7 +64,8 @@ function edgeMask(width = 0.045): F {
   return float(1).sub(smoothstep(0, width, d)) as F;
 }
 
-type Raw = { base: V3; rough: F; metal: F; opts: WeatherOpts };
+/** `wet`: the material was wet-aware (applyWet, wetness.ts): weathering rebuilds from its dry nodes, then re-wets */
+type Raw = { base: V3; rough: F; metal: F; opts: WeatherOpts; wet?: { normal: THREE.Node | null; opts: WetOpts } };
 /** unweathered nodes per material (not userData: Material.clone JSON-copies userData) */
 const RAW = new WeakMap<THREE.Material, Raw>();
 
@@ -72,13 +74,17 @@ const OFF = typeof location !== 'undefined' && location.search.includes('noweath
 
 export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) {
   if (OFF) return m;
-  const raw: Raw = RAW.get(m) ?? {
+  const dry = DRY.get(m);
+  const raw: Raw = RAW.get(m) ?? (dry ? {
+    base: (dry.opts.rgba ? (dry.color as THREE.Node<'vec4'>).rgb : dry.color) as V3, rough: dry.rough as F,
+    metal: (m.metalnessNode as F | null) ?? float(m.metalness), opts: o, wet: { normal: dry.normal, opts: { ...dry.opts, rgba: false } },
+  } : {
     // a colorNode replaces material.color AND .map, so a textured material's map is folded into the base here
     base: (m.colorNode as V3 | null) ?? (m.map ? texture(m.map).rgb.mul(vec3(m.color.r, m.color.g, m.color.b)) : vec3(m.color.r, m.color.g, m.color.b)) as V3,
     rough: (m.roughnessNode as F | null) ?? float(m.roughness),
     metal: (m.metalnessNode as F | null) ?? float(m.metalness),
     opts: o,
-  };
+  });
   RAW.set(m, { ...raw, opts: o });
 
   const obj = !!o.objectSpace;
@@ -136,6 +142,11 @@ export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) 
   if (m.map && !m.opacityNode && (m.alphaTest > 0 || m.transparent)) m.opacityNode = texture(m.map).a;
   m.roughnessNode = rough.clamp(0.04, 1);
   m.metalnessNode = metal.clamp(0, 1);
+  if (raw.wet) {
+    // rain on top of the rust and grime (wetness.ts): dry normal back first, so puddles don't stack twice
+    m.normalNode = raw.wet.normal;
+    applyWet(m, raw.wet.opts);
+  }
   return m;
 }
 

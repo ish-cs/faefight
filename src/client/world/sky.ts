@@ -8,7 +8,7 @@ import { settings } from '../settings/store';
 import { Lighting, type ShadowPreset, SUN_DIR as LIGHT_SUN_DIR } from './lighting';
 import { SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
 import { cascadeToRefresh, type CascadeCacheState, newCacheState, SHADOW_CACHE } from './shadowCache';
-import { buildPipeline, grade, type PostOptions, sunScreen } from './post';
+import { buildPipeline, grade, type PostOptions, sunScreen, upscaleInput } from './post';
 import { lightU } from './lightUniforms';
 
 export type Quality = 'low' | 'high' | 'ultra';
@@ -31,14 +31,25 @@ type Preset = {
   post: PostOptions;
 };
 /** Competitive mode's post chain overrides (see setCompetitive). */
-const COMPETITIVE_POST: Partial<PostOptions> = { samples: 2, bloom: false, ao: false, flare: false };
+const COMPETITIVE_POST: Partial<PostOptions> = { samples: 2, bloom: false, ao: false, flare: false, upscale: undefined };
+
+/**
+ * Ultra's upscaler (A/B, debug): `?upscale=0` off (native MSAA), `?upscale=taau` / `?upscale=fsr` picks the mode,
+ * `?upscaleScale=0.7` sets the input scale.
+ */
+const Q = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
+const UP_MODE = Q?.get('upscale') ?? 'cas';
+const UP_SCALE = Math.min(1, Math.max(0.4, Number(Q?.get('upscaleScale')) || (UP_MODE === 'taau' ? 0.6 : 0.7)));
+const UPSCALE_ULTRA: PostOptions['upscale'] = UP_MODE === '0' ? undefined
+  : { mode: UP_MODE === 'taau' || UP_MODE === 'fsr' ? UP_MODE : 'cas', scale: UP_SCALE, sharpen: UP_MODE === 'cas' ? 0.5 : 0.25 };
 
 // low: 2 small cascades over a short range; high: 3 cascades (crisp near, shorter reach than ultra);
 // ultra: 4 cascades with a long reach. GTAO + bloom on high/ultra (AO at half resolution).
 const PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, shadow: { cascades: 2, mapSize: 1024, far: 90 }, post: { samples: 4, bloom: false, ao: false } },
   high: { pixelRatio: 1.25, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true } },
-  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 16 }, flare: true } },
+  // ultra: native Retina output, scene rendered at 0.7× (MSAA ×4) and upscaled bilinear + contrast-adaptive sharpen in the grade pass
+  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 16 }, flare: true, upscale: UPSCALE_ULTRA } },
 };
 
 /** Far-cascade caster mask: layer 0 only (+ unused bit 31, see cascadeLayers). */
@@ -169,9 +180,22 @@ export class SkyLighting {
     this.apply();
   }
 
+  /** The built post chain's upscaler (null: scene renders at output resolution). */
+  private upscale: PostOptions['upscale'] | null = null;
+
   private applyPixelRatio() {
     const base = Math.min(window.devicePixelRatio, this.competitive ? 1 : PRESETS[this.quality].pixelRatio);
-    this.gpu.setPixelRatio(Math.min(2, Math.max(0.5, base * this.resScale * this.dynScale)));
+    const t = this.upscale;
+    // upscaling: dynamic resolution scales the scene's input resolution only; the output (and TAAU's history) keep
+    // their size, so a governor step never reallocates output targets or restarts accumulation
+    this.gpu.setPixelRatio(Math.min(2, Math.max(0.5, base * this.resScale * (t ? 1 : this.dynScale))));
+    if (t && this.scenePass) {
+      const s = t.scale * this.dynScale;
+      upscaleInput.value = s;
+      this.scenePass.setResolutionScale(s);
+      this.bloomPass?.setResolutionScale(0.5 * s);
+      this.applyAoBudget();
+    }
   }
 
   /** Effective pixel ratio the scene renders at (debug/perf). */
@@ -197,12 +221,17 @@ export class SkyLighting {
 
     this.pipeline?.dispose();
     const post = this.competitive ? { ...PRESETS[this.quality].post, ...COMPETITIVE_POST } : PRESETS[this.quality].post;
-    const built = buildPipeline(this.gpu, this.scene, this.camera, { ...post, ...this.postOverride }, this.interiorAO);
+    const opts = { ...post, ...this.postOverride };
+    const built = buildPipeline(this.gpu, this.scene, this.camera, opts, this.interiorAO);
+    this.upscale = opts.upscale ?? null;
     this.pipeline = built.pipe;
     this.scenePass = built.scenePass;
     this.aoPass = built.aoPass;
+    this.bloomPass = built.bloomPass;
+    this.applyPixelRatio(); // TAAU input scale onto the new scene pass
     this.applyAoBudget();
   }
+  private bloomPass: { setResolutionScale(s: number): unknown } | null = null;
   private aoPass: { resolutionScale: number } | null = null;
   /** Debug/profiling only (GPU cost bisect): post options over the preset's; rebuilds the chain (a full recompile). */
   private postOverride: Partial<PostOptions> = {};
@@ -210,7 +239,9 @@ export class SkyLighting {
   /** GTAO budget: the governor's cheap / minimal levels render AO at 60 % / 30 % of the preset's resolution (live). */
   private applyAoBudget() {
     const ao = this.competitive ? false : PRESETS[this.quality].post.ao;
-    if (this.aoPass && ao) this.aoPass.resolutionScale = ao.resolution * [1, 0.6, 0.3][this.govAo];
+    // GTAO sizes itself off the drawing buffer: when upscaling keep it relative to the scene's input resolution
+    const t = this.upscale;
+    if (this.aoPass && ao) this.aoPass.resolutionScale = ao.resolution * [1, 0.6, 0.3][this.govAo] * (t ? t.scale * this.dynScale : 1);
   }
 
   private govAo: 0 | 1 | 2 = 0;

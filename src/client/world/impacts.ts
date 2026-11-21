@@ -234,7 +234,8 @@ export class ImpactMarks {
   readonly ring = new DecalRing(DECAL_CAP.high, MAX_CAP);
   private cell: THREE.InstancedBufferAttribute;
   private fade: THREE.InstancedBufferAttribute;
-  private surf: SurfaceMap | null = null;
+  /** The map's solid boxes + ground surfaces (also read by footprints and ragdolls). */
+  surf: SurfaceMap | null = null;
   private dirtyFade = false;
 
   constructor(private particles: Particles) {

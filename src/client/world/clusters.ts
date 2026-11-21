@@ -619,6 +619,11 @@ export function islandZones(def: MapDef, isl: IslandLayout): Zones {
     const p = L(pr.pos), e = PROP_KINDS[pr.kind].ext;
     caps.push({ ax: p.x, az: p.z, bx: p.x, bz: p.z, r: Math.hypot(e.x, e.z) + 0.9 });
   }
+  // pier landings (sim MapDef.docks): keep the walk from the island onto the pier clear
+  for (const d of def.docks ?? []) if (d.island === isl.index && d.row === 0) {
+    const p = L(d.center), q = L({ x: d.center.x + (isl.center.x - d.center.x) * 0.25, z: d.center.z + (isl.center.z - d.center.z) * 0.25 });
+    caps.push({ ax: p.x, az: p.z, bx: q.x, bz: q.z, r: d.half.x + 1 });
+  }
   // explosive barrels / propane / supply crates (sim hazards): keep dressing off them
   for (const h of def.hazards ?? []) if (h.island === isl.index) { const p = L(h.pos); caps.push({ ax: p.x, az: p.z, bx: p.x, bz: p.z, r: HAZARD_CLEAR }); }
   return { caps, rects };

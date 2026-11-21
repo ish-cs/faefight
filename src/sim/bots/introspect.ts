@@ -66,6 +66,8 @@ export type BrainDigest = {
     stress: number; winded: boolean;
     /** Current aim error (deg), reaction delay (s) and what's left of it on the current target. */
     aimErr: number; react: number; reactLeft: number;
+    /** Gun handling (params.ts gunSkill): recoil pulled back (0..1), shots this burst / burst cap, rest left (s), full-auto range (m). */
+    comp: number; burst: [number, number]; rest: number; spray: number | null;
   };
 };
 
@@ -94,7 +96,8 @@ type Planned = { node: number; goal: Vec3; at: number; pts: Vec3[] } | null;
 type Internals = {
   id: number; difficulty: Difficulty; personality: { archetype: string; traits: Traits };
   t: Traits; style: ShopStyle; goal: Goal; targetId: number | null; hesitateUntil: number; nextScoreAt: number;
-  winded: boolean; centerMinded: boolean; view?: BotView; grid: unknown; lastScores: { goal: string; score: number }[];
+  winded: boolean; centerMinded: boolean; view?: BotView; burstN: number; burstRestUntil: number;
+  grid: unknown; lastScores: { goal: string; score: number }[];
   aim: { target: number; seenAt: number; lastSeen: number; err: Angles; p: AimProfile };
   nav: { cache: Map<string, unknown>; planned: Planned; bridges: Map<number, unknown>; centerNode: number; nodeAt(p: Vec3): number };
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
@@ -576,6 +579,15 @@ function pathOf(I: Internals, p: BrainProbe, me: PlayerState): [number, number, 
  * Build a digest of what the bot is thinking. Pure reads (call only for spectated bots). The first call on a
  * bot starts its probe; until its next re-score the utility table is empty.
  */
+type DockPlan = { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number };
+/** The pier tactic (Bot.dockShot) as a plan step: which section, how, and why. */
+export function dockStep(d: DockPlan): string {
+  const how = d.weapon === 'rocket' ? 'rocket' : 'grenade';
+  if (d.why === 'defend') return `Blowing out my pier under @${d.enemy} as they cross (${how}, section ${d.id})`;
+  if (d.why === 'cover') return `Blowing out the pier under @${d.enemy}'s cover (${how}, section ${d.id})`;
+  return `Blowing out the pier under @${d.enemy}: into the water (${how}, section ${d.id})`;
+}
+
 export function debugBrain(bot: Bot): BrainDigest {
   const I = inside(bot);
   const probe = (bot as unknown as { probe: BrainProbe | null }).probe;
@@ -623,7 +635,9 @@ export function debugBrain(bot: Bot): BrainDigest {
   const aim = I.aim, tracking = aim.lastSeen === now && aim.target >= 0;
   const cone = aim.p.coneRad * (1 - 0.3 * Math.min(1, (now - aim.seenAt) / 1));
   const thinking = now < I.hesitateUntil;
-  const step = !me?.alive ? 'Dead: waiting to respawn' : thinking ? 'Thinking it over…' : plan.steps[plan.at] ?? '—';
+  const dock = (bot as unknown as { dockPlan: DockPlan | null }).dockPlan;
+  const docking = !!dock && !!me?.alive && now < dock.until;
+  const step = !me?.alive ? 'Dead: waiting to respawn' : docking ? dockStep(dock!) : thinking ? 'Thinking it over…' : plan.steps[plan.at] ?? '—';
   const d: BrainDigest = {
     id: I.id, t: r1(now), arch: I.personality.archetype, diff: I.difficulty,
     traits: TRAIT_KEYS.map((k) => Math.round(I.t[k] * 100)),
@@ -637,13 +651,15 @@ export function debugBrain(bot: Bot): BrainDigest {
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     path: me ? pathOf(I, p, me) : [],
-    aim: aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
+    aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
     st: {
       hp: Math.round(me?.hp ?? 0), sh: Math.round(me?.shield ?? 0), sta: Math.round(me?.stamina ?? 0),
       cash: Math.round(me?.inv.cash ?? 0), vault: Math.round(me?.vault.cash ?? 0), inv: me ? invValue(me.inv) : 0,
       stress: r1(me?.mv?.stress ?? 0), winded: I.winded,
       aimErr: r2(tracking ? Math.hypot(aim.err.yaw, aim.err.pitch) * cone * 180 / Math.PI : aim.p.coneRad * 180 / Math.PI),
       react: r2(aim.p.reactSec), reactLeft: r2(tracking ? Math.max(0, aim.seenAt + aim.p.reactSec - now) : 0),
+      comp: r2(aim.p.recoilComp), burst: [I.burstN, I.P.gunSkill[I.difficulty].burstShots], rest: r2(Math.max(0, I.burstRestUntil - now)),
+      spray: Number.isFinite(I.P.gunSkill[I.difficulty].sprayRange) ? I.P.gunSkill[I.difficulty].sprayRange : null,
     },
   };
   return fitDigest(d);

@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { PLAYER } from '../../sim/constants';
-import type { MatchEvent, PlayerState, WeaponKind } from '../../sim/types';
+import type { MatchEvent, PlayerState, Vec3, WeaponKind } from '../../sim/types';
 import { reloadClock, reloadPose, type ReloadPose } from '../firstPerson';
 import { chooseClip } from './animState';
 import { EMOTE_BONES, emoteClip, emotePose, type BodyAxis, type EmoteBone } from './emotePose';
@@ -11,6 +11,8 @@ import { soldierLook } from './body';
 import { breath, flinchEnvelope, LOCOMOTION_CLIPS, StrideIK, strideFor } from './locomotion';
 import { BODY_LOD, HAND_BONE, loadCharacters, makeBody, type Body, type CharacterAssets } from './loader';
 import { buildMuzzleFlash, buildWeapon } from './weapons';
+import { Ragdoll } from './ragdoll';
+import { deathKick, ragdollBudget, RP, RP_COUNT } from './ragdollSim';
 
 const AIM_HOLD_S = 0.6; // keep the aim pose this long after a shot
 const FLINCH_S = 0.32;
@@ -20,6 +22,11 @@ const LOCO_FADE = 0.24;
 const DEATH_TURN_S = 0.22; // turn to face the killer while starting to fall (the clip falls backward)
 const PUNCH_S = 0.45;
 const DEATH_SHOW_S = 1.9; // play the death animation, then hide (as the capsule did)
+const CORPSE_S = 10; // a ragdoll lies this long when nobody respawns into the avatar (eliminated), then sinks away
+const SINK_S = 1.2;
+const BLAST_S = 0.35; // an explosion this recent and close threw the body
+const BLAST_M = 7;
+const EXPLOSIVE = new Set(['rocket', 'grenade', 'charge', 'barrel', 'propane']);
 const FADE = 0.16;
 const FLASH_MS = 55;
 const SPINE = ['Abdomen', 'Torso', 'Chest'] as const;
@@ -66,6 +73,14 @@ export type Motion = { pos: THREE.Vector3; vel: THREE.Vector3; yaw: number; pitc
 
 /** 1/s: how quickly the animation's velocity follows the real one (blends locomotion clips smoothly). */
 const VEL_SMOOTH_RATE = 12;
+
+/** What a death ragdoll needs from the world: the floor under the body, and the blast that threw it (if any). */
+export type RagdollEnv = {
+  floorAt(x: number, z: number, feetY: number): number;
+  blastNear(pos: THREE.Vector3, now: number): THREE.Vector3 | null;
+  /** The body hit the floor at `speed` m/s (a thud sound). */
+  thud(pos: Vec3, speed: number): void;
+};
 
 export type AvatarFrame = {
   pos: THREE.Vector3; // interpolated feet
@@ -221,6 +236,14 @@ export class Avatar {
   private flinchAt = -1e9;
   private flinchSide = 1;
   private hitFrom: THREE.Vector3 | null = null;
+  /** The last hit's detail (ragdoll push): where it landed, head or body, weapon. */
+  private hitPos: THREE.Vector3 | null = null;
+  private hitPart: string | undefined;
+  private hitWeapon: string | undefined;
+  /** Death ragdoll (null = alive, or the death clip when over the ragdoll budget). */
+  private ragdoll: Ragdoll | null = null;
+  private ragdollAwake = false;
+  ragdollEnv: RagdollEnv | null = null;
   private deathYaw: number | null = null;
   private deathYaw0 = 0;
   private effort = 0;
@@ -341,11 +364,69 @@ export class Avatar {
   }
 
   /** Took a hit: heavy hits play the full hit reaction, light ones an additive flinch; `from` = shooter's position. */
-  onHit(now: number, amount = 0, from: THREE.Vector3 | null = null) {
+  onHit(now: number, amount = 0, from: THREE.Vector3 | null = null, info: { pos?: { x: number; y: number; z: number }; part?: string; weapon?: string } = {}) {
     if (amount >= HEAVY_HIT) this.flinchUntil = now + FLINCH_S * 1000;
     this.flinchAt = now;
     this.flinchSide = Math.random() < 0.5 ? -1 : 1;
     if (from) (this.hitFrom ??= new THREE.Vector3()).copy(from);
+    if (info.pos) (this.hitPos ??= new THREE.Vector3()).set(info.pos.x, info.pos.y, info.pos.z);
+    else this.hitPos = null;
+    this.hitPart = info.part;
+    this.hitWeapon = info.weapon;
+    this.hitAt = now;
+  }
+  private hitAt = -1e9;
+
+  /**
+   * Go limp: a ragdoll from the current pose, thrown by the killing blow (away from the shooter, or out of a blast
+   * with some lift) on top of the body's own momentum. False when it can't (capsule fallback, over the budget).
+   */
+  private startRagdoll(now: number, vel: THREE.Vector3): boolean {
+    if (!this.model || !this.mixer || !ragdollBudget.acquire()) return false;
+    const pos = this.lastPos;
+    this.group.position.copy(pos);
+    this.group.updateMatrixWorld(true);
+    const yaw = this.group.rotation.y;
+    const airborne = Math.abs(vel.y) > 1.5;
+    const floor = airborne && this.ragdollEnv ? Math.min(pos.y, this.ragdollEnv.floorAt(pos.x, pos.z, pos.y)) : pos.y;
+    let r: Ragdoll;
+    try {
+      r = new Ragdoll(this.model, { x: -Math.sin(yaw), z: -Math.cos(yaw) }, floor);
+    } catch (err) {
+      ragdollBudget.release();
+      console.error('[characters] ragdoll failed, playing the death clip', err);
+      return false;
+    }
+    const blast = this.ragdollEnv?.blastNear(pos, now) ?? null;
+    const fresh = now - this.hitAt < 1000; // the killing blow, not some hit long before
+    const weapon = fresh ? this.hitWeapon : undefined;
+    const explosive = blast !== null || EXPLOSIVE.has(weapon ?? '');
+    const k = deathKick(weapon, explosive);
+    const src = blast ?? (fresh ? this.hitFrom : null);
+    let dx = src ? pos.x - src.x : Math.sin(yaw), dz = src ? pos.z - src.z : Math.cos(yaw); // no source: fall backward
+    const d = Math.hypot(dx, dz) || 1;
+    dx /= d; dz /= d;
+    // the point the blow landed on takes it all, the torso most of it, the limbs follow
+    const hitIdx = !fresh ? RP.chest : this.hitPart === 'head' ? RP.head : this.hitPos && this.hitPos.y < pos.y + 0.9 ? RP.pelvis : RP.chest;
+    const spin = (Math.random() - 0.5) * 1.2;
+    for (let i = 0; i < RP_COUNT; i++) {
+      const w = i === hitIdx ? 1 : i <= RP.head || i === RP.shL || i === RP.shR ? 0.7 : 0.4;
+      const tw = i === RP.shL || i === RP.hipL ? spin : i === RP.shR || i === RP.hipR ? -spin : 0;
+      r.sim.kick(i, vel.x * 0.8 + dx * k.push * w - dz * tw, Math.max(0, vel.y) * 0.5 + k.lift * (explosive ? 1 : w), vel.z * 0.8 + dz * k.push * w + dx * tw);
+    }
+    this.ragdoll = r;
+    this.ragdollAwake = true;
+    if (this.blob) this.blob.visible = false;
+    return true;
+  }
+
+  private endRagdoll() {
+    if (!this.ragdoll) return;
+    if (this.ragdollAwake) ragdollBudget.release();
+    this.ragdollAwake = false;
+    this.ragdoll.restore();
+    this.ragdoll = null;
+    if (this.blob) this.blob.visible = true;
   }
 
   /** World position of this avatar's muzzle or ejection port (null with fists / hidden). */
@@ -397,19 +478,25 @@ export class Avatar {
   }
 
   update(f: AvatarFrame, dt: number, now: number) {
-    if (f.alive && !this.wasAlive) { this.diedAt = -1; this.smoothVel.set(0, 0, 0); this.deathYaw = null; this.hitFrom = null; } // respawned
+    if (f.alive && !this.wasAlive) { // respawned
+      this.diedAt = -1; this.smoothVel.set(0, 0, 0); this.deathYaw = null; this.hitFrom = null; this.hitPos = null;
+      this.endRagdoll();
+    }
     if (!f.alive && this.wasAlive) {
       this.diedAt = now;
       // fall away from whoever landed the last hit: face them (the death clip falls backward)
       this.deathYaw0 = this.group.rotation.y;
       this.deathYaw = this.hitFrom ? Math.atan2(-(this.hitFrom.x - this.lastPos.x), -(this.hitFrom.z - this.lastPos.z)) : null;
+      if (this.wasShown && this.startRagdoll(now, this.smoothVel)) this.deathYaw = null;
     }
     this.wasAlive = f.alive;
     this.alive = f.alive;
 
-    const showDead = !f.alive && this.mixer !== null && this.diedAt >= 0 && now - this.diedAt < DEATH_SHOW_S * 1000;
+    const deadFor = now - this.diedAt;
+    const showDead = !f.alive && this.mixer !== null && this.diedAt >= 0 && deadFor < (this.ragdoll ? CORPSE_S : DEATH_SHOW_S) * 1000;
     this.group.visible = f.alive || showDead;
-    if (!this.group.visible) return;
+    this.wasShown = this.group.visible;
+    if (!this.group.visible) { if (this.ragdoll && !f.alive) this.endRagdoll(); return; }
 
     // Dead: stay where we fell (the sim may move the body to the respawn point).
     if (f.alive) { this.lastPos.copy(f.pos); this.group.rotation.y = f.yaw; }
@@ -419,6 +506,11 @@ export class Avatar {
       this.group.rotation.y = this.deathYaw0 + d * k * k * (3 - 2 * k);
     }
     this.group.position.copy(this.lastPos);
+    if (this.ragdoll) {
+      // a corpse nobody respawns into sinks away at the end (bones are frozen by then: the whole body goes down)
+      const sink = deadFor - (CORPSE_S - SINK_S) * 1000;
+      if (sink > 0) this.group.position.y -= 0.6 * (sink / (SINK_S * 1000));
+    }
     if (this.model) this.model.visible = !f.blinkHidden;
     else this.hitbox.visible = !f.blinkHidden;
 
@@ -458,6 +550,15 @@ export class Avatar {
 
     this.applyLod();
     if (!this.mixer) return;
+    if (this.ragdoll) {
+      if (this.ragdollAwake && !this.ragdoll.step(dt)) { this.ragdollAwake = false; ragdollBudget.release(); }
+      const hit = this.ragdoll.sim.takeImpact();
+      if (hit > 0 && this.ragdollEnv) {
+        const P = this.ragdoll.sim.pos;
+        this.ragdollEnv.thud({ x: P[RP.pelvis * 3], y: P[RP.pelvis * 3 + 1], z: P[RP.pelvis * 3 + 2] }, hit);
+      }
+      return;
+    }
     // Animation LOD: nothing to see off screen; far away, half rate. Skipped time is caught up on the next update.
     this.animFrame++;
     if (!this.lodOnScreen || (this.lodDist > CHAR_LOD.animHalfRateM && this.animFrame % 2 === 1)) { this.animSkipped += dt; return; }
@@ -535,6 +636,8 @@ export class Avatar {
     });
   }
   private weaponDirty = false;
+  /** Was drawn last frame (a death while hidden or culled by interest doesn't start a ragdoll from a stale pose). */
+  private wasShown = false;
 
   /** Rotate a bone by `angle` about one of the body's axes (world space, from the facing `yaw`). */
   private turn(bone: THREE.Bone | undefined, axis: BodyAxis, angle: number, yaw: number) {
@@ -559,6 +662,7 @@ export class Avatar {
   }
 
   dispose() {
+    this.endRagdoll();
     this.group.parent?.remove(this.group);
     this.mixer?.stopAllAction();
     if (this.model) this.mixer?.uncacheRoot(this.model);
@@ -604,6 +708,7 @@ export class CharacterSystem {
     let a = this.avatars.get(p.id);
     if (!a) {
       a = new Avatar(this.assets, p, this.colorFor(p.island), p.id === humanId);
+      a.ragdollEnv = this.ragdollEnv;
       this.scene.add(a.group);
       this.avatars.set(p.id, a);
     }
@@ -620,9 +725,36 @@ export class CharacterSystem {
     if (e.type === 'shot') { if (!e.data.echo) this.avatars.get(e.data.by as number)?.onShot((e.data.weapon as WeaponKind) ?? 'pistol', now); }
     else if (e.type === 'hit') {
       const shooter = this.avatars.get(e.data.by as number);
-      this.avatars.get(e.data.target as number)?.onHit(now, Number(e.data.amount) || 0, shooter ? shooter.group.position : null);
+      const d = e.data as { pos?: Vec3; part?: string; weapon?: string };
+      this.avatars.get(e.data.target as number)?.onHit(now, Number(e.data.amount) || 0, shooter ? shooter.group.position : null, d);
+    } else if (e.type === 'explosion') {
+      const pos = e.data.pos as Vec3 | undefined;
+      if (!pos) return;
+      const b = this.blasts[this.blastAt++ % this.blasts.length];
+      b.pos.set(pos.x, pos.y, pos.z);
+      b.at = now;
     }
   }
+
+  /** Recent explosions (ring): a body that dies next to one is thrown out of it. */
+  private blasts = Array.from({ length: 6 }, () => ({ pos: new THREE.Vector3(), at: -1e9 }));
+  private blastAt = 0;
+  /** Floor under a ragdoll that died airborne (render.ts sets it from the map); default: where the feet were. */
+  floorAt: ((x: number, z: number) => number | null) | null = null;
+  /** A ragdoll landed (render.ts plays the thud). */
+  onThud: ((pos: Vec3, speed: number) => void) | null = null;
+  private readonly ragdollEnv: RagdollEnv = {
+    floorAt: (x, z, feetY) => this.floorAt?.(x, z) ?? feetY,
+    thud: (pos, speed) => this.onThud?.(pos, speed),
+    blastNear: (pos, now) => {
+      let best: THREE.Vector3 | null = null, bd = BLAST_M;
+      for (const b of this.blasts) {
+        const d = b.pos.distanceTo(pos);
+        if (now - b.at < BLAST_S * 1000 && d < bd) { bd = d; best = b.pos; }
+      }
+      return best;
+    },
+  };
 
   /**
    * players = current snapshot, prevOf(id) = same player in the previous snapshot, t = interpolation

@@ -1,3 +1,4 @@
+import { displayRefresh, FrameQueue, frameBudgetMs } from './refresh';
 import './style.css';
 import type { Object3D } from 'three/webgpu';
 import type { HostMsg, Slot, ViewExtras } from '../net/protocol';
@@ -1007,6 +1008,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const prevLost = renderer.gpu.onDeviceLost.bind(renderer.gpu);
   renderer.gpu.onDeviceLost = (info) => { errors?.report('gpu', `device lost: ${info.message} (${info.reason ?? 'unknown'})`); prevLost(info); };
   renderer.world.onCritterSound = (s) => audio.critter(s);
+  renderer.gunFx.casings.onClink = (x, y, z, speed, hull) => audio.casing(x, y, z, speed, hull);
   loading.progress('gpu', 1, 'Starting the simulation');
   loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
   loading.progress('map', 0); // running until the map arrives (the bar creeps meanwhile)
@@ -1142,7 +1144,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const fxPos = new THREE.Vector3();
   const damageFx = new DamageFx(app);
   const sealAnnouncer = new SealAnnouncer(app, (k) => {
-    canvas.style.setProperty('--shake', `${Math.round(6 + 10 * k)}px`);
+    const intensity = settings.get().gameplay.screenShake; // Settings → Screen shake (0 = off)
+    if (intensity <= 0) return;
+    canvas.style.setProperty('--shake', `${Math.round((6 + 10 * k) * intensity)}px`);
     canvas.classList.remove('shake');
     void canvas.offsetWidth;
     canvas.classList.add('shake');
@@ -1561,8 +1565,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     hud.setViewed(viewer);
     audio.setViewed(viewer);
     qol.setViewed(viewer, s.players.find((p) => p.id === viewer)?.island ?? -1);
-    const meSnap = s.players.find((p) => p.id === humanId);
-    fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
+    // Camera feel (shake, recoil punch, hit-stop) follows the viewed player: us, or whoever we spectate.
+    const viewSnap = s.players.find((p) => p.id === viewer);
+    fpv.onEvents(s.events, viewer, viewSnap?.alive ? viewSnap.pos : null);
     // (Own 'shot'/'hit' events flagged echo were already shown when predicted; their effects skip them.)
     // My recoil: the sim reports each kick with the shot; it moves my real aim (I have to pull against it).
     for (const e of s.events) {
@@ -1658,7 +1663,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       hud.genMult = def.settings?.genMult ?? 1;
       if (practice && map[island]) practice.setBunker(map[island].bunker);
       qol.setMap(map, humanId, island);
-      audio.setMap(map, humanId);
+      audio.setMap(map, humanId, def.docks ?? []);
     },
     snapshot: (s) => {
       // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
@@ -1748,7 +1753,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
       predicted: () => ({ active: !!predictor?.active, pos: lastRendered, seq: moveSeq, stats: predictor?.stats ?? null, pending: predictor?.pending ?? 0 }),
       frames: () => frameStats(),
-      resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; },
+      resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; gpuDoneT.length = 0; },
+      /** frames the GPU actually finished per second (true throughput; rAF fps overstates it when frames queue) */
+      gpuFps: () => (gpuDoneT.length > 1 ? ((gpuDoneT.length - 1) * 1000) / (gpuDoneT[gpuDoneT.length - 1] - gpuDoneT[0]) : 0),
       gpuMs: () => renderer.gpuStats(),
       renderScale: () => ({ dyn: governor.knobs.res, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: governor.smoothedMs }),
       pbr: () => pbrStats,
@@ -1862,18 +1869,25 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   };
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
+  // ?gpuqueue=ms: GPU queue latency cap (0 = unbounded, A/B only)
+  const gpuQueue = new FrameQueue(Number(new URLSearchParams(location.search).get('gpuqueue') ?? 40) || Infinity, Infinity);
+  const gpuDoneT: number[] = [];
   const frame = () => {
     const now = performance.now();
     // Settings → Video frame cap (rAF itself is vsync-locked; this only skips frames below it).
     const cap = settings.get().video.frameCap;
     if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
+    // GPU queue too deep: wait (look→GPU-done latency stays ≈ 40 ms however GPU-bound; refresh.ts FrameQueue)
+    if (gpuQueue.busy(now)) { requestAnimationFrame(frame); return; }
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
       // main-thread work of the previous frame tells the governor whether frames are GPU- or CPU-bound
-      if (governor.frame(now - last, 1000 / (cap || 60), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
+      // budget: the frame cap, else the display's refresh (120 Hz ProMotion → 8.3 ms, not 60 fps)
+      if (governor.frame(now - last, frameBudgetMs(cap, displayRefresh.hz), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
     }
     frameMs.push(now - last);
+    displayRefresh.frame(now - last);
     errors?.frame(now - last);
     if (frameMs.length > 600) frameMs.shift();
     last = now;
@@ -2106,12 +2120,23 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
       damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     }
-    fpv.applyShake(dt); // visual only: the aim ray above was taken without it
+    // First-person camera bob: our own (predicted) ground speed, or the spectated player's when watching from their eyes.
+    let bobSpeed = -1;
+    if (fpv.isActive && me && !spectating) {
+      const v = predicting ? predicted.vel : me.vel;
+      bobSpeed = Math.abs(v.y) < 0.8 ? Math.hypot(v.x, v.z) : 0;
+    } else if (spectating && spectator.firstPerson && vMotion) {
+      bobSpeed = Math.abs(vMotion.vel.y) < 0.8 ? Math.hypot(vMotion.vel.x, vMotion.vel.z) : 0;
+    }
+    fpv.applyShake(dt, bobSpeed); // visual only: the aim ray above was taken without it
     if (!warmLoop.paused) {
       warmLoop.before?.();
       renderer.render(input.yaw);
       fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
       renderer.captureInfo();
+      const queued = gpuQueue.submitted(performance.now());
+      const gpuDone = () => { queued(); gpuDoneT.push(performance.now()); if (gpuDoneT.length > 600) gpuDoneT.shift(); };
+      (renderer.gpu.backend as { device?: { queue: { onSubmittedWorkDone(): Promise<void> } } }).device?.queue.onSubmittedWorkDone().then(gpuDone, gpuDone);
       if (input.lookEventT !== null) { latency.drawn(input.lookEventT); input.lookEventT = null; }
       if (warmLoop.left > 0 && --warmLoop.left === 0) { warmLoop.before = null; warmLoop.done?.(); }
     }

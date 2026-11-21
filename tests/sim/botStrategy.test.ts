@@ -335,6 +335,24 @@ describe('game sense', () => {
     expect(firedAtPlug).toBe(true);
   });
 
+  test('a metal plug in my doorway gets a charge with an enemy in sight far across the water', () => {
+    // Lining up the charge (face the plug) used to lose to tracking the far enemy: the bot never placed it.
+    const self = armed(0, 0, onIsland(0, 0));
+    self.inv.charges = 1;
+    const plug = plugs(0, 'metal', 1);
+    const far = armed(2, 2, onIsland(2, 0));
+    expect(dist2D(far.pos, self.pos)).toBeGreaterThan(30);
+    const view = makeView(self, { pieces: plug, enemies: [far] });
+    const bot = new Bot(0, 'hard', mulberry32(6), preset('Turtle'));
+    let placed = false;
+    for (let i = 0; i < 15 * TICK_HZ && !placed; i++) {
+      const inp = bot.think(view);
+      if (inp.placeCharge) placed = true;
+      step(view, inp);
+    }
+    expect(placed).toBe(true);
+  });
+
   test('does not idle inside its own bunker: with nothing to do there, walks out', () => {
     for (const difficulty of ['medium', 'hard', 'pro'] as const) {
       const self = armed(0, 0, v3(map[0].bunker.center.x, map[0].groundY, map[0].bunker.center.z));

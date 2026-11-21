@@ -1,9 +1,10 @@
 import * as dm from '../dmath';
-import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, SEAL, STORM, TRAP, WEAPONS } from '../constants';
+import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
-import type { Doorway, IslandLayout } from '../map';
+import type { DockDef, Doorway, IslandLayout } from '../map';
+import { overDock } from '../docks';
 import { NO_INPUT } from '../types';
 import type {
   BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
@@ -122,6 +123,8 @@ type Act = {
   shootAt?: Vec3;
   /** Shoot `shootAt` even with an enemy in sight (e.g. the deck under someone crossing a bridge). */
   shootFirst?: boolean;
+  /** Looking at `face` is the job (lining up a charge on a plug): a far-off enemy doesn't pull the view away. */
+  lookFirst?: boolean;
   build?: BuildRequest;
   shop?: ShopItem;
   vault?: VaultAction;
@@ -234,6 +237,13 @@ export class Bot {
   private aimLost: { at: Vec3; until: number } | null = null;
   private barrelPlan: { id: number; until: number } | null = null;
   private nextBarrelRollAt = 0;
+  /** Blowing out a pier section under an enemy (or under the piece they hide behind): which, how, and why. */
+  private dockPlan: { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number } | null = null;
+  private nextDockRollAt = 0;
+  /** Burst discipline (params.ts gunSkill): shots fired in the current burst, and the pause after it. */
+  private burstN = 0;
+  private burstRestUntil = -Infinity;
+  private seenShotAt = -Infinity;
   private view!: BotView;
   /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
   private readonly centerMinded: boolean;
@@ -265,7 +275,7 @@ export class Bot {
     // (hand-made test rng) has no state to read: one draw seeds it.
     const base = isRng(rng) ? rng.state.a : Math.floor(rng() * 4294967296);
     const aimSeed = (base ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
-    this.aim = new Aim(AIM[difficulty], mulberry32(aimSeed), P.aim.feel[difficulty]);
+    this.aim = new Aim({ ...AIM[difficulty], recoilComp: P.gunSkill[difficulty].recoilComp }, mulberry32(aimSeed), P.aim.feel[difficulty]);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
@@ -275,8 +285,24 @@ export class Bot {
   get currentTarget(): number | null { return this.targetId; }
   /** Hazard id this bot is deliberately shooting to catch an enemy in the blast, if any. */
   get barrelTarget(): number | null { return this.barrelPlan?.id ?? null; }
+  /** Pier section this bot is trying to blow out from under an enemy, if any. */
+  get dockTarget(): number | null { return this.dockPlan?.id ?? null; }
   /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
   get planScores(): { goal: string; score: number }[] { return this.lastScores; }
+  /**
+   * Burst discipline against recoil and bloom: with an automatic gun past my spray range, stop after
+   * `burstShots` shots for `burstPause` s (the climb and bloom settle, then the next burst lands). Up close: full auto.
+   * Counts real shots (the sim's lastShotAt moving), so a held trigger between shots doesn't count.
+   */
+  private burstRest(now: number, me: PlayerState, dist: number): boolean {
+    const g = this.P.gunSkill[this.difficulty];
+    if (me.lastShotAt !== this.seenShotAt) { this.seenShotAt = me.lastShotAt; if (me.lastShotAt > 0) this.burstN++; }
+    if (now < this.burstRestUntil) return true;
+    if (WEAPONS[me.equipped].rps < 5 || dist <= g.sprayRange) { this.burstN = 0; return false; }
+    if (this.burstN >= g.burstShots) { this.burstN = 0; this.burstRestUntil = now + g.burstPause; return true; }
+    return false;
+  }
+
   /** Start / stop recording decisions for a spectator (read-only: never changes what the bot does). */
   watch(on: boolean) { this.probe = on ? this.probe ?? new BrainProbe(this) : null; }
   /** What it's thinking, for the brain inspector (starts recording if it wasn't). */
@@ -357,7 +383,8 @@ export class Bot {
     const foe = this.aimTarget(view, enemy, now);
     // Medium+ tactic: a rocket into a rival's wooden base sets it burning (fire.ts).
     const torch = enemy || this.goal === 'disengage' ? null : this.torchTarget(ctx);
-    const best = torch ? 'rocket' : bestGun(me.inv, enemy ? ctx.enemyDist : 30);
+    const dock = enemy ? this.dockShot(ctx) : null;
+    const best = torch || dock?.weapon === 'rocket' ? 'rocket' : bestGun(me.inv, enemy ? ctx.enemyDist : 30);
     const gunReady = (range: number) => {
       const w = me.equipped;
       const ammo = w === 'fists' ? null : me.inv.weapons[w];
@@ -365,15 +392,28 @@ export class Bot {
     };
     let throwGrenade = false;
     const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
-    const barrel = enemy ? this.barrelShot(ctx) : null;
-    if (barrel) {
+    const barrel = enemy && !dock ? this.barrelShot(ctx) : null;
+    if (dock?.weapon === 'rocket') {
+      // Blow the planks out from under them: aim at the deck at their feet (the blast catches them too), held
+      // over for the rocket's drop at that range.
+      const tof = dist2D(eye, dock.at) / ROCKET.speed;
+      const want = lookAt(eye, v3(dock.at.x, dock.at.y + 0.5 * ROCKET.gravity * tof * tof, dock.at.z));
+      look = hand(want, TURN_RATE * 1.2);
+      fire = me.equipped === 'rocket' && angleBetween(look, want) < 0.035 && gunReady(dist2D(me.pos, dock.at));
+    } else if (dock) {
+      const a = throwAngles(eye, dock.at, false);
+      if (a) {
+        look = hand(a, TURN_RATE * 1.2);
+        if (angleBetween(look, a) < 0.03 && me.busyUntil <= now) { throwGrenade = true; this.lastNadeAt = now; this.dockPlan = null; }
+      } else { this.dockPlan = null; look = hand(cur, TURN_RATE); } // no throw arc: hold the view, re-plan next tick
+    } else if (barrel) {
       // Set the barrel next to them off: aim at its middle like any other shot.
       look = hand(lookAt(eye, barrel), TURN_RATE * 1.2);
       fire = angleBetween(look, lookAt(eye, barrel)) < 0.04 && gunReady(dist2D(me.pos, barrel));
     } else if (act.shootAt && act.shootFirst) {
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
-    } else if (foe && !(act.shootAt && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
+    } else if (foe && !((act.shootAt || act.lookFirst) && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
       // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
       const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, CHEST, 0)), foe.id, cur);
       look = r;
@@ -383,7 +423,7 @@ export class Bot {
       const w = WEAPONS[me.equipped];
       const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult &&
         !(this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3);
-      fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch;
+      fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !this.burstRest(now, me, foeDist);
     } else if (nade) {
       look = hand(nade, TURN_RATE);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
@@ -1457,9 +1497,9 @@ export class Bot {
     const facing = Math.abs(wrapAngle(c.me.yaw - lookAt(eyePos(c.me), center).yaw)) < 0.1;
     if (facing && c.me.busyUntil <= c.view.now) {
       this.retreat = { from: center, until: c.view.now + 3.5 };
-      return { dir: null, face: center, placeCharge: true };
+      return { dir: null, face: center, placeCharge: true, lookFirst: true };
     }
-    return { dir: null, face: center };
+    return { dir: null, face: center, lookFirst: true };
   }
 
   /** Occupancy grid of my bunker, rebuilt when the pieces around it change. */
@@ -1512,9 +1552,9 @@ export class Bot {
     if (spot && dist2D(spot, me.pos) > 0.3 && !(inReach && dist2D(spot, me.pos) < 0.8)) return { dir: norm(flat(sub(spot, me.pos))), face: center };
     if (useCharge) {
       const facing = Math.abs(wrapAngle(me.yaw - lookAt(eyePos(me), center).yaw)) < 0.1;
-      if (!facing || me.busyUntil > now) return { dir: null, face: center };
+      if (!facing || me.busyUntil > now) return { dir: null, face: center, lookFirst: true };
       this.hideFrom = { pos: target.pos, until: now + CHARGE.fuseSec + 0.3 };
-      return { dir: null, face: center, placeCharge: true };
+      return { dir: null, face: center, placeCharge: true, lookFirst: true };
     }
     return { dir: null, shootAt: center, shootFirst: true };
   }
@@ -1642,6 +1682,63 @@ export class Bot {
     if (this.rng() >= BARREL_CHANCE[this.difficulty] || !view.clearShot?.(pick.center)) return null;
     this.barrelPlan = { id: pick.id, until: view.now + BARREL_AIM_SEC };
     return pick.center;
+  }
+
+  /**
+   * A visible enemy standing on a pier section (or hiding behind a piece built on one): blow the section out
+   * with a rocket (or a grenade) and drop them in the water. Rolled every dockRollSec at dockShot (+ dockDefend on
+   * my own pier: an attacker crossing toward me); never from closer than dockMinRange, never a section near my feet.
+   */
+  private dockShot(c: Ctx): { at: Vec3; weapon: 'rocket' | 'grenade' } | null {
+    const { view, me } = c;
+    const e = c.enemy, docks = view.docks;
+    const D = this.P.drive;
+    if (!e || !docks?.length || D.dockShot[this.difficulty] <= 0) { this.dockPlan = null; return null; }
+    const rocket = me.inv.weapons.rocket, rockets = !!rocket && rocket.mag + rocket.spare > 0;
+    const nades = me.inv.grenades > 0 && view.now - this.lastNadeAt >= NADE_GAP;
+    if (!rockets && !nades) { this.dockPlan = null; return null; }
+    const top = (d: DockDef) => d.center.y + d.half.y;
+    // The deck just in front of their feet (a rocket at the feet would burst on their legs first, a bit higher).
+    const feet = (d: DockDef, p: Vec3) => {
+      const t = norm(flat(sub(me.pos, p)));
+      const f = v3(p.x + t.x * 0.7, top(d) + 0.05, p.z + t.z * 0.7);
+      return overDock(d, f) ? f : v3(p.x, top(d) + 0.05, p.z);
+    };
+    const onDeck = (d: DockDef, p: Vec3, pad: number) => overDock(d, p, pad) && Math.abs(p.y - top(d)) < 0.8;
+    const safe = (d: DockDef) => dist2D(d.center, me.pos) >= D.dockMinRange && !docks.some((x) => onDeck(x, me.pos, 0.5) && dist2D(x.center, d.center) < 4);
+    const plan = this.dockPlan;
+    if (plan) {
+      const d = docks.find((x) => x.id === plan.id);
+      // Still standing, still the same enemy on it (or still behind that cover), and the shot is still mine to take.
+      if (d && plan.enemy === e.id && view.now < plan.until && safe(d) && dist2D(e.pos, plan.at) < 2.5 && (plan.weapon === 'grenade' ? nades : rockets)) {
+        if (plan.why !== 'cover') plan.at = feet(d, e.pos);
+        return plan;
+      }
+      this.dockPlan = null;
+    }
+    if (view.now < this.nextDockRollAt) return null;
+    let pick: { d: DockDef; at: Vec3; why: 'under' | 'cover' | 'defend' } | null = null;
+    for (const d of docks) {
+      if (!safe(d)) continue;
+      if (onDeck(d, e.pos, 0.3)) { pick = { d, at: feet(d, e.pos), why: d.island === c.home.index ? 'defend' : 'under' }; break; }
+    }
+    if (!pick && view.clearShot && !view.clearShot(add(e.pos, v3(0, CHEST, 0)))) {
+      // Behind something built on a pier: take the planks out under that piece and the cover goes with them.
+      for (const p of view.pieces) {
+        if (dist2D(p.pos, e.pos) > 2.5) continue;
+        const d = docks.find((x) => onDeck(x, p.pos, 0.1) && safe(x));
+        if (d) { pick = { d, at: feet(d, p.pos), why: 'cover' }; break; }
+      }
+    }
+    if (!pick) return null;
+    this.nextDockRollAt = view.now + D.dockRollSec;
+    const range = dist2D(me.pos, pick.at);
+    const weapon = rockets && range <= WEAPONS.rocket.range * 0.9 ? 'rocket' : nades && range <= NADE_MAX ? 'grenade' : null;
+    const chance = D.dockShot[this.difficulty] + (pick.d.island === c.home.index ? D.dockDefend : 0);
+    if (!weapon || this.rng() >= chance) return null;
+    if (weapon === 'rocket' && view.clearShot && !view.clearShot(pick.at) && pick.why !== 'cover') return null;
+    this.dockPlan = { id: pick.d.id, enemy: e.id, at: pick.at, weapon, why: pick.why, until: view.now + 2.5 };
+    return this.dockPlan;
   }
 
   /** Run from a fusing barrel; in a fight (outside the storm), also step out of blast range of live ones (they could be shot). */

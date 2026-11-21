@@ -1,13 +1,57 @@
 import * as THREE from 'three/webgpu';
 import {
-  abs, builtinAOContext, dot, emissive, exp, float, length, luminance, min, mix, mrt, normalView, output, pass, renderOutput, screenUV, smoothstep, step,
-  uniform, vec2, vec3, vec4,
+  abs, builtinAOContext, dot, emissive, exp, float, length, luminance, min, mix, mrt, normalView, output, pass, renderOutput, screenSize, screenUV, smoothstep, step,
+  uniform, vec2, vec3, vec4, velocity,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
+import { taau } from 'three/addons/tsl/display/TAAUNode.js';
+import { fsr1 } from 'three/addons/tsl/display/FSR1Node.js';
 import { perfOff } from './perfFlags';
 
-export type PostOptions = { samples: number; bloom: boolean; ao: false | { resolution: number; samples: number }; flare?: boolean };
+export type PostOptions = {
+  samples: number; bloom: boolean; ao: false | { resolution: number; samples: number }; flare?: boolean;
+  /**
+   * Render the scene at `scale` × the output resolution and upscale. Same-frame: no added latency.
+   * - 'fsr': keeps MSAA; spatial FSR 1 (EASU edge-adaptive upscale + RCAS sharpen, `sharpen` = RCAS stops, 0 =
+   *   sharpest). No history, so no ghosting; thin wires and alpha-to-coverage foliage survive.
+   * - 'taau': temporal (Karis 2014 / FSR2-style): jittered, no MSAA, motion vectors (velocity MRT), history
+   *   reconstruction + a 5-tap contrast-adaptive sharpen (`sharpen` 0–1). Cheaper but softer; loses sub-pixel
+   *   wires and dithers foliage that relies on MSAA alpha-to-coverage.
+   * - 'cas': keeps MSAA; bilinear upscale + the same contrast-adaptive sharpen, folded into the final grade pass
+   *   (no extra full-resolution passes: FSR 1's EASU + RCAS are two more output-sized passes, ~40 % of ultra's
+   *   output-resolution GPU time at 2× DPR).
+   */
+  upscale?: { mode: 'fsr' | 'taau' | 'cas'; scale: number; sharpen: number };
+};
+
+/**
+ * Opt a material out of TAAU motion vectors (writes zero velocity; the history clamp absorbs the error). Needed for
+ * instanced meshes that already use most vertex buffers: velocity adds the previous instance matrix (4 more), and
+ * WebGPU allows 8 (critters: 9 → pipeline creation fails and the mesh disappears). Free when TAAU is off.
+ */
+export function noVelocity(m: THREE.NodeMaterial) {
+  m.mrtNode = mrt({ velocity: vec4(0, 0, 0, 0) });
+}
+
+/** live sharpen strength for 'taau' / 'cas' (debug) */
+const sharpenAmount = uniform(0.25);
+/** scene input scale (× output resolution) under 'cas', kept live by SkyLighting for dynamic resolution */
+export const upscaleInput = uniform(1);
+
+/**
+ * Contrast-adaptive 5-tap sharpen (CAS-lite) of `t` at screen uv, taps `px` apart (uv): restores the crispness an
+ * upscale/reconstruction softens, weaker where local contrast is already high so edges don't ring.
+ */
+function casSample(t: THREE.TextureNode, px: THREE.Node<'vec2'>): THREE.Node<'vec4'> {
+  const c0 = t.sample(screenUV);
+  const n = t.sample(screenUV.add(vec2(0, px.y))).rgb, s2 = t.sample(screenUV.sub(vec2(0, px.y))).rgb;
+  const e = t.sample(screenUV.add(vec2(px.x, 0))).rgb, w = t.sample(screenUV.sub(vec2(px.x, 0))).rgb;
+  const lo = min(min(min(n, s2), min(e, w)), c0.rgb), hi = n.max(s2).max(e).max(w).max(c0.rgb);
+  const contrast = luminance(hi.sub(lo)).div(luminance(hi).add(1e-3)).clamp(0, 1);
+  const k = sharpenAmount.mul(float(1).sub(contrast)).mul(0.25);
+  return vec4(c0.rgb.add(c0.rgb.mul(4).sub(n.add(s2).add(e).add(w)).mul(k)).max(0), 1);
+}
 
 /** Sun position on screen (uv, y up) + whether it's in front of the camera; SkyLighting updates these per frame. */
 export const sunScreen = { uv: uniform(new THREE.Vector2(0.5, 0.5)), front: uniform(0), aspect: uniform(16 / 9) };
@@ -35,18 +79,33 @@ export const grade = {
  */
 export function buildPipeline(
   gpu: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera, o: PostOptions, ambientOcclusion?: THREE.Node<'float'>,
-): { pipe: THREE.RenderPipeline; scenePass: THREE.PassNode; aoPass: { resolutionScale: number } | null } {
+): { pipe: THREE.RenderPipeline; scenePass: THREE.PassNode; aoPass: { resolutionScale: number } | null; bloomPass: { setResolutionScale(s: number): unknown } | null } {
   const pipe = new THREE.RenderPipeline(gpu);
   pipe.outputColorTransform = false; // tone map + sRGB ourselves so the grade runs in display space
 
-  const scenePass = pass(scene, camera, { samples: o.samples });
+  const taauOn = o.upscale?.mode === 'taau';
+  // TAAU needs MSAA off (the jittered history is the anti-aliasing)
+  const scenePass = pass(scene, camera, { samples: taauOn ? 0 : o.samples });
+  if (o.upscale) scenePass.setResolutionScale(o.upscale.scale);
   // analytic ambient-only occlusion (bunker interiors), every preset: sky light must not flood enclosed rooms
   if (ambientOcclusion) scenePass.contextNode = builtinAOContext(ambientOcclusion);
   const targets: Record<string, THREE.Node> = { output };
   if (o.bloom) targets.emissive = emissive;
   if (o.ao) targets.normal = normalView;
+  if (taauOn) targets.velocity = velocity;
   if (Object.keys(targets).length > 1) scenePass.setMRT(mrt(targets));
-  const col = scenePass.getTextureNode('output');
+  const raw = scenePass.getTextureNode('output');
+  // TAAU: everything after this runs at output resolution on the reconstructed image; AO and bloom stay at their
+  // (input-relative) resolutions and are sampled by screen uv.
+  let col: THREE.Node<'vec4'> = raw;
+  if (o.upscale) sharpenAmount.value = o.upscale.sharpen;
+  if (o.upscale?.mode === 'fsr') col = fsr1(raw, o.upscale.sharpen);
+  // taps one input pixel apart (bilinear between them), so the sharpen works on the scene's own detail
+  if (o.upscale?.mode === 'cas') col = casSample(raw, vec2(1, 1).div(screenSize.mul(upscaleInput)));
+  if (taauOn) {
+    const t = taau(raw, scenePass.getTextureNode('depth'), scenePass.getTextureNode('velocity'), camera).getTextureNode();
+    col = casSample(t, vec2(1, 1).div(screenSize)); // TAAU resolves at output size: output-pixel taps
+  }
 
   let aoPass: ReturnType<typeof ao> | null = null;
   let hdr = col.rgb;
@@ -66,6 +125,7 @@ export function buildPipeline(
     const lit = smoothstep(0.25, 1.6, luminance(col.rgb));
     hdr = hdr.mul(mix(float(1), occ, mix(grade.ao, grade.ao.mul(0.45), lit)));
   }
+  let bloomPass: ReturnType<typeof bloom> | null = null;
   if (o.bloom) {
     // Emissive output blooms (generator glow, water sun-glints write emissive), plus a subtle bloom of geometry hot
     // spots: sun specular on wet ground, chrome, galvanised steel. Never the sky (depth ≈ 1) — the sky dome is bright
@@ -73,7 +133,10 @@ export function buildPipeline(
     const lum = luminance(col.rgb);
     const notSky = step(scenePass.getTextureNode('depth').r, 0.9999);
     const hot = col.rgb.mul(smoothstep(grade.bloomThreshold, grade.bloomThreshold.mul(2.5), lum)).mul(notSky).mul(0.35);
-    hdr = hdr.add(bloom(perfOff('nohotbloom') ? scenePass.getTextureNode('emissive') : vec4(scenePass.getTextureNode('emissive').rgb.add(hot), 1), 0.75, 0.45, 0).rgb);
+    bloomPass = bloom(perfOff('nohotbloom') ? scenePass.getTextureNode('emissive') : vec4(scenePass.getTextureNode('emissive').rgb.add(hot), 1), 0.75, 0.45, 0);
+    // bloom sizes itself off the drawing buffer: keep it at half the *scene* resolution under TAAU
+    if (o.upscale) bloomPass.setResolutionScale(0.5 * o.upscale.scale);
+    hdr = hdr.add(bloomPass.rgb);
   }
 
   let flare: THREE.Node<'vec3'> | null = null;
@@ -113,5 +176,5 @@ export function buildPipeline(
   c = c.mul(vig);
   if (flare) c = c.add(flare);
   pipe.outputNode = c;
-  return { pipe, scenePass, aoPass }; // the scene pass: the warm-up compiles world materials for its exact target/MRT
+  return { pipe, scenePass, aoPass, bloomPass }; // the scene pass: the warm-up compiles world materials for its exact target/MRT
 }
