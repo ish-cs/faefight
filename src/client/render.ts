@@ -1,15 +1,16 @@
 import * as THREE from 'three/webgpu';
-import { GENERATOR_MAX_LEVEL, PLAYER } from '../sim/constants';
+import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
-import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
+import type { MatchEvent, PieceKind, Snapshot, Vec3, WeaponKind } from '../sim/types';
+import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import { CharacterSystem, type Motion } from './characters/avatar';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
-import { PotionSellers } from './world/potionSeller';
+import { PotionSellers, stall } from './world/potionSeller';
 import { StormFx } from './world/storm';
-import { LootView } from './lootView';
+import { LootView, lootWarmObjects } from './lootView';
 
 export { pieceGeometry };
 import { ISLAND_COLORS } from './colors';
@@ -232,6 +233,29 @@ export class Renderer {
     m.scale.setScalar(0.2);
     this.scene.add(m);
     this.fx.push({ mesh: m, mat, born: performance.now(), life: 450, grow: radius });
+  }
+
+  /**
+   * Loading warm-up (warmup.ts): one of each thing that only appears mid-match — every gun model and the muzzle
+   * flash (third person), an explosion fireball, a loot bag, the build ghost material, a potion stall — in a row.
+   */
+  warmProps(): THREE.Group {
+    const g = new THREE.Group();
+    g.name = 'warmProps';
+    const add = (o: THREE.Object3D) => { o.position.x = g.children.length * 0.8; g.add(o); };
+    for (const kind of Object.keys(WEAPONS) as WeaponKind[]) {
+      const w = buildWeapon(kind);
+      if (w) add(w);
+    }
+    const flash = buildMuzzleFlash();
+    flash.visible = true;
+    add(flash);
+    add(new THREE.Mesh(this.boomGeo, this.boomMat));
+    for (const o of lootWarmObjects()) add(o);
+    add(new THREE.Mesh(this.ghostLinkGeo, this.ghostMat));
+    add(stall());
+    g.traverse((o) => { o.frustumCulled = false; });
+    return g;
   }
 
   geometryFor(kind: PieceKind) {
