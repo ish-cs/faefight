@@ -60,6 +60,8 @@ import { ReplayLink } from './replay/link';
 import { showReplays } from './replay/replaysUi';
 import { ReplayControls } from './replay/viewerUi';
 import { followNewHost, GuestMigration, hostReachable, takeOver, type HeldLink, type HostWorker } from './migration';
+import type { PracticeCmd } from '../sim/practice';
+import { PracticePanel } from './practicePanel';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -139,6 +141,8 @@ type Backend = {
   pause?(paused: boolean): void;
   /** Watching a recording (forced spectator camera, playback controls). */
   replay?: ReplayLink;
+  /** Local worker only: practice range panel commands. */
+  practice?(cmd: PracticeCmd): void;
   debug?: {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
@@ -209,6 +213,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     preview: (req, key) => send({ type: 'preview', playerId: humanId, req, key }),
     chat: (text) => session?.localChat(text),
     pause: session ? undefined : (paused) => send({ type: 'pause', paused }),
+    practice: (cmd) => send({ type: 'practice', cmd }),
     /** Vs bot /spectate: a bot takes over the local player. */
     handOff: () => send({ type: 'botify', playerId: humanId }),
     debug: {
@@ -591,7 +596,26 @@ function showMenu() {
   replaysBtn.onclick = () => { menu.remove(); openReplays(); };
   menuBtns.append(howBtn, settingsButton(), replaysBtn);
   rememberDifficulty(play);
-  card.append(mapRow, play, bots.root, settingsToggle, soloSettings.root, online, status, menuBtns, keys);
+  // Practice range: offline sandbox (targets, dummies, free shop and building). Not a difficulty, so not in `play`.
+  const practiceRow = document.createElement('div');
+  practiceRow.className = 'practice-play';
+  const practiceBtn = document.createElement('button');
+  practiceBtn.className = 'btn';
+  practiceBtn.textContent = 'Practice';
+  practiceBtn.dataset.testid = 'play-practice-range';
+  practiceBtn.onclick = () => {
+    lockMenu();
+    status.textContent = 'Loading the practice range…';
+    playPractice(menu).catch((err) => {
+      console.error('[main] failed to start practice', err);
+      status.textContent = `Failed to start: ${err?.message ?? err}`;
+      unlockMenu();
+    });
+  };
+  const practiceNote = document.createElement('span');
+  practiceNote.textContent = 'Targets, dummies, free shop & building';
+  practiceRow.append(practiceBtn, practiceNote);
+  card.append(mapRow, play, bots.root, practiceRow, settingsToggle, soloSettings.root, online, status, menuBtns, keys);
   menu.append(card);
   app.append(menu);
   if (!currentIsChromium()) menu.append(chromeBanner());
@@ -683,6 +707,17 @@ async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bot
         });
       },
     },
+  });
+}
+
+/** Practice range: you alone on the range layout (sim/practice.ts); no timer, no result, Esc → Quit to menu. */
+async function playPractice(menu: HTMLElement) {
+  const backend = workerBackend(() => ({ setup: { players: [{ name: 'You', isBot: false }], practice: true }, humanId: 1 }), null);
+  await startGame(backend, menu, undefined, {
+    hostId: null,
+    practice: true,
+    money: () => 'Practice: cash is already unlimited',
+    role: { kind: 'solo', playAgain: () => location.reload() },
   });
 }
 
@@ -832,7 +867,7 @@ async function joinLobby(firstCode: string, name: string, menu: HTMLElement, rej
 /** A running game; destroy() removes every trace of it (rematch / back to lobby). */
 type Game = { destroy(): void };
 /** spectate / money: what /spectate and /money do here (host / vs bot); absent for a joined friend. */
-type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult; money?: (amount: number) => string; exitReplay?: () => void };
+type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult; money?: (amount: number) => string; exitReplay?: () => void; practice?: boolean };
 
 /** Loading-screen phases for a match and their share of the bar (real progress, see loading.ts). */
 const MATCH_PHASES = { code: 15, gpu: 10, characters: 25, map: 15, shaders: 30, frames: 5 };
@@ -1030,6 +1065,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Same as the drop key: select that slot and drop from it in the same input (the sim selects first).
     dropSlot: (slot, amount) => { input.select(slot); input.queue({ drop: amount }); },
   });
+  if (end.practice) hud.setPractice();
   const online = backend.buffered || !!onChat;
   const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
@@ -1056,7 +1092,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         hud.setEndVisible(true);
         return;
       }
-      if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead) showPause();
+      if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead && !practice?.open) showPause();
     },
     inventoryChange: (open) => {
       hint.textContent = open ? `Drag hotbar items to reorder · ${bindingLabel(activeKeymap(), 'inventory')} to resume` : 'Click to resume';
@@ -1195,6 +1231,38 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     document.body.append(paused);
   }
 
+  // ---- practice range panel (practicePanel.ts): O opens the controls, O / Esc / Resume closes them ----
+  const practice = end.practice ? new PracticePanel(app, {
+    send: (cmd) => {
+      if (!backend.practice) throw new Error('practice panel: backend has no practice channel');
+      backend.practice(cmd);
+    },
+    faceRange: () => { input.yaw = 0; input.pitch = 0; },
+    closed: () => closePractice(),
+  }) : null;
+  function openPractice() {
+    practice!.setOpen(true);
+    input.enabled = false;
+    chat.enabled = false;
+    if (document.pointerLockElement) document.exitPointerLock();
+  }
+  function closePractice() {
+    practice!.setOpen(false);
+    input.enabled = !hud.ended && !dead;
+    chat.enabled = !hud.ended && !dead;
+    canvas.focus();
+    input.requestLock();
+  }
+  if (practice) window.addEventListener('keydown', (e) => {
+    if (e.repeat || e.target instanceof HTMLInputElement) return;
+    if (practice.open && (e.code === 'Escape' || e.code === 'KeyO')) { e.preventDefault(); e.stopPropagation(); closePractice(); return; }
+    // O, unless the player bound it to a game action.
+    if (e.code === 'KeyO' && !ACTIONS.some((a) => isAction(a.id, 'KeyO')) && !hud.panelOpen && !paused && !chat.open && !dead && !input.inventory) {
+      e.preventDefault();
+      openPractice();
+    }
+  }, { capture: true });
+
   function showFatal(titleText: string, detail: string) {
     if (dead) return;
     if (titleText === 'Simulation crashed') errors?.report('fatal', `${titleText}: ${detail}`);
@@ -1317,6 +1385,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       maybeWarm();
     }
     damageFx.onSnapshot(s, humanId);
+    practice?.onSnapshot(s, humanId);
     sealAnnouncer.onSnapshot(s, humanId);
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
@@ -1365,6 +1434,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       hud.setMap(map, humanId, island, def.center);
       hud.suddenDeathAt = def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt;
       hud.genMult = def.settings?.genMult ?? 1;
+      if (practice && map[island]) practice.setBunker(map[island].bunker);
       qol.setMap(map, humanId, island);
       audio.setMap(map, humanId);
     },
@@ -1604,7 +1674,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (unsent.length > MAX_CMDS_PER_MSG) unsent = unsent.slice(-MAX_CMDS_PER_MSG);
     const predicting = !!predictor && predictor.renderState(liveCmd(moveSeq + 1), moveAcc / DT, dt, predicted);
     renderer.setLocal(predicting ? predicted : null);
-    hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead ? '' : 'none';
+    hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead && !practice?.open ? '' : 'none';
 
     const me = snap?.players.find((p) => p.id === humanId);
     // No player of our own (spectating host / handed to a bot), dead (respawning or eliminated), or free

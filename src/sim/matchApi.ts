@@ -11,6 +11,11 @@ export type MatchSetup = {
   map?: MapTemplate;
   /** Host's game settings (clamped by the sim; missing = today's defaults). Stored with the setup so replays match. */
   settings?: GameSettings;
+  /**
+   * Practice range (offline sandbox, see practice.ts): exactly one human player; the map is the practice layout,
+   * targets and dummies are added by the range; no timer, sudden death or elimination; cash and pieces never run out.
+   */
+  practice?: boolean;
 };
 
 /**

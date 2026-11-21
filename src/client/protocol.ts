@@ -2,6 +2,7 @@ import type { Placement } from '../sim/building';
 import type { MapDef } from '../sim/map';
 import type { MoveCmd } from '../sim/movement';
 import type { MatchSetup } from '../sim/matchApi';
+import type { PracticeCmd } from '../sim/practice';
 import type { BuildRequest, Inventory, PieceKind, PlayerInput, Snapshot } from '../sim/types';
 import type { ReplayKind, ReplayMeta } from '../sim/replay/format';
 
@@ -30,6 +31,8 @@ export type ToWorker =
   | { type: 'humanize'; playerId: number }
   /** Vs bot only: stop / restart ticking (pause card). */
   | { type: 'pause'; paused: boolean }
+  /** Practice range panel (reset, clear pieces, dummy toggles). */
+  | { type: 'practice'; cmd: PracticeCmd }
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
