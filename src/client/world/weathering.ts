@@ -117,8 +117,8 @@ export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) 
     // patches where low + high noise agree; per-object amount so some pieces are near-new, some badly rusted
     const amount = float(o.rust).mul(objK.mul(0.7).add(0.5));
     const field = nLo.mul(0.55).add(nHi.mul(0.45));
-    const patch = smoothstep(float(1).sub(amount.mul(0.55)), float(1.08).sub(amount.mul(0.55)), field);
-    const run = streak!.mul(smoothstep(0.45, 0.7, nLo)).mul(amount.mul(0.8));
+    const patch = smoothstep(float(1).sub(amount.mul(0.75)), float(1.08).sub(amount.mul(0.75)), field);
+    const run = streak!.mul(smoothstep(0.4, 0.65, nLo)).mul(amount.mul(1.2));
     const k = max(patch, run.mul(0.7)).min(1);
     col = mix(col, RUST.mul(nHi.mul(0.7).add(0.65)), k);
     rough = mix(rough, float(0.88), k);

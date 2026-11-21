@@ -160,8 +160,9 @@ export function barrelModel(b: StaticBatch) {
   const M = mats();
   // dented steel shell: a knock low on one side, a shallow one near the top rim on the other
   const shell = dent(new THREE.CylinderGeometry(0.3, 0.3, 0.9, 20, 6), [
-    { at: new THREE.Vector3(0.22, -0.18, 0.2), radius: 0.2, depth: 0.035 },
-    { at: new THREE.Vector3(-0.27, 0.3, -0.1), radius: 0.14, depth: 0.02 },
+    { at: new THREE.Vector3(0.22, -0.18, 0.2), radius: 0.22, depth: 0.05 },
+    { at: new THREE.Vector3(-0.27, 0.3, -0.1), radius: 0.16, depth: 0.03 },
+    { at: new THREE.Vector3(-0.1, -0.05, -0.29), radius: 0.12, depth: 0.025 },
   ]);
   b.add(M.paint, shell, mat(0, 0.45, 0));
   b.add(labelMaterial(), cylinderLabel(0.303, 0.45, 0.28, 1.45, 0), null, 0xffffff, false);
