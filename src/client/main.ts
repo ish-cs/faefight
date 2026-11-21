@@ -600,6 +600,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   app.prepend(canvas);
   loading.progress('gpu', 0, 'Starting WebGPU');
   const renderer = await Renderer.create(canvas);
+  renderer.world.onCritterSound = (s) => audio.critter(s);
   loading.progress('gpu', 1, 'Starting the simulation');
   console.info(`[render] backend: ${renderer.backend}`);
   scope.begin(); // window/document listeners from here on are removed by destroy()

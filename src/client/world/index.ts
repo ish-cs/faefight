@@ -2,6 +2,8 @@ import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
 import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { CosmeticLayer } from './cosmetics';
+import { Critters } from './critters';
+import type { CritterSound, V3 } from './critterSim';
 import { Boats, gullPerches, Gulls } from './dressing';
 import { defineDetailKinds } from './detail';
 import { Grass } from './grass';
@@ -35,6 +37,11 @@ export class World {
   readonly scatter = new Scatter();
   private boats: Boats | null = null;
   private gulls: Gulls | null = null;
+  /** wildlife (rats, birds, crabs, insects, fish …): cosmetic, client-only */
+  critters: Critters | null = null;
+  /** positional critter sounds (main wires this to the audio system) */
+  onCritterSound: ((s: CritterSound) => void) | null = null;
+  private lastFrame = performance.now();
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
   constructor(gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
@@ -74,6 +81,10 @@ export class World {
     this.boats = new Boats(map);
     this.gulls = new Gulls(map, gullPerches(map, (isl) => backdropFrame(isl, map.length)));
     this.scene.add(this.boats.root, this.gulls.mesh);
+    const perches = gullPerches(map, (isl) => backdropFrame(isl, map.length)).filter((p) => !p.roof).map((p) => ({ x: p.p.x, y: p.p.y, z: p.p.z, yaw: p.yaw }));
+    this.critters = new Critters(def, perches);
+    this.critters.onSound = (s) => this.onCritterSound?.(s);
+    this.scene.add(this.critters.root);
     setBuiltInPotionStalls([def.center.potionShop]); // center.ts draws this seller; PotionSellers must not double it
     this.cosmetics = new CosmeticLayer(def.cosmetics);
     this.scene.add(this.cosmetics.root);
@@ -97,6 +108,8 @@ export class World {
     this.boats = null;
     this.gulls?.mesh.removeFromParent();
     this.gulls = null;
+    this.critters?.root.removeFromParent();
+    this.critters = null;
     this.cosmetics?.dispose();
     this.cosmetics = null;
   }
@@ -112,12 +125,21 @@ export class World {
 
   syncPieces(pieces: PieceState[]) { this.pieces.sync(pieces); this.pieceFx.sync(pieces); }
 
+  /** Shots / explosions scare the wildlife. */
+  critterEvent(e: MatchEvent) { this.critters?.onEvent(e); }
+
   /** `pieceHit` / `destroyed` events → decals, particles, shake, debris. */
   pieceEvent(e: MatchEvent, players: PlayerState[]) { this.pieceFx.onEvent(e, players); }
 
   /** `feet`: live player feet positions (grass bends away from them). */
   render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
+    const now = performance.now(), dt = Math.min(0.1, (now - this.lastFrame) / 1000);
+    this.lastFrame = now;
     if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
+    if (this.critters) {
+      this.critters.setQuality(this.sky.quality);
+      this.critters.update(dt, this.sky.camera as THREE.PerspectiveCamera, feet as V3[], waterY);
+    }
     const t = performance.now() / 1000;
     this.boats?.update(t, waterY);
     this.gulls?.update(t);

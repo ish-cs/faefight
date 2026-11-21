@@ -203,6 +203,7 @@ export class Renderer {
   private onEvent(e: MatchEvent) {
     if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
+    if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
     if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {
@@ -337,6 +338,9 @@ export class Renderer {
   private aimList: THREE.Object3D[] = [];
   private motionOf = (id: number, out: Motion) => this.playerMotion(id, out);
 
+  /** Debug/screenshots only (?debug=1 harness): pin the camera at `pos` looking at `look`, overriding the game camera. */
+  debugView: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
+
   render(localYaw: number) {
     this.potionSellers.frame(performance.now());
     const now = performance.now();
@@ -362,6 +366,7 @@ export class Renderer {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
+    if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }
