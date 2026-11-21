@@ -102,6 +102,13 @@ export class World {
     this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
+    // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
+    // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
+    for (const r of [this.islands, this.scatter.root, this.cosmetics.root]) {
+      if (!r) continue;
+      r.updateMatrixWorld(true);
+      r.traverse((o) => { o.matrixAutoUpdate = false; o.matrixWorldAutoUpdate = false; });
+    }
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
 

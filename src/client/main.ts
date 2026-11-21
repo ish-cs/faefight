@@ -921,7 +921,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
    */
   const governor = new FrameGovernor();
   const sky = renderer.world.sky;
-  const govSkip = () => governor.setSkip((a, b) => !sky.presetHasAo && a.ao !== b.ao && a.shadowScale === b.shadowScale && a.grass === b.grass && a.lodBias === b.lodBias && a.res === b.res);
+  const govSkip = () => governor.setSkip((s) => s === 'ao' && !sky.presetHasAo);
   govSkip();
   governor.enabled = settings.get().video.dynamicResolution;
   const applyGovernor = () => {
@@ -935,6 +935,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const offSettings = settings.subscribe((st) => {
     sky.setQuality(st.video.quality);
     sky.setResolutionScale(st.video.resolutionScale);
+    sky.setCompetitive(st.video.competitive);
     governor.enabled = st.video.dynamicResolution;
     perfDetail = st.video.perfDetail || DEBUG;
     if (sky.quality !== govQuality) { govQuality = sky.quality; governor.reset(); govSkip(); }
@@ -1608,7 +1609,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
-      if (governor.frame(now - last, 1000 / (cap || 60))) applyGovernor();
+      // main-thread work of the previous frame tells the governor whether frames are GPU- or CPU-bound
+      if (governor.frame(now - last, 1000 / (cap || 60), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
     }
     frameMs.push(now - last);
     errors?.frame(now - last);
@@ -1624,7 +1626,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         hud.setFpsDetail([
           `${((now - fpsSince) / fpsFrames).toFixed(1)} ms${g !== null ? ` · gpu ${g.toFixed(1)} ms` : ''}`,
           `${ri.drawCalls} draws · ${(ri.triangles / 1e6).toFixed(2)}M tris`,
-          `gov ${governor.level} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
+          `gov ${governor.level}${governor.gpuBound ? ' gpu' : ' cpu'} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
         ]);
       }
       fpsFrames = 0; fpsSince = now;
