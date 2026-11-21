@@ -120,7 +120,8 @@ export class HostMigrator {
     this.nextDue = this.now() + interval;
     const first = this.stats.sent === 0;
     Object.assign(this.stats, { sent: this.stats.sent + 1, lastBytes: sealed.byteLength, lastIntervalMs: interval, totalBytes: this.stats.totalBytes + sealed.byteLength });
-    if (first || this.stats.sent % 20 === 0) console.info(`[migrate] checkpoint #${this.stats.sent} to seat ${bk.seat}: ${sealed.byteLength} B, next in ${(interval / 1000).toFixed(1)} s (~${(sealed.byteLength / interval).toFixed(1)} KB/s)`);
+    // Every checkpoint at debug level (e2e counts them); the first and every 20th at info.
+    (first || this.stats.sent % 20 === 0 ? console.info : console.debug)(`[migrate] checkpoint #${this.stats.sent} to seat ${bk.seat}: ${sealed.byteLength} B, next in ${(interval / 1000).toFixed(1)} s (~${(sealed.byteLength / interval).toFixed(1)} KB/s)`);
   }
 
   /** Match over / back to the lobby: no plan until the next match. */
