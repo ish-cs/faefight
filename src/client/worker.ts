@@ -98,6 +98,7 @@ function step() {
   const tickInputs = new Map<number, PlayerInput>();
   const moves = new Map<number, MoveCmd[]>();
   for (const [id, acc] of inputs) {
+    if (!acc.started) continue; // nothing sent yet: the sim keeps the player's spawn facing
     const input = acc.take();
     tickInputs.set(id, input);
     const q = moveQueues.get(id);

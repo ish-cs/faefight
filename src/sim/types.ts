@@ -149,7 +149,7 @@ export type FirePatch = { id: number; kind: 'grass' | 'crate' | 'palm'; pos: Vec
 export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number } };
 
 export type MatchEventType =
-  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
+  | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped' | 'spawn'
   | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning'
   /** Emote / quick-chat wheel use: data { by, id } (emotes.ts). */
   | 'wheel';

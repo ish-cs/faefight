@@ -1,7 +1,7 @@
 import { LIFECYCLE, MAP, PLAYER, SEAL, WEAPONS } from './constants';
 import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
 import { addKind, countOf, emptyHotbar, heldKinds, takeOut } from './hotbar';
-import type { IslandLayout } from './map';
+import { spawnYaw, type IslandLayout } from './map';
 import type { Physics } from './physics';
 import { refillStamina, STAMINA } from './movement';
 import { isSealed } from './seal';
@@ -215,6 +215,10 @@ export function tickLifecycle(
     grantLockedGuns(p);
     // Come back with a pistol + one spare mag so a camper with a rifle isn't a guaranteed kill.
     if (!p.inv.weapons.pistol && addKind(p.hotbar, 'pistol') >= 0) p.inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag };
+    // Face out through the bunker's front doorway from wherever the free spot put us; level the view.
+    p.yaw = spawnYaw(map[p.island].bunker, spawn);
+    p.pitch = 0;
+    out.push(ev(now, 'spawn', { player: p.id, yaw: p.yaw }));
     p.invulnUntil = now + LIFECYCLE.spawnProtectMaxSec;
     p.spawnProtected = true;
     physics.setPlayerPos(p.id, spawn);

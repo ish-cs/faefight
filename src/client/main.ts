@@ -16,7 +16,7 @@ import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { BuildPredictor } from './buildPredict';
 import type { BrainDigest } from '../sim/bots/introspect';
-import { moveForAim } from './aim';
+import { adoptSpawnLook, moveForAim } from './aim';
 import { BodyCam, SpectatorCamera, viewedPlayer } from './viewed';
 import { AudioSystem } from './audio/engine';
 import { errors, installErrorReporting } from './telemetry/errors';
@@ -1556,10 +1556,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const kick = e.data.kick as { pitch: number; yaw: number } | undefined;
       if (e.type === 'shot' && e.data.by === humanId && kick && !first) input.addKick(kick.pitch, kick.yaw);
     }
+    // Respawned: the sim turned me to face out of my bunker's front door. Snap camera + aim to it once.
+    if (adoptSpawnLook(input, s.events, humanId)) console.info(`[main] respawn: facing front door (yaw ${input.yaw.toFixed(2)})`);
     audio.snapshot(s);
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
-      if (me) { input.yaw = me.yaw; input.selected = me.selected; }
+      if (me) { input.yaw = me.yaw; input.pitch = me.pitch; input.selected = me.selected; }
       input.enabled = !dead;
       menu.remove(); // the loading screen still covers the game until warm-up is done
       canvas.focus();
