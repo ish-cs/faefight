@@ -92,6 +92,7 @@ function latch(ctx: GrappleCtx, p: PlayerState, h: NonNullable<PlayerState['hook
       if (mv) mv.pull = { x: p.pos.x, y: p.pos.y + 0.6, z: p.pos.z, left: GRAPPLE.yankSec, yank: true };
       if (q.hook && q.hook.st !== 3) release(ctx, q, now); // their own hook lets go
       if (q.emote) delete q.emote;
+      q.yankedBy = { by: p.id, at: now };
       p.spawnProtected = false;
       p.invulnUntil = Math.min(p.invulnUntil, now);
       return [ev(now, { by: p.id, phase: 'yank', target: q.id })];

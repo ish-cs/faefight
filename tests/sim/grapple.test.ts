@@ -229,3 +229,16 @@ describe('grappling hook in a match', () => {
     expect(me(b!).hook).toEqual(me(a!).hook);
   });
 });
+
+describe('yank kill credit', () => {
+  test('drowning within a few seconds of a yank is the yanker\'s kill, via grapple', async () => {
+    const m = await Match.create(humans);
+    m.tick(new Map());
+    internal(m, 2).yankedBy = { by: 1, at: (m as unknown as { s: { time: number } }).s.time };
+    m.debugTeleport(2, v3(500, -3, 500));
+    const s = m.tick(new Map());
+    const kill = s.events.find((e) => e.type === 'kill');
+    expect(kill?.data).toMatchObject({ victim: 2, killer: 1, inWater: true, via: 'grapple' });
+    expect(me(s).kills).toBe(1);
+  });
+});

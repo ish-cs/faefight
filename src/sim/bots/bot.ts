@@ -708,7 +708,9 @@ export class Bot {
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
-      grapple: c.bridgeTo !== null && total >= this.P.hook.crossBuyAt[this.difficulty] ? 'cross' : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
+      // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
+      grapple: c.bridgeTo !== null && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c) && total >= this.P.hook.crossBuyAt[this.difficulty] ? 'cross'
+        : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
     };

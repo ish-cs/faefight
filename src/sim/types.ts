@@ -143,6 +143,8 @@ export type PlayerState = {
   emote?: { id: EmoteId; at: number };
   /** Grappling hook out (sim/grapple.ts); absent when none. Public: everyone draws the rope. */
   hook?: HookState;
+  /** Host bookkeeping: who last yanked this player with a hook, and when (a drowning soon after is their kill). */
+  yankedBy?: { by: number; at: number };
   /** The hook can't be fired again before this sim time (absent = ready). */
   hookReadyAt?: number;
   /** Last quick-chat line (speech bubble for QUIP_SHOW_SEC from `at`); absent when none. */
