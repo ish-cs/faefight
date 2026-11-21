@@ -5,7 +5,7 @@ import {
   rebind, setKeymapSuspended, unbind,
 } from '../keymap';
 import {
-  CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, LIMITS, QUALITIES, type Settings, settings,
+  CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, GEN_ALERT_PCTS, LIMITS, QUALITIES, type Settings, settings,
 } from './store';
 import type { Quality } from '../world/sky';
 
@@ -286,6 +286,9 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     paint();
     section('Feedback');
     toggle('Damage numbers', 'Floating numbers over players you hit', 'set-dmgnums', () => g().damageNumbers, (x) => set((d) => { d.gameplay.damageNumbers = x; }));
+    section('Alerts');
+    segmented('Generator alert', 'Soft ping + toast when your home generator reaches this', 'set-gen-alert', GEN_ALERT_PCTS,
+      (x) => (x === 100 ? 'Full' : x === 0 ? 'Off' : `${x}%`), () => g().genAlertPct, (x) => set((d) => { d.gameplay.genAlertPct = x; }));
     section('Camera');
     segmented('Default camera', `Toggle in game with ${keyLabel(settings.get().controls.keys.camera[0] ?? '') || '—'}`, 'set-camera',
       ['third', 'first'] as const, (m) => (m === 'third' ? 'Third person' : 'First person'), () => g().cameraMode, (m) => set((d) => { d.gameplay.cameraMode = m; }));

@@ -33,12 +33,16 @@ export type CameraMode = 'third' | 'first';
  */
 export const SETTINGS_VERSION = 2;
 
+/** Home generator alert: when it reaches this % of its cap (100 = only when full, 0 = never). */
+export const GEN_ALERT_PCTS = [100, 90, 75, 50, 0] as const;
+export type GenAlertPct = typeof GEN_ALERT_PCTS[number];
+
 export type Settings = {
   v: typeof SETTINGS_VERSION;
   controls: { sensitivity: number; invertY: boolean; keys: Keymap };
   video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; perfDetail: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean };
   audio: { master: number; effects: number; ambience: number; muted: boolean };
-  gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode };
+  gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct };
   /** One-time things: the How to play card shows by itself until it has been seen once. */
   onboarding: { howToSeen: boolean };
 };
@@ -56,7 +60,7 @@ export function defaultSettings(): Settings {
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true },
     audio: { master: 0.8, effects: 1, ambience: 1, muted: false },
-    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third' },
+    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100 },
     onboarding: { howToSeen: false },
   };
 }
@@ -107,6 +111,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       crosshairColor: typeof g.crosshairColor === 'string' && HEX.test(g.crosshairColor) ? g.crosshairColor.toLowerCase() : d.gameplay.crosshairColor,
       damageNumbers: bool(g.damageNumbers, d.gameplay.damageNumbers),
       cameraMode: oneOf(g.cameraMode, ['third', 'first'] as const, d.gameplay.cameraMode),
+      genAlertPct: oneOf(g.genAlertPct, GEN_ALERT_PCTS, d.gameplay.genAlertPct),
     },
     onboarding: { howToSeen: bool(o.howToSeen, d.onboarding.howToSeen) },
   };
