@@ -1,4 +1,4 @@
-import { MAP, PLAYER } from '../constants';
+import { MAP, PIECES, PLAYER } from '../constants';
 import { MOVE } from '../movement';
 import type { Box, Bunker, CenterIsland, Doorway, IslandLayout, StaticBox } from '../map';
 import { doorBlocked } from './plans';
@@ -11,6 +11,8 @@ export const LANE_OFFSET = 3;
 const SCAN_STEP = 0.25;
 const CARROT = 2;
 const LOOK = [0.4, 0.8];
+/** Side offset of the edge probes in safeDir (most of the body radius: the capsule hangs over a rim before it drops). */
+const EDGE = 0.25;
 const DETOURS = [0.4, -0.4, 0.8, -0.8, 1.2, -1.2, 1.6, -1.6];
 /** Highest step the character controller climbs without jumping (autostep 0.3 m). */
 const STEP_UP = 0.35;
@@ -485,14 +487,20 @@ export class Nav {
    * under every point of it: anyone looking at a deck edge knows not to hop sideways off it.
    */
   safeJump(dir: Vec3 | null, sprint: boolean): boolean {
-    return this.landsOnGround(dir, sprint, PLAYER.jumpVelocity);
+    // Strict: solid ground under the whole arc (a hop is never worth crossing open water), and never off a deck
+    // (they're 2 m wide: one bad hop and I'm swimming).
+    const me = this.view.self.pos;
+    const onDeck = this.view.pieces.some((p) => p.kind === 'scaffold' && Math.abs(p.pos.y + PIECES.scaffold.h - me.y) < 0.5 &&
+      Math.abs((me.x - p.pos.x) * Math.cos(p.rotY) - (me.z - p.pos.z) * Math.sin(p.rotY)) < PIECES.scaffold.w / 2 + 0.4 &&
+      Math.abs((me.x - p.pos.x) * Math.sin(p.rotY) + (me.z - p.pos.z) * Math.cos(p.rotY)) < PIECES.scaffold.d / 2 + 0.4);
+    return !onDeck && this.landsOnGround(dir, sprint, PLAYER.jumpVelocity, true);
   }
 
   /**
    * Airborne (or about to jump with vertical speed vy0): does steering toward `dir` bring me down on something
    * solid rather than in the water?
    */
-  landsOnGround(dir: Vec3 | null, sprint: boolean, vy0 = this.view.self.vel.y): boolean {
+  landsOnGround(dir: Vec3 | null, sprint: boolean, vy0 = this.view.self.vel.y, strict = false): boolean {
     const me = this.view.self;
     let x = me.pos.x, z = me.pos.z, y = me.pos.y, vx = me.vel.x, vz = me.vel.z, vy = vy0;
     const speed = sprint ? PLAYER.sprint : PLAYER.walk;
@@ -502,8 +510,9 @@ export class Nav {
       if (d <= step) { vx = wx; vz = wz; } else { vx += dx / d * step; vz += dz / d * step; }
       vy -= PLAYER.gravity * JUMP_STEP;
       x += vx * JUMP_STEP; z += vz * JUMP_STEP; y += vy * JUMP_STEP;
-      if (vy > 0) continue;
       const g = this.view.groundAt(x, z);
+      if (strict && (g === null || me.pos.y - g > MAX_DROP)) return false;
+      if (vy > 0) continue;
       if (g !== null && y <= g + 0.05) {
         // Landed: with the body's edge on it too (the capsule slides off a corner it only grazes).
         return me.pos.y - g <= MAX_DROP && [[PLAYER.radius, 0], [-PLAYER.radius, 0], [0, PLAYER.radius], [0, -PLAYER.radius]]
@@ -549,16 +558,19 @@ export class Nav {
    * over water what is under it is unknown, so it is avoided.
    */
   safeDir(dir: Vec3): Vec3 | null {
-    const me = this.view.self.pos;
-    const ok = (d: Vec3, maxDrop: number) => LOOK.every((k) => {
-      const p = v3(me.x + d.x * k, me.y, me.z + d.z * k);
+    const me = this.view.self.pos, vel = this.view.self.vel;
+    // Look as far as it takes to stop (fast sprints and sharp turns carry momentum), and at the body's edges.
+    const stop = (vel.x * vel.x + vel.z * vel.z) / (2 * MOVE.groundDecel) + 0.4;
+    const looks = stop > LOOK[LOOK.length - 1] ? [...LOOK, stop] : LOOK;
+    const ok = (d: Vec3, maxDrop: number) => looks.every((k) => [0, EDGE, -EDGE].every((o) => {
+      const p = v3(me.x + d.x * k - d.z * o, me.y, me.z + d.z * k + d.x * o);
       let floor = this.view.groundAt(p.x, p.z);
       if (floor !== null && floor - me.y > STEP_UP + 0.25) {
         const i = this.nodeAt(p);
         floor = i >= 0 ? this.nodeList[i].groundY : null;
       }
       return floor !== null && me.y - floor <= maxDrop && !(this.view.suddenDeath && floor <= this.view.waterY + 0.05);
-    });
+    }));
     // Rather a hurtful drop than being stuck up there forever.
     for (const maxDrop of [MAX_DROP, Infinity]) {
       if (ok(dir, maxDrop)) return dir;

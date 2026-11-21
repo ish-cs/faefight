@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { Bot } from '../../src/sim/bots/bot';
 import { BUILD_SKILL as BS_FROM_BUILD, BUILD_TUNING as BT_FROM_BUILD } from '../../src/sim/bots/build';
-import { BUILD_SKILL, BUILD_TUNING, DEFAULT_BOT_PARAMS, DRIVE, flattenParams, withParams } from '../../src/sim/bots/params';
+import { BUILD_SKILL, BUILD_TUNING, DEFAULT_BOT_PARAMS, DRIVE, PARAM_RANGES, flattenParams, withParams } from '../../src/sim/bots/params';
 import { Match } from '../../src/sim/match';
 
 describe('bot params (trainer-tunable DRIVE, BUILD_SKILL, BUILD_TUNING)', () => {
@@ -24,6 +24,17 @@ describe('bot params (trainer-tunable DRIVE, BUILD_SKILL, BUILD_TUNING)', () => 
     expect(p.buildTuning.coverDist[1]).toBe(2);
     expect(DRIVE.push.pro).not.toBe(0.9);
     expect(withParams(flat)).toEqual(structuredClone(DEFAULT_BOT_PARAMS));
+  });
+
+  test('PARAM_RANGES: every tunable default sits inside its search box; safety geometry has none', () => {
+    const flat = flattenParams();
+    for (const [k, [lo, hi]] of Object.entries(PARAM_RANGES)) {
+      expect(lo, k).toBeLessThan(hi);
+      expect(flat[k], k).toBeGreaterThanOrEqual(lo);
+      expect(flat[k], k).toBeLessThanOrEqual(hi);
+    }
+    for (const k of ['buildTuning.ownBunkerCheck', 'buildTuning.clearanceMargin', 'buildTuning.doorKeepOut']) expect(PARAM_RANGES[k]).toBeUndefined();
+    expect(Object.keys(PARAM_RANGES).length).toBeGreaterThan(80);
   });
 
   test('typos and non-numbers fail loudly', () => {
