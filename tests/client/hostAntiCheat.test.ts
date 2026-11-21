@@ -142,4 +142,36 @@ describe('HostSession anti-cheat', () => {
     expect(s.generators[0].stored).toBe(0);
     expect(s.generators[1].stored).toBe(5);
   });
+
+  test("'follow' gets a dead spectator the followed player's kit and brain, never a living one", async () => {
+    const { t, h } = await host();
+    const f = await friend(t, h, 'Bob');
+    startWithWorker(h);
+    const map = buildMap(2);
+    h.onMap(map, [0, 1]);
+    const p1 = newPlayer(1, 'Alice', false, 0, map[0].center);
+    p1.inv.cash = 4321;
+    const p2 = newPlayer(2, 'Bob', false, 1, map[1].center);
+    const brain = { id: 1, personality: 'Turtle', difficulty: 'easy' as const, action: 'shop', goal: null, reason: '', steps: [], step: -1, fightOdds: null, thought: 'hm', target: null, options: [] };
+    const snapAt = (tick: number): Snapshot => ({
+      time: tick / 30, tick, players: [p1, p2], pieces: [], loot: [], generators: [{ island: 0, stored: 0 }, { island: 1, stored: 0 }], genLevels: [1, 1],
+      sealed: [false, false], waterY: 0, suddenDeath: false, winner: null, events: [], brains: [brain],
+    });
+    const dec = new WireDecoder();
+    const last = () => { const snaps = f.got.filter((m) => m.t === 'snap'); return dec.decode<any>(snaps[snaps.length - 1].b); };
+    f.link.send({ t: 'follow', id: 1 });
+    await flush();
+    h.onSnapshot(snapAt(150));
+    await flush();
+    let s = last();
+    expect(s.players.find((p: any) => p.id === 1).inv).toBeUndefined(); // Bob is alive
+    expect(s.brain).toBeUndefined();
+    p2.alive = false;
+    p2.respawnAt = 10;
+    h.onSnapshot(snapAt(151));
+    await flush();
+    s = last();
+    expect(s.players.find((p: any) => p.id === 1).inv.cash).toBe(4321);
+    expect(s.brain?.thought).toBe('hm');
+  });
 });
