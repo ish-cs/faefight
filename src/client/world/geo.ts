@@ -81,6 +81,16 @@ export class StaticBatch {
     bin.parts.push(part(geo, m, col));
   }
 
+  /** Push a geometry already in merge form (non-indexed; exactly position/normal/uv/color; final space). No copy. */
+  addRaw(material: THREE.Material, geo: THREE.BufferGeometry, cast = true, receive = true) {
+    let id = this.ids.get(material);
+    if (id === undefined) { id = this.ids.size; this.ids.set(material, id); }
+    const key = `${id}|${+cast}${+receive}`;
+    let bin = this.bins.get(key);
+    if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
+    bin.parts.push(geo);
+  }
+
   build(parent: THREE.Object3D, name: string): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
     for (const bin of this.bins.values()) {

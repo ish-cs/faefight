@@ -31,6 +31,13 @@ export function containerStack(b: StaticBatch, B: THREE.Matrix4, heights: number
     for (let k = 0; k < n; k++) {
       const col = CONTAINER_COLORS[Math.floor(rng.rnd() * CONTAINER_COLORS.length)];
       container(b, at(B, mat(rng.rr(-0.06, 0.06), k * 2.59, i * spacing, 0, rng.rr(-0.012, 0.012), 0)), col);
+      // lashing bars crossing the door end of every upper box, down to the corner castings of the one below
+      if (k > 0) for (const s of [-1, 1]) {
+        const x = 3.03 + 0.06, z = i * spacing;
+        const lo = V(x, k * 2.59 - 1.7, z + s * 1.05), hi = V(x, k * 2.59 + 0.06, z - s * 1.1);
+        b.add(mats().galv, strut(lo, hi, 0.014, 4), B, 0x8a8e90, false);
+        b.add(mats().dark, cyl(0.03, 0.12, 6).translate(0, 0, 0), at(B, mat(lo.x, lo.y + 0.2, lo.z - s * 0.245, -s * Math.atan2(2.15, 1.76))), 0x6a4a2a, false);
+      }
     }
   });
 }

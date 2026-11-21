@@ -13,6 +13,7 @@ import { Scatter } from './scatter';
 import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
+import { PropLayer, TIER_LIMIT } from './propLayer';
 import { setBuiltInPotionStalls } from './potionSeller';
 import { installQualityToggle, SkyLighting } from './sky';
 import { buildWater, type Ocean } from './water';
@@ -42,6 +43,8 @@ export class World {
   /** client-only physics debris (bottles, cans, cones, boxes…): tumbles, never touches gameplay */
   readonly debris = new Debris();
   private lastT = performance.now();
+  /** dense dock clusters + quay gear (clusters.ts / propLayer.ts) */
+  readonly props = new PropLayer();
   private boats: Boats | null = null;
   /** soft baked-AO footprints under containers, walls and stations (groundAO.ts) */
   private groundAO: THREE.Mesh | null = null;
@@ -64,7 +67,10 @@ export class World {
     this.clearMap();
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
-    const { root, collidables } = buildIslands(def, teamColors, this.scatter);
+    this.props.buildTier = TIER_LIMIT[this.sky.quality];
+    const { root, collidables } = buildIslands(def, teamColors, this.scatter, location.search.includes('noprops') ? undefined : this.props);
+    this.props.build();
+    this.scene.add(this.props.root);
     this.scatter.build();
     this.scene.add(this.scatter.root);
     this.scene.add(root);
@@ -129,6 +135,7 @@ export class World {
     this.debris.clear();
     this.gameProps?.dispose();
     this.gameProps = null;
+    this.props.clear();
   }
 
   /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
@@ -161,6 +168,7 @@ export class World {
     this.gulls?.update(t);
     this.grass.setQuality(this.sky.quality);
     this.scatter.setQuality(this.sky.quality);
+    this.props.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
     this.pieceFx.update(performance.now());
     this.gameProps?.update(dt);

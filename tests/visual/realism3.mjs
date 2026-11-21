@@ -22,7 +22,7 @@ page.on('console', (m) => {
 });
 page.on('pageerror', (e) => errors.push(String(e)));
 await page.addInitScript(() => { try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { dynamicResolution: false, quality: 'high' } })); } catch { /* fresh profile */ } });
-await page.goto(`${url}/?debug=1&bots=7&gputime=1`);
+await page.goto(`${url}/?debug=1&bots=7&gputime=1${process.env.EXTRA ?? ''}`);
 const tClick = Date.now();
 await page.getByTestId('play-easy').click();
 await page.waitForFunction(() => window.__faefight?.snapshot?.(), null, { timeout: 90_000 });
