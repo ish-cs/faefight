@@ -45,16 +45,30 @@ describe.runIf(env.SHIP_CHECK)('ship checks for a trained champion', () => {
     expect(homeShare(rs)).toBeLessThan(homeShare(base));
   }, 3_600_000);
 
-  test('8-bot PRO FFAs mostly finish before sudden death, and nobody sits at home geared for over 60 s', async () => {
-    let decisive = 0;
-    for (let seed = 1; seed <= 6; seed++) {
-      const r = await runMatch({ seed: 8100 + seed, maxSec: LIFECYCLE.suddenDeathAt + 180, seats: Array(8).fill(champ) });
-      if (r.decisive) decisive++;
-      for (const s of r.seats) expect(s.longestHomeIdle ?? 0).toBeLessThanOrEqual(60);
-    }
-    console.log(`8-bot FFAs decisive before sudden death: ${decisive}/6`);
-    expect(decisive).toBeGreaterThanOrEqual(4);
-  }, 3_600_000);
+  // Primary gate: most real lobbies are full 8-player FFAs.
+  test('8-bot PRO FFAs (20 games): ≥ 12 end before sudden death, median engagement < 25 m, more attacking and less time at home than hand-tuned, nobody sits at home geared > 60 s', async () => {
+    const ffa = async (who: SeatSpec) => {
+      let decisive = 0, attack = 0, home = 0, alive = 0, longest = 0;
+      const dists: number[] = [];
+      for (let seed = 1; seed <= 20; seed++) {
+        const r = await runMatch({ seed: 8100 + seed, maxSec: LIFECYCLE.suddenDeathAt + 180, seats: Array(8).fill(who) });
+        if (r.decisive) decisive++;
+        for (const s of r.seats) {
+          attack += s.attackSec; home += s.idleHome; alive += s.aliveSec; dists.push(...s.hitDists);
+          longest = Math.max(longest, s.longestHomeIdle);
+        }
+      }
+      return { decisive, attack: attack / alive, home: home / alive, dist: median(dists), longest };
+    };
+    const c = await ffa(champ), h = await ffa(hand);
+    const fmt = (x: typeof c) => `decisive ${x.decisive}/20 · engagement median ${x.dist} m · attack ${(100 * x.attack).toFixed(0)}% · home ${(100 * x.home).toFixed(0)}% · longest home sit ${x.longest.toFixed(0)} s`;
+    console.log(`champion: ${fmt(c)}\nhand:     ${fmt(h)}`);
+    expect(c.decisive).toBeGreaterThanOrEqual(12);
+    expect(c.dist).toBeLessThan(25);
+    expect(c.attack).toBeGreaterThan(h.attack);
+    expect(c.home).toBeLessThan(h.home);
+    expect(c.longest).toBeLessThanOrEqual(60);
+  }, 7_200_000);
 
   test('skill tiers stay ordered: medium beats easy, hard beats medium, PRO beats hard (1v1, 20 games each)', async () => {
     for (const [hi, lo] of [['medium', 'easy'], ['hard', 'medium'], ['pro', 'hard']] as const) {

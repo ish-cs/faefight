@@ -46,7 +46,8 @@ const cfg: TrainConfig = {
   players: opt('players', 8),
   maxSec: opt('max-sec', 18 * 60),
   seed: opt('seed', 1),
-  duels: opt('duels', 2),
+  // ~70% of games are 8-player FFAs (14 per generation), ~30% duels.
+  duels: opt('duels', 6),
   duelWeight: opt('duel-weight', 1.5),
 };
 const TRAINED = path.resolve('src/sim/bots/trained-params.json');

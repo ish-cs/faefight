@@ -49,6 +49,9 @@ export type SeatResult = {
   wasted: number;
   /** Distances of my hits on players (engagement range). */
   hitDists: number[];
+  /** Seconds alive (sampled) and seconds spent on offensive actions (attack, seal, bridge, raid, fight). */
+  aliveSec: number;
+  attackSec: number;
   /** Longest stretch (s) in or right behind my own bunker with a gun and cash, nobody near: sitting at home. */
   longestHomeIdle: number;
 };
@@ -71,11 +74,12 @@ export function makeBrain(spec: SeatSpec, id: number, rng: () => number): BotBra
 export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
   if (spec.scenario) throw new Error(`runMatch: scenario starts (${spec.scenario}) need state restore from scripts/replays, which isn't available yet`);
   const n = spec.seats.length;
+  const brains: BotBrain[] = [];
   const m = await Match.create(
     { players: spec.seats.map((s) => ({ name: '', isBot: true, difficulty: s.difficulty })), seed: spec.seed },
-    { makeBot: (id, _d, rng) => makeBrain(spec.seats[id - 1], id, rng) },
+    { makeBot: (id, _d, rng) => { const b = makeBrain(spec.seats[id - 1], id, rng); brains[id - 1] = b; return b; } },
   );
-  const seats: SeatResult[] = spec.seats.map(() => ({ place: 0, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 0, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0, sealScore: 0, elimScore: 0, raidSec: 0, hoardSec: 0, wasted: 0, hitDists: [] as number[], longestHomeIdle: 0 }));
+  const seats: SeatResult[] = spec.seats.map(() => ({ place: 0, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 0, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0, sealScore: 0, elimScore: 0, raidSec: 0, hoardSec: 0, wasted: 0, hitDists: [] as number[], longestHomeIdle: 0, aliveSec: 0, attackSec: 0 }));
   const outOrder: number[] = [];
   /** Who sealed each island's bunker last (player i+1 lives on island i). */
   const sealedBy = new Map<number, number>();
@@ -96,6 +100,9 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
       for (const p of snap.players) {
         if (!p.alive || p.breakoutUntil !== null) continue;
         const dtS = SAMPLE_TICKS / TICK_HZ;
+        seats[p.id - 1].aliveSec += dtS;
+        const goal = (brains[p.id - 1] as { currentGoal?: string }).currentGoal;
+        if (goal && ATTACK_GOALS.has(goal)) seats[p.id - 1].attackSec += dtS;
         const walls = (p.inv.pieces.wood ?? 0) + (p.inv.pieces.metal ?? 0) + (p.inv.pieces.steel ?? 0);
         const on = islandOf(p.pos);
         if (walls > 0 && on >= 0 && on !== p.island) seats[p.id - 1].raidSec += dtS;
@@ -183,6 +190,7 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
 }
 
 const HOARD = 600, WASTE_SEC = 5;
+const ATTACK_GOALS = new Set(['attack', 'seal', 'bridge', 'raid', 'fight']);
 const CLOSE_M = 20, LONG_M = 40, IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15;
 const dist = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
 
@@ -208,7 +216,7 @@ export function seatFitness(r: MatchResult, seat: number, maxSec = 18 * 60): num
   const won = r.winner === seat + 1;
   const outcome = placement + 1.0 * (s.elimScore ?? s.elims) + 0.25 * (s.sealScore ?? s.seals) + 0.01 * s.kills +
     0.05 * (s.survived / Math.max(1, r.time)) + (won ? 0.4 * Math.max(0, 1 - r.time / maxSec) : 0) + (won && r.decisive ? 2 : 0) -
-    (r.time >= LIFECYCLE.suddenDeathAt ? 0.2 : 0);
+    (r.time >= LIFECYCLE.suddenDeathAt ? 0.4 : 0);
   const alive = Math.max(30, s.survived);
   const progress = Math.min(0.3, 0.05 * (s.plugs ?? 0)) + Math.min(0.2, 0.002 * (s.raidSec ?? 0)) + Math.min(0.1, 0.008 * (s.scaffolds ?? 0));
   const economy = -0.15 * Math.min(1, (s.hoardSec ?? 0) / alive);

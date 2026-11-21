@@ -17,7 +17,7 @@ export type TrainConfig = {
   players: number;
   maxSec: number;
   seed: number;
-  /** 1v1s per candidate against the frozen pre-training bot (the endgame and the human-vs-bot case), and their weight. */
+  /** 1v1s per generation against the frozen pre-training bot (the endgame and the human-vs-bot case), and their weight. */
   duels?: number;
   duelWeight?: number;
   /** Optional: pull play statistics toward human data (fitness −= weight × imitation penalty). */
@@ -74,8 +74,11 @@ export async function runGeneration(
   }
   const nFfa = plans.length;
   // Duels: each candidate 1v1 against the frozen old bot, seats alternating.
-  for (let c = 0; c < lambda; c++)
-    for (let d = 0; d < (cfg.duels ?? 0); d++) plans.push(d % 2 ? [{ field: 'legacy' }, { cand: c }] : [{ cand: c }, { field: 'legacy' }]);
+  // Duels (a minority: most real lobbies are full 8-player FFAs): `duels` per generation, round-robin over candidates.
+  for (let d = 0; d < (cfg.duels ?? 0); d++) {
+    const c = (d + st.gen * 5) % lambda;
+    plans.push(d % 2 ? [{ field: 'legacy' }, { cand: c }] : [{ cand: c }, { field: 'legacy' }]);
+  }
   const hallPick = plans.map(() => (hall.length ? hall[Math.floor(rng() * hall.length)] : champion));
   const specs: MatchSpec[] = plans.map((seats, g) => ({
     seed: cfg.seed * 100003 + st.gen * 1009 + (g < nFfa ? g : 500 + Math.floor((g - nFfa) / 2)),

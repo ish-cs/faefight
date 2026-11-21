@@ -34,7 +34,7 @@ describe('self-play training harness', () => {
   });
 
   test('fitness: eliminating someone via a seal is worth far more than kills', () => {
-    const base = { place: 2, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 600, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0, sealScore: 0, elimScore: 0, raidSec: 0, hoardSec: 0, wasted: 0, hitDists: [] as number[], longestHomeIdle: 0 };
+    const base = { place: 2, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 600, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0, sealScore: 0, elimScore: 0, raidSec: 0, hoardSec: 0, wasted: 0, hitDists: [] as number[], longestHomeIdle: 0, aliveSec: 600, attackSec: 0 };
     const r = (seat: typeof base): MatchResult => ({ seed: 1, winner: null, time: 600, decisive: false, msPerTick: 0, seats: [seat, { ...base, place: 1.5 }] });
     const killer = seatFitness(r({ ...base, kills: 10 }), 0), sealer = seatFitness(r({ ...base, seals: 1, elims: 1, sealScore: 1.5, elimScore: 1.5 }), 0);
     expect(sealer).toBeGreaterThan(killer + 0.3);
@@ -43,7 +43,7 @@ describe('self-play training harness', () => {
   });
 
   test('fitness shaping: real fights and mission work beat plinking and hiding at home', () => {
-    const base = { place: 2, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 600, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0, sealScore: 0, elimScore: 0, raidSec: 0, hoardSec: 0, wasted: 0, hitDists: [] as number[], longestHomeIdle: 0 };
+    const base = { place: 2, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 600, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0, sealScore: 0, elimScore: 0, raidSec: 0, hoardSec: 0, wasted: 0, hitDists: [] as number[], longestHomeIdle: 0, aliveSec: 600, attackSec: 0 };
     const r = (seat: typeof base): MatchResult => ({ seed: 1, winner: null, time: 600, decisive: false, msPerTick: 0, seats: [seat, { ...base, place: 1.5 }] });
     const plain = seatFitness(r(base), 0);
     expect(seatFitness(r({ ...base, closeDmg: 150 }), 0)).toBeGreaterThan(plain + 0.15);
