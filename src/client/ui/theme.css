@@ -184,6 +184,8 @@ button, input { font-family: inherit; }
 .ui-btn--ghost, .btn.ghost { --btn-bg: transparent; --btn-bg-hover: rgba(255, 255, 255, 0.06); --btn-fg: var(--c-text-dim); --btn-ring: transparent; box-shadow: none; }
 .ui-btn--ghost:hover:not(:disabled), .btn.ghost:hover:not(:disabled) { color: var(--c-text); }
 .ui-btn--sm, .btn.small { min-height: 32px; padding: 0 12px; font-size: 14px; --cut: 6px; gap: 6px; }
+/* Small buttons sit in dense rows (lobby seats, vault): colour change only, no lift. */
+.ui-btn--sm:hover:not(:disabled), .btn.small:hover:not(:disabled) { transform: none; }
 .ui-btn--lg { min-height: 54px; padding: 0 28px; font-size: 22px; --cut: 12px; }
 .ui-btn--block { display: flex; width: 100%; }
 /* Key hint inside a button, e.g. <span class="ui-kbd">Esc</span>. */

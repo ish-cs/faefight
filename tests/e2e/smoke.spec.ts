@@ -61,9 +61,9 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   // Slots show the mag only; mag/spare is the big ammo readout bottom-right.
   await expect(page.getByTestId('hotbar-slot-0')).toContainText(/pistol/i);
   await expect(page.locator('[data-testid="hotbar-slot-0"] .hb-count')).toHaveText('12');
-  // Shop cards are icon + price; the name is only the accessible label / tooltip.
+  // Shop cards are icon + short name + price; full details are in the info bar and the accessible label.
   await expect(page.getByTestId('buy-pistol')).toHaveAttribute('aria-label', /^Pistol, \$50, Owned/);
-  await expect(page.getByTestId('buy-pistol')).not.toContainText('Pistol');
+  await expect(page.locator('[data-testid="buy-pistol"] .iname')).toHaveText('Pistol');
   // A medkit is a hotbar item too: next free slot. Bought from the keyboard (Enter on the focused card).
   await page.getByTestId('buy-medkit').focus();
   await page.keyboard.press('Enter');
