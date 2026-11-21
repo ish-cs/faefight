@@ -5,6 +5,7 @@ import { CosmeticLayer } from './cosmetics';
 import { Boats, gullPerches, Gulls } from './dressing';
 import { defineDetailKinds } from './detail';
 import { Grass } from './grass';
+import { buildGroundAO } from './groundAO';
 import { Scatter } from './scatter';
 import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
@@ -34,6 +35,9 @@ export class World {
   /** instanced small detail (litter, rubble, shells, seaweed…) */
   readonly scatter = new Scatter();
   private boats: Boats | null = null;
+  /** soft baked-AO footprints under containers, walls and stations (groundAO.ts) */
+  private groundAO: THREE.Mesh | null = null;
+  private waterEnv: THREE.MeshStandardNodeMaterial | null = null;
   private gulls: Gulls | null = null;
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
@@ -67,6 +71,9 @@ export class World {
     const wm = this.water.mesh.material as THREE.MeshStandardNodeMaterial;
     wm.envMap = this.scene.environment;
     wm.envMapIntensity = 0.62;
+    this.waterEnv = wm;
+    this.groundAO = buildGroundAO(def);
+    if (this.groundAO) this.scene.add(this.groundAO);
     this.sky.setInteriors(map);
     // grass follows the harbor surface mask (sand/grass beds); the Container Yard is bare asphalt
     if (def.template === 'harbor') this.grass.build(map, (isl) => backdropFrame(isl, map.length), islandMask);
@@ -90,7 +97,8 @@ export class World {
       this.islands = null;
       this.islandHulls = [];
     }
-    if (this.water) { this.water.mesh.geometry.dispose(); this.water.mesh.removeFromParent(); this.water = null; }
+    if (this.water) { this.water.mesh.geometry.dispose(); this.water.mesh.removeFromParent(); this.water = null; this.waterEnv = null; }
+    if (this.groundAO) { this.groundAO.geometry.dispose(); this.groundAO.removeFromParent(); this.groundAO = null; }
     // grass beds are additive per build: drop the previous map's
     for (const c of [...this.grass.root.children]) { if (c instanceof THREE.Mesh) c.geometry.dispose(); c.removeFromParent(); }
     this.boats?.root.removeFromParent();
@@ -118,6 +126,8 @@ export class World {
   /** `feet`: live player feet positions (grass bends away from them). */
   render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
     if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
+    // water reflections follow the weather (its own envMapIntensity ignores scene.environmentIntensity)
+    if (this.waterEnv) this.waterEnv.envMapIntensity = 0.62 * (1 - 0.65 * this.sky.lighting.weather);
     const t = performance.now() / 1000;
     this.boats?.update(t, waterY);
     this.gulls?.update(t);

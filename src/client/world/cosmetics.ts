@@ -8,10 +8,10 @@ import type { Particles } from './particles';
 const MODELS: Record<CosmeticKind, { build: (b: StaticBatch) => void; cast: boolean }> = {
   barrel: { build: barrelModel, cast: true },
   crate: { build: crateModel, cast: true },
-  fence: { build: fenceModel, cast: false },
+  fence: { build: fenceModel, cast: true },
   palm: { build: palmModel, cast: true },
   lamp: { build: lampModel, cast: true },
-  bollard: { build: bollardModel, cast: false },
+  bollard: { build: bollardModel, cast: true },
 };
 const BARREL_COLORS = [0x1f5fa8, 0xb23a26, 0x46505a, 0x2f6b3a];
 /** Per-instance tint so a row of drums / crates doesn't look cloned. */
@@ -47,10 +47,10 @@ export class CosmeticLayer {
     for (const [kind, list] of kinds) {
       const b = new StaticBatch();
       MODELS[kind].build(b);
-      const meshes = b.take().map(({ material, geometry, receive }) => {
+      const meshes = b.take().map(({ material, geometry, cast, receive }) => {
         const m = new THREE.InstancedMesh(geometry, material, list.length);
         m.name = `cosmetic:${kind}:${material.name}`;
-        m.castShadow = MODELS[kind].cast; m.receiveShadow = receive;
+        m.castShadow = MODELS[kind].cast && cast; m.receiveShadow = receive;
         return m;
       });
       list.forEach((d, i) => {

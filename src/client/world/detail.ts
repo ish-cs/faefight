@@ -58,7 +58,7 @@ export function defineDetailKinds(sc: Scatter) {
   const pebble = jitterGeo(new THREE.IcosahedronGeometry(1, 0), 0.25, 3);
   pebble.scale(1, 0.55, 1);
   sc.define('pebble', { geo: pebble, material: M.gravel, far: 26, density: all(0.25, 0.7) });
-  sc.define('rubble', { geo: jitterGeo(new THREE.BoxGeometry(1, 0.7, 0.8, 1, 1, 1).toNonIndexed(), 0.18, 7), material: M.concrete, far: 45, density: all(0.35, 0.8), cast: true });
+  sc.define('rubble', { geo: jitterGeo(new THREE.BoxGeometry(1, 0.7, 0.8, 1, 1, 1).toNonIndexed(), 0.18, 7), material: M.concrete, far: 45, density: all(0.35, 0.8) });
   // bottle: body + shoulder + neck (lathe), lying or standing
   const bottle = new THREE.LatheGeometry([0, 0.033, 0.035, 0.035, 0.03, 0.014, 0.013, 0.015, 0].map((r, i) => new THREE.Vector2(r, [0, 0, 0.005, 0.15, 0.18, 0.21, 0.26, 0.265, 0.265][i])), 8);
   sc.define('bottle', { geo: bottle, material: shiny, far: 22, density: all(0, 0.7) });
@@ -70,7 +70,7 @@ export function defineDetailKinds(sc: Scatter) {
     card.computeVertexNormals();
   }
   sc.define('cardboard', { geo: card, material: matte, far: 35, density: all(0.2, 0.8) });
-  sc.define('box', { geo: new THREE.BoxGeometry(0.45, 0.35, 0.4).translate(0, 0.175, 0), material: matte, far: 45, density: all(0.3, 0.9), cast: true });
+  sc.define('box', { geo: new THREE.BoxGeometry(0.45, 0.35, 0.4).translate(0, 0.175, 0), material: matte, far: 45, density: all(0.3, 0.9), blob: 0.34 });
   const shell = new THREE.SphereGeometry(1, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.4, 1.25);
   sc.define('shell', { geo: shell, material: matte, far: 16, density: all(0, 0.6) });
   const weed = new THREE.PlaneGeometry(0.08, 0.6, 1, 4).rotateX(-Math.PI / 2).translate(0, 0.012, 0);
