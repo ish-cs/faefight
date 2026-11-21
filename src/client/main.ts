@@ -17,7 +17,7 @@ import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type Piec
 import { BuildPredictor } from './buildPredict';
 import type { BrainDigest } from '../sim/bots/introspect';
 import { adoptSpawnLook, moveForAim } from './aim';
-import { BodyCam, SpectatorCamera, viewedPlayer } from './viewed';
+import { BodyCam, SpectatorCamera, viewedPlayer, KillerLock, followAfterDeath } from './viewed';
 import { AudioSystem } from './audio/engine';
 import { errors, installErrorReporting } from './telemetry/errors';
 import { telemetryEnabled } from './telemetry/config';
@@ -1293,6 +1293,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   const spectator = new Spectator(app, renderer.camera, () => renderer.collidables, canvas, () => input.enabled);
   const bodyCam = new BodyCam();
+  // The followed player was killed: once their killcam has played, follow whoever killed them (viewed.ts).
+  const killerLock = new KillerLock();
+  /** A dead followed player the camera stays on (killcam pending, or respawning with no killer to follow). */
+  let holdId: number | null = null;
   /** Our own seat, kept after /spectate hands it to a bot (humanId → 0): "you" in bot-brain text. */
   let selfId = 0;
   // Spectating a bot: B opens its brain inspector, Shift+B its in-world overlay (route, aim, target, ghosts, build).
@@ -1604,6 +1608,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         killcamFor = viewer;
         if (viewer === humanId) hud.setEndVisible(false); // eliminated: the end screen waits for the killcam
       } else if (viewer !== humanId) bodyCam.onEvents(s.events, spectator.following, performance.now() / 1000);
+      if (viewer !== humanId && spectator.following === viewer) { killerLock.onDeath(viewer, killer, performance.now()); holdId = viewer; }
     }
     if (backend.buffered) {
       // Guest: keep the rejoin record fresh while the match runs; a finished match has nothing to rejoin.
@@ -1909,6 +1914,27 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // fly picked on the end screen: invisible spectator camera.
     const spectating = replay ? !!snap : !!snap && (watching || (!!me && (!me.alive || spectateChosen)));
     const kc = killcam.active ? killcam.frame(now) : null;
+    if (snap && killerLock.pending && !kc && !bodyCam.active(killerLock.pending.victim, now / 1000)) {
+      // Killcam over: lock onto the killer (unless the spectator picked someone meanwhile).
+      const r = killerLock.resolve(snap.players, humanId, spectator.manualAt);
+      holdId = null;
+      if (r && r.target !== null && r.target === r.victim) holdId = r.victim; // no killer to follow: wait for the respawn
+      else if (r && r.target !== null) {
+        spectator.mode = 'follow';
+        spectator.followId = r.target;
+        toast(`Now spectating ${snap.players.find((p) => p.id === r.target)?.name ?? `#${r.target}`}`);
+      }
+    }
+    if (holdId !== null && snap && !killerLock.pending) {
+      const v = snap.players.find((p) => p.id === holdId);
+      if (!v || v.alive || spectator.following !== holdId) holdId = null;
+      else if (v.eliminated) {
+        // Out for good: the living player nearest to where they fell.
+        const next = followAfterDeath(holdId, null, snap.players, humanId);
+        holdId = null;
+        if (next !== null) { spectator.mode = 'follow'; spectator.followId = next; }
+      }
+    }
     if (!kc && killcamWas) {
       // Killcam over: back to the live world; the normal death flow (free-fly, end screen) carries on.
       renderer.setReplay(null);
@@ -1935,7 +1961,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const kc = bodyCam.active(fid, now / 1000) ? { victim: bodyCam.victim!, killer: bodyCam.killer } : null;
       spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId: replay ? 0 : humanId, players: snap!.players,
         posOf: (id, out) => renderer.playerPos(id, out),
-        lookOf: (id) => renderer.playerMotion(id, specMotion), firstPerson: fp, killcam: kc });
+        lookOf: (id) => renderer.playerMotion(id, specMotion), firstPerson: fp, killcam: kc, hold: holdId });
       // A human's build ghost and open shop / vault, as they see them.
       const fv = spectator.following !== null && !snap!.players.find((p) => p.id === spectator.following)?.isBot ? backend.viewOf?.(spectator.following) ?? null : null;
       const g = kc ? null : fv?.ghost ?? null;
