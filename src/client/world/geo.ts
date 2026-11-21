@@ -119,6 +119,12 @@ export class StaticBatch {
     const key = `${material.uuid}:${+cast}${+receive}`;
     let bin = this.bins.get(key);
     if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
+    if (!geo.getAttribute('pc')) { // part centre per vertex (see part()), so raw parts merge with normal ones
+      geo.computeBoundingSphere();
+      const c = geo.boundingSphere!.center, n = geo.getAttribute('position').count, pc = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { pc[i * 3] = c.x; pc[i * 3 + 1] = c.y; pc[i * 3 + 2] = c.z; }
+      geo.setAttribute('pc', new THREE.Float32BufferAttribute(pc, 3));
+    }
     bin.parts.push(geo);
   }
 
