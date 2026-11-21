@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 type P = { id: number; island: number; pos: { x: number; z: number }; hp: number; alive: boolean };
 type Snap = { suddenDeath: boolean; waterY: number; storm: { x: number; z: number; r: number; strikes: unknown[] } | null; players: P[] };
