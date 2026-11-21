@@ -48,8 +48,9 @@ class SpritePool {
     r: number, g: number, b: number, a: number, grav: number, drag: number) {
     if (this.n >= this.cap) return;
     const i = this.n++;
-    this.ps.set([x, y, z, size0], i * 4);
-    this.cs.set([r, g, b, a], i * 4);
+    const o = i * 4, ps = this.ps, cs = this.cs; // (no temp arrays: hundreds of spawns per frame in a firefight)
+    ps[o] = x; ps[o + 1] = y; ps[o + 2] = z; ps[o + 3] = size0;
+    cs[o] = r; cs[o + 1] = g; cs[o + 2] = b; cs[o + 3] = a;
     const s = i * 12;
     this.st[s] = vx; this.st[s + 1] = vy; this.st[s + 2] = vz; this.st[s + 3] = 0; this.st[s + 4] = life;
     this.st[s + 5] = size0; this.st[s + 6] = size1; this.st[s + 7] = a; this.st[s + 8] = grav; this.st[s + 9] = drag;
@@ -162,8 +163,11 @@ class DebrisPool {
     this.mesh.count = this.n;
     this.mesh.visible = this.n > 0;
     if (this.n > 0) {
-      this.mesh.instanceMatrix.needsUpdate = true;
-      if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+      // Upload only the live instances, not the whole pool.
+      const im = this.mesh.instanceMatrix;
+      im.clearUpdateRanges(); im.addUpdateRange(0, this.n * 16); im.needsUpdate = true;
+      const ic = this.mesh.instanceColor;
+      if (ic) { ic.clearUpdateRanges(); ic.addUpdateRange(0, this.n * 3); ic.needsUpdate = true; }
     }
   }
 

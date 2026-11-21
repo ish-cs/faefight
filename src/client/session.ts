@@ -5,6 +5,8 @@ import { ChatLimiter, cleanChat } from '../net/chat';
 import { Lobby } from '../net/lobby';
 import { SnapshotEncoder } from '../net/snapshotCodec';
 import { InterestManager } from '../net/interest';
+import { WireEncoder, wireHeader } from '../net/wire';
+import { SnapRate } from '../net/snapRate';
 import { PeerGuard, type Verdict } from '../net/rateLimit';
 import type { Placement } from '../sim/building';
 import type { IslandLayout } from '../sim/map';
@@ -17,6 +19,9 @@ const HELLO_TIMEOUT_MS = 10_000;
 const HOST_PEER = '\u0000host';
 /** Difficulty of the bot that takes a leaver's seat in a rematch (same as a mid-match takeover). */
 const TAKEOVER_DIFFICULTY = 'medium' as const;
+
+/** Result of the host's /spectate: a chat line for the host, and whether its player was just handed to a bot. */
+export type SpectateResult = { text: string; handoff: boolean };
 
 export type HostEvents = {
   lobby(slots: Slot[]): void;
@@ -43,6 +48,12 @@ export class HostSession {
   private warned = new Map<string, number>();
   /** Per-client anti-ESP filter; created once the map is known. */
   private interest: InterestManager | null = null;
+  /** Per remote player: binary delta encoder (baseline = their last ack) and adaptive send rate. */
+  private streams = new Map<number, { wire: WireEncoder; rate: SnapRate }>();
+  /** Seat → player id for the running match (frozen at start: /spectate mid-match only affects the next one). */
+  private seatIds: (number | null)[] = [];
+  /** The host's own player in the running match; null while it spectates (from the start or after a handoff). */
+  private hostPlayerId: number | null = null;
 
   private constructor(private room: HostRoom, readonly hostName: string, private ev: HostEvents) {
     this.lobby = new Lobby(hostName, HOST_PEER);
@@ -55,6 +66,8 @@ export class HostSession {
   }
 
   get code() { return this.room.code; }
+  /** The host's player id in the running match (null: spectating, or no match). */
+  get hostPlayer() { return this.hostPlayerId; }
 
   // ---- lobby (host UI) ----
   setSeat(i: number, slot: Slot) { if (this.lobby.setSeat(i, slot)) this.broadcastLobby(); }
@@ -71,8 +84,41 @@ export class HostSession {
     if (link) { this.send(link, { t: 'ended', reason: 'kicked' }); setTimeout(() => link.close(), 200); }
   }
   canStart() {
-    const s = this.lobby.slots();
-    return !this.started && s.length >= 2 && s.every((x) => x.kind !== 'open');
+    return !this.started && this.lobby.playerCount() >= 2 && this.lobby.slots().every((x) => x.kind !== 'open');
+  }
+
+  /**
+   * Host's /spectate. Lobby: toggle the host's seat between player and spectator. Mid-match while playing:
+   * hand the host's player to a medium bot (the caller switches to the free-fly camera); the host stays a
+   * spectator for the rematch. Mid-match while spectating: the seat can't be taken back now, so it
+   * toggles whether the host plays the next match.
+   */
+  toggleSpectate(): SpectateResult {
+    if (!this.started) {
+      const on = !this.lobby.hostSpectating();
+      this.lobby.setHostSpectator(on);
+      console.info(`[host] host ${on ? 'spectates' : 'plays'}`);
+      this.broadcastLobby();
+      return { text: on ? 'You are spectating: you host the match without playing. /spectate again to play.' : 'You are back in as a player.', handoff: false };
+    }
+    if (this.hostPlayerId !== null) {
+      const id = this.hostPlayerId;
+      this.hostPlayerId = null;
+      this.lobby.setHostSpectator(true);
+      if (!this.worker) throw new Error('HostSession.toggleSpectate: match started without a worker');
+      this.worker.postMessage({ type: 'botify', playerId: id });
+      console.info(`[host] host player ${id} handed to a bot; host spectates`);
+      this.system(`${this.hostName} is spectating — a bot took over`);
+      return { text: 'You are spectating. A bot plays your seat. /spectate again to play next match.', handoff: true };
+    }
+    const next = !this.lobby.hostSpectating();
+    this.lobby.setHostSpectator(next);
+    return { text: next ? 'You will keep spectating next match.' : 'You can rejoin as a player next match.', handoff: false };
+  }
+
+  /** Player id of a seat in the running match (null: the spectating host, or not started). */
+  private idOf(seat: number): number | null {
+    return this.seatIds[seat] ?? null;
   }
 
   private broadcastLobby() {
@@ -140,14 +186,15 @@ export class HostSession {
       }
       const seat = this.lobby.seatOf(link.peerId);
       if (seat === null) return;
-      const playerId = seat + 1;
+      const playerId = this.idOf(seat);
       switch (msg.t) {
         case 'input':
           if (blocked(guard.admitInput(now))) return;
-          if (this.started) this.worker?.postMessage({ type: 'remoteInput', playerId, input: msg.input, cmds: msg.cmds });
+          if (msg.ack !== undefined && playerId !== null) this.streams.get(playerId)?.wire.ack(msg.ack);
+          if (this.started && playerId !== null) this.worker?.postMessage({ type: 'remoteInput', playerId, input: msg.input, cmds: msg.cmds });
           break;
         case 'preview':
-          if (this.started && this.previewAllowed(link.peerId))
+          if (this.started && playerId !== null && this.previewAllowed(link.peerId))
             this.worker?.postMessage({ type: 'preview', playerId, req: msg.req, key: msg.key });
           break;
         case 'chat':
@@ -173,11 +220,14 @@ export class HostSession {
     const seat = this.lobby.seatOf(peerId);
     this.links.delete(peerId);
     if (seat === null) return;
-    this.interest?.forget(seat + 1);
+    { const gone = this.idOf(seat); if (gone !== null) { this.interest?.forget(gone); this.streams.delete(gone); } }
     if (!this.started) { this.lobby.removePeer(peerId); this.broadcastLobby(); return; }
+    const playerId = this.idOf(seat);
+    if (playerId === null) throw new Error(`HostSession.onLeave: seat ${seat} has no player`);
+    this.interest?.forget(playerId);
     const name = this.nameOf(seat);
     console.info(`[host] ${name} (seat ${seat}) left mid-match; bot takes over`);
-    this.worker?.postMessage({ type: 'botify', playerId: seat + 1 });
+    this.worker?.postMessage({ type: 'botify', playerId });
     this.system(`${name} left — a bot took over`);
   }
 
@@ -197,12 +247,22 @@ export class HostSession {
   localChat(text: string) { this.relayChat(HOST_PEER, this.hostName, text); }
 
   // ---- match ----
-  /** Lock the lobby and produce the setup for the worker. Host is always seat 0 → player id 1. */
+  /**
+   * Lock the lobby and produce the setup for the worker. A playing host is seat 0 → player id 1;
+   * a spectating host has no player (humanId 0).
+   */
   start(worker: { postMessage(m: ToWorker): void }): { setup: MatchSetup; humanId: number } {
     if (!this.canStart()) throw new Error('HostSession.start: lobby not ready');
     this.started = true;
     this.worker = worker;
-    return { setup: this.lobby.toMatchSetup(), humanId: 1 };
+    return this.freezeSeats();
+  }
+
+  private freezeSeats(): { setup: MatchSetup; humanId: number } {
+    const setup = this.lobby.toMatchSetup();
+    this.seatIds = this.lobby.playerIds();
+    this.hostPlayerId = this.seatIds[0];
+    return { setup, humanId: this.hostPlayerId ?? 0 };
   }
 
   /**
@@ -217,9 +277,13 @@ export class HostSession {
       if (slot.kind === 'human') this.lobby.removePeer(slot.peerId);
       this.lobby.setSeat(seat, { kind: 'bot', difficulty: TAKEOVER_DIFFICULTY });
     }
+    if (this.lobby.playerCount() < 2) {
+      console.info('[host] rematch: too few seats to keep spectating; host plays');
+      this.lobby.setHostSpectator(false);
+    }
     this.resetStream(worker);
     console.info('[host] rematch');
-    return { setup: this.lobby.toMatchSetup(), humanId: 1 };
+    return this.freezeSeats();
   }
 
   /** End the match and send everyone back to the lobby screen (seats editable, new friends may join). */
@@ -230,6 +294,8 @@ export class HostSession {
       if (slot.kind === 'human') this.lobby.removePeer(slot.peerId);
     }
     this.started = false;
+    this.seatIds = [];
+    this.hostPlayerId = null;
     this.resetStream(null);
     console.info('[host] back to lobby');
     this.broadcastLobby();
@@ -243,36 +309,55 @@ export class HostSession {
   private resetStream(worker: { postMessage(m: ToWorker): void } | null) {
     this.worker = worker;
     this.encoder = new SnapshotEncoder();
+    this.streams.clear();
     this.tickNo = 0;
     this.previewBudget.clear();
   }
 
-  /** Worker sent the map: tell every remote to start. */
+  /** Worker sent the map (islands[id - 1] = island of player id): tell every remote to start. */
   onMap(map: IslandLayout[], islands: number[]) {
     this.interest = new InterestManager(map);
     for (const [peerId, link] of this.links) {
       const seat = this.lobby.seatOf(peerId);
-      if (seat !== null) this.send(link, { t: 'start', map, playerId: seat + 1, island: islands[seat] ?? seat });
+      const id = seat === null ? null : this.idOf(seat);
+      if (id !== null) this.send(link, { t: 'start', map, playerId: id, island: islands[id - 1] ?? id - 1 });
     }
   }
 
-  /** Every worker snapshot; broadcast every 2nd tick (15 Hz). */
+  /**
+   * Every worker snapshot. Each friend gets it at 30 Hz while their stream fits the bandwidth budget,
+   * else every 2nd tick (snapRate.ts), interest-filtered, binary and delta-compressed against the
+   * newest snapshot they acknowledged (wire.ts).
+   */
   onSnapshot(snap: Snapshot) {
     this.encoder.push(snap);
-    if (this.tickNo++ % 2 !== 0) return;
-    this.interest?.update(snap);
+    const tick = this.tickNo++;
+    let updated = false;
     for (const [peerId, link] of this.links) {
       const seat = this.lobby.seatOf(peerId);
-      if (seat === null) continue;
-      const s = this.encoder.take(seat + 1);
-      this.send(link, { t: 'snap', s: this.interest ? this.interest.apply(seat + 1, s) : s });
+      const id = seat === null ? null : this.idOf(seat);
+      if (id === null) continue;
+      let st = this.streams.get(id);
+      if (!st) { st = { wire: new WireEncoder(), rate: new SnapRate() }; this.streams.set(id, st); }
+      if (!st.rate.due(tick)) continue;
+      if (!updated) { this.interest?.update(snap); updated = true; }
+      const s = this.encoder.take(id, true);
+      const b = st.wire.encode(snap.tick, this.interest ? this.interest.apply(id, s) : s);
+      st.rate.sent(b.byteLength, wireHeader(b).baseSeq === 0);
+      this.send(link, { t: 'snap', b });
     }
+  }
+
+  /** Debug/bench: per-friend stream stats. */
+  streamStats() {
+    return [...this.streams].map(([id, st]) => ({ id, fast: st.rate.fast, avgBytes: Math.round(st.rate.avgBytes), acked: st.wire.ackedSeq, ...st.wire.stats }));
   }
 
   /** Worker preview reply for a remote player. */
   onPreview(playerId: number, result: Placement, key: number) {
     for (const [peerId, link] of this.links) {
-      if (this.lobby.seatOf(peerId) === playerId - 1) this.send(link, { t: 'preview', result, key });
+      const seat = this.lobby.seatOf(peerId);
+      if (seat !== null && this.idOf(seat) === playerId) this.send(link, { t: 'preview', result, key });
     }
   }
 

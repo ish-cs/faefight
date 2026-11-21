@@ -11,6 +11,11 @@ export default defineConfig({
   timeout: 90_000,
   // channel 'chromium' = full Chromium in new headless mode, which keeps a real GPU (WebGPU) on macOS;
   // the default headless shell loses its WebGPU device right after init.
-  use: { baseURL: `http://localhost:${port}`, channel: 'chromium', launchOptions: { args: ['--enable-unsafe-webgpu'] } },
+  // Every test starts as a returning player (How to play already seen) so the first-launch card doesn't
+  // cover the menu; tests/e2e/menuExtras.spec.ts clears this to test the first launch itself.
+  use: {
+    baseURL: `http://localhost:${port}`, channel: 'chromium', launchOptions: { args: ['--enable-unsafe-webgpu'] },
+    storageState: { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: 'faefight.settings.v1', value: JSON.stringify({ v: 2, onboarding: { howToSeen: true } }) }] }] },
+  },
   webServer: { command: `pnpm vite --port ${port} --strictPort`, url: `http://localhost:${port}`, reuseExistingServer: false },
 });

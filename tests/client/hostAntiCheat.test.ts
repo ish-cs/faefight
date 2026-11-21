@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test, vi } from 'vitest';
 import type { HostSession as HostSessionT } from '../../src/client/session';
 import { LoopbackTransport } from '../../src/net/loopback';
 import { NET_VERSION } from '../../src/net/protocol';
+import { WireDecoder } from '../../src/net/wire';
 import { buildMap } from '../../src/sim/map';
 import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type Snapshot } from '../../src/sim/types';
@@ -131,7 +132,8 @@ describe('HostSession anti-cheat', () => {
     };
     h.onSnapshot(snap);
     await flush();
-    const s = f.got.find((m) => m.t === 'snap')?.s;
+    const wb = f.got.find((m) => m.t === 'snap')?.b;
+    const s = wb && new WireDecoder().decode<any>(wb);
     expect(s).toBeDefined();
     expect(s.hidden).toEqual([1]);
     const hostP = s.players.find((p: any) => p.id === 1);

@@ -148,6 +148,39 @@ describe('Lobby', () => {
   });
 });
 
+describe('spectating host', () => {
+  test('host seat is excluded from the match and later seats renumber', () => {
+    const l = new Lobby('Ann', 'p0');
+    l.setSeat(1, { kind: 'bot', difficulty: 'easy' });
+    l.addSeat();
+    l.setSeat(2, { kind: 'bot', difficulty: 'pro' });
+    expect(l.playerIds()).toEqual([1, 2, 3]);
+    l.setHostSpectator(true);
+    expect(l.hostSpectating()).toBe(true);
+    expect(l.slots()[0]).toMatchObject({ kind: 'human', isHost: true, spectator: true });
+    expect(l.playerIds()).toEqual([null, 1, 2]);
+    expect(l.playerCount()).toBe(2);
+    const setup = l.toMatchSetup();
+    expect(setup.players.map((p) => p.difficulty)).toEqual(['easy', 'pro']);
+    expect(setup.players.some((p) => p.name === 'Ann')).toBe(false);
+  });
+
+  test('needs 2 players besides a spectating host', () => {
+    const l = new Lobby('Ann', 'p0');
+    l.setSeat(1, { kind: 'bot', difficulty: 'easy' });
+    l.setHostSpectator(true);
+    expect(() => l.toMatchSetup()).toThrow(/at least 2 players/);
+  });
+
+  test('toggling back restores the plain host seat', () => {
+    const l = new Lobby('Ann', 'p0');
+    l.setHostSpectator(true);
+    l.setHostSpectator(false);
+    expect(l.slots()[0]).toEqual({ kind: 'human', name: 'Ann', peerId: 'p0', isHost: true });
+    expect(l.playerIds()).toEqual([1, 2]);
+  });
+});
+
 describe('bot nicknames in the lobby', () => {
   test('a bot seat gets a human-style nickname that carries into the match', () => {
     const l = new Lobby('Alice', 'host');

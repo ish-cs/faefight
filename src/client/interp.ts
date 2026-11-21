@@ -28,12 +28,20 @@ export class RenderClock {
   /** Current target delay (s), for debugging. */
   delay = 0;
 
+  /** Freshest offset and target delay, recomputed only when a snapshot arrives (advance() runs every frame). */
+  private freshest = 0;
+  private targetDelay = 0;
+
   /** A snapshot of sim time `simTime` arrived at wall time `now` (seconds). */
   push(simTime: number, now: number) {
     if (this.times.length && simTime <= this.times[this.times.length - 1]) return;
     this.offsets.push(simTime - now);
     this.times.push(simTime);
     if (this.offsets.length > WINDOW) { this.offsets.shift(); this.times.shift(); }
+    let f = -Infinity;
+    for (const o of this.offsets) if (o > f) f = o;
+    this.freshest = f;
+    this.targetDelay = Math.min(0.3, this.interval() + this.jitter() + 0.005);
   }
 
   /** Nominal snapshot spacing (median of recent sim-time gaps). */
@@ -57,9 +65,8 @@ export class RenderClock {
   /** Playback sim time for wall time `now` (s). Call once per frame. */
   advance(now: number): number | null {
     if (!this.offsets.length) return this.t;
-    const freshest = Math.max(...this.offsets);
-    this.delay = Math.min(0.3, this.interval() + this.jitter() + 0.005);
-    const target = now + freshest - this.delay;
+    this.delay = this.targetDelay;
+    const target = now + this.freshest - this.delay;
     if (this.t === null || Math.abs(target - this.t) > SNAP_ERR) this.t = target;
     else {
       const dt = Math.max(0, now - this.lastNow);
@@ -86,6 +93,16 @@ export function hermite(p0: number, m0: number, p1: number, m1: number, h: numbe
 
 const angleLerp = (a: number, b: number, s: number) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * s;
 const dist = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+
+const ZERO: Readonly<Vec3> = Object.freeze({ x: 0, y: 0, z: 0 });
+let setOut: { pos: Vec3; vel: Vec3; yaw: number; pitch: number } = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 };
+/** Writes into the `out` of the sample() call in progress (module-level so sample() allocates no closure). */
+function setSample(p: Vec3, v: Vec3, yaw: number, pitch: number) {
+  const out = setOut;
+  out.pos.x = p.x; out.pos.y = p.y; out.pos.z = p.z;
+  out.vel.x = v.x; out.vel.y = v.y; out.vel.z = v.z;
+  out.yaw = yaw; out.pitch = pitch;
+}
 
 /** Short per-player history, sampled at the render clock. */
 export class PlayerTrack {
@@ -115,12 +132,9 @@ export class PlayerTrack {
   sample(t: number, out: { pos: Vec3; vel: Vec3; yaw: number; pitch: number }): boolean {
     const s = this.s;
     if (!s.length) return false;
-    const set = (p: Vec3, v: Vec3, yaw: number, pitch: number) => {
-      out.pos.x = p.x; out.pos.y = p.y; out.pos.z = p.z;
-      out.vel.x = v.x; out.vel.y = v.y; out.vel.z = v.z;
-      out.yaw = yaw; out.pitch = pitch;
-    };
-    const zero = { x: 0, y: 0, z: 0 };
+    const set = setSample;
+    setOut = out;
+    const zero = ZERO;
     if (t <= s[0].t) { set(s[0].pos, zero, s[0].yaw, s[0].pitch); return true; }
     const n = s.length - 1;
     if (t >= s[n].t) {
