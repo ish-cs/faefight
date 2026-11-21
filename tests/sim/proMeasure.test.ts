@@ -86,7 +86,7 @@ async function aggression(label: string, diffs: Difficulty[], seeds: number[]) {
   for (const r of rs) for (const [g, n] of r.goals) goals.set(g, (goals.get(g) ?? 0) + n);
   const total = [...goals.values()].reduce((a, b) => a + b, 0);
   console.log([
-    `${label} (${seeds.length} seeds): decided before sudden death ${preSd}/${rs.length} · median length ${median(rs.map((r) => r.minutes)).toFixed(1)} min`,
+    `${label} (${seeds.length} seeds): decided before sudden death ${preSd}/${rs.length} · median length ${median(rs.map((r) => r.minutes)).toFixed(1)} min · pre-SD eliminations median ${median(rs.map((r) => r.preSdElims))} · seals median ${median(rs.map((r) => r.seals))}`,
     `  median hit distance ${median(dists).toFixed(1)} m (${(100 * dists.filter((d) => d > 30).length / Math.max(1, dists.length)).toFixed(0)}% past 30 m) · first seal median ${seals.length ? median(seals).toFixed(0) : '-'} s (${seals.length}/${rs.length} games) · time at home ${(100 * median(rs.map((r) => r.homeShare))).toFixed(0)}% · ${median(rs.map((r) => r.msPerTick)).toFixed(2)} ms/tick`,
     `  goals: ${[...goals].sort((a, b) => b[1] - a[1]).map(([g, n]) => `${g} ${(100 * n / total).toFixed(0)}%`).join(' ')}`,
   ].join('\n'));

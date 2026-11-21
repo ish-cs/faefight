@@ -189,3 +189,18 @@ Cover odds and fort share are scaled by `builder` (Turtle ≈ full, Rusher ≈ h
 - **Hotbar**: building never takes the last two free slots; cover walls use the same kind as the seal kit.
 - Easy players misplace pieces (persistent for fort slots, so they "repair" the silly spot too) and roll cover rarely.
 
+
+## 11. Drive to win (`DRIVE` in `bots/bot.ts`, Medium/Hard/PRO)
+
+Spectators saw passive bots: plinking across the water, idling at home, most games going to sudden death. A
+score layer (`Bot.drive`) on top of the goal scores makes them seek the win, same rules for everyone:
+- **Offensive plan** from 4:00 (Medium 5:00), or as soon as a gun is owned and cash (carried + banked) covers about
+  three walls (3 metal Hard/PRO, 3 wood Medium): bridge/attack/seal +0.35, shopping for push gear (pistol, ammo,
+  scaffolds, wood/metal/steel, charge) ≥ 0.75, the generator only while still short of the push gear (or ≥ $200),
+  fortifying/cutting/looting/idle banking scaled down; with nothing better the default goal is attack.
+- **No plinking**: a fight across water past 30 m isn't a goal (shots still go out while doing something else); on
+  the same island the preferred range is capped at 20 m and a gap over 8 m is closed at a sprint with a little weave.
+- **Home only for a threat**: guard needs an intruder seen on my island in the last 4 s (defend = plugs in my doors,
+  as before).
+- **Retreat only when losing**: no disengage while ahead in HP + shield of the enemy in front of me; a retreat
+  (disengage/heal) ends after 20 s unless still being hit or under 30 HP.

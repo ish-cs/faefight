@@ -95,6 +95,8 @@ export const DRIVE = {
   push: 0.35,
   shopForPush: 0.75,
   plinkRange: 30,
+  /** Hold fire past this at someone on another island who isn't my reachable target or crossing toward me. */
+  holdFireRange: 40,
   maxRange: 20,
   sprintGap: 8,
   reengageSec: 20,
@@ -281,7 +283,7 @@ export class Bot {
     } else if (enemy) {
       const r = this.aim.track(now, dt, eye, add(enemy.pos, v3(0, CHEST, 0)), enemy.id, cur);
       look = r;
-      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist);
+      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist) && !this.plinking(ctx, enemy);
     } else if (nade) {
       look = turnToward(cur, nade, TURN_RATE, dt);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
@@ -830,6 +832,16 @@ export class Bot {
     return best;
   }
 
+  /**
+   * A long shot across the water at someone who can't reach me and isn't coming: skilled players save the ammo (and
+   * their position) for the fight they're heading to. Easy players blaze away.
+   */
+  private plinking(c: Ctx, e: PlayerState): boolean {
+    if (this.difficulty === 'easy' || c.enemyDist <= DRIVE.holdFireRange) return false;
+    const theirs = islandAt(c.view.map, e.pos);
+    return theirs !== c.on && !(theirs < 0 && this.crossing(c)) && !(c.rival && e.id === c.rival.id && c.reach);
+  }
+
   /** On an offensive plan: gun in hand and either the money for a few walls or enough time gone by. */
   private offensive(c: Ctx): boolean {
     const me = c.me;
@@ -855,6 +867,8 @@ export class Bot {
       case 'disengage': case 'heal': {
         // Retreat only when losing: still ahead of the one in front of me, keep fighting.
         if (g === 'disengage' && c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield) return 0;
+        // Shot at from far across the water: keep doing what I was doing (moving), don't run home.
+        if (g === 'disengage' && c.enemy && c.enemyDist > DRIVE.plinkRange && islandAt(view.map, c.enemy.pos) !== c.on) return s * 0.3;
         const long = this.retreatSince !== null && now - this.retreatSince > DRIVE.reengageSec;
         const stillHit = now - this.mem.lastHurtAt < 3;
         return long && !stillHit && me.hp / 100 > DRIVE.reengageHp ? 0 : s;
