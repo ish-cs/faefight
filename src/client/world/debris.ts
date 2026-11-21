@@ -91,7 +91,7 @@ export class Debris {
         const mat = kind === 'bottle' || kind === 'can' ? this.mats.shiny : kind === 'box' ? this.mats.cardboard : kind === 'plank' ? this.mats.wood : this.mats.plastic;
         const mesh = new THREE.InstancedMesh(geometryFor(kind), mat, ids.length);
         mesh.name = `debris:${kind}`;
-        mesh.castShadow = kind !== 'bottle' && kind !== 'can';
+        mesh.castShadow = kind === 'box' || kind === 'cone';
         mesh.layers.set(SMALL_CASTER_LAYER); // near shadow cascades only
         mesh.receiveShadow = true;
         mesh.frustumCulled = false; // spans the map

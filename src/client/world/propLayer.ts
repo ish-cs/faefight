@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { type Placement, PROP_SPEC, type PropType } from './clusters';
 import { ChunkedInstances } from './chunked';
 import { mat, merge, StaticBatch } from './geo';
+import { registerDistanceCull, releaseLods, SMALL_CASTER_LAYER } from './lod';
 import { propModel } from './propModels';
 import type { Quality } from './sky';
 
@@ -17,6 +18,8 @@ import type { Quality } from './sky';
  * [{ parts: propModel(type), maxDist }], small: true, chunk: 48 })` + add/build/setTierLimit.
  */
 export const TIER_LIMIT: Record<Quality, number> = { low: 0, high: 1, ultra: 2 };
+/** dock clusters beyond this (high-preset metres, scaled per preset by lod.ts) are not drawn */
+const CLUSTER_CULL = 150;
 const _c = new THREE.Color();
 
 const _n = new THREE.Matrix3();
@@ -62,6 +65,11 @@ export class PropLayer {
   private ms = 0;
   /** non-casting baked props (PROP_SPEC.cast false): their own merged meshes, drawn in the main pass only */
   private quiet = new StaticBatch();
+  /**
+   * casting baked props: their own chunked batch (not the island dressing's: their triangles pushed those bins over
+   * the chunk-split threshold), near shadow cascades only, culled past CLUSTER_CULL m
+   */
+  private baked = new StaticBatch();
   /** highest quality tier baked by the next place() calls (set from the preset before a map build) */
   buildTier = 2;
 
@@ -86,7 +94,8 @@ export class PropLayer {
     if (p.tier > this.buildTier) { this.counts.skipped++; return; }
     this.counts.baked++;
     _c.set(p.tint);
-    const into = PROP_SPEC[p.type].cast ? bake : this.quiet;
+    void bake; // kept for the call sites' signature; clusters bake into their own batch
+    const into = PROP_SPEC[p.type].cast ? this.baked : this.quiet;
     for (const part of propModel(p.type, p.cell ?? 0)) into.addRaw(part.material, transformed(part.geometry, m, part.tint ? _c : null), part.cast, true);
   }
 
@@ -94,6 +103,14 @@ export class PropLayer {
   build() {
     const t0 = performance.now();
     for (const mesh of this.quiet.build(this.root, 'dockQuiet', { chunked: true })) mesh.castShadow = false;
+    for (const mesh of this.baked.build(this.root, 'dock', { chunked: true })) {
+      mesh.layers.set(SMALL_CASTER_LAYER);
+      if (mesh.userData.lod) continue; // small-part chunks already distance-cull themselves
+      mesh.geometry.computeBoundingSphere();
+      const sp = mesh.geometry.boundingSphere!;
+      // map-wide leftovers (radius ≥ the cull distance) stay drawn; real chunks cull with distance
+      if (sp.radius < CLUSTER_CULL) mesh.userData.lod = registerDistanceCull(mesh, CLUSTER_CULL, { center: sp.center, radius: sp.radius });
+    }
     this.ms += performance.now() - t0;
     for (const [type, list] of this.pending) {
       list.sort((a, b) => a.tier - b.tier); // stable: within a tier, placement order (stack bottoms first)
@@ -108,7 +125,8 @@ export class PropLayer {
       }
       const parts = [...byMat].map(([material, geos]) => ({ material, geometry: geos.length === 1 ? geos[0] : merge(geos), cast, receive: true }));
       // tiny ground pieces: full detail near, gone past 60 m (they shrink below a pixel well before that)
-      const layer = new ChunkedInstances({ name: `props:${type}`, levels: [{ parts, maxDist: 60 }], small: true, chunk: 48 });
+      // tiny ground pieces (stones): no shadows, few big chunks (draws cost more than their triangles)
+      const layer = new ChunkedInstances({ name: `props:${type}`, levels: [{ parts: parts.map((x) => ({ ...x, cast: false })), maxDist: 60 }], small: true, chunk: 128 });
       for (const it of list) layer.add(it.m, _c.set(it.tint), it.tier);
       this.root.add(layer.build());
       this.layers.push({ layer, type, n: list.length });
@@ -134,8 +152,10 @@ export class PropLayer {
     for (const { layer } of this.layers) layer.dispose();
     this.layers = [];
     this.pending.clear();
+    releaseLods(this.root);
     for (const o of [...this.root.children]) { if (o instanceof THREE.Mesh) o.geometry.dispose(); o.removeFromParent(); }
     this.quiet = new StaticBatch();
+    this.baked = new StaticBatch();
     this.counts = { baked: 0, instanced: 0, skipped: 0 };
     this.ms = 0;
   }
