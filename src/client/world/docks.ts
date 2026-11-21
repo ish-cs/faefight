@@ -79,6 +79,9 @@ export class DockLayer {
   private byId = new Map<number, DockDef>();
   private gone = new Set<number>();
   private hot = new Set<number>();
+  /** Visible instances per look: a look with none has its whole subtree off (hidden instances still cost draws). */
+  private shown: Record<Look, number> = { whole: 0, scorched: 0, broken: 0 };
+  private look = new Map<number, Look>();
 
   constructor(defs: DockDef[], waterY: number) {
     this.root.name = 'docks';
@@ -97,8 +100,14 @@ export class DockLayer {
       this.byId.set(d.id, d);
       this.layers.scorched.setVisible(k, false);
       this.layers.broken.setVisible(k, false);
+      this.look.set(d.id, 'whole');
+      this.shown.whole++;
     }
-    for (const look of ['whole', 'scorched', 'broken'] as const) this.root.add(this.layers[look].build());
+    for (const look of ['whole', 'scorched', 'broken'] as const) {
+      const g = this.layers[look].build();
+      g.visible = this.shown[look] > 0;
+      this.root.add(g);
+    }
     pileBatch(defs, waterY).build(this.root, 'docks', { chunked: true });
   }
 
@@ -120,7 +129,12 @@ export class DockLayer {
     const k = this.index.get(id);
     if (k === undefined) return; // a stale id from another map
     if (look === 'broken') { this.gone.add(id); this.hot.delete(id); }
-    for (const l of ['whole', 'scorched', 'broken'] as const) this.layers[l].setVisible(k, l === look);
+    const was = this.look.get(id);
+    if (was === look) return;
+    if (was) { this.layers[was].setVisible(k, false); this.layers[was].root.visible = --this.shown[was] > 0; }
+    this.layers[look].setVisible(k, true);
+    this.layers[look].root.visible = ++this.shown[look] > 0;
+    this.look.set(id, look);
   }
 
   /** `dockBroken` event: swap to the stubs now (the snapshot agrees a moment later) and throw the planks. */
@@ -150,7 +164,7 @@ function pileBatch(defs: DockDef[], waterY: number): StaticBatch {
     const S = mat(d.center.x, 0, d.center.z, 0, d.rotY, 0);
     for (const end of d.row === 0 ? [-1, 1] : [1]) {
       const z = end * (L / 2);
-      for (const x of [-PILE_X, PILE_X]) b.add(M.wood, pile, S.clone().multiply(mat(x, (top + base) / 2, z, 0, 0, 0, 1, top - base, 1)), 0x4d3b28, true);
+      for (const x of [-PILE_X, PILE_X]) b.add(M.wood, pile, S.clone().multiply(mat(x, (top + base) / 2, z, 0, 0, 0, 1, top - base, 1)), 0x4d3b28, false);
       b.add(M.wood, boxUV(W, 0.16, 0.18, 1), S.clone().multiply(mat(0, top - 0.08, z)), 0x5a4430, false); // pile cap
       // cross brace between the two piles, from the waterline up to the cap
       const rise = top - 0.16 - (waterY + 0.3);
