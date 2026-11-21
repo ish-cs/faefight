@@ -949,6 +949,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
           !!(renderer.characters as unknown as { avatars: Map<number, { group: Object3D }> }).avatars.get(humanId)?.group.visible,
       }),
       scoreboard: () => scoreboard.visible,
+      /** Loot on the ground as drawn: label lines, label shown, model count. */
+      loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),

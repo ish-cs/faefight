@@ -14,7 +14,7 @@ import type { NetPlayer, NetSnapshot } from './snapshotCodec';
  *   you. A reveal lasts `graceSec` past the last positive test so nothing pops at corners.
  * - Unrevealed enemies stay in the list (names, alive/eliminated for HUD + kill feed) with a frozen
  *   last-sent position, neutral aim/hp/timers, and their id in `hidden` (the renderer skips them).
- * - Enemy generator cash only near it; loot bag contents never; far shots from hidden shooters become
+ * - Enemy generator cash only near it; loot bag contents only within lootRevealM; far shots from hidden shooters become
  *   a coarse sound position with no tracer; hits on unrevealed players are dropped.
  */
 export const INTEREST = {
@@ -28,6 +28,8 @@ export const INTEREST = {
   nearMissM: 4,
   coarseGrid: 4,
   generatorRevealM: 15,
+  /** Loot bag contents within this distance (you can see what's lying there); farther bags are just bags. */
+  lootRevealM: 25,
   /** Occluder boxes are shrunk by this (under-occlude on grazing rays rather than over-occlude). */
   shrink: 0.05,
 };
@@ -164,7 +166,8 @@ export class InterestManager {
       events: this.filterEvents(net.events, viewerId, eye, revealed),
       generators: net.generators.map((g) => (g.island === me.island || Math.hypot(this.map[g.island].generator.x - me.pos.x, this.map[g.island].generator.z - me.pos.z) <= INTEREST.generatorRevealM
         ? g : { island: g.island, stored: 0 })),
-      loot: net.loot.map((b) => ({ ...b, inv: emptyInventory() })),
+      // Contents only of bags close enough to see what's lying there (drawn as their items); far ones stay sealed.
+      loot: net.loot.map((b) => (omniscient || this.seesLoot(eye, b.pos) || (watchedEye && this.seesLoot(watchedEye, b.pos)) ? b : { ...b, inv: emptyInventory() })),
     };
     if (hidden.length) out.hidden = hidden;
     else delete out.hidden;
@@ -172,6 +175,10 @@ export class InterestManager {
     if (out.brain && out.brain.id !== target) delete out.brain;
     this.costMs += performance.now() - t0;
     return out;
+  }
+
+  private seesLoot(eye: Vec3, at: Vec3): boolean {
+    return Math.hypot(at.x - eye.x, at.y - eye.y, at.z - eye.z) <= INTEREST.lootRevealM;
   }
 
   /** Viewer left: forget its state. */
