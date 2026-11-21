@@ -47,7 +47,6 @@ export class World {
   readonly scatter = new Scatter();
   /** client-only physics debris (bottles, cans, cones, boxes…): tumbles, never touches gameplay */
   readonly debris = new Debris();
-  private lastT = performance.now();
   /** dense dock clusters + quay gear (clusters.ts / propLayer.ts) */
   readonly props = new PropLayer();
   private boats: Boats | null = null;
@@ -188,9 +187,7 @@ export class World {
     if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
     // water reflections follow the weather (its own envMapIntensity ignores scene.environmentIntensity)
     if (this.waterEnv) this.waterEnv.envMapIntensity = 0.62 * (1 - 0.65 * this.sky.lighting.weather);
-    const now = performance.now(), t = now / 1000;
-    const dt = Math.min(0.1, (now - this.lastT) / 1000);
-    this.lastT = now;
+    const t = now / 1000;
     this.debris.update(dt, focus ?? this.sky.camera.position, feet, waterY);
     if (this.critters) {
       this.critters.setQuality(this.sky.quality);
