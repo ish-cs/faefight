@@ -1,11 +1,10 @@
 import * as THREE from 'three/webgpu';
-import { cameraPosition, color, cos, dot, exp, float, fog, luminance, max, min, mix, normalize, positionView, positionWorld, pow, sin, smoothstep, step, uniform, vec3, vec4 } from 'three/tsl';
+import { cos, float, max, min, mix, positionWorld, sin, smoothstep, step, uniform } from 'three/tsl';
 import { MAP } from '../../sim/constants';
 import type { IslandLayout } from '../../sim/map';
-import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
-import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
+import { Lighting, type ShadowPreset, SUN_DIR as LIGHT_SUN_DIR } from './lighting';
 import { buildPipeline, grade, type PostOptions, sunScreen } from './post';
 
 export type Quality = 'low' | 'high' | 'ultra';
@@ -19,137 +18,57 @@ function saveQuality(q: Quality) {
   settings.update((s) => { s.video.quality = q; });
 }
 
-/** Late-morning sun ≈ 38° elevation. Sky dome, environment map, key light, haze and water glints all derive from this. */
-export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 38), THREE.MathUtils.degToRad(58));
+export { SUN_DIR } from './lighting';
 
 type Preset = {
   pixelRatio: number;
-  /** cascaded shadow maps: count × size², shadow distance (m) */
-  cascades: number; shadowMap: number; shadowFar: number;
+  /** cascaded shadow maps: count, size², shadow distance (m) */
+  shadow: ShadowPreset;
   post: PostOptions;
 };
+// low: 2 small cascades over a short range; high: 3 cascades (crisp near, shorter reach than ultra);
+// ultra: 4 cascades with a long reach. GTAO + bloom on high/ultra (AO at half resolution).
 const PRESETS: Record<Quality, Preset> = {
-  low: { pixelRatio: 1, cascades: 2, shadowMap: 1024, shadowFar: 110, post: { samples: 4, bloom: false, ao: false } },
-  high: { pixelRatio: 1.5, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true } },
-  ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true } },
+  low: { pixelRatio: 1, shadow: { cascades: 2, mapSize: 1024, far: 90 }, post: { samples: 4, bloom: false, ao: false } },
+  high: { pixelRatio: 1.5, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 10 }, flare: true } },
+  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 16 }, flare: true } },
 };
-
-const SKY = { turbidity: 3, rayleigh: 1.5, mieCoefficient: 0.002, mieDirectionalG: 0.9 };
-
-function makeSky(clouds: boolean) {
-  const sky = new SkyMesh();
-  sky.scale.setScalar(4000);
-  sky.turbidity.value = SKY.turbidity;
-  sky.rayleigh.value = SKY.rayleigh;
-  sky.mieCoefficient.value = SKY.mieCoefficient;
-  sky.mieDirectionalG.value = SKY.mieDirectionalG;
-  sky.sunPosition.value.copy(SUN_DIR);
-  sky.cloudCoverage.value = clouds ? 0.35 : 0.2;
-  sky.cloudDensity.value = clouds ? 0.5 : 0.35;
-  return sky;
-}
-
-/** Re-grade a SkyMesh's output: gain + saturation around luminance. */
-function regradeSky(sky: SkyMesh, gain: THREE.Node<'float'> | number, saturation: THREE.Node<'float'> | number) {
-  const mat = sky.material as THREE.NodeMaterial;
-  const rgb = (mat.colorNode as THREE.Node<'vec4'>).rgb.mul(gain);
-  mat.colorNode = vec4(mix(vec3(luminance(rgb)), rgb, saturation), 1);
-}
 
 /**
  * Sky dome, image-based lighting, warm cascaded-shadow sun, aerial-perspective haze, ACES tone mapping, colour
  * grade, and (high/ultra) GTAO + bloom. Owns the frame's final draw so the post chain follows the quality preset.
  */
 export class SkyLighting {
-  readonly sun = new THREE.DirectionalLight(0xffe9cc, 6);
+  /** the lighting rig (sun, hemisphere bounce, sky, env map, haze, weather): world/lighting.ts */
+  readonly lighting: Lighting;
+  readonly sun: THREE.DirectionalLight;
   /** live-tweakable grade uniforms (debug) */
   readonly grade = grade;
   /** haze uniforms (debug) */
-  readonly haze = {
-    color: uniform(new THREE.Color(0x9fc0dc)),
-    sunColor: uniform(new THREE.Color(0xf4dcb4)),
-    density: uniform(0.0011),
-    heightFalloff: uniform(0.012),
-  };
-  /** brightness of the bounce hemisphere baked into the environment map (debug: tweak, then buildEnvironment()) */
-  readonly envGround = uniform(12);
-  /** main sky dome brightness / saturation (the env map uses its own hazier copy) */
-  readonly skyGain = uniform(0.7);
-  readonly skySaturation = uniform(1.12);
-  /** bunker interiors (x, groundY, z, yaw) — up to 8; parked far away until setMap */
+  readonly haze: { color: Lighting['u']['hazeColor']; sunColor: Lighting['u']['hazeSunColor']; density: Lighting['u']['hazeDensity']; heightFalloff: Lighting['u']['hazeHeightFalloff'] };
+  /** bunker interiors (x, groundY, z, yaw) - up to 8; parked far away until setMap */
   private interiors = Array.from({ length: 8 }, () => uniform(new THREE.Vector4(1e6, 0, 1e6, 0)));
   private interiorAO = this.buildInteriorAO();
   quality: Quality;
-  /** Settings → Video resolution scale: multiplies the preset's pixel ratio (result clamped to 0.5–2). */
+  /** Settings / Video resolution scale: multiplies the preset's pixel ratio (result clamped to 0.5-2). */
   private resScale = settings.get().video.resolutionScale;
   private pipeline: THREE.RenderPipeline | null = null;
-  private csm: CSMShadowNode | null = null;
   private sunTmp = new THREE.Vector3();
 
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
-    gpu.toneMapping = THREE.ACESFilmicToneMapping;
-    gpu.toneMappingExposure = 0.5;
-    gpu.shadowMap.enabled = true;
-    gpu.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is removed in WebGPURenderer; soften via radius
-
-    const sky = makeSky(true);
-    regradeSky(sky, this.skyGain, this.skySaturation);
-    scene.add(sky);
-    this.buildEnvironment();
-
-    this.sun.castShadow = true;
-    this.sun.shadow.bias = -0.0002;
-    this.sun.shadow.normalBias = 0.035;
-    this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 700;
-    this.sun.position.copy(SUN_DIR).multiplyScalar(200);
-    this.sun.target.position.set(0, 0, 0);
-    scene.add(this.sun, this.sun.target);
-
-    // Aerial perspective: exponential distance haze that thins with altitude, warmer when looking toward the sun.
-    const h = this.haze;
-    const viewDir = normalize(positionWorld.sub(cameraPosition));
-    const toSun = pow(max(dot(viewDir, uniform(SUN_DIR.clone())), 0), 6);
-    const dist = positionView.z.negate();
-    const heightK = exp(max(positionWorld.y, 0).mul(h.heightFalloff).negate());
-    const amount = float(1).sub(exp(dist.mul(h.density).mul(heightK).negate()));
-    scene.fogNode = fog(mix(h.color, h.sunColor, toSun.mul(0.6)), amount);
-
+    this.lighting = new Lighting(gpu, scene);
+    this.sun = this.lighting.sun;
+    const u = this.lighting.u;
+    this.haze = { color: u.hazeColor, sunColor: u.hazeSunColor, density: u.hazeDensity, heightFalloff: u.hazeHeightFalloff };
     this.apply();
   }
 
-  /**
-   * IBL: PMREM of the same sky (sun disc removed — the DirectionalLight is the sun) above a lower hemisphere that
-   * stands in for light bounced off the sea and sun-baked concrete. Gives every PBR material matching ambient +
-   * reflections (containers, galvanised steel, water). The ambient sky is hazier and half-desaturated: a pure
-   * Rayleigh dome turns every shaded face violet-blue.
-   */
-  buildEnvironment() {
-    try {
-      (this.scene.environment as THREE.Texture | null)?.dispose();
-      const envScene = new THREE.Scene();
-      const sky = makeSky(false);
-      sky.showSunDisc.value = 0;
-      sky.turbidity.value = 9;
-      sky.rayleigh.value = 0.9;
-      regradeSky(sky, 1, 0.5);
-      envScene.add(sky);
-      const groundMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide });
-      // warm sunlit-quay bounce near the horizon, teal-grey sea straight down
-      const y = normalize(positionWorld).y.negate().clamp(0, 1);
-      groundMat.colorNode = mix(color(0.34, 0.33, 0.28), color(0.1, 0.17, 0.19), y.pow(0.5)).mul(this.envGround);
-      groundMat.fog = false;
-      envScene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 48, 16, 0, Math.PI * 2, Math.PI / 2 + 0.02, Math.PI / 2), groundMat));
-      const pmrem = new THREE.PMREMGenerator(this.gpu);
-      this.scene.environment = pmrem.fromScene(envScene, 0.02).texture;
-      this.scene.environmentIntensity = 0.8;
-      pmrem.dispose();
-    } catch (err) {
-      console.warn('[world/sky] sky environment map unavailable, using hemisphere light only', err);
-      this.scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x8a7a58, 0.8));
-    }
-  }
+  /** Rebuild the IBL map (debug: after tweaking `lighting.u.envGround`). */
+  buildEnvironment() { this.lighting.buildEnvironment(); }
+
+  /** Blend clear (0) to storm (1); see world/lighting.ts. */
+  setWeather(t: number) { this.lighting.setWeather(t); }
 
   /**
    * Ambient occlusion for the roofed bunkers: the environment map has no idea a point is under a concrete slab, so
@@ -213,19 +132,8 @@ export class SkyLighting {
     const p = PRESETS[this.quality];
     this.applyPixelRatio();
 
-    // Cascaded shadows: crisp near the player, still casting long shadows out to `shadowFar`. CSMShadowNode
-    // snaps each cascade to its texel grid, so edges don't shimmer as the camera moves.
-    const sh = this.sun.shadow;
-    sh.mapSize.set(p.shadowMap, p.shadowMap);
-    sh.radius = p.shadowMap >= 2048 ? 2.5 : 1.5;
-    const prev = this.csm;
-    const csm = new CSMShadowNode(this.sun, { cascades: p.cascades, maxFar: p.shadowFar, mode: 'practical', lightMargin: 120 });
-    csm.fade = true;
-    sh.shadowNode = csm;
-    this.csm = csm;
-    if (prev) {
-      prev.dispose();
-      // the shadow node is baked into every lit material's shader → rebuild them
+    if (this.lighting.applyShadows(p.shadow)) {
+      // the shadow node is baked into every lit material's shader: rebuild them
       this.scene.traverse((o) => {
         const m = (o as THREE.Mesh).material;
         if (m) for (const x of Array.isArray(m) ? m : [m]) x.needsUpdate = true;
@@ -239,7 +147,7 @@ export class SkyLighting {
   /** Draw the frame (cascades follow the camera on their own). */
   render() {
     if (PRESETS[this.quality].post.flare) {
-      const v = this.sunTmp.copy(SUN_DIR).multiplyScalar(1000).add(this.camera.position).project(this.camera);
+      const v = this.sunTmp.copy(LIGHT_SUN_DIR).multiplyScalar(1000).add(this.camera.position).project(this.camera);
       sunScreen.uv.value.set(v.x * 0.5 + 0.5, v.y * 0.5 + 0.5);
       sunScreen.front.value = v.z < 1 ? 1 : 0;
       sunScreen.aspect.value = this.camera.aspect;
@@ -247,7 +155,7 @@ export class SkyLighting {
     this.pipeline!.render();
   }
 
-  dispose() { this.pipeline?.dispose(); this.csm?.dispose(); }
+  dispose() { this.pipeline?.dispose(); this.lighting.dispose(); }
 }
 
 /** 'P' cycles the preset low → high → ultra (ignored while typing in an input). */

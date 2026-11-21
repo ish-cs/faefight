@@ -68,22 +68,25 @@ export function strut(a: THREE.Vector3, b: THREE.Vector3, r: number, seg = 8): T
  * (backdrop, island dressing, palms) go through this so the static world costs ~1 draw call per material.
  */
 export class StaticBatch {
-  private bins = new Map<THREE.Material, THREE.BufferGeometry[]>();
-  private flags = new Map<THREE.Material, { cast: boolean; receive: boolean }>();
+  /** One bin per (material, cast, receive): a part's own shadow flags are kept (a bin used to take its first part's). */
+  private bins = new Map<string, { material: THREE.Material; cast: boolean; receive: boolean; parts: THREE.BufferGeometry[] }>();
+  private ids = new Map<THREE.Material, number>();
 
   add(material: THREE.Material, geo: THREE.BufferGeometry, m: THREE.Matrix4 | null = null, col: THREE.ColorRepresentation = 0xffffff, cast = true, receive = true) {
-    let bin = this.bins.get(material);
-    if (!bin) { bin = []; this.bins.set(material, bin); this.flags.set(material, { cast, receive }); }
-    bin.push(part(geo, m, col));
+    let id = this.ids.get(material);
+    if (id === undefined) { id = this.ids.size; this.ids.set(material, id); }
+    const key = `${id}|${+cast}${+receive}`;
+    let bin = this.bins.get(key);
+    if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
+    bin.parts.push(part(geo, m, col));
   }
 
   build(parent: THREE.Object3D, name: string): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
-    for (const [material, parts] of this.bins) {
-      const mesh = new THREE.Mesh(merge(parts), material);
-      const f = this.flags.get(material)!;
-      mesh.castShadow = f.cast; mesh.receiveShadow = f.receive;
-      mesh.name = `${name}:${material.name || 'mat'}`;
+    for (const bin of this.bins.values()) {
+      const mesh = new THREE.Mesh(merge(bin.parts), bin.material);
+      mesh.castShadow = bin.cast; mesh.receiveShadow = bin.receive;
+      mesh.name = `${name}:${bin.material.name || 'mat'}${bin.cast ? '' : ':nc'}`;
       parent.add(mesh);
       out.push(mesh);
     }
@@ -91,9 +94,9 @@ export class StaticBatch {
     return out;
   }
 
-  /** Merged geometry per material without creating meshes (instanced props build their own). */
+  /** Merged geometry per material (and shadow flags) without creating meshes (instanced props build their own). */
   take(): { material: THREE.Material; geometry: THREE.BufferGeometry; cast: boolean; receive: boolean }[] {
-    const out = [...this.bins].map(([material, parts]) => ({ material, geometry: merge(parts), ...this.flags.get(material)! }));
+    const out = [...this.bins.values()].map((b) => ({ material: b.material, geometry: merge(b.parts), cast: b.cast, receive: b.receive }));
     this.bins.clear();
     return out;
   }
