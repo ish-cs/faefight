@@ -147,6 +147,8 @@ test('practice range: free shop, shoot a target with hit feedback, build for fre
   // Esc → pause card → Quit to menu.
   await page.locator('canvas.game').click();
   await expect.poll(() => page.evaluate(() => !!document.pointerLockElement)).toBe(true);
+  // Let the game see the lock first (pointerlockchange fires at the next rendering step), then release it.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   await page.evaluate(() => document.exitPointerLock());
   await expect(page.getByTestId('pause')).toBeVisible();
   await expect(page.getByTestId('pause-quit')).toHaveText('Quit to menu');
