@@ -1,10 +1,10 @@
-import { LIFECYCLE, MAP, PLAYER, SEAL, WEAPONS } from './constants';
+import { LIFECYCLE, MAP, PLAYER, RULE_EXP, SEAL, WEAPONS } from './constants';
 import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
 import { addKind, countOf, emptyHotbar, heldKinds, takeOut } from './hotbar';
 import type { IslandLayout } from './map';
 import type { Physics } from './physics';
 import { refillStamina, STAMINA } from './movement';
-import { isSealed } from './seal';
+import { doorwaysBlocked, isSealed } from './seal';
 import { newStorm, type StormCenter, type StormState } from './storm';
 import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState, Vec3 } from './types';
 import { clone, dist, dist2D, rotateY, v3 } from './vec';
@@ -121,6 +121,10 @@ export function killPlayer(
  * Seal checks are a flood fill, and the escape countdown asks every tick for anyone standing near their bunker:
  * cache per island until the set of pieces changes. Ids only ever grow, so (count, id sum) identifies the set.
  */
+/** EXPERIMENT: deaths count when each player's bunker was first sealed (keyed by player id; one match per process run is fine for CI). */
+const sealedDeathsBy = new WeakMap<MatchStateCore, Map<number, number>>();
+let sealedDeaths = new Map<number, number>();
+export function useSealedDeaths(s: MatchStateCore) { let m = sealedDeathsBy.get(s); if (!m) { m = new Map(); sealedDeathsBy.set(s, m); } sealedDeaths = m; }
 const sealCache = new WeakMap<MatchStateCore, { count: number; sum: number; byIsland: Map<number, boolean> }>();
 
 export function islandSealed(s: MatchStateCore, map: IslandLayout[], island: number): boolean {
@@ -134,7 +138,9 @@ export function islandSealed(s: MatchStateCore, map: IslandLayout[], island: num
   }
   let sealed = c.byIsland.get(island);
   if (sealed === undefined) {
-    sealed = isSealed(map[island].bunker, [...s.pieces.values()]);
+    const all = [...s.pieces.values()];
+    sealed = RULE_EXP.sealDoors >= map[island].bunker.doorways.length ? isSealed(map[island].bunker, all)
+      : doorwaysBlocked(map[island].bunker, all).filter(Boolean).length >= RULE_EXP.sealDoors;
     c.byIsland.set(island, sealed);
   }
   return sealed;
@@ -165,6 +171,7 @@ export function tickLifecycle(
   suddenDeathAt: number = LIFECYCLE.suddenDeathAt,
 ): MatchEvent[] {
   const out: MatchEvent[] = [];
+  useSealedDeaths(s);
 
   if (!s.suddenDeath && now >= suddenDeathAt) {
     s.suddenDeath = true;
@@ -198,8 +205,16 @@ export function tickLifecycle(
       out.push(ev(now, 'eliminated', { player: p.id }));
       continue;
     }
+    // EXPERIMENT: eliminated at N deaths after your bunker was first sealed.
+    const mark = sealedDeaths.get(p.id);
+    if (RULE_EXP.elimDeathsAfterSeal > 0 && mark !== undefined && p.deaths - mark >= RULE_EXP.elimDeathsAfterSeal) {
+      p.eliminated = true;
+      out.push(ev(now, 'eliminated', { player: p.id }));
+      continue;
+    }
     // Physically sealed: respawn inside anyway, with a short window to break out.
-    if (islandSealed(s, map, p.island)) {
+    const trappedNow = islandSealed(s, map, p.island);
+    if (trappedNow) {
       p.breakoutUntil = now + LIFECYCLE.breakoutSec;
       out.push(ev(now, 'trapped', { player: p.id, until: p.breakoutUntil }));
     }
@@ -213,11 +228,13 @@ export function tickLifecycle(
     grantLockedGuns(p);
     // Come back with a pistol + one spare mag so a camper with a rifle isn't a guaranteed kill.
     if (!p.inv.weapons.pistol && addKind(p.hotbar, 'pistol') >= 0) p.inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag };
-    p.invulnUntil = now + LIFECYCLE.spawnProtectMaxSec;
-    p.spawnProtected = true;
+    p.invulnUntil = trappedNow && !RULE_EXP.trappedSpawnProtect ? now : now + LIFECYCLE.spawnProtectMaxSec;
+    p.spawnProtected = !(trappedNow && !RULE_EXP.trappedSpawnProtect);
     physics.setPlayerPos(p.id, spawn);
   }
 
+  if (RULE_EXP.elimDeathsAfterSeal > 0 && !s.forcedSeal)
+    for (const p of s.players.values()) if (!sealedDeaths.has(p.id) && islandSealed(s, map, p.island)) sealedDeaths.set(p.id, p.deaths);
   for (const p of s.players.values()) {
     if (!p.alive) continue;
     const bunker = map[p.island].bunker.center;
