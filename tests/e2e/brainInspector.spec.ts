@@ -46,6 +46,7 @@ test('spectate a bot: brain inspector populated, overlay on, and the HUD shows i
   // Our player, armed, walks up to the bot's island; the bot gets a rifle too. Then /spectate: our seat is
   // bot-run from here, so the two bots fight right away.
   const bot = (await players(page)).find((p) => p.isBot)!;
+  const me = await dbg<number>(page, 'humanId');
   await dbg(page, 'give', { cash: 300, weapons: { rifle: { mag: 25, spare: 100 } } });
   await dbg(page, 'give', { cash: 300, weapons: { rifle: { mag: 25, spare: 100 } } }, bot.id);
   await dbg(page, 'teleport', bot.pos.x + 9, bot.pos.z + 9);
@@ -84,17 +85,29 @@ test('spectate a bot: brain inspector populated, overlay on, and the HUD shows i
   await expect.poll(async () => (await dbg<{ overlay: boolean }>(page, 'brain')).overlay).toBe(true);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/brain-inspector.png` });
 
-  // Its view: it hits our old seat (hit marker + damage numbers) and gets hit (hit-direction arcs).
+  // Its view: it gets hit (hit-direction arcs) and hits back (hit marker + damage numbers). Our old seat (a
+  // medium bot now) usually lands the hits first; if the easy bot hasn't hit anyone yet, watch that one.
   const crossHits = () => page.getByTestId('crosshair').evaluate((n) => Number((n as HTMLElement).dataset.hits ?? 0));
   const fx = () => page.evaluate(() => (window as unknown as { fx: { arrow: number; number: number } }).fx);
-  await expect.poll(crossHits, { timeout: 45_000 }).toBeGreaterThan(0);
-  await expect.poll(async () => (await fx()).number, { timeout: 10_000 }).toBeGreaterThan(0);
   await expect.poll(async () => (await fx()).arrow, { timeout: 45_000 }).toBeGreaterThan(0);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/brain-hurt.png` });
+  let watched = bot.id;
+  const t0 = Date.now();
+  await expect.poll(async () => {
+    const n = await crossHits();
+    if (n === 0 && watched === bot.id && Date.now() - t0 > 12_000) {
+      watched = me;
+      await page.locator('canvas.game').focus();
+      const order = (await players(page)).filter((p) => p.alive).map((p) => p.id).sort((a, b) => a - b);
+      await page.keyboard.press(`Digit${order.indexOf(me) + 1}`);
+    }
+    return n;
+  }, { timeout: 60_000 }).toBeGreaterThan(0);
+  await expect.poll(async () => (await fx()).number, { timeout: 10_000 }).toBeGreaterThan(0);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/brain-fight.png` });
 
-  // Hotbar selection mirrors the bot's own.
-  const sel = (await players(page)).find((p) => p.id === bot.id)!.selected;
+  // Hotbar selection mirrors the watched bot's own.
+  const sel = (await players(page)).find((p) => p.id === watched)!.selected;
   await expect(page.locator(`[data-testid="hotbar-slot-${sel}"]`)).toHaveClass(/selected/);
 
   // Shift+B: overlay off; B: inspector closed, compact panel back.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { viewedPlayer, viewingOther } from '../../src/client/viewed';
+import { KILLCAM_SEC, Killcam, SpectatorCamera, personalize, viewedPlayer, viewingOther } from '../../src/client/viewed';
 import { damageNumbers } from '../../src/client/damageFx';
 import { SoundDirector } from '../../src/client/audio/events';
 import { buildMap } from '../../src/sim/map';
@@ -29,5 +29,46 @@ describe('viewed player (spectating shows their view)', () => {
     expect(d.update(snap).some((c) => c.sound === 'hitmarker')).toBe(false);
     d.setViewed(3);
     expect(d.update({ ...snap, tick: 31 }).some((c) => c.sound === 'hitmarker')).toBe(true);
+  });
+});
+
+describe('spectator camera mode follows the watched player', () => {
+  test("their first/third person; bots third person; V flips it until the target or their camera changes", () => {
+    const c = new SpectatorCamera();
+    expect(c.firstPerson(2, undefined, 'third')).toBe(false); // a bot: over the shoulder
+    expect(c.firstPerson(3, 1, 'third')).toBe(true); // a human in first person
+    expect(c.firstPerson(3, 1, 'first')).toBe(false); // V pressed: flipped
+    expect(c.firstPerson(3, 0, 'first')).toBe(false); // they switched to third person: follow them again
+    expect(c.firstPerson(3, 1, 'first')).toBe(true);
+    expect(c.firstPerson(2, undefined, 'first')).toBe(false); // someone new: their view, whatever the local setting
+  });
+});
+
+describe('killcam', () => {
+  const kill = (victim: number, killer: number | null) => ({ type: 'kill', data: { victim, killer } });
+  test('the followed player dying starts it (looking at the killer), for KILLCAM_SEC', () => {
+    const k = new Killcam();
+    k.onEvents([kill(4, 2)], 3, 10); // someone else died
+    expect(k.active(3, 10)).toBe(false);
+    k.onEvents([kill(3, 2)], 3, 10);
+    expect(k.active(3, 10.5)).toBe(true);
+    expect(k.killer).toBe(2);
+    expect(k.active(3, 10 + KILLCAM_SEC + 0.01)).toBe(false);
+    expect(k.active(5, 10.5)).toBe(false); // followed someone else meanwhile
+    k.onEvents([kill(3, null)], 3, 20); // the storm
+    expect(k.active(3, 20.1)).toBe(true);
+    expect(k.killer).toBeNull();
+  });
+});
+
+describe('bot-brain text names', () => {
+  const names: Record<number, string> = { 1: 'You', 2: 'Marco' };
+  const nameOf = (id: number) => names[id] ?? `#${id}`;
+  test('the local player is you / your, others by name', () => {
+    expect(personalize("no route to @1's island", 1, nameOf)).toBe('no route to your island');
+    expect(personalize("@1's generator holds $200", 1, nameOf)).toBe('Your generator holds $200');
+    expect(personalize('Going after @1 (seen 3 s ago)', 1, nameOf)).toBe('Going after you (seen 3 s ago)');
+    expect(personalize("Sealing @2's bunker", 1, nameOf)).toBe("Sealing Marco's bunker");
+    expect(personalize("no route to @2's island", 0, nameOf)).toBe("no route to Marco's island"); // spectating host: names only
   });
 });

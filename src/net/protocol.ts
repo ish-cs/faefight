@@ -1,7 +1,7 @@
 import type { MoveCmd } from '../sim/movement';
 import type { Placement } from '../sim/building';
 import type { MapChoice, MapDef } from '../sim/map';
-import type { BuildRequest, Difficulty, PlayerInput } from '../sim/types';
+import type { BuildRequest, Difficulty, PieceKind, PlayerInput, ShopItem } from '../sim/types';
 import type { BrainDigest } from '../sim/bots/introspect';
 
 /**
@@ -14,6 +14,17 @@ export type Slot =
   | { kind: 'bot'; difficulty: Difficulty; name?: string };
 
 export const MAX_PLAYERS = 8;
+
+/**
+ * What a human player sees that the sim doesn't know: their build ghost, the shop/vault panel they have open
+ * and the item they hover. Sent to the host ~4 Hz while it changes; the host forwards it only to a dead
+ * friend spectating that player (read-only mirror), never into snapshots or replays.
+ */
+export type ViewExtras = {
+  ghost: { kind: PieceKind; x: number; y: number; z: number; rotY: number; ok: boolean } | null;
+  panel: 'shop' | 'potions' | 'vault' | null;
+  hover: ShopItem | null;
+};
 export const CHAT_MAX_LEN = 200;
 
 /** Remote client → host. */
@@ -27,7 +38,9 @@ export type ClientMsg =
   | { t: 'preview'; req: BuildRequest; key: number }
   | { t: 'chat'; text: string }
   /** Spectating (dead/eliminated): the player followed, null = free fly. The host only honours it while you're dead. */
-  | { t: 'follow'; id: number | null };
+  | { t: 'follow'; id: number | null }
+  /** My ghost / open panel (ViewExtras), for friends spectating me. */
+  | { t: 'view'; v: ViewExtras };
 
 /** Host → remote client. */
 export type HostMsg =
@@ -40,6 +53,8 @@ export type HostMsg =
   | { t: 'ping'; n: number }
   /** Brain digest of the bot you're spectating (only while you're dead and following it), ~4 Hz. */
   | { t: 'brain'; d: BrainDigest }
+  /** What the human you spectate sees beyond the snapshot (ghost, open panel), ~4 Hz, only while you're dead and following them. */
+  | { t: 'view'; id: number; v: ViewExtras }
   /** Connection quality: round-trip ms by seat (null = unknown; the host's own seat is 0) and the host's sim health. */
   | { t: 'net'; rtt: (number | null)[]; host: 'ok' | 'strained' }
   /** Your seat's rejoin token: hello with it after a drop to reclaim the seat from the bot (within the grace period). */

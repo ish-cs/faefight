@@ -1,6 +1,7 @@
 import './brainPanel.css';
 import type { BrainDigest } from '../sim/bots/introspect';
 import { TRAIT_KEYS } from '../sim/bots/introspect';
+import { personalize } from './viewed';
 
 /**
  * The expanded bot-brain inspector shown while spectating a bot (B toggles it): Now, Scores (goal utilities
@@ -30,6 +31,8 @@ export class BrainInspector {
   private lastSig = '';
   /** Bot being followed (null: none / not a bot): the panel only shows for that bot's digest. */
   private follow: number | null = null;
+  /** The local player (even after handing the seat to a bot): "you" in the text. */
+  private selfId = 0;
 
   constructor(parent: HTMLElement) {
     this.root.dataset.testid = 'brain-inspector';
@@ -56,7 +59,8 @@ export class BrainInspector {
   toggleOverlay() { this.overlay = !this.overlay; if (!this.open) this.open = true; this.sync(); }
 
   /** Every snapshot: who we follow (a bot, or null) and the names for `@id`. */
-  setFollow(id: number | null, players: { id: number; name: string }[]) {
+  setFollow(id: number | null, players: { id: number; name: string }[], selfId = 0) {
+    this.selfId = selfId;
     if (id !== this.follow) { this.follow = id; this.digest = null; this.lastSig = ''; this.expanded.clear(); }
     for (const p of players) this.names.set(p.id, p.name);
     this.sync();
@@ -76,8 +80,8 @@ export class BrainInspector {
     else if (show) this.render();
   }
 
-  private name(id: number) { return id < 0 ? 'the storm' : this.names.get(id) ?? `#${id}`; }
-  private text(s: string) { return s.replace(/@(\d+)/g, (_, id) => this.name(Number(id))); }
+  private name(id: number) { return id < 0 ? 'the storm' : id === this.selfId && id > 0 ? 'You' : this.names.get(id) ?? `#${id}`; }
+  private text(s: string) { return personalize(s, this.selfId, (id) => this.names.get(id) ?? `#${id}`); }
 
   private render() {
     const d = this.digest;

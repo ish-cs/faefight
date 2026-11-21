@@ -41,6 +41,8 @@ export type PlayerInput = {
   fire: boolean;
   /** Aim down sights (held): tighter spread, zoom, slower move. */
   ads: boolean;
+  /** Camera the player looks through: 0 third person, 1 first person (cosmetic: spectators follow it). */
+  view?: 0 | 1;
   reload: boolean;
   interact: boolean;
   slot: WeaponKind | null;
@@ -120,6 +122,8 @@ export type PlayerState = {
   nextFireAt: number;
   /** Aiming down sights (sim-validated: needs a gun in hand, not sprinting or reloading). */
   ads: boolean;
+  /** Their camera: 0 third person (bots, default), 1 first person. Cosmetic; spectators follow it. */
+  view?: 0 | 1;
   /** Spread bloom (deg) as of `lastShotAt`; it recovers over time (gunplay.ts). */
   bloom: number;
   lastShotAt: number;

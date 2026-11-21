@@ -13,6 +13,7 @@ import { resolveMapChoice, type MapChoice, type MapDef, type MapTemplate } from 
 import type { MatchSetup } from '../sim/matchApi';
 import type { Snapshot } from '../sim/types';
 import type { BrainDigest } from '../sim/bots/introspect';
+import type { ViewExtras } from '../net/protocol';
 import type { ToWorker } from './protocol';
 import { MONEY_MAX, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven } from './commands';
 import { PING_EVERY_MS, PingTracker, TickMonitor, type HostTick } from './qol/netQuality';
@@ -257,6 +258,9 @@ export class HostSession {
         case 'follow':
           if (playerId !== null) this.follows.set(playerId, msg.id);
           break;
+        case 'view':
+          if (playerId !== null) this.views.set(playerId, msg.v);
+          break;
       }
     });
   }
@@ -277,7 +281,7 @@ export class HostSession {
     const seat = this.lobby.seatOf(peerId);
     this.links.delete(peerId);
     if (seat === null) return;
-    { const gone = this.idOf(seat); if (gone !== null) { this.interest?.forget(gone); this.streams.delete(gone); this.follows.delete(gone); } }
+    { const gone = this.idOf(seat); if (gone !== null) { this.interest?.forget(gone); this.streams.delete(gone); this.follows.delete(gone); this.views.delete(gone); } }
     if (!this.started) { this.lobby.removePeer(peerId); this.broadcastLobby(); return; }
     const playerId = this.idOf(seat);
     if (playerId === null) throw new Error(`HostSession.onLeave: seat ${seat} has no player`);
@@ -445,6 +449,7 @@ export class HostSession {
     this.encoder = new SnapshotEncoder();
     this.streams.clear();
     this.follows.clear();
+    this.views.clear();
     this.tickNo = 0;
     this.previewBudget.clear();
   }
@@ -468,6 +473,7 @@ export class HostSession {
    */
   onSnapshot(snap: Snapshot) {
     this.lastSnap = snap;
+    if (this.tickNo % 8 === 0) this.sendViews(snap);
     this.ticks.onTick(performance.now());
     this.encoder.push(snap);
     const tick = this.tickNo++;
@@ -489,6 +495,23 @@ export class HostSession {
   }
 
   private lastSnap: Snapshot | null = null;
+  /** Each human's ghost / open panel (ViewExtras): friends' from their 'view' messages, the host's own via setLocalView. */
+  private views = new Map<number, ViewExtras>();
+
+  setLocalView(v: ViewExtras) { if (this.hostPlayerId !== null) this.views.set(this.hostPlayerId, v); }
+  viewOf(id: number): ViewExtras | null { return this.views.get(id) ?? null; }
+
+  /** ~4 Hz: a dead friend following a human gets that human's ViewExtras (never a living player). */
+  private sendViews(snap: Snapshot) {
+    for (const [peerId, link] of this.links) {
+      const seat = this.lobby.seatOf(peerId);
+      const id = seat === null ? null : this.idOf(seat);
+      if (id === null) continue;
+      const t = spectateTarget(snap, id, this.follows.get(id));
+      const v = t === null || snap.players.find((p) => p.id === t)?.isBot ? undefined : this.views.get(t);
+      if (v) this.send(link, { t: 'view', id: t!, v });
+    }
+  }
 
   /** Bots that spectating friends follow right now (dead and watching a living bot): the worker digests these. */
   brainWants(): number[] {
