@@ -1,5 +1,6 @@
 import { CHAT_MAX_LEN } from '../net/protocol';
 import { isAction } from './keymap';
+import { isMuted } from './chatMute';
 
 const MAX_LINES = 6;
 const FADE_MS = 8000;
@@ -79,6 +80,7 @@ export class ChatUi {
 
   /** Append a line. from = '' → system line. */
   add(from: string, text: string) {
+    if (isMuted(from)) return;
     const line = document.createElement('div');
     line.className = from ? 'chat-line' : 'chat-line system';
     if (from) {

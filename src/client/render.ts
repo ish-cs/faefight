@@ -1,10 +1,12 @@
+import { CASING_CAP } from './world/casings';
 import * as THREE from 'three/webgpu';
 import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
-import type { MatchEvent, PieceKind, Snapshot, Vec3, WeaponKind } from '../sim/types';
+import type { MatchEvent, PieceKind, PieceState, Snapshot, Vec3, WeaponKind } from '../sim/types';
 import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import { CharacterSystem, type Motion } from './characters/avatar';
+import { NpcSystem } from './characters/npcs';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
@@ -17,7 +19,7 @@ export { lods } from './world/lod';
 export { pbrStats } from './world/pbr';
 
 export { pieceGeometry };
-import { ISLAND_COLORS } from './colors';
+import { islandColor, setIslandPalette } from './colors';
 export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 
 /** WebGPURenderer tone-maps everything on output (per-material toneMapped is ignored), so unlit
@@ -52,10 +54,12 @@ export class Renderer {
   private motion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
   private lastFrame = performance.now();
   /** Animated player avatars (src/client/characters). */
-  readonly characters = new CharacterSystem(this.scene, (island) => ISLAND_COLORS[island % 8]);
+  readonly characters = new CharacterSystem(this.scene, (island) => islandColor(island));
   /** Loot on the ground drawn as its items, with labels nearby (lootView.ts). */
   readonly lootView = new LootView(this.scene);
   private potionSellers = new PotionSellers(this.scene);
+  /** Animated shop keepers (characters/npcs.ts). */
+  readonly npcs = new NpcSystem(this.scene);
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
   private fx: Fx[] = [];
   private ghost: THREE.Mesh | null = null;
@@ -68,6 +72,9 @@ export class Renderer {
   private ghostTmp = new THREE.Vector3();
   private ghostTmp2 = new THREE.Vector3();
   private ghostWhite = new THREE.Color(0xffffff);
+  /** Own unconfirmed placements (drawn with the real pieces) and refused ones fading out. */
+  private predicted: PieceState[] = [];
+  private fadeMeshes: THREE.Mesh[] = [];
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
   /** Level pips above each island's generator (lit = reached), by island. */
   private genPips: THREE.Mesh[][] = [];
@@ -137,7 +144,9 @@ export class Renderer {
   setMap(def: MapDef, humanId: number) {
     this.map = def.islands;
     this.humanId = humanId;
-    this.world.setMap(def, ISLAND_COLORS);
+    setIslandPalette(def.colors);
+    this.world.setMap(def, def.islands.map((isl) => islandColor(isl.index)));
+    this.npcs.sync(); // keepers registered by the map art (before the loading warm-up compiles the scene)
     const map = def.islands;
     this.storm.setMap(map, def.center);
     this.gunFx.warmUp([this.boomMat]);
@@ -200,7 +209,7 @@ export class Renderer {
   pushSnapshot(snap: Snapshot): MatchEvent[] {
     this.curr = snap;
     this.waterY = snap.waterY;
-    this.world.syncPieces(snap.pieces);
+    this.world.syncPieces(this.predicted.length ? snap.pieces.concat(this.predicted) : snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
     this.world.syncProps(snap.props);
     this.syncLoot(snap);
@@ -226,6 +235,8 @@ export class Renderer {
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
     if (e.type === 'shot' || e.type === 'explosion') this.world.debris.onEvent(e, this.camera.position);
     if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
+    if ((e.type === 'shot' || e.type === 'explosion') && this.curr)
+      this.world.impactEvent(e, { pieces: this.curr.pieces, players: this.curr.players, waterY: this.waterY, broken: this.curr.broken ?? [] });
     if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {
@@ -363,6 +374,35 @@ export class Renderer {
     this.ghostPulse = 1;
   }
 
+  /**
+   * Own placements the host hasn't confirmed yet (buildPredict.ts): drawn as real pieces, merged with the
+   * current snapshot's pieces. Call before pushSnapshot when a confirmation and its snapshot arrive together.
+   */
+  setPredictedPieces(pieces: PieceState[]) {
+    if (pieces.length === 0 && this.predicted.length === 0) return;
+    this.predicted = pieces;
+    if (this.curr) this.world.syncPieces(this.curr.pieces.concat(pieces));
+  }
+
+  /** Refused predicted pieces fading out (opacity 1 → 0); pass the full current list every frame. */
+  setPieceFades(fades: { piece: PieceState; opacity: number }[]) {
+    while (this.fadeMeshes.length < fades.length) {
+      const m = new THREE.Mesh(undefined, new THREE.MeshBasicNodeMaterial({ color: boosted(0xff4d4d), transparent: true, depthWrite: false }));
+      m.renderOrder = 10;
+      this.scene.add(m);
+      this.fadeMeshes.push(m);
+    }
+    this.fadeMeshes.forEach((m, i) => {
+      const f = fades[i];
+      m.visible = !!f;
+      if (!f) return;
+      m.geometry = this.geometryFor(f.piece.kind);
+      m.position.set(f.piece.pos.x, f.piece.pos.y, f.piece.pos.z);
+      m.rotation.set(0, f.piece.rotY, 0);
+      (m.material as THREE.MeshBasicNodeMaterial).opacity = 0.7 * f.opacity;
+    });
+  }
+
   /** Meshes the aim ray may hit: world + pieces + other players. Reused array: valid until the next call. */
   aimTargets(): THREE.Object3D[] {
     const out = this.aimList;
@@ -404,8 +444,11 @@ export class Renderer {
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
     if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
+    this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
     this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
-    this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
+    const feet = this.feet.slice(0, nf);
+    this.npcs.frame(dt, this.camera, feet);
+    this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }
 

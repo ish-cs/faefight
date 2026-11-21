@@ -13,6 +13,20 @@ export type HitTarget = { type: 'player'; id: number } | { type: 'piece'; id: nu
 export type PropPush = { prop: number; player: number; dir: Vec3; speed: number; feetY: number };
 /** `part`: for player hits, whether the ray went through the head sphere (HEAD) or just the body. */
 export type RayHit = { dist: number; point: Vec3; hit: HitTarget; part?: 'head' | 'body' };
+/** Physics.save(): collider handles by entity, and the Rapier world snapshot. */
+export type PhysicsSave = {
+  world: Uint8Array;
+  entities: [number, HitTarget][];
+  pieces: [number, number][];
+  pieceKinds: [number, PieceState['kind']][];
+  players: [number, number][];
+  slits: number[];
+  dirty: boolean;
+  /** gameplay props' query colliders (props.ts), push recording */
+  props?: [number, number, PropSpawn][];
+  recordPushes?: boolean;
+  pushes?: PropPush[];
+};
 
 /** Distance along a unit ray to a sphere, or null if it misses. */
 export function raySphere(o: Vec3, d: Vec3, c: Vec3, r: number): number | null {
@@ -87,11 +101,52 @@ export class Physics {
     for (const [id, k] of this.pieceKinds) ph.pieceKinds.set(id, k);
     for (const [id, c] of this.players) ph.players.set(id, same(c));
     for (const h of this.slits) ph.slits.add(h);
+    for (const [id, y] of this.pieceBaseY) ph.pieceBaseY.set(id, y);
+    for (const h of this.anchors) ph.anchors.add(h);
+    for (const [g, z] of this.zones) ph.zones.set(g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } })));
     for (const [id, x] of this.props) ph.props.set(id, { c: same(x.c), spawn: x.spawn });
     ph.recordPushes = this.recordPushes;
     ph.pushes = this.pushes.map((p) => ({ ...p, dir: { ...p.dir } }));
-    for (const [k, z] of this.zones) ph.zones.set(k, z);
     ph.dirty = this.dirty;
+    return ph;
+  }
+
+  /** The collision world as plain data + Rapier's own snapshot bytes (host migration checkpoints: net/checkpoint.ts). */
+  save(): PhysicsSave {
+    return {
+      world: this.world.takeSnapshot(),
+      entities: [...this.entities].map(([h, t]) => [h, { ...t }]),
+      pieces: [...this.pieces].map(([id, c]) => [id, c.handle]),
+      pieceKinds: [...this.pieceKinds],
+      players: [...this.players].map(([id, c]) => [id, c.handle]),
+      slits: [...this.slits],
+      dirty: this.dirty,
+      props: [...this.props].map(([id, x]) => [id, x.c.handle, x.spawn]),
+      recordPushes: this.recordPushes,
+      pushes: this.pushes.map((x) => ({ ...x, dir: { ...x.dir } })),
+    };
+  }
+
+  /** Inverse of save(): same handles, same state, so the restored world steps exactly like the saved one. */
+  static async load(s: PhysicsSave): Promise<Physics> {
+    await ensureInit();
+    const world = RAPIER.World.restoreSnapshot(s.world);
+    if (!world) throw new Error('Physics.load: Rapier could not restore the world snapshot');
+    const ph = new Physics(world);
+    const col = (h: number) => {
+      const c = world.getCollider(h);
+      if (!c) throw new Error(`Physics.load: collider ${h} missing from the snapshot`);
+      return c;
+    };
+    for (const [h, t] of s.entities) ph.entities.set(h, { ...t });
+    for (const [id, h] of s.pieces) ph.pieces.set(id, col(h));
+    for (const [id, k] of s.pieceKinds) ph.pieceKinds.set(id, k);
+    for (const [id, h] of s.players) ph.players.set(id, col(h));
+    for (const h of s.slits) ph.slits.add(h);
+    for (const [id, h, spawn] of s.props ?? []) ph.props.set(id, { c: col(h), spawn });
+    ph.recordPushes = s.recordPushes ?? false;
+    ph.pushes = (s.pushes ?? []).map((x) => ({ ...x, dir: { ...x.dir } }));
+    ph.dirty = s.dirty;
     return ph;
   }
 
@@ -175,6 +230,10 @@ export class Physics {
   }
 
   /** Pushes recorded since the last call (PropSim drains these every tick). */
+  /** Whether the query world must step before the next query (checkpoint restore puts it back after PropSim replays). */
+  get syncPending(): boolean { return this.dirty; }
+  set syncPending(d: boolean) { this.dirty = d; }
+
   takePushes(): PropPush[] {
     const out = this.pushes;
     this.pushes = [];

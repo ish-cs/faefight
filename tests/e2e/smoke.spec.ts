@@ -61,10 +61,12 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await expect(page.getByTestId('cash')).toHaveText(`$${cash - 50}`);
   await expect(page.getByTestId('buy-pistol')).toBeDisabled();
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', 'pistol');
-  await expect(page.getByTestId('hotbar-slot-0')).toContainText(/pistol\s*12\/36/i);
-  // Shop cards are icon + price; the name is only the accessible label / tooltip.
+  // Slots show the mag only; mag/spare is the big ammo readout bottom-right.
+  await expect(page.getByTestId('hotbar-slot-0')).toContainText(/pistol/i);
+  await expect(page.locator('[data-testid="hotbar-slot-0"] .hb-count')).toHaveText('12');
+  // Shop cards are icon + short name + price; full details are in the info bar and the accessible label.
   await expect(page.getByTestId('buy-pistol')).toHaveAttribute('aria-label', /^Pistol, \$50, Owned/);
-  await expect(page.getByTestId('buy-pistol')).not.toContainText('Pistol');
+  await expect(page.locator('[data-testid="buy-pistol"] .iname')).toHaveText('Pistol');
   // A medkit is a hotbar item too: next free slot. Bought from the keyboard (Enter on the focused card).
   await page.getByTestId('buy-medkit').focus();
   await page.keyboard.press('Enter');
@@ -122,16 +124,20 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await dbg(page, 'give', { medkits: 1 });
   await expect(page.locator('[data-testid="hotbar-slot-1"] .hb-count')).toHaveText('2');
   await dbg(page, 'hp', 40);
-  await expect.poll(async () => (await me()).hp).toBe(40);
+  // The set landed (from 100); passive regen (1 HP/s) may already have added a little on top.
+  await expect.poll(async () => (await me()).hp).toBeLessThanOrEqual(45);
   await page.keyboard.press('Digit2');
   await expect(page.getByTestId('weapon')).toHaveText(/medkit/i);
   await expect(async () => {
     if ((await me()).inv.medkits === 2) await page.mouse.click(640, 360);
     await expect.poll(async () => (await me()).inv.medkits, { timeout: 1000 }).toBe(1);
   }).toPass({ timeout: 10_000 });
+  const hpAtUse = (await me()).hp; // the heal has started; it adds its +50 when it finishes
+  expect(hpAtUse).toBeLessThan(50);
   await expect(page.getByTestId('healing')).toBeVisible();
   await expect(page.locator('[data-testid="hotbar-slot-1"] .hb-count')).toHaveText('1');
-  await expect.poll(async () => (await me()).hp, { timeout: 5000 }).toBeGreaterThanOrEqual(90); // +50, plus any passive regen during the 2 s heal
+  // At least the full +50 over the HP it started from (passive regen during the 2 s heal can only add to it).
+  await expect.poll(async () => (await me()).hp, { timeout: 5000 }).toBeGreaterThanOrEqual(hpAtUse + 50);
   await expect(page.getByTestId('healing')).toBeHidden();
 
   expect(errors, errors.join('\n')).toEqual([]);

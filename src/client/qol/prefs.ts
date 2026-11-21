@@ -1,5 +1,6 @@
 import type { Slot } from '../../net/protocol';
 import type { Difficulty, ShopItem } from '../../sim/types';
+import { clampSettings, isColor, type GameSettings } from '../../sim/settings';
 
 /**
  * Remembered menu choices (localStorage `faefight.prefs.v1`): last vs-bot difficulty and bot count, last
@@ -11,10 +12,14 @@ export const MAX_SOLO_BOTS = 7;
 
 /** A remembered lobby seat (humans can't be remembered: they come back by joining). */
 export type SeatPref = { kind: 'open' } | { kind: 'bot'; difficulty: Difficulty };
-export type Prefs = { difficulty: Difficulty; bots: number; map: string | null; seats: SeatPref[] | null; lastBuy: ShopItem | null };
+/** settings: the host's / vs-bot game settings (clamped). color: palette index this player last picked. */
+export type Prefs = {
+  difficulty: Difficulty; bots: number; map: string | null; seats: SeatPref[] | null; lastBuy: ShopItem | null;
+  settings: GameSettings; color: number | null;
+};
 
 const DIFFS: Difficulty[] = ['easy', 'medium', 'hard', 'pro'];
-const defaults = (): Prefs => ({ difficulty: 'medium', bots: 1, map: null, seats: null, lastBuy: null });
+const defaults = (): Prefs => ({ difficulty: 'medium', bots: 1, map: null, seats: null, lastBuy: null, settings: clampSettings(null), color: null });
 
 type KV = Pick<Storage, 'getItem' | 'setItem'>;
 const store = (): KV | null => {
@@ -38,6 +43,8 @@ export function sanitizePrefs(raw: unknown): Prefs {
     map: typeof r.map === 'string' && r.map.length <= 40 ? r.map : null,
     seats: seats && seats.every((s) => s) ? (seats as SeatPref[]) : null,
     lastBuy: typeof r.lastBuy === 'string' && r.lastBuy.length <= 32 ? (r.lastBuy as ShopItem) : null,
+    settings: clampSettings(r.settings),
+    color: isColor(r.color) ? r.color : null,
   };
 }
 

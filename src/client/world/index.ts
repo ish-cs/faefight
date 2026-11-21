@@ -1,6 +1,9 @@
 import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
-import type { MatchEvent, PieceState, PlayerState, Snapshot } from '../../sim/types';
+import type { FirePatch, MatchEvent, PieceState, PlayerState, Snapshot } from '../../sim/types';
+import { FireFx } from './fireFx';
+import { ImpactMarks } from './impacts';
+import { clearNpcSpots } from '../characters/npcSpots';
 import { CosmeticLayer } from './cosmetics';
 import { Debris } from './debris';
 import { Critters } from './critters';
@@ -36,6 +39,10 @@ export class World {
   readonly pieces = new PieceLayer();
   /** Bullet holes, impact particles, shake and destruction debris for pieces. */
   readonly pieceFx = new PieceFx(this.pieces);
+  /** Bullet/blast marks and impact bursts on the world itself (ground, quay walls, cover, props). */
+  readonly impacts = new ImpactMarks(this.pieceFx.particles);
+  /** Flames, smoke, embers, charring and the fire light for burning pieces and ground fires. */
+  readonly fire = new FireFx(this.pieceFx.particles, this.pieces);
   private water: Ocean | null = null;
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
@@ -51,6 +58,7 @@ export class World {
   /** dense dock clusters + quay gear (clusters.ts / propLayer.ts) */
   readonly props = new PropLayer();
   private boats: Boats | null = null;
+  private lastFrame = performance.now();
   /** soft baked-AO footprints under containers, walls and stations (groundAO.ts) */
   private groundAO: THREE.Mesh | null = null;
   private waterEnv: THREE.MeshStandardNodeMaterial | null = null;
@@ -59,14 +67,13 @@ export class World {
   critters: Critters | null = null;
   /** positional critter sounds (main wires this to the audio system) */
   onCritterSound: ((s: CritterSound) => void) | null = null;
-  private lastFrame = performance.now();
 
   /** `collidables` is the Renderer's camera/aim blocker list; World adds its static + piece hulls to it. */
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, camera: THREE.PerspectiveCamera, private collidables: THREE.Object3D[]) {
     this.sky = new SkyLighting(gpu, scene, camera);
     SUN_FOR_BAKE.dir.copy(SUN_DIR);
     installQualityToggle(this.sky);
-    scene.add(this.pieces.root, this.pieceFx.root);
+    scene.add(this.pieces.root, this.pieceFx.root, this.impacts.mesh, this.fire.light);
     collidables.push(...this.pieces.proxies);
     this.pieces.onProxiesChanged = () => {
       for (let i = collidables.length - 1; i >= 0; i--) if (collidables[i].name.startsWith('pieceHull:')) collidables.splice(i, 1);
@@ -78,6 +85,7 @@ export class World {
     this.clearMap();
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
+    clearNpcSpots(); // the shop/potion props below register their keepers
     this.props.buildTier = TIER_LIMIT[this.sky.quality];
     // ?noprops (perf A/B): no dock clusters, no physics debris, no gameplay-prop meshes (the sim still has them)
     const q = typeof location !== 'undefined' ? location.search : '';
@@ -94,6 +102,7 @@ export class World {
     this.islandHulls = collidables;
     this.collidables.push(...collidables);
     const map = def.islands;
+    this.impacts.setMap(def);
     this.water = buildWater(def);
     this.scene.add(this.water.mesh);
     // The ambient env map is deliberately hazy/desaturated (for shading); at grazing angles it turned the far sea
@@ -132,6 +141,13 @@ export class World {
       gameProps.onPose = (id, p, q) => sim.moveObstacle(id, p, [q.x, q.y, q.z, q.w], cam);
     });
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
+    // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
+    // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
+    for (const r of [this.islands, this.scatter.root, this.cosmetics.root]) {
+      if (!r) continue;
+      r.updateMatrixWorld(true);
+      r.traverse((o) => { o.matrixAutoUpdate = false; o.matrixWorldAutoUpdate = false; });
+    }
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
 
@@ -176,7 +192,17 @@ export class World {
   /** Snapshot `props` (displaced gameplay props; the rest are at spawn). */
   syncProps(poses: Snapshot['props']) { this.gameProps?.sync(poses); }
 
-  syncPieces(pieces: PieceState[]) { this.pieces.sync(pieces); this.pieceFx.sync(pieces); this.debris.syncPieces(pieces); }
+  syncPieces(pieces: PieceState[], fires?: FirePatch[]) {
+    this.pieces.sync(pieces);
+    this.pieceFx.sync(pieces);
+    this.debris.syncPieces(pieces);
+    this.fire.sync(pieces, fires);
+    this.water?.syncPieces(pieces, this.sky.camera.position);
+    if (this.impacts.active) { const ids = new Set(pieces.map((p) => p.id)); this.impacts.retainPieces((id) => ids.has(id)); }
+  }
+
+  /** `shot` / `explosion` events → world surface marks and impact bursts. */
+  impactEvent(e: MatchEvent, view: Parameters<ImpactMarks['onEvent']>[1]) { this.impacts.onEvent(e, view); }
 
   /** Shots / explosions scare the wildlife. */
   critterEvent(e: MatchEvent) { this.critters?.onEvent(e); }
@@ -188,7 +214,7 @@ export class World {
   render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
     const now = performance.now(), dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
-    if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
+    if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY, dt);
     // water reflections follow the weather (its own envMapIntensity ignores scene.environmentIntensity)
     if (this.waterEnv) this.waterEnv.envMapIntensity = 0.62 * (1 - 0.65 * this.sky.lighting.weather);
     const t = now / 1000;
@@ -206,8 +232,12 @@ export class World {
     impostors.step(this.gpu, this.scene.environment); // one queued impostor bake per frame (load/reveal frames)
     lods.setQuality(this.sky.quality);
     lods.update(this.sky.camera.position);
-    this.pieceFx.update(performance.now());
+    this.pieceFx.update(now);
     this.gameProps?.update(dt);
+    this.impacts.setQuality(this.sky.quality);
+    this.impacts.update();
+    this.fire.setQuality(this.sky.quality);
+    this.fire.update(Math.min(0.05, dt), this.sky.camera);
     this.sky.render(); // cascaded shadows follow the camera themselves
   }
 }

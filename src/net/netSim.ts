@@ -99,7 +99,7 @@ export function withConditions(t: Transport, c: NetConditions): Transport {
   });
   console.info(`[netSim] simulating rtt ${c.rttMs} ms, jitter ${c.jitterMs} ms, loss ${(c.loss * 100).toFixed(1)}%`);
   return {
-    host: async () => wrapRoom(await t.host()),
+    host: async (code) => wrapRoom(await t.host(code)),
     join: async (code) => new SimLink(await t.join(code), c),
   };
 }

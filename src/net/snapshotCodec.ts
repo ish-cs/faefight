@@ -19,8 +19,11 @@ export type NetProjectile = [number, number, number, number, number, number, num
 const PROJ_KINDS = ['grenade', 'charge', 'rocket'] as const;
 /** A displaced gameplay prop on the wire: position in cm, quaternion in 1/1000 (delta-encoded per id by wire.ts). */
 export type NetProp = PropPose;
-export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players' | 'projectiles' | 'brains' | 'props'> & {
-  pieces?: PieceState[]; players: NetPlayer[]; proj?: NetProjectile[]; pr?: NetProp[];
+/** A ground fire on the wire: [id, kind (0 grass, 1 crate, 2 palm), x, y, z]. */
+export type NetFire = [number, number, number, number, number];
+const FIRE_KINDS = ['grass', 'crate', 'palm'] as const;
+export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players' | 'projectiles' | 'brains' | 'fires' | 'props'> & {
+  pieces?: PieceState[]; players: NetPlayer[]; proj?: NetProjectile[]; fire?: NetFire[]; pr?: NetProp[];
   /** Spectators only: the followed bot's thinking. */
   brain?: BotBrainInfo;
 };
@@ -47,7 +50,7 @@ export class SnapshotEncoder {
     this.events.push(snap.events);
     this.eventTicks.push(snap.tick);
     if (this.events.length > MAX_EVENT_TICKS) { this.events.shift(); this.eventTicks.shift(); }
-    const key = snap.pieces.map((p) => `${p.id}:${Math.round(p.hp)}`).join(',');
+    const key = snap.pieces.map((p) => `${p.id}:${Math.round(p.hp)}${p.burning ? 'f' : ''}`).join(',');
     if (key !== this.piecesKey) {
       this.piecesKey = key;
       this.pieces = snap.pieces.map((p) => ({ ...p, pos: rv(p.pos), rotY: r3(p.rotY), hp: Math.round(p.hp) }));
@@ -78,6 +81,9 @@ export class SnapshotEncoder {
       const p = rv(e.pos), v = r1v(e.vel);
       return [e.id, PROJ_KINDS.indexOf(e.kind), p.x, p.y, p.z, v.x, v.y, v.z];
     });
+    // Ground fires: tiny list, only while something burns.
+    delete (out as Partial<Snapshot>).fires;
+    if (s.fires?.length) out.fire = s.fires.map((f): NetFire => { const p = rv(f.pos); return [f.id, FIRE_KINDS.indexOf(f.kind), p.x, p.y, p.z]; });
     // Gameplay props away from their spawn (the sim only lists those), quantized; a resting prop's entry is
     // unchanged between updates, so the binary wire's per-id delta sends nothing for it.
     delete (out as Partial<Snapshot>).props;
@@ -137,10 +143,11 @@ export class SnapshotDecoder {
       reloadUntil: p.reloadUntil ?? 0, reloadSec: p.reloadSec ?? 0, reloadMag: p.reloadMag ?? 0, ads: p.ads ?? false,
       stamina: p.stamina ?? p.mv?.stamina ?? 100,
     }));
-    const { proj, brain, pr, ...rest } = n;
+    const { proj, brain, fire, pr, ...rest } = n;
     const projectiles = (proj ?? []).map(([id, k, x, y, z, vx, vy, vz]) => ({ id, kind: PROJ_KINDS[k] ?? 'grenade', pos: { x, y, z }, vel: { x: vx, y: vy, z: vz } }));
     const out: Snapshot = { ...rest, players, pieces: this.pieces, projectiles };
     if (brain) out.brains = [brain];
+    if (fire?.length) out.fires = fire.map(([id, k, x, y, z]) => ({ id, kind: FIRE_KINDS[k] ?? 'grass', pos: { x, y, z } }));
     if (pr) out.props = pr;
     return out;
   }

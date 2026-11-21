@@ -1,4 +1,5 @@
 import { DT, WEAPONS } from '../sim/constants';
+import { shotDamage } from '../sim/gunplay';
 import type { MatchEvent, PlayerState, WeaponKind } from '../sim/types';
 
 /**
@@ -26,6 +27,15 @@ export function firePeriodMs(w: WeaponKind): number {
 export function aimDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
   const c = Math.cos(pitch);
   return { x: -Math.sin(yaw) * c, y: Math.sin(pitch), z: -Math.cos(yaw) * c };
+}
+
+/**
+ * Damage a predicted hit at `dist` metres would do: the sim's own shotDamage (falloff, headshot), and the
+ * `falloff` tag the sim puts on reduced hits, so a predicted hit carries exactly what the host will send.
+ */
+export function predictedHit(w: WeaponKind, dist: number, head: boolean): { amount: number; falloff?: number } {
+  const { amount, mult } = shotDamage(w, dist, head);
+  return mult < 1 ? { amount, falloff: Math.round(mult * 100) / 100 } : { amount };
 }
 
 export class ShotPredictor {

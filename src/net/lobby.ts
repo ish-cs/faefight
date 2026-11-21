@@ -1,5 +1,6 @@
 import type { MatchSetup } from '../sim/matchApi';
 import { nickname } from '../sim/names';
+import { isColor, resolveColors } from '../sim/settings';
 import { MAX_PLAYERS, type Slot } from './protocol';
 
 const MIN_SEATS = 2;
@@ -101,6 +102,34 @@ export class Lobby {
     return true;
   }
 
+  /** A guest's Ready toggle. False for an unknown peer or the host (always ready). */
+  setReady(peerId: string, ready: boolean): boolean {
+    const i = this.seatOf(peerId);
+    const s = i === null ? null : this.seats[i];
+    if (!s || s.kind !== 'human' || s.isHost) return false;
+    if (ready) s.ready = true; else delete s.ready;
+    return true;
+  }
+
+  /** Everyone unready again (back to the lobby after a match). */
+  resetReady() {
+    for (const s of this.seats) if (s.kind === 'human') delete s.ready;
+  }
+
+  /** Guests (not the host) who haven't pressed Ready. Bots are always ready. */
+  notReady(): number {
+    return this.seats.filter((s) => s.kind === 'human' && !s.isHost && !s.ready).length;
+  }
+
+  /** A human seat picks a palette colour. False if out of range, not a human seat, or another human picked it. */
+  setColor(i: number, color: number): boolean {
+    const s = this.seats[i];
+    if (!s || s.kind !== 'human' || !isColor(color)) return false;
+    if (this.seats.some((o, j) => j !== i && o.kind === 'human' && o.color === color)) return false;
+    s.color = color;
+    return true;
+  }
+
   /** Host watches instead of playing (still hosts and runs the sim): its seat gets no player/island. */
   setHostSpectator(on: boolean) {
     const h = this.seats[0];
@@ -122,6 +151,17 @@ export class Lobby {
     return this.seats.map((s) => (s.kind === 'human' && s.spectator ? null : next++));
   }
 
+  /**
+   * Host migration: the seating of a match already running, as the old host last had it. The host's seat
+   * need not be 0 here; the result is only used to route a running match (never edited as a lobby).
+   */
+  static fromSlots(slots: Slot[]): Lobby {
+    if (slots.filter((s) => s.kind === 'human' && s.isHost).length !== 1) throw new Error('Lobby.fromSlots: need exactly one host seat');
+    const l = new Lobby('', '');
+    l.seats = slots.map((s) => ({ ...s }));
+    return l;
+  }
+
   /** Seats that will get a player (every seat except a spectating host). */
   playerCount(): number {
     return this.seats.length - (this.hostSpectating() ? 1 : 0);
@@ -134,10 +174,23 @@ export class Lobby {
     if (open >= 0) throw new Error(`Seat ${open + 1} is still open; fill it with a bot or wait for a player`);
     return {
       players: this.seats.filter((s) => !(s.kind === 'human' && s.spectator)).map((s) => {
-        if (s.kind === 'human') return { name: s.name, isBot: false };
+        if (s.kind === 'human') return s.color === undefined ? { name: s.name, isBot: false } : { name: s.name, isBot: false, color: s.color };
         if (s.kind === 'bot') return { name: s.name ?? '', isBot: true, difficulty: s.difficulty };
         throw new Error('unreachable: open seat');
       }),
     };
   }
+}
+
+/**
+ * The colour each seat plays in (palette index; null for the spectating host): picks are kept, everyone
+ * else gets the lowest free colour in seat order. Same rule the sim applies (resolveColors), so the lobby
+ * shows exactly what the match uses.
+ */
+export function seatColors(slots: Slot[]): (number | null)[] {
+  const playing = slots.map((s, i) => [s, i] as const).filter(([s]) => !(s.kind === 'human' && s.spectator));
+  const colors = resolveColors(playing.map(([s]) => (s.kind === 'human' ? s.color : undefined)));
+  const out: (number | null)[] = slots.map(() => null);
+  playing.forEach(([, i], k) => { out[i] = colors[k]; });
+  return out;
 }

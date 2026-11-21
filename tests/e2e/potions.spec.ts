@@ -36,7 +36,9 @@ test('shield bar, potion seller, drinking', async ({ page }) => {
   await expect(shield).toBeVisible();
   await expect(shield).toHaveClass(/empty/);
   const sb = (await shield.boundingBox())!, hb = (await page.locator('.hud .hp').boundingBox())!;
-  expect(Math.abs(sb.width - hb.width)).toBeLessThan(1);
+  // Same layout width (the bars are skewed, so their bounding boxes differ by the skew of their heights).
+  const widths = await page.evaluate(() => [(document.querySelector('.hud .shield') as HTMLElement).offsetWidth, (document.querySelector('.hud .hp') as HTMLElement).offsetWidth]);
+  expect(Math.abs(widths[0] - widths[1])).toBeLessThan(1);
   expect(sb.y + sb.height).toBeLessThanOrEqual(hb.y);
   expect(hb.y - (sb.y + sb.height)).toBeLessThan(10);
 

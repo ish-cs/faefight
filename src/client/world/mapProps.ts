@@ -2,7 +2,8 @@ import * as THREE from 'three/webgpu';
 import { boxUV, mat, StaticBatch } from './geo';
 import { cylinderLabel, dent, faceLabel, labelMaterial } from './labels';
 import { mats } from './materials';
-import { bollard, container, generatorProp, keeper, palm } from './props';
+import { addNpcSpot } from '../characters/npcSpots';
+import { bollard, container, generatorProp, palm } from './props';
 import { makeRng } from './textures';
 
 // Map-template props: center-island stations, built-in cover art, Container Yard backdrop pieces and the
@@ -60,7 +61,7 @@ export function supplyProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3) {
 export function potionProp(b: StaticBatch, B: THREE.Matrix4, h: THREE.Vector3) {
   const M = mats();
   const W = h.x * 2;
-  keeper(b, at(B, mat(0, 0, -0.12)), { skin: 0xc58f68, shirt: 0x5a3d8a, pants: 0x2d2540, apron: 0x3d2a63, hat: 0x6b2f86 });
+  addNpcSpot('potion', at(B, mat(0, 0, -0.12))); // animated keeper (characters/npcs.ts)
   // counter (front strip of the footprint, z 0.08..0.30)
   b.add(M.wood, boxUV(W, 0.92, 0.2, 1.5), at(B, mat(0, 0.46, h.z - 0.11)), 0x7a5634);
   b.add(M.wood, boxUV(W, 0.04, 0.22, 1.5), at(B, mat(0, 0.94, h.z - 0.11)), 0xa57c50);

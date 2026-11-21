@@ -582,3 +582,47 @@ export function critterCall(k: Kit, out: AudioNode, t: number, kind: string): nu
       return 0;
   }
 }
+
+/** Crackle buffer (2 s, looped): sparse pops and snaps over a low roar, generated once per context. */
+const crackles = new WeakMap<AudioContext, AudioBuffer>();
+function crackleBuffer(k: Kit): AudioBuffer {
+  let b = crackles.get(k.ctx);
+  if (b) return b;
+  const sr = k.ctx.sampleRate, n = Math.floor(sr * 2);
+  b = k.ctx.createBuffer(1, n, sr);
+  const d = b.getChannelData(0);
+  let roar = 0;
+  for (let i = 0; i < n; i++) { roar = roar * 0.985 + (k.rnd() * 2 - 1) * 0.015; d[i] = roar * 2.2; }
+  for (let i = 0; i < n; i++) {
+    if (k.rnd() > 0.0009) continue;
+    const len = Math.floor(sr * (0.002 + k.rnd() * 0.012)), amp = 0.25 + k.rnd() * 0.75;
+    for (let j = 0; j < len && i + j < n; j++) d[i + j] += (k.rnd() * 2 - 1) * amp * Math.exp((-6 * j) / len);
+  }
+  crackles.set(k.ctx, b);
+  return b;
+}
+
+/** Fire crackle loop (positional via `out`); stop() fades it out. */
+export function fireLoop(k: Kit, out: AudioNode): { stop(): void } {
+  const { ctx } = k;
+  const s = ctx.createBufferSource();
+  s.buffer = crackleBuffer(k);
+  s.loop = true;
+  s.playbackRate.value = 0.85 + k.rnd() * 0.3;
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass'; hp.frequency.value = 120;
+  const g = ctx.createGain();
+  const t = ctx.currentTime;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.5, t + 0.6);
+  s.connect(hp).connect(g).connect(out);
+  s.start(t, k.rnd() * 2);
+  return {
+    stop() {
+      const now = ctx.currentTime;
+      g.gain.cancelScheduledValues(now);
+      g.gain.setTargetAtTime(0, now, 0.3);
+      s.stop(now + 1.5);
+    },
+  };
+}
