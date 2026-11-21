@@ -254,8 +254,13 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     const pct = (x: number) => `${Math.round(x * 100)}%`;
     section('Volume');
     slider('Master', '', 'set-master', 0, 1, 0.05, () => a().master, (x) => set((d) => { d.audio.master = x; d.audio.muted = false; }), pct);
-    slider('Effects', 'Weapons, impacts, footsteps, UI', 'set-effects', 0, 1, 0.05, () => a().effects, (x) => set((d) => { d.audio.effects = x; }), pct);
-    slider('Ambience', 'Waves, wind, gulls', 'set-ambience', 0, 1, 0.05, () => a().ambience, (x) => set((d) => { d.audio.ambience = x; }), pct);
+    slider('Effects', 'Weapons, impacts, footsteps, building', 'set-effects', 0, 1, 0.05, () => a().effects, (x) => set((d) => { d.audio.effects = x; }), pct);
+    slider('Interface', 'Hit ticks, shop, alerts, win and lose stingers', 'set-ui', 0, 1, 0.05, () => a().ui, (x) => set((d) => { d.audio.ui = x; }), pct);
+    slider('Ambience', 'Waves, wind, rain, wildlife', 'set-ambience', 0, 1, 0.05, () => a().ambience, (x) => set((d) => { d.audio.ambience = x; }), pct);
+    section('Music');
+    toggle('Music', 'Calm while you build, tense in a nearby fight, intense when the storm closes', 'set-music-on', () => a().musicOn, (x) => set((d) => { d.audio.musicOn = x; }));
+    slider('Music volume', '', 'set-music', 0, 1, 0.05, () => a().music, (x) => set((d) => { d.audio.music = x; }), pct);
+    section('Output');
     toggle('Mute', `Also on ${keyLabel(settings.get().controls.keys.mute[0] ?? '') || '—'} in game`, 'set-mute', () => a().muted, (x) => set((d) => { d.audio.muted = x; }));
     resetBtn('Reset audio to defaults', () => settings.reset('audio'));
   }

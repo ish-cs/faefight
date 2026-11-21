@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Match } from '../../src/sim/match';
+import { LIFECYCLE } from '../../src/sim/constants';
 import { NO_INPUT, type MatchEvent, type PlayerInput } from '../../src/sim/types';
 import { add, dist2D, forward, right, scale, v3 } from '../../src/sim/vec';
 
@@ -106,8 +107,8 @@ describe('Match', () => {
     expect(sealEvents.at(-1)?.data).toMatchObject({ island: 1, by: 1, owner: 2 });
     m.debugKill(2);
     let snap = sealedSnap;
-    // 3 s respawn + 10 s to break out of the sealed bunker.
-    for (let i = 0; i < 30 * 14; i++) snap = m.tick(new Map());
+    // Respawn wait + 10 s to break out of the sealed bunker.
+    for (let i = 0; i < 30 * (LIFECYCLE.respawnSec + LIFECYCLE.breakoutSec + 1); i++) snap = m.tick(new Map());
     expect(snap.winner).toBe(1);
   });
 });
@@ -157,7 +158,7 @@ describe('spawn protection ends when you attack', () => {
     const m = await Match.create({ players: [{ name: 'a', isBot: false }, { name: 'b', isBot: false }] });
     m.debugKill(1);
     let snap = m.tick(new Map());
-    for (let i = 0; i < 100; i++) snap = m.tick(new Map());
+    for (let i = 0; i < 30 * LIFECYCLE.respawnSec + 10; i++) snap = m.tick(new Map());
     expect(snap.players[0].alive).toBe(true);
     expect(snap.players[0].invulnUntil).toBeGreaterThan(snap.time + 5);
     snap = m.tick(new Map([[1, { ...NO_INPUT, fire: true, slot: 'pistol' }]]));

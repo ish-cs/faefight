@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { WEAPONS } from '../../src/sim/constants';
+import { LIFECYCLE, WEAPONS } from '../../src/sim/constants';
 import { MAP_TEMPLATES } from '../../src/sim/map';
 import { Match } from '../../src/sim/match';
 import type { PlayerState, Snapshot, Vec3 } from '../../src/sim/types';
@@ -57,7 +57,7 @@ describe('spawn facing', () => {
       // Respawn 1: free spawn point.
       m.debugKill(1);
       let snap: Snapshot | undefined;
-      for (let i = 0; i < 30 * 4 && !snap; i++) {
+      for (let i = 0; i < 30 * (LIFECYCLE.respawnSec + 1) && !snap; i++) {
         const s = m.tick(new Map());
         if (s.events.some((e) => e.type === 'spawn' && e.data.player === 1)) snap = s;
       }
@@ -74,7 +74,7 @@ describe('spawn facing', () => {
       m.debugKill(1);
       m.debugPlacePiece('container', { ...isl.spawn }, isl.bunker.facingYaw);
       snap = undefined;
-      for (let i = 0; i < 30 * 4 && !snap; i++) {
+      for (let i = 0; i < 30 * (LIFECYCLE.respawnSec + 1) && !snap; i++) {
         const s = m.tick(new Map());
         if (s.events.some((e) => e.type === 'spawn' && e.data.player === 1)) snap = s;
       }
