@@ -448,13 +448,15 @@
   transition: transform var(--dur-1) var(--ease-snap), box-shadow var(--dur-2), background-color var(--dur-2);
 }
 .shop-row { grid-template-columns: repeat(auto-fill, 80px); }
-.shop-item { width: 80px; height: 98px; padding: 9px 3px 6px; }
+.shop-item { width: 80px; height: 92px; padding: 8px 3px 6px; }
+.hud .panel[data-kind="shop"], .hud .panel[data-kind="potions"] { width: min(664px, 94vw); max-height: calc(100vh - 150px); top: calc(50% - 40px); }
+.shop-item.blocked { justify-content: flex-start; gap: 6px; }
+.shop-item.blocked .iname { opacity: 0.7; }
 .shop-item .sicon { width: 36px; height: 36px; flex: none; }
 .shop-item .iname { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ff-display); font-weight: 700; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--c-text-dim); line-height: 1; }
 .shop-item .iprice { font-family: var(--ff-display); font-weight: 900; font-size: 16px; color: var(--c-yellow); line-height: 1; }
 .shop-item .ibadge { font-family: var(--ff-display); font-weight: 900; font-size: 12px; }
 .shop-item.poor .iname { opacity: 0.5; }
-.shop-item.blocked .iname { opacity: 0.45; }
 .shop-item.blocked .istatus { bottom: 5px; }
 .shop-item.deny { animation: ui-shake 0.35s ease-out; }
 /* Upgrades read at a glance: the next level as a violet chip; locks as a padlock badge on the gun. */
