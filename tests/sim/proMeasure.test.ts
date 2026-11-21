@@ -92,7 +92,86 @@ async function aggression(label: string, diffs: Difficulty[], seeds: number[]) {
   ].join('\n'));
 }
 
+/**
+ * One game as a JSON line (for seed series split over several processes, see MEASURE=series):
+ * MEASURE=series MIX=pro|hard|mixed|medium SEEDS=1,2 OUT=file.jsonl npx vitest run tests/sim/proMeasure.test.ts
+ */
+async function seriesGame(diffs: Difficulty[], seed: number) {
+  const bots = new Map<number, Bot>();
+  const m = await Match.create({ players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed },
+    { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.set(id, b); return b; } });
+  let snap: Snapshot = m.tick(new Map());
+  const hitDists: number[] = [];
+  const lastHurt = new Map<number, number>();
+  const drown = { total: 0, unexplained: 0, byDiff: {} as Record<string, number>, spots: [] as string[] };
+  let preSdElims = 0, firstSeal: number | null = null, aliveTicks = 0, homeTicks = 0, kills = 0, seals = 0;
+  const goals: Record<string, number> = {};
+  const elimAt: { id: number; diff: string; t: number }[] = [];
+  for (let i = 0; i < LIMIT && snap.winner === null; i++) {
+    snap = m.tick(new Map());
+    for (const p of snap.players) {
+      if (!p.alive) continue;
+      aliveTicks++;
+      const home = m.map[p.island];
+      if (Math.hypot(p.pos.x - home.center.x, p.pos.z - home.center.z) < home.radius) homeTicks++;
+      const g = bots.get(p.id)!.currentGoal;
+      goals[g] = (goals[g] ?? 0) + 1;
+    }
+    for (const e of snap.events) {
+      if (e.type === 'hit' && e.data.by != null && e.data.by !== e.data.target) {
+        const a = snap.players.find((p) => p.id === e.data.by), b = snap.players.find((p) => p.id === e.data.target);
+        if (a && b) hitDists.push(Math.round(10 * Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z)) / 10);
+      }
+      if (e.type === 'hit') lastHurt.set(e.data.target as number, e.t);
+      if (e.type === 'sealed' && e.data.by != null) { firstSeal ??= e.t; if (e.t < LIFECYCLE.suddenDeathAt) seals++; }
+      if (e.type === 'kill') {
+        const k = e.data.killer as number | null, v = e.data.victim as number;
+        if (k != null && k !== v) kills++;
+        if (e.data.inWater && k == null && !e.data.cause) {
+          drown.total++;
+          const d = diffs[v - 1];
+          drown.byDiff[d] = (drown.byDiff[d] ?? 0) + 1;
+          if (e.t - (lastHurt.get(v) ?? -Infinity) > 4) {
+            drown.unexplained++;
+            const b = bots.get(v)!;
+            if (drown.spots.length < 6) drown.spots.push(`${d}#${v}@${e.t.toFixed(0)}s ${b.currentGoal}`);
+          }
+        }
+      }
+      if (e.type === 'eliminated') {
+        const id = e.data.player as number;
+        elimAt.push({ id, diff: diffs[id - 1], t: e.t });
+        if (e.t < LIFECYCLE.suddenDeathAt) preSdElims++;
+      }
+    }
+  }
+  return {
+    seed, winner: snap.winner, winnerDiff: snap.winner ? diffs[snap.winner - 1] ?? null : null, t: snap.time,
+    preSd: snap.winner !== null && snap.time < LIFECYCLE.suddenDeathAt, preSdElims, kills, seals, firstSeal,
+    homeShare: homeTicks / Math.max(1, aliveTicks), goals, aliveTicks, hitDists, drown, elimAt,
+  };
+}
+
 describe.runIf(env.MEASURE)('measure', () => {
+  test.runIf(env.MEASURE === 'series')('series', async () => {
+    const mixes: Record<string, Difficulty[]> = {
+      pro: Array(8).fill('pro'), hard: Array(8).fill('hard'), medium: Array(8).fill('medium'),
+      mixed: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'],
+      hard1v1: ['hard', 'hard'],
+    };
+    const fs = (await import(/* @vite-ignore */ 'node:fs' as string)) as { appendFileSync(p: string, d: string): void };
+    for (const mix of (env.MIX ?? 'pro').split(',')) {
+      for (const seed of (env.SEEDS ?? '1').split(',').map(Number)) {
+        let diffs = mixes[mix];
+        // 1v1 ladders: A vs B, seats alternate with the seed.
+        if (!diffs && mix.includes('v')) { const [a, b] = mix.split('v') as Difficulty[]; diffs = seed % 2 ? [a, b] : [b, a]; }
+        if (!diffs) throw new Error(`unknown MIX ${mix}`);
+        const r = await seriesGame(diffs, seed);
+        fs.appendFileSync(env.OUT ?? 'series.jsonl', JSON.stringify({ mix, diffs, ...r }) + '\n');
+      }
+    }
+  }, 7_200_000);
+
   test.runIf(env.MEASURE?.includes('aggr'))('aggression', async () => {
     const seeds = (env.SEEDS ?? Array.from({ length: 20 }, (_, i) => i + 1).join(',')).split(',').map(Number);
     if (!env.MIX || env.MIX === 'pro') await aggression('8 PRO FFA', Array(8).fill('pro'), seeds);

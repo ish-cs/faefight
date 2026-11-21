@@ -376,6 +376,8 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .dmg-number.big { font-size: 30px; color: #ff6a3d; }
 .dmg-number.health { color: #ffd84a; }
 .dmg-number.shield { color: #5cb4ff; }
+/* Cut by range falloff: same colour, a little dimmer and smaller (opacity is animated inline, so filter). */
+.dmg-number.far { filter: brightness(0.7) saturate(0.6); font-size: 19px; }
 .hit-arrow {
   position: absolute; left: 50%; top: 50%; width: 260px; height: 260px; will-change: transform, opacity;
 }

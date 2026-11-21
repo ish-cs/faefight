@@ -134,6 +134,14 @@ export const DRIVE = {
   guardFreshSec: 4,
   collectCarried: 200,
 };
+/** Goal watchdog: how long a goal may go without progress, how far counts as progress, how long it's dropped. */
+const STALL_SEC: Partial<Record<Goal, number>> = {
+  seal: 8, attack: 15, bridge: 10, contest: 10, raid: 10, loot: 8, shop: 10, bank: 8, fortify: 10, cut: 12,
+};
+const STALL_DIST = 2.5, STALL_BAN_SEC = 20;
+/** Camping a sealed bunker: this far out from the doorway (outside a grenade's reach of the door). */
+const SIEGE_DIST = 6.5, SIEGE_AFTER_DEATH = 16;
+const TARGETED = new Set<Goal>(['seal', 'attack', 'bridge']);
 const PUSH_GEAR: ShopItem[] = ['pistol', 'ammo', 'scaffold', 'wood', 'metal', 'steel', 'charge'];
 
 /** What a goal wants this tick; aiming at enemies, weapons and safety are layered on top by think(). */
@@ -236,6 +244,12 @@ export class Bot {
   /** Telegraphed strikes already judged (easy bots notice only some), keyed by spot and time. */
   private bolts = new Map<string, boolean>();
   private wander: { to: Vec3; until: number } | null = null;
+  /** Goal watchdog: where I was when the current goal last made progress (moved, built, bought, shot). */
+  private prog: { goal: Goal; at: number; pos: Vec3 } | null = null;
+  private lastDidAt = -Infinity;
+  /** Goals (and the rival they were aimed at) that went nowhere lately: left alone a while. */
+  private goalBan = new Map<Goal, number>();
+  private targetBan = new Map<number, number>();
   private lastNadeAt = -Infinity;
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
@@ -355,6 +369,7 @@ export class Bot {
       else if (this.fightSince === null) this.fightSince = now;
       this.nextScoreAt = now + RESCORE_SEC[this.difficulty] * (0.75 + 0.5 * this.rng());
     }
+    this.watchdog(now, me);
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
@@ -406,14 +421,15 @@ export class Bot {
     const ammo = me.equipped === 'fists' ? null : me.inv.weapons[me.equipped];
     const slot = best !== me.equipped && (me.reloadUntil === 0 || !ammo || ammo.mag === 0) ? best : null;
     if (slot) fire = false;
-    const reload = !enemy && !slot && !!ammo && me.reloadUntil === 0 && ammo.spare > 0 && ammo.mag < WEAPONS[me.equipped].mag * 0.6;
+    // An empty mag gets reloaded whoever is in sight (a full one only tops up when nobody is).
+    const reload = !slot && !!ammo && me.reloadUntil === 0 && ammo.spare > 0 &&
+      (ammo.mag === 0 || (!enemy && ammo.mag < WEAPONS[me.equipped].mag * 0.6));
 
     // Movement: stuck recovery, then never step toward water.
     let dir = act.dir;
     let jump = !!act.jump;
     const dodge = this.dodgeBolt(me, view);
     if (dodge) { dir = dodge; act = { ...act, sprint: true }; }
-    this.trackStuck(now, me, dir);
     if (now < this.unstickUntil) {
       // Step aside; stuck again at the same spot, back off further each time (around whatever is in the way).
       dir = this.unstickDir ?? scale(right(look.yaw), this.unstickSide);
@@ -426,6 +442,10 @@ export class Bot {
     }
     if (dir && !dodge) dir = this.stormFence(me, view, dir);
     if (dir) dir = this.nav.safeDir(dir);
+    // Stuck means pushing and not moving; held back at an edge by safeDir isn't stuck (a hop there goes in the water).
+    this.trackStuck(now, me, dir);
+    // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
+    if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
@@ -443,6 +463,7 @@ export class Bot {
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
       (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
+    if (act.shop || act.build || act.vault || act.placeCharge || fire || throwGrenade) this.lastDidAt = now;
     if (act.build) {
       this.lastPieceAt = now;
     }
@@ -600,7 +621,8 @@ export class Bot {
   private chooseTarget(facts: RivalFacts[]) {
     let best: number | null = null, bestScore = -Infinity, cur = -Infinity;
     for (const f of facts) {
-      const s = rivalScore(f, this.params) + (this.rng() - 0.5) * NOISE[this.difficulty];
+      const s = rivalScore(f, this.params) + (this.rng() - 0.5) * NOISE[this.difficulty] -
+        ((this.targetBan.get(f.id) ?? -Infinity) > this.view.now ? 1.5 : 0);
       if (f.id === this.targetId) cur = s;
       if (s > bestScore) { bestScore = s; best = f.id; }
     }
@@ -934,15 +956,18 @@ export class Bot {
         // everything to fight when they're close or on the same island.
         const sameIsland = islandAt(view.map, c.enemy.pos) === islandAt(view.map, me.pos);
         if (!sameIsland && c.enemyDist > P.engageRange) return 0.2;
-        return (gun || c.enemyDist < 8 ? 0.85 : 0.35) + 0.25 * t.aggression;
+        // Sudden death with no ammo left anywhere to buy it: fists are all there is.
+        return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression;
       }
       case 'disengage': {
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
+        // Outside the safe ring, getting in comes first (running from a gun into the storm kills just as well).
+        if (view.storm && Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm)) return 0;
         const low = P.lowHp;
         // Hurt: get out of the fight, but once home with nobody close the heal goal takes over (medkit, then back out).
         if (hp < low) return c.on === home.index && (!c.enemy || c.enemyDist > 30) ? 0 : 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
-        const outgunned = !gun && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
+        const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
           (c.enemyDist < Math.min(P.engageRange, WEAPONS[c.enemy.equipped].range) || view.now - this.mem.lastHurtAt < 1.5);
         if (outgunned) return 0.95 + 0.2 * t.caution;
         // Two or more guns on me at once: don't take that fight, especially hurt.
@@ -1041,6 +1066,8 @@ export class Bot {
         if (!c.reach || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
+        // Sealed in (or about to respawn into a sealed bunker): be there to finish it.
+        if (this.sieging(c)) return 0.75 + 0.2 * t.opportunism;
         // Respawn window with no kit: a kill that can't be followed by a seal is wasted (and respawns are
         // protected), so go get a kit rather than camp the door.
         if (rivalDown || this.sealWindow(c)) return sealKit(me.inv) === 0 && c.homeReach ? 0.1 : 0.3;
@@ -1114,6 +1141,7 @@ export class Bot {
     for (const g of GOALS) {
       if (g !== step && !REFLEXES.has(g)) continue;
       if (this.bannedAct && this.bannedAct.goal === g && this.view.now < this.bannedAct.until) continue;
+      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrep(c.view)) continue;
       // Running from a fight I'd lose: only shoot back when cornered.
       if (g === 'fight' && retreating && c.enemyDist > 5) continue;
       // A step whose own situational score is nil (e.g. "heal up" while already home) still runs: walking home,
@@ -1360,6 +1388,16 @@ export class Bot {
     if (seen && c.rival.alive && seen.island >= 0 && seen.island !== c.rival.island && (seen.island === c.on || this.nav.hop(c.src, seen.island) !== null))
       return this.goTo(seen.pos, 3);
     const b = c.rivalIsl.bunker;
+    // Their bunker is sealed: camp the plug most likely to give (weakest), out of grenade reach, and shoot
+    // whoever breaks out (respawned inside, they're eliminated if they die before getting clear) or comes
+    // home to unseal it.
+    if (this.sieging(c) && c.on === c.rivalIsl.index) {
+      const hp = (d: Doorway) => doorPieces(c.view.pieces, d).reduce((n, p) => n + p.hp, 0);
+      const door = b.doorways.reduce((a, d) => (hp(d) < hp(a) ? d : a));
+      const spot = add(door.center, scale(forward(door.yaw), SIEGE_DIST));
+      const walk = this.goTo(spot, 1.2);
+      return walk.dir ? walk : { dir: null, face: v3(door.center.x, door.center.y + CHEST, door.center.z) };
+    }
     // They went into their bunker: take the open doorway that sees inside (grenade it, shoot what comes out).
     const inside = c.on === c.rivalIsl.index ? this.inTheirBunker(c) : null;
     const door = inside ? b.doorways.filter((d) => !doorBlocked(c.view.pieces, d))
@@ -1394,6 +1432,15 @@ export class Bot {
       return { dir: null, face: base, build: { kind: plug.kind, pos, rotY: door.yaw, free: true } };
     }
     return { dir: null, face: base };
+  }
+
+  /** My rival's bunker is sealed and they're in it or around it (just died, or seen there lately): camp it. */
+  private sieging(c: Ctx): boolean {
+    if (!c.rival || !c.rivalIsl || !c.view.sealed[c.rivalIsl.index] || c.view.suddenDeath) return false;
+    const now = c.view.now;
+    if (now - (this.mem.diedAt.get(c.rival.id) ?? -Infinity) < SIEGE_AFTER_DEATH) return true;
+    const s = this.mem.recent(c.rival.id, now, 10);
+    return !!s && s.island === c.rivalIsl.index;
   }
 
   /** Pieces in my own doorways, softest-to-clear first. */
@@ -1954,7 +2001,9 @@ export class Bot {
     const st = view.storm;
     if (!st || this.difficulty === 'easy') return dir;
     const d = Math.hypot(me.pos.x - st.x, me.pos.z - st.z);
-    if (d < 0.5 || d < this.stormSafeR(st) - 1.5) return dir;
+    // Only at the edge of where I want to be: further out, the storm goal is taking me in (or back home for decks).
+    const safe = this.stormSafeR(st);
+    if (d < 0.5 || d < safe - 1.5 || d > safe + 1) return dir;
     const out = v3((me.pos.x - st.x) / d, 0, (me.pos.z - st.z) / d);
     const k = dir.x * out.x + dir.z * out.z;
     if (k <= 0) return dir;
@@ -1985,6 +2034,27 @@ export class Bot {
       return away;
     }
     return null;
+  }
+
+  /**
+   * A goal that goes nowhere (no ground covered, nothing built, bought or shot for a while) is a plan that doesn't
+   * work from here, e.g. a route the map says exists but I can't walk: drop it (and the rival it was aimed at) for
+   * a while and think again, like a player giving up on a dead end.
+   */
+  private watchdog(now: number, me: PlayerState) {
+    const limit = STALL_SEC[this.goal];
+    // Getting set for the storm (decks to the center, buying them) is never given up.
+    if (limit === undefined || this.stormPrep(this.view)) { this.prog = null; return; }
+    const p = this.prog;
+    if (!p || p.goal !== this.goal || dist2D(p.pos, me.pos) > STALL_DIST || this.lastDidAt > p.at) {
+      this.prog = { goal: this.goal, at: now, pos: clone(me.pos) };
+      return;
+    }
+    if (now - p.at < limit) return;
+    this.goalBan.set(this.goal, now + STALL_BAN_SEC);
+    if (this.targetId !== null && TARGETED.has(this.goal)) this.targetBan.set(this.targetId, now + STALL_BAN_SEC);
+    this.prog = null;
+    this.nextScoreAt = now;
   }
 
   private trackStuck(now: number, me: PlayerState, want: Vec3 | null) {

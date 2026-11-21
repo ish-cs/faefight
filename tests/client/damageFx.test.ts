@@ -6,17 +6,23 @@ const hit = (target: number, by: number, amount: number, shieldAmount = 0): Matc
 
 describe('damageNumbers', () => {
   test('only shows damage dealt by me', () => {
-    expect(damageNumbers([hit(2, 1, 20), hit(1, 2, 30)], 1)).toEqual([{ target: 2, amount: 20, shield: 0 }]);
+    expect(damageNumbers([hit(2, 1, 20), hit(1, 2, 30)], 1)).toEqual([{ target: 2, amount: 20, shield: 0, far: false }]);
   });
   test('combines shotgun pellets on the same target into one number', () => {
     const evs = Array.from({ length: 7 }, () => hit(3, 1, 8));
-    expect(damageNumbers(evs, 1)).toEqual([{ target: 3, amount: 56, shield: 0 }]);
+    expect(damageNumbers(evs, 1)).toEqual([{ target: 3, amount: 56, shield: 0, far: false }]);
   });
   test('separate targets stay separate, rounded', () => {
-    expect(damageNumbers([hit(2, 1, 12.4), hit(3, 1, 30.6)], 1)).toEqual([{ target: 2, amount: 12, shield: 0 }, { target: 3, amount: 31, shield: 0 }]);
+    expect(damageNumbers([hit(2, 1, 12.4), hit(3, 1, 30.6)], 1)).toEqual([{ target: 2, amount: 12, shield: 0, far: false }, { target: 3, amount: 31, shield: 0, far: false }]);
   });
   test('splits the part the shield soaked from the part that reached health', () => {
-    expect(damageNumbers([hit(2, 1, 30, 30), hit(2, 1, 30, 10)], 1)).toEqual([{ target: 2, amount: 60, shield: 40 }]);
+    expect(damageNumbers([hit(2, 1, 30, 30), hit(2, 1, 30, 10)], 1)).toEqual([{ target: 2, amount: 60, shield: 40, far: false }]);
+  });
+  test('dims (far) only when every hit on that target was cut by range falloff', () => {
+    const farHit = (target: number, amount: number): MatchEvent => ({ t: 1, type: 'hit', data: { target, by: 1, amount, shieldAmount: 0, falloff: 0.6 } });
+    expect(damageNumbers([farHit(2, 12), farHit(2, 12), farHit(3, 12), hit(3, 1, 20)], 1)).toEqual([
+      { target: 2, amount: 24, shield: 0, far: true }, { target: 3, amount: 32, shield: 0, far: false },
+    ]);
   });
   test('ignores other events', () => {
     expect(damageNumbers([{ t: 1, type: 'shot', data: { by: 1 } }], 1)).toEqual([]);
