@@ -268,20 +268,20 @@ export class SkyLighting {
   /** Debug/profiling only (GPU cost bisect): post options over the preset's; rebuilds the chain (a full recompile). */
   private postOverride: Partial<PostOptions> = {};
   debugPost(o: Partial<PostOptions>) { this.postOverride = o; this.apply(); }
-  /** GTAO budget: the governor's cheap mode renders AO at 60 % of the preset's resolution (live, no recompile). */
+  /** GTAO budget: the governor's cheap / minimal levels render AO at 60 % / 30 % of the preset's resolution (live). */
   private applyAoBudget() {
     const ao = this.competitive ? false : PRESETS[this.quality].post.ao;
-    if (this.aoPass && ao) this.aoPass.resolutionScale = ao.resolution * (this.govAo ? 1 : 0.6);
+    if (this.aoPass && ao) this.aoPass.resolutionScale = ao.resolution * [1, 0.6, 0.3][this.govAo];
   }
 
-  private govAo = true;
+  private govAo: 0 | 1 | 2 = 0;
   private govShadow = 1;
 
   /**
    * Frame-time governor knobs (governor.ts): GTAO full / cheap (resolution, live) and a shadow-map size multiplier
    * (applied live to every cascade). Neither recompiles a shader.
    */
-  setGovernor(k: { ao: boolean; shadowScale: number }) {
+  setGovernor(k: { ao: 0 | 1 | 2; shadowScale: number }) {
     // never rebuild the post chain here (a mid-match shader compile is a 100+ ms hitch): AO only gets cheaper
     if (k.ao !== this.govAo) { this.govAo = k.ao; this.applyAoBudget(); }
     if (k.shadowScale !== this.govShadow) {

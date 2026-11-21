@@ -118,8 +118,10 @@ that fails falls back to its JPEG. `?ktx2=0` forces JPEG for A/B. To re-encode a
 ## Frame-time governor (src/client/governor.ts)
 
 Settings → Video "Dynamic resolution" turns it on. When the smoothed frame time exceeds the budget, it steps down
-one rung at a time: GTAO at 60 % resolution → shadow maps ½ → grass ½ → LOD distances ×0.7 → render resolution
-0.9 … 0.6. **No rung may recompile a shader.** A post-chain rebuild mid-match recompiles every world material
+one knob at a time, chosen by what the frame is bound by (main-thread time vs frame interval). **GPU-bound**
+(e.g. a Retina Mac on high): render scale first in 5 % steps (faster cooldown), GTAO cheaper (60 % → 30 %
+resolution, never off) in between, then shadows, grass and LOD. **CPU-bound**: LOD distance, grass, shadows, AO
+first, then scale. It climbs back last-in, first-out. Shift+` shows the rung and `gpu`/`cpu`. **No rung may recompile a shader.** A post-chain rebuild mid-match recompiles every world material
 (measured: one rebuild = 21.7 s freeze on main e01c3d1). Every knob is a live uniform, size or count.
 
 Settings → Video "Competitive mode" applies on top of any preset: 1× render scale, no GTAO, bloom or flare, and
