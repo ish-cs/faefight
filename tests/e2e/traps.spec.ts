@@ -51,7 +51,7 @@ test('place a spike trap on the ground; an enemy on it gets hurt, I never do', a
     input.yaw = -Math.PI / 2; // looking toward +X
     input.pitch = -0.75;
   });
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1200);
   await shot(page, 'ghost');
   await page.mouse.click(640, 360);
   await expect.poll(async () => (await snap()).traps?.filter((t) => t.owner === humanId).length ?? 0, { timeout: 5000 }).toBe(1);
@@ -65,8 +65,16 @@ test('place a spike trap on the ground; an enemy on it gets hurt, I never do', a
   await page.waitForTimeout(2000);
   expect((await me()).hp).toBe(hp0);
 
+  // Watch from 3.5 m off, looking at it.
+  const lookAtTrap = () => page.evaluate((t) => {
+    const input = (window as unknown as { __faefight: { input: { yaw: number; pitch: number } } }).__faefight.input;
+    input.yaw = -Math.PI / 2; input.pitch = -0.45;
+  }, trap.pos);
+  await dbg(page, 'teleport', trap.pos.x - 3.5, trap.pos.z + 0.6);
+  await lookAtTrap();
+  await page.waitForTimeout(500);
+  await shot(page, 'placed');
   // The bot on it (out of spawn protection): springs, it takes the hit.
-  await dbg(page, 'teleport', c.x + 6, c.z - 6);
   const bot = (await snap()).players.find((p) => p.id !== humanId)!;
   const botHp = bot.hp + bot.shield;
   await page.waitForTimeout(3200);
