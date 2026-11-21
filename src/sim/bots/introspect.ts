@@ -102,7 +102,8 @@ type Internals = {
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
-  defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null;
+  defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
+  P: { team: { regroupScore: number } };
 };
 const inside = (b: Bot) => b as unknown as Internals;
 
@@ -210,6 +211,15 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const f: [string, number][] = [['teammate hit', 0.9], ['aggression', 0.2 * t.aggression]];
       if (I.defender && a.island !== home.index) f.push(['defender', -0.3]);
       return { f, why: `Teammate @${a.id} is being shot${a.hurtBy !== null ? ` by @${a.hurtBy}` : ''} ${Math.round(dist2D(a.pos, me.pos))} m away: going to help` };
+    }
+    case 'regroup': {
+      if (!view.allies) return zero('no team');
+      if (c.enemy) return zero('in my own fight');
+      if (!gun) return zero('no gun');
+      if (!I.offensive(c)) return zero('not on offense');
+      const a = I.regroupWith(c);
+      if (!a) return zero(I.defender ? 'defender: holding home' : 'with my team already (or pushing alone)');
+      return { f: [['regroup', I.P.team.regroupScore]], why: `@${a.id} leads the push on ${rivalName(c)} ${Math.round(dist2D(a.pos, me.pos))} m ahead: catching up so we hit together` };
     }
     case 'guard': {
       if (!c.homeReach) return zero("can't walk home");
@@ -535,6 +545,7 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
     case 'cut': return two('Walk to the shore', 'Shoot the incoming deck');
     case 'contest': return two('Walk to the centre stations', 'Grab gold / pieces');
     case 'assist': return two('Run to the teammate under fire', 'Shoot whoever is on them');
+    case 'regroup': return two('Catch up with the push leader', 'Push in together');
     case 'storm': return { steps: ['Get inside the ring', 'Hold position'], at: moving ? 0 : 1 };
     case 'cover': return { steps: ['Get to the cover spot', 'Place a wall', 'Fight from behind it'], at: a?.build ? 1 : moving ? 0 : 2 };
     case 'fortify': return { steps: ['Walk to the next fort slot', 'Build it', 'Next slot'], at: a?.build ? 1 : moving ? 0 : 1 };

@@ -90,9 +90,9 @@ describe('lobby over the network', () => {
     await flush();
     expect(friends[0].last().settings).toEqual({ ...DEFAULT_SETTINGS, startCash: 250 });
     host.setSettings({ genMult: 7, suddenDeathSec: 60 } as any);
-    expect(host.settings).toEqual({ startCash: 250, suddenDeathSec: 480, genMult: 2 });
+    expect(host.settings).toEqual({ startCash: 250, suddenDeathSec: 480, genMult: 2, teamMode: 0 });
     const { setup } = host.start({ postMessage: () => {} });
-    expect(setup.settings).toEqual({ startCash: 250, suddenDeathSec: 480, genMult: 2 });
+    expect(setup.settings).toEqual({ startCash: 250, suddenDeathSec: 480, genMult: 2, teamMode: 0 });
     host.setSettings({ startCash: 0 }); // locked while the match runs
     expect(host.settings.startCash).toBe(250);
   });

@@ -25,10 +25,10 @@ import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, 
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'storm' | 'heal' | 'cover' | 'fortify' | 'contest' | 'assist';
+  | 'fight' | 'disengage' | 'storm' | 'heal' | 'cover' | 'fortify' | 'contest' | 'assist' | 'regroup';
 const GOALS: Goal[] = [
   'storm', 'defend', 'disengage', 'cover', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'fortify', 'shop', 'heal', 'contest', 'collect', 'assist',
+  'fortify', 'shop', 'heal', 'contest', 'collect', 'assist', 'regroup',
 ];
 /** Center gold worth a trip, and how far a bot will go out of its way for it. */
 const CONTEST_AT = 150;
@@ -616,10 +616,41 @@ export class Bot {
       return s;
     }
     if ((g === 'bridge' || g === 'attack' || g === 'seal') && s > 0 && c.rivalIsl) {
-      const there = c.view.allies.some((a) => a.alive && islandAt(c.view.map, a.pos) === c.rivalIsl!.index);
-      if (there) return s + T.groupPush;
+      // Push together: teammates already on that island, or going after the same rival, pull me along.
+      const rivalIsl = c.rivalIsl.index, rivalId = c.rival?.id ?? null;
+      let n = 0;
+      for (const a of c.view.allies) {
+        if (!a.alive) continue;
+        if (islandAt(c.view.map, a.pos) === rivalIsl) n += 1;
+        else if (rivalId !== null && a.target === rivalId && !a.defender) n += 0.5;
+      }
+      return s + T.groupPush * Math.min(2, n);
     }
     return s;
+  }
+
+  /**
+   * Teams, on offense: the nearest teammate pushing the same rival who is ahead of me (nearer their island) and more
+   * than regroupM away, so we arrive together; null when I'm with them already (or alone, or the defender).
+   */
+  private regroupWith(c: Ctx): AllyStatus | null {
+    if (!c.view.allies || this.defender || !c.rival || !c.rivalIsl) return null;
+    const T = this.P.team;
+    const mine = dist2D(c.me.pos, c.rivalIsl.center);
+    let best: AllyStatus | null = null, bestD = Infinity;
+    for (const a of c.view.allies) {
+      if (!a.alive || a.defender || a.target !== c.rival.id) continue;
+      const d = dist2D(a.pos, c.me.pos);
+      if (d <= T.regroupM || d > 2 * T.assistM || dist2D(a.pos, c.rivalIsl.center) >= mine) continue;
+      if (d < bestD) { best = a; bestD = d; }
+    }
+    return best;
+  }
+
+  private doRegroup(c: Ctx): Act {
+    const a = this.regroupWith(c);
+    if (!a) { this.nextScoreAt = c.view.now; return IDLE; }
+    return this.goTo(a.pos, this.P.team.regroupM * 0.5);
   }
 
   /** Go to the teammate under fire (the fight layer shoots whoever shows up). */
@@ -943,6 +974,13 @@ export class Bot {
         if (!a || (islandAt(view.map, a.pos) !== c.on && !this.nav.routeTo(a.pos))) return 0;
         return this.P.team.assistScore + 0.2 * t.aggression - (this.defender && islandAt(view.map, a.pos) !== home.index ? 0.3 : 0);
       }
+      case 'regroup': {
+        // Teams: catch up with the teammate leading the push on our shared rival.
+        if (!view.allies || c.enemy || !gun || trapped || !this.offensive(c)) return 0;
+        const a = this.regroupWith(c);
+        if (!a || (islandAt(view.map, a.pos) !== c.on && !this.nav.routeTo(a.pos))) return 0;
+        return this.P.team.regroupScore;
+      }
       case 'guard': {
         if (!c.homeReach || view.suddenDeath) return 0;
         const s = this.intruder(c);
@@ -1177,6 +1215,7 @@ export class Bot {
       case 'storm': return this.doStorm(c);
       case 'contest': return this.doContest(c);
       case 'assist': return this.doAssist(c);
+      case 'regroup': return this.doRegroup(c);
     }
   }
 

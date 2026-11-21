@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'vitest';
 import { Bot } from '../../src/sim/bots/bot';
-import { islandAt } from '../../src/sim/bots/nav';
 import { Match } from '../../src/sim/match';
 import type { MatchSetup } from '../../src/sim/matchApi';
 import { InvariantChecker } from '../../src/sim/invariants';
@@ -100,6 +99,20 @@ describe('teams match rules', () => {
     m.dispose();
   });
 
+  test('deterministic: a recorded teams setup (JSON round trip) replays the same match, teams included', async () => {
+    const setup: MatchSetup = {
+      players: Array.from({ length: 6 }, (_, i) => ({ name: '', isBot: true, difficulty: 'hard' as const, ...(i === 0 ? { team: 1 } : {}) })),
+      seed: 9, settings: { startCash: 400, suddenDeathSec: 600, genMult: 1, teamMode: 2 },
+    };
+    const a = await Match.create(setup), b = await Match.create(JSON.parse(JSON.stringify(setup)) as MatchSetup);
+    let sa = a.tick(new Map()), sb = b.tick(new Map());
+    expect(sa.players.find((p) => p.id === 1)!.team).toBe(1);
+    for (let i = 0; i < 30 * 40; i++) { sa = a.tick(new Map()); sb = b.tick(new Map()); }
+    const fp = (s: Snapshot) => JSON.stringify(s.players.map((p) => [p.id, p.team, p.island, p.pos, p.hp, p.kills]));
+    expect(fp(sa)).toBe(fp(sb));
+    a.dispose(); b.dispose();
+  }, 120_000);
+
   test('the match ends when one team is left, even with several of its players alive', async () => {
     const m = await Match.create({ players: humans(4, (i) => i % 2), seed: 5, settings: { startCash: 200, suddenDeathSec: 900, genMult: 1, teamMode: 2 } });
     let snap = m.tick(new Map());
@@ -127,7 +140,7 @@ async function teamsBotMatch(mode: number, n: number, seed: number) {
   const checker = new InvariantChecker({ map: m.map });
   let snap: Snapshot = m.tick(new Map());
   const team = new Map(snap.players.map((p) => [p.id, p.team!]));
-  let friendlyHits = 0, enemyHits = 0, pushTicks = 0, assistTicks = 0, defendTicks = 0, focusTicks = 0, kills = 0;
+  let friendlyHits = 0, enemyHits = 0, pushTicks = 0, assistTicks = 0, regroupTicks = 0, defendTicks = 0, focusTicks = 0, kills = 0;
   for (let i = 0; i < LIMIT && snap.winner === null; i++) {
     snap = m.tick(new Map());
     checker.observe(snap);
@@ -138,18 +151,17 @@ async function teamsBotMatch(mode: number, n: number, seed: number) {
       if (e.type === 'kill' && typeof e.data.killer === 'number' && e.data.killer !== e.data.victim) kills++;
     }
     if (snap.tick % 15) continue;
-    // Group push: two or more teammates on the same island that belongs to an enemy.
-    const owner = new Map(snap.players.map((p) => [p.island, p]));
-    const on = new Map<string, number>();
-    for (const p of snap.players) {
-      if (!p.alive) continue;
-      const isl = islandAt(m.map, p.pos);
-      const o = isl >= 0 ? owner.get(isl) : undefined;
-      if (o && o.team !== p.team) on.set(`${p.team}:${isl}`, (on.get(`${p.team}:${isl}`) ?? 0) + 1);
-    }
-    if ([...on.values()].some((k) => k >= 2)) pushTicks++;
+    // Group push: two teammates out together (within 15 m of each other), both off their own team's islands (on an
+    // enemy island, a bridge or the center).
+    const home = (p: Snapshot['players'][number]) => m.map.some((isl) => {
+      const o = snap.players.find((q) => q.island === isl.index);
+      return !!o && o.team === p.team && Math.hypot(p.pos.x - isl.center.x, p.pos.z - isl.center.z) < isl.radius;
+    });
+    const out = snap.players.filter((p) => p.alive && !home(p));
+    if (out.some((p) => out.some((q) => q.id !== p.id && q.team === p.team && Math.hypot(p.pos.x - q.pos.x, p.pos.z - q.pos.z) < 15))) pushTicks++;
     for (const b of bots.values()) {
       if (b.currentGoal === 'assist') assistTicks++;
+      if (b.currentGoal === 'regroup') regroupTicks++;
       if (b.teamDefender) defendTicks++;
     }
     // Focus: two teammates going after the same rival.
@@ -159,8 +171,8 @@ async function teamsBotMatch(mode: number, n: number, seed: number) {
   }
   checker.finish(snap);
   const left = snap.players.filter((p) => !p.eliminated);
-  const res = { winner: snap.winner, winTeam: snap.winner !== null && snap.winner > 0 ? team.get(snap.winner) : null, time: snap.time, friendlyHits, enemyHits, kills, pushTicks, assistTicks, defendTicks, focusTicks, left, violations: checker.violations.filter((v) => v.kind === 'sealContradiction').map((v) => v.detail) };
-  console.log(`teams mode ${mode} (${n} bots) seed ${seed}: winner #${res.winner} (team ${res.winTeam}) at ${(res.time / 60).toFixed(1)} min; kills ${kills}, enemy hits ${enemyHits}, friendly hits ${friendlyHits}; push ${pushTicks}, assist ${assistTicks}, defend ${defendTicks}, focus ${focusTicks} (half-second samples)`);
+  const res = { winner: snap.winner, winTeam: snap.winner !== null && snap.winner > 0 ? team.get(snap.winner) : null, time: snap.time, friendlyHits, enemyHits, kills, pushTicks, assistTicks, regroupTicks, defendTicks, focusTicks, left, violations: checker.violations.filter((v) => v.kind === 'sealContradiction').map((v) => v.detail) };
+  console.log(`teams mode ${mode} (${n} bots) seed ${seed}: winner #${res.winner} (team ${res.winTeam}) at ${(res.time / 60).toFixed(1)} min; kills ${kills}, enemy hits ${enemyHits}, friendly hits ${friendlyHits}; push ${pushTicks}, assist ${assistTicks}, regroup ${regroupTicks}, defend ${defendTicks}, focus ${focusTicks} (half-second samples)`);
   m.dispose();
   return res;
 }
