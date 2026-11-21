@@ -293,12 +293,16 @@ export class Hud {
 
   update(snap: Snapshot, ctx: HudContext) {
     this.snap = snap;
-    const me = snap.players.find((p) => p.id === this.humanId) ?? null;
+    const found = snap.players.find((p) => p.id === this.humanId) ?? null;
+    // After /spectate mid-match our old player is bot-driven: it's not "us" any more, so no player widgets.
+    const me = found && !found.isBot ? found : null;
     this.me = me;
     // No player of our own (spectating host): player widgets hidden, match info and the end screen still live.
     this.root.classList.toggle('no-player', !me);
     if (!me) {
       this.center.style.display = 'none';
+      this.heal.style.display = 'none';
+      this.drinkBox.style.display = 'none';
       this.sealedBanner.style.display = 'none';
       this.updateMatchInfo(snap, -1);
       const end = endState(snap.winner, 0, false, snap.players);
