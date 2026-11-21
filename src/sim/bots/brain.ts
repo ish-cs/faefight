@@ -24,7 +24,7 @@ export type GoalKind =
   | 'seal' | 'finish' | 'upgrade' | 'heal' | 'retreat' | 'bank' | 'fortify' | 'center' | 'defend' | 'raid' | 'hunt';
 export type BrainEvent = 'stuck' | 'died' | 'targetGone' | 'targetSealed' | 'bridgeCut' | 'targetBusy' | 'homeThreat' | 'goalDone' | 'losingFight';
 
-export type StepInfo = { label: string; act: Goal; done: boolean };
+export type StepInfo = { label: string; act: Goal; done: boolean; /** A shopping step for decks: they come before anything else on the list. */ decks?: boolean };
 
 export type BrainGoal = {
   kind: GoalKind;
@@ -69,6 +69,8 @@ export type BrainInput = {
   scaffolds: number;
   /** Scaffolds the next bridge I'd build still needs (it may go to the center island first); 0 = none to build. */
   bridgeNeed: number;
+  /** My shopping plan (vault cash included) would buy a scaffold now: false = carrying all I can get, go lay it. */
+  scaffoldBuy?: boolean;
   medkits: number;
   carried: number;
   banked: number;
@@ -153,6 +155,12 @@ export class Brain {
   get stepAct(): Goal | null {
     const g = this.goal;
     return g && g.step < g.steps.length ? g.steps[g.step].act : null;
+  }
+
+  /** The current step is a deck-buying trip: decks go before anything else on the shopping list. */
+  get buyingDecks(): boolean {
+    const g = this.goal;
+    return !!g && g.step < g.steps.length && !!g.steps[g.step].decks;
   }
 
   /** "Goal: seal Wavy.Dan (he's away from home, I have 3 steel) — step 3/5 bridging". */
@@ -307,7 +315,7 @@ export class Brain {
         // Standing at my vault with spare cash: two seconds to bank it before the trip (death drops what I carry).
         { label: 'bank spare cash (the vault is right here)', act: 'bank' as Goal, done: !(home && inp.nearVault && inp.bankable >= 150) },
         // Scaffolds I can afford now; with no cash, lay what I carry and come back for more.
-        { label: `carry ${r.scaffolds} scaffolds`, act: 'shop' as Goal, done: r.reach || inp.scaffolds >= (inp.bridgeNeed || r.scaffolds) || (inp.scaffolds > 0 && total < PIECES.scaffold.price) },
+        { label: `carry ${r.scaffolds} scaffolds`, act: 'shop' as Goal, decks: true, done: r.reach || inp.scaffolds >= (inp.bridgeNeed || r.scaffolds) || (inp.scaffolds > 0 && (total < PIECES.scaffold.price || inp.scaffoldBuy === false)) },
         { label, act: 'bridge' as Goal, done: r.reach },
       ];
       const kitStep = { label: `get a seal kit (${KIT_NAME(r.openDoors, total >= 3 * PIECES.metal.price)})`, act: 'shop' as Goal, done: inp.kit >= r.openDoors };

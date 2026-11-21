@@ -76,6 +76,8 @@ const TURN_RATE = 8;
 const CHEST = 1.2;
 /** Net forward progress of one scaffold laid end-to-end. */
 const SCAFFOLD_STEP = 3.8;
+/** A bridge this few decks short is "nearly there": buying them beats anything else on the shopping list. */
+const DECK_TOPUP = 4;
 const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, smg: 12, pistol: 16, rifle: 25, rocket: 20 };
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
@@ -679,6 +681,7 @@ export class Bot {
       }),
       gun: ownsGun(inv), upgraded: !!(inv.weapons.smg || inv.weapons.rifle || inv.weapons.shotgun),
       shield: (me.shield ?? 0) / 100, scaffolds: inv.pieces.scaffold ?? 0, bridgeNeed: this.scaffoldsNeeded(c), medkits: inv.medkits,
+      scaffoldBuy: this.plan(c).items.includes('scaffold'),
       myWeapon: bestGun(inv, c.enemy ? c.enemyDist : 30),
       enemy: c.enemy ? { id: c.enemy.id, dist: c.enemyDist, hp: c.enemy.hp + (c.enemy.shield ?? 0), weapon: c.enemy.equipped } : null,
       armedNear: c.armedNear, underFire: !!c.fire,
@@ -699,7 +702,7 @@ export class Bot {
     if (c.enemy) { needs.grenades = 0; needs.medkits = 0; }
     // Same budget as the shop trip (carried + spendable vault), so banking never undoes a withdrawal for it.
     const me = c.me, total = { ...me, inv: { ...me.inv, cash: me.inv.cash + this.spendable(me) } };
-    return Math.min(me.inv.cash, shoppingPlan(total, needs, this.difficulty, this.style).spent);
+    return Math.min(me.inv.cash, shoppingPlan(total, needs, this.difficulty, this.shopStyle(c)).spent);
   }
 
   private wantShields(me: PlayerState): boolean {
@@ -750,13 +753,6 @@ export class Bot {
     let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
     // Center-minded: bridge to the center island first when it isn't much further than the rival. Anyone else
     // (but easy players) goes via the center when it's the shorter bridge: it's the hub to everyone, and the fights.
-    // My bridge to them got shot out: skilled players go round on the mirror lane (noticed here too, not only
-    // while bridging, so a detour via the center doesn't hide it).
-    if (rivalIsl && !reach && this.P.buildSkill[this.difficulty].altRoute && !this.alt.has(rivalIsl.index)) {
-      const l = this.nav.lane(home.index, rivalIsl.index), key = `${l.from}>${l.to}`;
-      const best = this.laneBest.get(key), s = this.nav.frontier(l).s;
-      if (best !== undefined && s < best - 3) { this.laneBest.set(key, s); this.alt.add(rivalIsl.index); }
-    }
     const slack = this.centerMinded ? 2 : this.difficulty !== 'easy' ? 0 : -Infinity;
     if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath && !(bridgeTo !== null && this.alt.has(bridgeTo)) &&
         (bridgeTo === null ? this.centerMinded : this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
@@ -896,11 +892,21 @@ export class Bot {
     return insideBunker(c.rivalIsl.bunker, s.pos) ? s : null;
   }
 
+  /**
+   * Topping up for the last few decks of a bridge (the brain's deck-buying trip, the bridge nearly there): the decks
+   * come first even for a build-first player. A whole new bridge still waits for the home fortification pieces.
+   */
+  private shopStyle(c: Ctx): ShopStyle {
+    if (!this.style.buildFirst || !this.brain.buyingDecks) return this.style;
+    const short = this.scaffoldsNeeded(c) - (c.me.inv.pieces.scaffold ?? 0);
+    return short > 0 && short <= DECK_TOPUP ? { ...this.style, buildFirst: false } : this.style;
+  }
+
   /** Shopping plan counting what's in the vault too (it can be withdrawn on the way). */
   private plan(c: Ctx) {
     const me = c.me;
     const total = { ...me, inv: { ...me.inv, cash: me.inv.cash + this.spendable(me) } };
-    return shoppingPlan(total, this.needs(c), this.difficulty, this.style);
+    return shoppingPlan(total, this.needs(c), this.difficulty, this.shopStyle(c));
   }
 
   /** Rebuy money (pistol + ammo) skilled players keep banked; 0 for others. */
@@ -1204,8 +1210,11 @@ export class Bot {
       const base = Math.max(this.drive(g, c, this.score(g, c)), g === step && SAFE_STEPS.has(g) ? 0.05 : 0);
       if (base <= 0 && g !== best) continue;
       const bias = GOAL_BIAS[g];
-      // The storm outranks any plan step: staying inside the ring is survival.
-      const s = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' || g === 'cover' || (g === 'fortify' && this.t.builder > 0.6 && c.view.now < this.params.turtleUntil) ? STEP_BONUS + this.params.stepPush : 0) +
+      // The storm outranks any plan step: staying inside the ring is survival. Early on a keen builder's home
+      // fortification does too, except a bank step (two seconds at the vault; walking off to fortify would undo
+      // "the vault is right here" and the step order would ping-pong).
+      const earlyFort = g === 'fortify' && step !== 'bank' && this.t.builder > 0.6 && c.view.now < this.params.turtleUntil;
+      const s = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' || g === 'cover' || earlyFort ? STEP_BONUS + this.params.stepPush : 0) +
         (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
@@ -1334,7 +1343,7 @@ export class Bot {
     }
     const walk = this.goTo(c.home.shop, 2.0);
     if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt) return walk;
-    let item = nextPurchase(me, this.needs(c), this.difficulty, this.style);
+    let item = nextPurchase(me, this.needs(c), this.difficulty, this.shopStyle(c));
     if (!item || this.buyBlocked(item)) { this.nextScoreAt = now; return walk; }
     if (!fits(me, item)) {
       // Hotbar full: clear a slot of junk first (drop it), like a player making room.

@@ -243,7 +243,7 @@ describe('params', () => {
 describe('no cheating: bots only see BotView', () => {
   test('bot modules import nothing that holds match state', () => {
     const dir = path.resolve(__dirname, '../../src/sim/bots');
-    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building', '../seal', '../fire']);
+    const allowed = new Set(['../constants', '../combat', '../map', '../types', '../vec', '../economy', '../hotbar', '../potions', '../building', '../seal', '../fire', '../movement']);
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts'))) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8');
       for (const m of src.matchAll(/from '([^']+)'/g)) {
@@ -257,6 +257,9 @@ describe('no cheating: bots only see BotView', () => {
       // fire: only the pure helpers (is a piece flammable, steer around visible fire zones), never the burn step.
       const fire = src.match(/import \{([^}]*)\} from '\.\.\/fire'/);
       if (fire) for (const name of fire[1].split(',').map((x) => x.trim()).filter(Boolean)) expect(['isFlammable', 'steerFromFire']).toContain(name);
+      // movement: only the tuning tables (how far a jump carries), never the mover itself.
+      const mv = src.match(/import \{([^}]*)\} from '\.\.\/movement'/);
+      if (mv) for (const name of mv[1].split(',').map((x) => x.trim()).filter(Boolean)) expect(['MOVE', 'STAMINA']).toContain(name);
     }
   });
 

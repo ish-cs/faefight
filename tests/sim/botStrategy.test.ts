@@ -145,9 +145,18 @@ describe('target choice (FFA)', () => {
     const self = armed(0, 0, onIsland(0, 0));
     const view = makeView(self, { others: [status(1, 1), status(2, 2, { eliminated: true }), status(3, 3)] });
     const bot = new Bot(0, 'easy', mulberry32(9), preset('Turtle'));
-    const seen = new Set<number | null>();
-    for (let i = 0; i < 30 * TICK_HZ; i++) { bot.think(view); view.now += DT; seen.add(bot.currentTarget); }
-    expect(seen.size).toBe(1);
+    // The view is frozen, so the bot walks without getting anywhere: after a while it gives up on that plan
+    // ("stuck", like a player abandoning a dead end) and may pick another rival. That is a reasoned switch; any
+    // other change of target is flip-flopping on noise.
+    let changes = 0, last: number | null | undefined;
+    for (let i = 0; i < 30 * TICK_HZ; i++) {
+      bot.think(view); view.now += DT;
+      if (last !== undefined && bot.currentTarget !== last) changes++;
+      last = bot.currentTarget;
+    }
+    const stuck = bot.planEvents.filter((e) => e.event === 'stuck').length;
+    expect(changes).toBeLessThanOrEqual(stuck);
+    expect(changes).toBeLessThanOrEqual(2);
   });
 });
 
