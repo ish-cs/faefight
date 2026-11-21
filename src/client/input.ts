@@ -48,6 +48,8 @@ export class InputController {
   lookScale = 1;
   private keys = new Set<string>();
   private fireHeld = false;
+  /** The last pointer-lock request was refused (unsupported / denied): clicks then act without the lock. */
+  private lockRefused = false;
   /** Recoil still to be applied to the look angles (rad); fed in over a few frames. */
   private kickPitch = 0;
   private kickYaw = 0;
@@ -148,9 +150,13 @@ export class InputController {
 
   requestLock() {
     if (this.locked) return;
-    // Some browsers return a promise that rejects (e.g. too soon after Esc); that's not an error for us.
+    // Some browsers return a promise that rejects (e.g. too soon after Esc); that's not an error for us,
+    // but then clicks must still act (see onMouseDown) or the game would be unplayable without the lock.
     const r = this.canvas.requestPointerLock() as unknown as Promise<void> | undefined;
-    r?.catch?.(() => {});
+    r?.then?.(() => { this.lockRefused = false; }, () => {
+      this.lockRefused = true;
+      console.info('[input] pointer lock refused; clicks act without capturing the mouse');
+    });
   }
 
   setSensitivity(v: number) {
@@ -168,7 +174,12 @@ export class InputController {
   private onMouseDown(e: MouseEvent) {
     if (!this.enabled) return;
     if (this.inventory) { this.setInventory(false); return; }
-    if (!this.locked) this.requestLock();
+    if (!this.locked) {
+      this.requestLock();
+      // The click that captures the mouse ("Click to capture the mouse") only captures it: it must not
+      // fire the gun in hand (a $500 rocket), place a piece or use an item.
+      if (!this.lockRefused) return;
+    }
     // Other buttons act like keys ('Mouse2' = right button), so the keymap can bind them (aim by default).
     if (e.button !== 0) { this.keys.add(`Mouse${e.button}`); return; }
     if (e.button !== 0) return;

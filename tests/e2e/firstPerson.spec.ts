@@ -45,6 +45,9 @@ test('V toggles first person (persisted) with a viewmodel', async ({ page }) => 
   await page.waitForTimeout(1800); // toast gone, weapon raised
   await page.screenshot({ path: 'test-results/first-person.png' });
   console.log(`[fps] third person ${tpFps.toFixed(1)} · first person ${(await fps()).toFixed(1)}`);
+  // Capture the mouse first, as a player does: that click only captures it (it doesn't fire).
+  await page.locator('canvas.game').click();
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null)).toBe('CANVAS');
   // Shoot: the sim registers the shot and the viewmodel kicks / flashes.
   await page.mouse.move(640, 360);
   await page.mouse.down();
