@@ -110,6 +110,12 @@ export const DRIVE = {
   guardFreshSec: 4,
   collectCarried: 200,
 };
+/** Goal watchdog: how long a goal may go without progress, how far counts as progress, how long it's dropped. */
+const STALL_SEC: Partial<Record<Goal, number>> = {
+  seal: 8, attack: 15, bridge: 10, contest: 10, raid: 10, loot: 8, shop: 10, bank: 8, fortify: 10, cut: 12,
+};
+const STALL_DIST = 2.5, STALL_BAN_SEC = 20;
+const TARGETED = new Set<Goal>(['seal', 'attack', 'bridge']);
 const PUSH_GEAR: ShopItem[] = ['pistol', 'ammo', 'scaffold', 'wood', 'metal', 'steel', 'charge'];
 
 /** What a goal wants this tick; aiming at enemies, weapons and safety are layered on top by think(). */
@@ -200,6 +206,12 @@ export class Bot {
   /** Telegraphed strikes already judged (easy bots notice only some), keyed by spot and time. */
   private bolts = new Map<string, boolean>();
   private wander: { to: Vec3; until: number } | null = null;
+  /** Goal watchdog: where I was when the current goal last made progress (moved, built, bought, shot). */
+  private prog: { goal: Goal; at: number; pos: Vec3 } | null = null;
+  private lastDidAt = -Infinity;
+  /** Goals (and the rival they were aimed at) that went nowhere lately: left alone a while. */
+  private goalBan = new Map<Goal, number>();
+  private targetBan = new Map<number, number>();
   private lastNadeAt = -Infinity;
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
@@ -274,6 +286,7 @@ export class Bot {
       else if (this.fightSince === null) this.fightSince = now;
       this.nextScoreAt = now + RESCORE_SEC[this.difficulty] * (0.75 + 0.5 * this.rng());
     }
+    this.watchdog(now, me);
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
@@ -329,7 +342,6 @@ export class Bot {
     let jump = !!act.jump;
     const dodge = this.dodgeBolt(me, view);
     if (dodge) { dir = dodge; act = { ...act, sprint: true }; }
-    this.trackStuck(now, me, dir);
     if (now < this.unstickUntil) {
       // Step aside; stuck again at the same spot, back off further each time (around whatever is in the way).
       dir = this.unstickDir ?? scale(right(look.yaw), this.unstickSide);
@@ -337,6 +349,10 @@ export class Bot {
     }
     if (dir && !dodge) dir = this.stormFence(me, view, dir);
     if (dir) dir = this.nav.safeDir(dir);
+    // Stuck means pushing and not moving; held back at an edge by safeDir isn't stuck (a hop there goes in the water).
+    this.trackStuck(now, me, dir);
+    // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
+    if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
@@ -354,6 +370,7 @@ export class Bot {
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
       (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
     if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
+    if (act.shop || act.build || act.vault || act.placeCharge || fire || throwGrenade) this.lastDidAt = now;
     if (act.build) {
       this.lastPieceAt = now;
     }
@@ -462,7 +479,8 @@ export class Bot {
   private chooseTarget(view: BotView) {
     let best: number | null = null, bestScore = -Infinity, cur = -Infinity;
     for (const f of this.rivalFacts(view)) {
-      const s = rivalScore(f, this.t) + (this.rng() - 0.5) * NOISE[this.difficulty];
+      const s = rivalScore(f, this.t) + (this.rng() - 0.5) * NOISE[this.difficulty] -
+        ((this.targetBan.get(f.id) ?? -Infinity) > view.now ? 1.5 : 0);
       if (f.id === this.targetId) cur = s;
       if (s > bestScore) { bestScore = s; best = f.id; }
     }
@@ -866,6 +884,7 @@ export class Bot {
     let best: Goal = (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
+      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now) continue;
       const base = this.drive(g, c, this.score(g, c));
       if (base <= 0 && g !== best) continue;
       const s = base + (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
@@ -1698,6 +1717,26 @@ export class Bot {
       return away;
     }
     return null;
+  }
+
+  /**
+   * A goal that goes nowhere (no ground covered, nothing built, bought or shot for a while) is a plan that doesn't
+   * work from here, e.g. a route the map says exists but I can't walk: drop it (and the rival it was aimed at) for
+   * a while and think again, like a player giving up on a dead end.
+   */
+  private watchdog(now: number, me: PlayerState) {
+    const limit = STALL_SEC[this.goal];
+    if (limit === undefined) { this.prog = null; return; }
+    const p = this.prog;
+    if (!p || p.goal !== this.goal || dist2D(p.pos, me.pos) > STALL_DIST || this.lastDidAt > p.at) {
+      this.prog = { goal: this.goal, at: now, pos: clone(me.pos) };
+      return;
+    }
+    if (now - p.at < limit) return;
+    this.goalBan.set(this.goal, now + STALL_BAN_SEC);
+    if (this.targetId !== null && TARGETED.has(this.goal)) this.targetBan.set(this.targetId, now + STALL_BAN_SEC);
+    this.prog = null;
+    this.nextScoreAt = now;
   }
 
   private trackStuck(now: number, me: PlayerState, want: Vec3 | null) {

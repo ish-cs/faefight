@@ -1,4 +1,5 @@
 import { MAP, PLAYER } from '../constants';
+import { MOVE } from '../movement';
 import type { Box, Bunker, CenterIsland, Doorway, IslandLayout, StaticBox } from '../map';
 import { doorBlocked } from './plans';
 import type { Vec3 } from '../types';
@@ -15,6 +16,8 @@ const DETOURS = [0.4, -0.4, 0.8, -0.8, 1.2, -1.2, 1.6, -1.6];
 const STEP_UP = 0.35;
 /** Don't walk off anything higher than this when there's another way (falls over ~3.3 m hurt). */
 const MAX_DROP = 3;
+/** Jump arc check: time step. */
+const JUMP_STEP = 0.1;
 const BUNKER_HALF = MAP.bunker.interior / 2 + MAP.bunker.wall;
 /** Walk grid: cell size, and how far to keep the body from cover (player radius + margin). */
 const GRID_CELL = 0.5;
@@ -452,6 +455,31 @@ export class Nav {
     if (Math.abs(gap) < 0.5) return b >= 0 && a !== b ? laneAt(l, sTarget) : dest;
     const carrot = laneAt(l, sMe + Math.sign(gap) * Math.min(CARROT, Math.abs(gap)));
     return a >= 0 ? this.within(a, me, carrot) : carrot;
+  }
+
+  /**
+   * Would a jump now (steering toward `dir`, null = no input) come down on solid ground? Flies the arc the way
+   * movement.ts does (jump velocity, gravity, slow air steering) from the current velocity and checks the ground
+   * under every point of it: anyone looking at a deck edge knows not to hop sideways off it.
+   */
+  safeJump(dir: Vec3 | null, sprint: boolean): boolean {
+    const me = this.view.self;
+    let x = me.pos.x, z = me.pos.z, y = 0, vx = me.vel.x, vz = me.vel.z, vy = PLAYER.jumpVelocity;
+    const speed = sprint ? PLAYER.sprint : PLAYER.walk;
+    const wx = dir ? dir.x * speed : vx, wz = dir ? dir.z * speed : vz;
+    for (let t = 0; t < 1.2; t += JUMP_STEP) {
+      const dx = wx - vx, dz = wz - vz, d = Math.hypot(dx, dz), step = MOVE.airAccel * JUMP_STEP;
+      if (d <= step) { vx = wx; vz = wz; } else { vx += dx / d * step; vz += dz / d * step; }
+      vy -= PLAYER.gravity * JUMP_STEP;
+      x += vx * JUMP_STEP; z += vz * JUMP_STEP; y += vy * JUMP_STEP;
+      // Body edge, not just the centre: the capsule hangs over the drop before it falls.
+      for (const [ox, oz] of [[0, 0], [PLAYER.radius, 0], [-PLAYER.radius, 0], [0, PLAYER.radius], [0, -PLAYER.radius]]) {
+        const g = this.view.groundAt(x + ox, z + oz);
+        if (g === null || me.pos.y - g > MAX_DROP) return false;
+      }
+      if (y < 0 && t > 0.3) return true;
+    }
+    return true;
   }
 
   /**
