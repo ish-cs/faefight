@@ -85,6 +85,8 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
+/** An enemy farther than this doesn't pull my gun off what my goal is shooting at (a plug, a wall). */
+const SHOOT_AT_OVER_FOE_M = 25;
 /**
  * Explosive props. PRO bots sometimes shoot a barrel standing next to an enemy instead of the enemy (a
  * roll every BARREL_ROLL_SEC while such a shot is on, so it's a choice, not a reflex); everyone keeps out of
@@ -446,7 +448,8 @@ export class Bot {
     } else if (act.shootAt && act.shootFirst) {
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
-    } else if (foe) {
+    } else if (foe && !(act.shootAt && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
+      // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
       const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, rocketAtEnemy && foe === enemy ? 0.15 : CHEST, 0)), foe.id, cur);
       look = r;
       const foeDist = dist2D(foe.pos, me.pos);
@@ -1341,11 +1344,13 @@ export class Bot {
     let best: Goal = step ?? ((c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack'), bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
-      if (g !== step && !REFLEXES.has(g)) continue;
-      if (this.bannedAct && this.bannedAct.goal === g && this.view.now < this.bannedAct.until) continue;
-      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrep(c.view)) continue; // banned for a while (goal watchdog)
+      // Not the brain's step and not a reflex: out of the running this decision (the inspector still lists it at 0).
+      if (g !== step && !REFLEXES.has(g)) { rows?.push({ goal: g, raw: 0, base: 0, noise: 0, sticky: 0, score: 0 }); continue; }
+      const out = () => rows?.push({ goal: g, raw: 0, base: 0, noise: 0, sticky: 0, score: 0 });
+      if (this.bannedAct && this.bannedAct.goal === g && this.view.now < this.bannedAct.until) { out(); continue; }
+      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrep(c.view)) { out(); continue; } // banned for a while (goal watchdog)
       // Running from a fight I'd lose: only shoot back when cornered.
-      if (g === 'fight' && retreating && c.enemyDist > 5) continue;
+      if (g === 'fight' && retreating && c.enemyDist > 5) { out(); continue; }
       // A step whose own situational score is nil (e.g. "heal up" while already home) still runs: walking home,
       // hanging around the generator or the target's door is harmless.
       const raw = this.score(g, c);
@@ -1357,9 +1362,10 @@ export class Bot {
       // "the vault is right here" and the step order would ping-pong).
       const earlyFort = g === 'fortify' && step !== 'bank' && this.t.builder > 0.6 && c.view.now < this.params.turtleUntil;
       const noise = (this.rng() - 0.5) * NOISE[this.difficulty], sticky = g === this.goal ? STICKY : 0;
-      const s = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' || g === 'cover' || earlyFort ? STEP_BONUS + this.params.stepPush : 0) +
-        noise + sticky;
-      rows?.push({ goal: g, raw, base, noise, sticky, score: s });
+      // Brain terms (trained per-goal bias, the current step's push) count as part of the base for the inspector.
+      const planned = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' || g === 'cover' || earlyFort ? STEP_BONUS + this.params.stepPush : 0);
+      const s = planned + noise + sticky;
+      rows?.push({ goal: g, raw, base: planned, noise, sticky, score: s });
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
     }
