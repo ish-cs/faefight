@@ -19,7 +19,7 @@ const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 const WEAPON_KINDS = Object.keys(WEAPONS) as WeaponKind[];
 const GUN_KINDS = WEAPON_KINDS.filter((k): k is GunKind => k !== 'fists');
 const SHOP_ITEMS: ShopItem[] = [
-  ...PIECE_KINDS, ...GUN_KINDS, 'ammo', 'grenade', 'charge', 'medkit', ...POTION_KINDS,
+  ...PIECE_KINDS, ...GUN_KINDS, 'ammo', 'grenade', 'charge', 'medkit', ...POTION_KINDS, 'grapple',
   'genUpgrade', ...GUN_KINDS.map((g) => `lock:${g}` as const),
 ];
 const oneOf = <T extends string>(list: readonly T[], x: unknown): T | null => (list.includes(x as T) ? (x as T) : null);
@@ -59,7 +59,7 @@ function buildReq(x: unknown): BuildRequest | null {
 function partialInv(x: unknown): Partial<Inventory> | null {
   if (!isObj(x)) return null;
   const out: Partial<Inventory> = {};
-  for (const k of ['cash', 'grenades', 'charges', 'medkits'] as const) {
+  for (const k of ['cash', 'grenades', 'charges', 'medkits', 'grapples'] as const) {
     if (x[k] === undefined) continue;
     const n = count(x[k]);
     if (n === null) return null;
@@ -133,6 +133,7 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     moveSlot: moveSlot(x.moveSlot),
     useMedkit: bool(x.useMedkit),
     drink: bool(x.drink),
+    ...(x.grapple === true ? { grapple: true } : {}),
     ...(x.view === 0 || x.view === 1 ? { view: x.view } : {}),
     ...(typeof x.viewT === 'number' && Number.isFinite(x.viewT) ? { viewT: x.viewT } : {}),
   };

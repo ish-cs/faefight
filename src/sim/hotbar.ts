@@ -14,12 +14,17 @@ const GUNS: readonly HotbarGun[] = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket
 const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 export const POTION_KINDS: readonly PotionKind[] = ['shieldSmall', 'shieldBig', 'healPotion', 'speedPotion'];
 /** Order used when filling slots for kinds that arrived without a slot (e.g. debug grants). */
-export const HOTBAR_ITEMS: readonly HotbarItem[] = [...GUNS, ...PIECE_KINDS, 'grenade', 'charge', 'medkit', ...POTION_KINDS];
+export const HOTBAR_ITEMS: readonly HotbarItem[] = [...GUNS, ...PIECE_KINDS, 'grenade', 'charge', 'medkit', ...POTION_KINDS, 'grapple'];
 
 export const isGunItem = (k: unknown): k is HotbarGun => (GUNS as readonly unknown[]).includes(k);
 export const isPotionItem = (k: unknown): k is PotionKind => (POTION_KINDS as readonly unknown[]).includes(k);
 export const isPieceItem = (k: unknown): k is PieceKind => (PIECE_KINDS as readonly unknown[]).includes(k);
 export const isHotbarItem = (k: unknown): k is HotbarItem => (HOTBAR_ITEMS as readonly unknown[]).includes(k);
+
+/** Sets the grappling hook uses left, dropping the key at 0 (so an inventory without hooks has none). */
+export function setGrapples(inv: Inventory, n: number): void {
+  if (n > 0) inv.grapples = n; else delete inv.grapples;
+}
 
 export function emptyHotbar(): Hotbar {
   return Array.from({ length: HOTBAR_SIZE }, () => null);
@@ -31,6 +36,7 @@ export function countOf(inv: Inventory, kind: HotbarItem): number {
   if (kind === 'grenade') return inv.grenades;
   if (kind === 'charge') return inv.charges;
   if (kind === 'medkit') return inv.medkits;
+  if (kind === 'grapple') return inv.grapples ?? 0;
   if (isPotionItem(kind)) return inv.potions[kind] ?? 0;
   return inv.pieces[kind] ?? 0;
 }
@@ -105,10 +111,11 @@ export function takeOut(inv: Inventory, kind: HotbarItem, amount: 'one' | 'stack
     delete inv.weapons[kind];
     return out;
   }
-  const n = amount === 'one' ? 1 : have;
+  const n = amount === 'one' && kind !== 'grapple' ? 1 : have; // the hook goes as one item, all its uses with it
   if (kind === 'grenade') { inv.grenades -= n; out.grenades = n; }
   else if (kind === 'charge') { inv.charges -= n; out.charges = n; }
   else if (kind === 'medkit') { inv.medkits -= n; out.medkits = n; }
+  else if (kind === 'grapple') { setGrapples(inv, have - n); out.grapples = n; }
   else if (isPotionItem(kind)) {
     const left = have - n;
     if (left > 0) inv.potions[kind] = left; else delete inv.potions[kind];

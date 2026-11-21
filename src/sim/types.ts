@@ -18,15 +18,17 @@ export type Inventory = {
   charges: number;
   medkits: number;
   potions: Partial<Record<PotionKind, number>>;
+  /** Grappling hook uses left (absent = none). One hotbar slot ('grapple') holds them all. */
+  grapples?: number;
 };
 
 /** Something that occupies a hotbar slot (amounts live in the inventory). */
-export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit' | PotionKind;
+export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit' | PotionKind | 'grapple';
 
 export type GunKind = Exclude<WeaponKind, 'fists'>;
 /** `genUpgrade`: next level of your own island's generator. `lock:<gun>`: respawn with that gun from now on. */
 export type LockItem = `lock:${GunKind}`;
-export type ShopItem = PieceKind | GunKind | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind | 'genUpgrade' | LockItem;
+export type ShopItem = PieceKind | GunKind | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind | 'genUpgrade' | LockItem | 'grapple';
 export type ShopAction = { buy: ShopItem };
 export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> };
 
@@ -62,6 +64,8 @@ export type PlayerInput = {
   useMedkit: boolean;
   /** Start drinking the potion in the selected slot. */
   drink: boolean;
+  /** Fire the grappling hook in the selected slot; while one is out, let go of it. Optional: old inputs/replays lack it. */
+  grapple?: boolean;
   /**
    * Lag compensation: the sim time of the world this player was looking at when they fired (their
    * interpolated view of everyone else). The host resolves their shots against hitboxes rewound to
@@ -137,9 +141,20 @@ export type PlayerState = {
   mv?: MoveState;
   /** Cosmetic emote playing since sim time `at` (emotes.ts); absent when none. Moving, firing or damage ends it. */
   emote?: { id: EmoteId; at: number };
+  /** Grappling hook out (sim/grapple.ts); absent when none. Public: everyone draws the rope. */
+  hook?: HookState;
+  /** The hook can't be fired again before this sim time (absent = ready). */
+  hookReadyAt?: number;
   /** Last quick-chat line (speech bubble for QUIP_SHOW_SEC from `at`); absent when none. */
   quip?: { id: QuipId; at: number };
 };
+
+/**
+ * A grappling hook in use. st: 0 flying out (reaches x,y,z at `at`), 1 latched to the world (reeling its owner
+ * in), 2 latched to player `tgt` (yanking them over), 3 missed (retracting; gone at `at`). `t0`: when it was
+ * fired. `pc`: the piece it hooked, if any (the hook lets go when that piece breaks).
+ */
+export type HookState = { st: 0 | 1 | 2 | 3; x: number; y: number; z: number; t0: number; at: number; tgt?: number; pc?: number };
 
 /** `burning`: on fire right now (sim/fire.ts); omitted when not, so it costs nothing on the wire. */
 export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number; burning?: true };
@@ -161,7 +176,9 @@ export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped' | 'spawn'
   | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning'
   /** Emote / quick-chat wheel use: data { by, id } (emotes.ts). */
-  | 'wheel' | 'hazard';
+  | 'wheel' | 'hazard'
+  /** Grappling hook: data { by, phase: 'fire' | 'latch' | 'yank' | 'miss' | 'release', target? }. */
+  | 'grapple';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */

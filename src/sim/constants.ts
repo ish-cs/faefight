@@ -111,6 +111,20 @@ export const BURST_RESET_SEC = 0.2;
 
 export const GRENADE = { price: 100, dmg: 100, radius: 4, fuseSec: 2.5, throwSpeed: 14 };
 export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
+/**
+ * Grappling hook (sim/grapple.ts, movement.ts). One buy = `uses` hooks; a use is spent only when the hook
+ * latches. Range (m) from the eye; the hook flies at `tipSpeed`. Hooking the world reels you in toward the
+ * point at up to `pullSpeed` (reaching it over ~1/`pullResponse` s), for at most `pullSec`; within
+ * `arriveDist` you let go keeping `arriveKeep` of your speed plus a little `arrivePop` up, so you land on the ledge. Jump lets go early. Hooking a
+ * player yanks them toward you at `yankSpeed` for at most `yankSec` (their own movement is off meanwhile),
+ * stopping `yankStop` m short of you. `cooldownSec` after the hook comes back (a miss: `missCooldownSec`).
+ */
+export const GRAPPLE = {
+  price: 90, uses: 3, range: 36, tipSpeed: 90,
+  pullSpeed: 22, pullResponse: 7, pullSec: 2.4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.3,
+  yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
+  cooldownSec: 1.5, missCooldownSec: 0.6, minDist: 2.5,
+};
 /** Shield sits on top of health (blue bar). */
 export const SHIELD_MAX = 100;
 export const POTIONS: Record<PotionKind, { price: number; useSec: number }> = {
