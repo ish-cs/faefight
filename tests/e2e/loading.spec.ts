@@ -31,7 +31,7 @@ test('match loading: monotonic bar, step dots, reveal only after warm-up', async
   expect(bar.at(-1)).toBe(100);
 
   const all = await page.evaluate(() => (window as unknown as { __faefightLoading: { events(): LoadEvent[] } }).__faefightLoading.events());
-  const ev = all.slice(all.findLastIndex((e) => e.kind === 'show'));
+  const ev = all.slice(all.map((e) => e.kind).lastIndexOf('show'));
   const hide = ev.findIndex((e) => e.kind === 'hide');
   expect(hide).toBeGreaterThan(0);
   const before = ev.slice(0, hide);
