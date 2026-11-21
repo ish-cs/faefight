@@ -5,6 +5,7 @@ import { spawnYaw, type IslandLayout } from './map';
 import type { Physics } from './physics';
 import { refillStamina, STAMINA } from './movement';
 import { isSealed } from './seal';
+import { sealBlocker, sidesLeft } from './teams';
 import { newStorm, type StormCenter, type StormState } from './storm';
 import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState, Vec3 } from './types';
 import { clone, dist, dist2D, rotateY, v3 } from './vec';
@@ -140,10 +141,18 @@ export function islandSealed(s: MatchStateCore, map: IslandLayout[], island: num
   }
   let sealed = c.byIsland.get(island);
   if (sealed === undefined) {
-    sealed = isSealed(map[island].bunker, [...s.pieces.values()]);
+    sealed = isSealed(map[island].bunker, sealPieces(s, island));
     c.byIsland.set(island, sealed);
   }
   return sealed;
+}
+
+/** Pieces that count toward sealing this island's bunker: all but its owner's teammates' (teams.ts sealBlocker). */
+export function sealPieces(s: MatchStateCore, island: number): PieceState[] {
+  let owner: PlayerState | undefined;
+  for (const p of s.players.values()) if (p.island === island) { owner = p; break; }
+  const all = [...s.pieces.values()];
+  return owner?.team === undefined ? all : all.filter((pc) => sealBlocker(owner, s.players.get(pc.owner)));
 }
 
 /** The spawn point, or the nearest free spot inside the bunker if a piece sits on it. */
@@ -253,7 +262,8 @@ export function tickLifecycle(
 
   if (!s.practice && s.winner === null && s.players.size >= 2) {
     const left = [...s.players.values()].filter((p) => !p.eliminated);
-    if (left.length <= 1) {
+    // Last side standing: one player in free-for-all, one team in a teams match (winner = one of its players).
+    if (sidesLeft(left) <= 1) {
       s.winner = left[0]?.id ?? -1;
       out.push(ev(now, 'win', { winner: s.winner }));
     }

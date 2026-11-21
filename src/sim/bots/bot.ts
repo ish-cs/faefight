@@ -20,15 +20,15 @@ import {
   shoppingPlan,
   type Needs, type ShopStyle,
 } from './plans';
-import type { BotView, OtherStatus } from './view';
+import type { AllyStatus, BotView, OtherStatus } from './view';
 import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, type ScoreRow } from './introspect';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'storm' | 'heal' | 'cover' | 'fortify' | 'contest';
+  | 'fight' | 'disengage' | 'storm' | 'heal' | 'cover' | 'fortify' | 'contest' | 'assist';
 const GOALS: Goal[] = [
   'storm', 'defend', 'disengage', 'cover', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'fortify', 'shop', 'heal', 'contest', 'collect',
+  'fortify', 'shop', 'heal', 'contest', 'collect', 'assist',
 ];
 /** Center gold worth a trip, and how far a bot will go out of its way for it. */
 const CONTEST_AT = 150;
@@ -156,6 +156,8 @@ export class Bot {
   private readonly style: ShopStyle;
   private goal: Goal = 'collect';
   private targetId: number | null = null;
+  /** Teams: this bot is its team's home defender (one stays back while the others push). */
+  private defender = false;
   private hesitateUntil = -Infinity;
   private nextScoreAt = -Infinity;
   private lastNow = NaN;
@@ -249,6 +251,8 @@ export class Bot {
   get currentGoal(): Goal { return this.goal; }
   /** Rival this bot is currently going after (player id), if any. */
   get currentTarget(): number | null { return this.targetId; }
+  /** Teams: stays home to defend while teammates push (told to teammates, shown to spectators). */
+  get teamDefender(): boolean { return this.defender; }
   /** Hazard id this bot is deliberately shooting to catch an enemy in the blast, if any. */
   get barrelTarget(): number | null { return this.barrelPlan?.id ?? null; }
   /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
@@ -284,6 +288,7 @@ export class Bot {
     this.view = view;
     this.nav.begin(view);
     this.checkPurchase(me, now);
+    this.defender = this.isDefender(view);
     this.sealRace(view);
     if (now >= this.nextScoreAt) this.chooseTarget(view);
     const ctx = this.context(view);
@@ -549,13 +554,81 @@ export class Bot {
     let best: number | null = null, bestScore = -Infinity, cur = -Infinity;
     for (const f of this.rivalFacts(view)) {
       const s = rivalScore(f, this.t, this.P.drive.sealAwayTarget) + (this.rng() - 0.5) * NOISE[this.difficulty] -
-        ((this.targetBan.get(f.id) ?? -Infinity) > view.now ? 1.5 : 0);
+        ((this.targetBan.get(f.id) ?? -Infinity) > view.now ? 1.5 : 0) + this.teamFocus(view, f.id);
       if (f.id === this.targetId) cur = s;
       if (s > bestScore) { bestScore = s; best = f.id; }
     }
     if (best === null) { this.targetId = null; return; }
     if (cur > -Infinity && cur + commitment(this.t) >= bestScore) return;
     this.targetId = best;
+  }
+
+  // ---------------------------------------------------------------- teams
+
+  /**
+   * One bot per team stays home once the team has P.team.defendMin players left: the lowest-id bot still in
+   * (everyone on the team reaches the same answer from the same facts, so exactly one defends).
+   */
+  private isDefender(view: BotView): boolean {
+    if (!view.allies) return false;
+    const left = view.allies.filter((a) => !a.eliminated);
+    if (left.length + 1 < this.P.team.defendMin) return false;
+    return left.every((a) => !a.isBot || a.id > this.id);
+  }
+
+  /**
+   * Teams: rival-choice bonus. Teammates already after this rival pull me onto them too (focus one target, push
+   * one island together); someone who just hurt a teammate near me is the one to go for.
+   */
+  private teamFocus(view: BotView, id: number): number {
+    if (!view.allies) return 0;
+    let n = 0;
+    for (const a of view.allies) {
+      if (a.eliminated) continue;
+      if (a.target === id) n++;
+      if (a.hurtBy === id && view.now - a.hurtAt <= this.P.team.assistSec && dist2D(a.pos, view.self.pos) <= this.P.team.assistM) n++;
+    }
+    return this.P.team.focus * Math.min(2, n);
+  }
+
+  /** A teammate under fire close enough to help (the nearest one an enemy hurt lately), or null. */
+  private allyInTrouble(c: Ctx): AllyStatus | null {
+    const view = c.view;
+    let best: AllyStatus | null = null, bestD = this.P.team.assistM;
+    for (const a of view.allies ?? []) {
+      if (!a.alive || a.hurtBy === null || view.now - a.hurtAt > this.P.team.assistSec) continue;
+      const d = dist2D(a.pos, c.me.pos);
+      if (d < bestD) { best = a; bestD = d; }
+    }
+    return best;
+  }
+
+  /**
+   * Teams: my team role on top of the solo scores. The defender holds home (guard/fortify/cut/defend up, the push
+   * down); everyone else pushes harder where a teammate already is (group push on one island).
+   */
+  private teamDrive(g: Goal, c: Ctx, s: number): number {
+    if (!c.view.allies) return s;
+    const T = this.P.team;
+    if (this.defender) {
+      if (g === 'guard' || g === 'fortify' || g === 'cut' || g === 'defend') return s > 0 ? s + T.defendBias : s;
+      if (g === 'bridge' || g === 'attack' || g === 'seal') return s - T.defendBias;
+      return s;
+    }
+    if ((g === 'bridge' || g === 'attack' || g === 'seal') && s > 0 && c.rivalIsl) {
+      const there = c.view.allies.some((a) => a.alive && islandAt(c.view.map, a.pos) === c.rivalIsl!.index);
+      if (there) return s + T.groupPush;
+    }
+    return s;
+  }
+
+  /** Go to the teammate under fire (the fight layer shoots whoever shows up). */
+  private doAssist(c: Ctx): Act {
+    const a = this.allyInTrouble(c);
+    if (!a) { this.nextScoreAt = c.view.now; return IDLE; }
+    const walk = this.goTo(a.pos, 3);
+    const s = a.hurtBy === null ? undefined : this.mem.seen.get(a.hurtBy);
+    return walk.dir ? walk : { dir: null, face: s ? add(s.pos, v3(0, CHEST, 0)) : add(a.pos, v3(0, CHEST, 0)) };
   }
 
   // ---------------------------------------------------------------- context
@@ -778,7 +851,7 @@ export class Bot {
   private raidIsland(c: Ctx): IslandLayout | null {
     const now = c.view.now;
     for (const i of [c.on, c.reach && c.rivalIsl ? c.rivalIsl.index : -1]) {
-      if (i < 0 || i === c.home.index || c.view.generators[i] < RAID_AT) continue;
+      if (i < 0 || i === c.home.index || c.view.generators[i] < RAID_AT || c.view.allies?.some((a) => a.island === i)) continue;
       const owner = c.view.others.find((o) => o.island === i);
       const guarded = owner && owner.alive && this.mem.recent(owner.id, now, 6)?.island === i;
       if (!guarded) return c.view.map[i];
@@ -862,6 +935,13 @@ export class Bot {
         if (view.suddenDeath || c.enemy || c.on === home.index || !c.homeReach || me.inv.medkits > 0) return 0;
         const low = 0.35 + 0.25 * t.caution - 0.15 * t.aggression;
         return hp < low ? 0.75 + (low - hp) : 0;
+      }
+      case 'assist': {
+        // Teams: help a teammate under fire nearby (no one in my own face, a gun, a way there).
+        if (!view.allies || c.enemy || !gun || trapped) return 0;
+        const a = this.allyInTrouble(c);
+        if (!a || (islandAt(view.map, a.pos) !== c.on && !this.nav.routeTo(a.pos))) return 0;
+        return this.P.team.assistScore + 0.2 * t.aggression - (this.defender && islandAt(view.map, a.pos) !== home.index ? 0.3 : 0);
       }
       case 'guard': {
         if (!c.homeReach || view.suddenDeath) return 0;
@@ -1003,7 +1083,7 @@ export class Bot {
     for (const g of GOALS) {
       if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrep(c.view)) continue; // banned for a while (goal watchdog)
       const raw = this.score(g, c);
-      const base = this.drive(g, c, raw);
+      const base = this.teamDrive(g, c, this.drive(g, c, raw));
       if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
       const noise = (this.rng() - 0.5) * NOISE[this.difficulty], sticky = g === this.goal ? STICKY : 0;
       const s = base + noise + sticky;
@@ -1096,6 +1176,7 @@ export class Bot {
       case 'fortify': return this.doFortify(c);
       case 'storm': return this.doStorm(c);
       case 'contest': return this.doContest(c);
+      case 'assist': return this.doAssist(c);
     }
   }
 

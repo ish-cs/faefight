@@ -56,6 +56,7 @@ const DICT = [
   'action', 'goal', 'reason', 'steps', 'step', 'fightOdds', 'thought',
   'burning', 'fire', 'view',
   'emote', 'quip', 'wheel',
+  'team',
 ];
 
 const enc = new TextEncoder();

@@ -117,7 +117,22 @@ export type BuildTuning = {
   coverScore: number; fortifyScore: number;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning };
+/**
+ * Teams play (teams matches only; free-for-all never reads these).
+ * - focus: rival-choice bonus per teammate already going after that rival, and for whoever just hurt a teammate near
+ *   me (focus one target: the team converges on one enemy island).
+ * - groupPush: bridge/attack/seal bonus while a teammate is already on my target's island (push together).
+ * - assistM / assistSec / assistScore: go help a teammate an enemy hurt within assistSec, if they're within assistM.
+ * - defendMin: from this many players left on my team, one bot (the lowest id) stays home as the defender.
+ * - defendBias: the defender's guard/fortify/cut/defend bonus, also taken off its bridge/attack/seal.
+ */
+export type TeamParams = {
+  focus: number; groupPush: number;
+  assistM: number; assistSec: number; assistScore: number;
+  defendMin: number; defendBias: number;
+};
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; team: TeamParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -175,7 +190,13 @@ export const BUILD_TUNING: BuildTuning = {
   coverScore: 1.05, fortifyScore: 0.5,
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING });
+export const TEAM: TeamParams = {
+  focus: 0.45, groupPush: 0.3,
+  assistM: 45, assistSec: 4, assistScore: 0.9,
+  defendMin: 3, defendBias: 0.45,
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, team: TEAM });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -230,6 +251,8 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['buildTuning.slotBackoffSec', [10, 90]], ['buildTuning.pushLead', [0, 80]], ['buildTuning.bridgeRetrySec', [0.2, 2]],
   ['buildTuning.bridgeStuckSec', [1, 10]], ['buildTuning.bridgeHoldSec', [5, 60]], ['buildTuning.freeSlots', [1, 4]],
   ['buildTuning.coverScore', [0.5, 1.5]], ['buildTuning.fortifyScore', [0.1, 1]],
+  ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
+  ['team.assistScore', [0.3, 1.5]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
 ];
 const ruleMatch = (pattern: string, key: string) => {
   const a = pattern.split('.'), b = key.split('.');

@@ -9,6 +9,18 @@ export type OtherStatus = {
   kills: number;
 };
 
+/**
+ * A teammate (teams match): shared team info, like the through-walls teammate markers a human sees. `hurtAt`/`hurtBy`:
+ * the last time an enemy hurt them and who (-Infinity / null: not lately). `target`: the rival their bot is going after
+ * (null for a human or none); `defender`: their bot is the team's home defender.
+ */
+export type AllyStatus = {
+  id: number; island: number; isBot: boolean; alive: boolean; eliminated: boolean; pos: Vec3; hp: number;
+  hurtAt: number; hurtBy: number | null; target: number | null; defender: boolean;
+};
+/** An enemy a teammate can see right now (shared sighting: remembered, never shot at through walls). */
+export type TeamSighting = { id: number; pos: Vec3; hp: number; armed: boolean };
+
 /** A hit I took: the damage indicator says how much, the kill cam / direction says who. */
 export type HurtEvent = { t: number; by: number | null; amount: number };
 /** A shot whose tracer I could see (fired within sight range of me). */
@@ -24,7 +36,12 @@ export type BotView = {
   now: number;
   self: PlayerState;
   enemies: PlayerState[];
+  /** Every other player not on my team (free-for-all: everyone else). */
   others: OtherStatus[];
+  /** Teams match only: my teammates (absent in free-for-all). */
+  allies?: AllyStatus[];
+  /** Teams match only: enemies my teammates see right now. */
+  teamSeen?: TeamSighting[];
   map: IslandLayout[];
   /** Neutral center island and what its bonus stations hold (absent in hand-made test views). */
   center?: { island: CenterIsland; gold: number; bags: number; steel: number };

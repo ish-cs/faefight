@@ -9,7 +9,7 @@ const tickN = (m: Match, n: number) => { let s; for (let i = 0; i < n; i++) s = 
 
 describe('game settings: defaults and clamping', () => {
   test('defaults equal today\'s constants exactly', () => {
-    expect(DEFAULT_SETTINGS).toEqual({ startCash: ECONOMY.startCash, suddenDeathSec: LIFECYCLE.suddenDeathAt, genMult: 1 });
+    expect(DEFAULT_SETTINGS).toEqual({ startCash: ECONOMY.startCash, suddenDeathSec: LIFECYCLE.suddenDeathAt, genMult: 1, teamMode: 0 });
     expect(clampSettings(undefined)).toEqual(DEFAULT_SETTINGS);
     expect(clampSettings({})).toEqual(DEFAULT_SETTINGS);
     // Defaults sit on a slider step, so clamping them is a no-op.
@@ -22,13 +22,13 @@ describe('game settings: defaults and clamping', () => {
   });
 
   test('clamps out-of-range values, snaps to the step, rejects junk', () => {
-    expect(clampSettings({ startCash: 1e9, suddenDeathSec: -5, genMult: 99 })).toEqual({ startCash: 1000, suddenDeathSec: 480, genMult: 2 });
-    expect(clampSettings({ startCash: 123, suddenDeathSec: 1000, genMult: 1.3 })).toEqual({ startCash: 120, suddenDeathSec: 1020, genMult: 1.25 });
+    expect(clampSettings({ startCash: 1e9, suddenDeathSec: -5, genMult: 99 })).toEqual({ startCash: 1000, suddenDeathSec: 480, genMult: 2, teamMode: 0 });
+    expect(clampSettings({ startCash: 123, suddenDeathSec: 1000, genMult: 1.3 })).toEqual({ startCash: 120, suddenDeathSec: 1020, genMult: 1.25, teamMode: 0 });
     expect(clampSettings({ startCash: NaN, suddenDeathSec: '600', genMult: Infinity })).toEqual(DEFAULT_SETTINGS);
     expect(clampSettings({ startCash: null, genMult: { valueOf: () => 2 } })).toEqual(DEFAULT_SETTINGS);
     expect(clampSettings([1, 2, 3])).toEqual(DEFAULT_SETTINGS);
     expect(clampSettings('x')).toEqual(DEFAULT_SETTINGS);
-    expect(Object.keys(clampSettings({ evil: 1, startCash: 200 }))).toEqual(['startCash', 'suddenDeathSec', 'genMult']);
+    expect(Object.keys(clampSettings({ evil: 1, startCash: 200 }))).toEqual(['startCash', 'suddenDeathSec', 'genMult', 'teamMode']);
   });
 });
 
@@ -43,9 +43,9 @@ describe('colours', () => {
   });
 
   test('the match exposes its colours and settings on the map def (sent to every client)', async () => {
-    const m = await Match.create({ players: [{ name: 'A', isBot: false, color: 5 }, { name: 'B', isBot: false }], settings: { startCash: 100, suddenDeathSec: 600, genMult: 1.5 } });
+    const m = await Match.create({ players: [{ name: 'A', isBot: false, color: 5 }, { name: 'B', isBot: false }], settings: { startCash: 100, suddenDeathSec: 600, genMult: 1.5, teamMode: 0 } });
     expect(m.def.colors).toEqual([5, 0]);
-    expect(m.def.settings).toEqual({ startCash: 100, suddenDeathSec: 600, genMult: 1.5 });
+    expect(m.def.settings).toEqual({ startCash: 100, suddenDeathSec: 600, genMult: 1.5, teamMode: 0 });
   });
 });
 
@@ -103,7 +103,7 @@ describe('the sim honours each setting', () => {
   test('replays: the same setup (settings included) replays the same match', async () => {
     const setup: MatchSetup = {
       players: [{ name: 'A', isBot: true, difficulty: 'hard' }, { name: 'B', isBot: true, difficulty: 'medium' }, { name: 'C', isBot: true, difficulty: 'pro' }],
-      seed: 7, map: 'yard', settings: { startCash: 400, suddenDeathSec: 600, genMult: 1.75 },
+      seed: 7, map: 'yard', settings: { startCash: 400, suddenDeathSec: 600, genMult: 1.75, teamMode: 0 },
     };
     // A recording stores the setup as JSON: round-trip it the same way.
     const recorded = JSON.parse(JSON.stringify(setup)) as MatchSetup;

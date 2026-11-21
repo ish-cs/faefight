@@ -11,12 +11,15 @@ export type GameSettings = {
   suddenDeathSec: number;
   /** Multiplier on every generator's speed (home cash, center gold, center supply). */
   genMult: number;
+  /** Team mode (sim/teams.ts TEAM_MODES): 0 free-for-all, 1 2v2v2v2, 2 3v3, 3 4v4. */
+  teamMode: number;
 };
 
 export const DEFAULT_SETTINGS: Readonly<GameSettings> = Object.freeze({
   startCash: ECONOMY.startCash,
   suddenDeathSec: LIFECYCLE.suddenDeathAt,
   genMult: 1,
+  teamMode: 0,
 });
 
 /** Slider ranges. Defaults sit on a step (tested). */
@@ -24,6 +27,7 @@ export const SETTING_RANGES: Readonly<Record<keyof GameSettings, { min: number; 
   startCash: { min: 0, max: 1000, step: 10 },
   suddenDeathSec: { min: 8 * 60, max: 25 * 60, step: 60 },
   genMult: { min: 0.5, max: 2, step: 0.25 },
+  teamMode: { min: 0, max: 3, step: 1 },
 });
 
 export const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof GameSettings)[];
@@ -45,6 +49,7 @@ export function clampSettings(x: unknown): GameSettings {
     startCash: clampSetting('startCash', o.startCash),
     suddenDeathSec: clampSetting('suddenDeathSec', o.suddenDeathSec),
     genMult: clampSetting('genMult', o.genMult),
+    teamMode: clampSetting('teamMode', o.teamMode),
   };
 }
 

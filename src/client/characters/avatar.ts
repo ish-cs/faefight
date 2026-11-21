@@ -208,6 +208,7 @@ export class Avatar {
   private flash: THREE.Mesh;
   private flashUntil = 0;
   private tag: THREE.Sprite | null = null;
+  private allyTag = false;
   private shieldTag: ReturnType<typeof shieldBar> | null = null;
   private shownShield = 0;
   private bubble: ReturnType<typeof speechBubble> | null = null;
@@ -277,6 +278,19 @@ export class Avatar {
       this.group.add(this.shieldTag.sprite);
     }
     this.materials.push(this.hitbox.material as THREE.Material);
+  }
+
+  /** Teams: a teammate's name tag draws through walls (where they are, always). No-op when unchanged. */
+  allyMarker(on: boolean) {
+    if (!this.tag || this.allyTag === on) return;
+    this.allyTag = on;
+    for (const sp of [this.tag, this.shieldTag?.sprite]) {
+      if (!sp) continue;
+      const mat = sp.material as THREE.SpriteNodeMaterial;
+      mat.depthTest = !on;
+      mat.needsUpdate = true;
+      sp.renderOrder = on ? 9 : 6;
+    }
   }
 
   private buildModel(assets: CharacterAssets, p: PlayerState, color: number) {
@@ -642,11 +656,13 @@ export class CharacterSystem {
       this.frustum.setFromProjectionMatrix(_proj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     }
     const simNow = simTime + Math.min(0.1, (now - this.snapAt) / 1000);
+    const myTeam = players.find((p) => p.id === humanId)?.team;
     for (const p of players) {
       // Not perceivable (interest management): keep the avatar, just don't show it — rebuilding a skinned
       // model each time someone steps round a corner is a frame hitch.
       if (hidden?.includes(p.id)) { const h = this.avatars.get(p.id); if (h) { h.group.visible = false; h.alive = false; } continue; }
       const a = this.avatar(p, humanId);
+      a.allyMarker(myTeam !== undefined && p.team === myTeam && p.id !== humanId);
       if (cam) {
         const pos = a.group.position;
         a.lodDist = cam.position.distanceTo(pos);

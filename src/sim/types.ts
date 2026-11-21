@@ -75,6 +75,8 @@ export type PlayerState = {
   name: string;
   isBot: boolean;
   island: number;
+  /** Team index in a teams match (sim/teams.ts); absent in free-for-all, where everyone is their own side. */
+  team?: number;
   pos: Vec3;
   vel: Vec3;
   yaw: number;

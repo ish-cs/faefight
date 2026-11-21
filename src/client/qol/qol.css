@@ -103,6 +103,9 @@
 .qol-compass .qc-marker.nolabel .qc-label { display: none; }
 /* Storm ring: violet marker toward the ring's centre; pulses while you're outside it. */
 .qol-compass .qc-marker.storm { --c: #9a6bff; }
+/* Teammate (teams mode): a diamond in the team colour. */
+.qol-compass .qc-marker.ally::before { border-radius: 1px; transform: rotate(45deg) scale(0.85); }
+.qol-compass .qc-marker.ally .qc-label { font-weight: 700; }
 .qol-compass .qc-marker.storm .qc-label { color: #cdb8ff; font-weight: 700; }
 .qol-compass .qc-marker.storm.outside::before { animation: qc-storm 0.8s ease-in-out infinite; }
 @keyframes qc-storm { 50% { box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.45), 0 0 10px 3px rgba(154, 107, 255, 0.9); } }

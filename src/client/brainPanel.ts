@@ -169,6 +169,10 @@ export class BrainInspector {
       t.append(el('span', 'bx-k', 'Target'), el('b', '', this.name(d.target.id)), el('span', 'bx-dim', ` — ${this.text(d.target.why)}`));
       parts.push(t);
     }
+    if (d.team) {
+      const focus = d.team.focus.length ? ` · same target as ${d.team.focus.map((id) => this.name(id)).join(', ')}` : '';
+      parts.push(el('div', 'bx-dim', `Team role: ${d.team.role === 'defend' ? 'defender (holds home)' : 'pusher'}${focus}`));
+    }
     const ul = el('ul', 'bx-seen');
     for (const [id, age, , , , hp, armed] of d.seen) {
       const li = el('li', age === 0 ? 'now' : '');

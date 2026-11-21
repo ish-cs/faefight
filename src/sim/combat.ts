@@ -1,3 +1,4 @@
+import { isAlly } from './teams';
 import * as dm from './dmath';
 import {
   CHARGE, DT, GRENADE, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
@@ -65,11 +66,18 @@ export type HitInfo = { part?: 'head' | 'body'; pos?: Vec3; weapon?: string; /**
  * damage first and the overflow hits hp, unless `bypassShield` (falls). The hit event carries the total
  * `amount`, the part the shield took (`shieldAmount`), whether it broke the shield to 0, and `info`.
  */
+/** Friendly fire is off (teams.ts): damage or a blast push from a teammate (not yourself) does nothing. */
+export function friendlyFire(ctx: CombatCtx, attackerId: number | null, target: PlayerState): boolean {
+  if (attackerId === null || attackerId === target.id) return false;
+  const a = ctx.players.get(attackerId);
+  return !!a && isAlly(a, target);
+}
+
 export function applyPlayerDamage(
   ctx: CombatCtx, target: PlayerState, amount: number, attackerId: number | null, now: number,
   opts: { bypassShield?: boolean } & HitInfo = {},
 ): MatchEvent[] {
-  if (!target.alive || now < target.invulnUntil) return [];
+  if (!target.alive || now < target.invulnUntil || friendlyFire(ctx, attackerId, target)) return [];
   const had = target.shield;
   const shieldAmount = opts.bypassShield ? 0 : Math.min(had, amount);
   target.shield = had - shieldAmount;
@@ -298,7 +306,7 @@ function rocketBlast(ctx: CombatCtx, e: Explosive, now: number, out: MatchEvent[
     const f = k(d) * shield;
     const dmg = ROCKET.playerDmg * f * (pl.id === e.owner ? ROCKET.selfMult : 1);
     out.push(...applyPlayerDamage(ctx, pl, dmg, e.owner, now, { pos: rv(point), weapon: 'rocket' }));
-    if (pl.alive && ctx.onKnockback) {
+    if (pl.alive && ctx.onKnockback && !friendlyFire(ctx, e.owner, pl)) {
       const away = norm(sub(bodyCenter(pl), e.pos));
       ctx.onKnockback(pl.id, v3(away.x * ROCKET.knock * f, away.y * ROCKET.knock * f * 0.5 + ROCKET.knockUp * f, away.z * ROCKET.knock * f));
     }

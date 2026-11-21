@@ -120,6 +120,20 @@ class Compass {
       setText(m.label!, `${owner.name}${out ? ' · OUT' : sealed ? ' · SEALED' : ''}`);
       at(key, isl.center);
     }
+    // Teams: every living teammate gets a marker (shared team info: through walls, any distance).
+    const mine = snap.players.find((p) => p.island === myIsland);
+    for (const p of snap.players) {
+      const key = `ally${p.id}`;
+      if (mine?.team === undefined || p.id === mine.id || p.team !== mine.team || !p.alive) {
+        const old = this.markers.get(key);
+        if (old) this.place(old, null);
+        continue;
+      }
+      const m = this.marker(key, 'ally', '');
+      m.node.style.setProperty('--c', hex(islandColor(p.island)));
+      setText(m.label!, `${p.name} · ${Math.round(Math.hypot(p.pos.x - me.x, p.pos.z - me.z))} m`);
+      at(key, p.pos);
+    }
     // Centre island, when the map has one (an island with no owner), and the potion seller(s).
     const owned = new Set(snap.players.map((p) => p.island));
     for (const isl of map) if (!owned.has(isl.index) && isl.index !== myIsland) { this.marker(`mid${isl.index}`, 'island center', 'Center'); at(`mid${isl.index}`, isl.center); }

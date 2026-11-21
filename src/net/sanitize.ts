@@ -215,6 +215,8 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
       return typeof x.ready === 'boolean' ? { t: 'ready', ready: x.ready } : null;
     case 'color':
       return isColor(x.color) ? { t: 'color', color: x.color } : null;
+    case 'team':
+      return Number.isInteger(x.team) && (x.team as number) >= 0 && (x.team as number) < 4 ? { t: 'team', team: x.team as number } : null;
     case 'chat':
       // Generous bound here; cleanChat trims to CHAT_MAX_LEN after stripping junk.
       return typeof x.text === 'string' && x.text.length <= CHAT_MAX_LEN * 4 ? { t: 'chat', text: x.text } : null;

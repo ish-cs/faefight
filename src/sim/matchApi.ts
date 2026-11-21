@@ -5,7 +5,8 @@ import type { BuildRequest, Difficulty, Inventory, PlayerInput, Snapshot, Vec3 }
 
 export type MatchSetup = {
   /** color: palette index the player picked in the lobby (resolveColors fills/dedupes). */
-  players: { name: string; isBot: boolean; difficulty?: Difficulty; color?: number }[];
+  /** team: the side picked in the lobby for a teams match (resolveTeams keeps it while there's room, else balances). */
+  players: { name: string; isBot: boolean; difficulty?: Difficulty; color?: number; team?: number }[];
   seed?: number;
   /** Map template (already resolved from the lobby's choice; 'random' never reaches the sim). Default harbor. */
   map?: MapTemplate;

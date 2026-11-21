@@ -16,6 +16,7 @@ import { countOf, equippedFor, heldKinds, isHotbarItem, HOTBAR_SIZE, validSlot }
 import { buildMap, bunkerWallBoxes, type Box, type IslandLayout } from './map';
 import { PROP_HALF } from './physics';
 import { isSealed } from './seal';
+import { sealBlocker, sidesLeft } from './teams';
 import type { Inventory, PieceState, PlayerInput, PlayerState, Snapshot, Vec3 } from './types';
 import { dist2D, rotateY, v3 } from './vec';
 
@@ -277,23 +278,24 @@ export class InvariantChecker {
 
     if (snap.players.length < 2) return;
     const left = snap.players.filter((p) => !p.eliminated);
+    const sides = sidesLeft(left);
     if (snap.winner === null) {
-      if (left.length <= 1)
+      if (sides <= 1)
         this.record(snap, 'sealContradiction:noWinner', {
           kind: 'sealContradiction', sub: 'noWinner',
-          detail: `${left.length} player(s) not eliminated but no winner declared`,
+          detail: `${left.length} player(s) (${sides} side(s)) not eliminated but no winner declared`,
         }, seen, WIN_GRACE_TICKS);
       return;
     }
     // The win is decided once; after that the run may keep ticking (later deaths don't undo it).
     if (this.winChecked) return;
     this.winChecked = true;
-    if (left.length >= 2)
+    if (sides >= 2)
       this.record(snap, 'sealContradiction:winnerWithRivals', {
         kind: 'sealContradiction', sub: 'winnerWithRivals',
         detail: `winner ${snap.winner} declared while ${left.length} players are not eliminated (${left.map((p) => p.id).join(', ')})`,
       }, seen);
-    else if (snap.winner === -1 ? left.length !== 0 : left[0]?.id !== snap.winner)
+    else if (snap.winner === -1 ? left.length !== 0 : left[0]?.id !== snap.winner && !left.some((p) => p.id === snap.winner))
       this.record(snap, 'sealContradiction:wrongWinner', {
         kind: 'sealContradiction', sub: 'wrongWinner',
         detail: `winner ${snap.winner} but the non-eliminated players are [${left.map((p) => p.id).join(', ')}]`,
@@ -312,7 +314,10 @@ export class InvariantChecker {
     if (snap.suddenDeath) expected = map.map(() => true);
     else {
       const key = snap.pieces.map((p) => p.id).join(',');
-      if (this.sealCache?.key !== key) this.sealCache = { key, sealed: map.map((isl) => isSealed(isl.bunker, snap.pieces)) };
+      if (this.sealCache?.key !== key) this.sealCache = { key, sealed: map.map((isl, i) => {
+        const owner = snap.players.find((p) => p.island === i);
+        return isSealed(isl.bunker, snap.pieces.filter((pc) => sealBlocker(owner, snap.players.find((p) => p.id === pc.owner))));
+      }) };
       expected = this.sealCache.sealed;
     }
     expected.forEach((want, i) => {

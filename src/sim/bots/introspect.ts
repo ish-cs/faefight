@@ -19,7 +19,7 @@ import { islandAt } from './nav';
 import type { Traits } from './personality';
 import { BUILD_TUNING as BT } from './build';
 import { ownsGun, plugFor, plugSpot, sealKit, type Needs, type ShopStyle } from './plans';
-import type { BotView, OtherStatus } from './view';
+import type { AllyStatus, BotView, OtherStatus } from './view';
 
 /**
  * One goal's line in the utility table: `raw` from Bot.score, `base` after Bot.drive (the win-seeking push of
@@ -48,6 +48,8 @@ export type BrainDigest = {
   hurt: [number, number, number][];
   grudge: [number, number][];
   target: { id: number; why: string } | null;
+  /** Teams match: its role (defender stays home, the rest push) and the teammates going after the same target. */
+  team?: { role: 'defend' | 'push'; focus: number[] };
   /** Rivals as it weighs them: [id, score]. */
   rivals: [number, number][];
   plan: string[]; planAt: number;
@@ -100,6 +102,7 @@ type Internals = {
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
+  defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
 
@@ -197,6 +200,16 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const low = 0.35 + 0.25 * t.caution - 0.15 * t.aggression;
       if (hp >= low) return zero('healthy enough');
       return { f: [['hurt away', 0.75], ['hp gap', low - hp]], why: `${Math.round(me.hp)} hp, away from home and no medkit: going back to recover` };
+    }
+    case 'assist': {
+      if (!view.allies) return zero('no team');
+      if (c.enemy) return zero('in my own fight');
+      if (!gun) return zero('no gun');
+      const a = I.allyInTrouble(c);
+      if (!a) return zero('no teammate under fire nearby');
+      const f: [string, number][] = [['teammate hit', 0.9], ['aggression', 0.2 * t.aggression]];
+      if (I.defender && a.island !== home.index) f.push(['defender', -0.3]);
+      return { f, why: `Teammate @${a.id} is being shot${a.hurtBy !== null ? ` by @${a.hurtBy}` : ''} ${Math.round(dist2D(a.pos, me.pos))} m away: going to help` };
     }
     case 'guard': {
       if (!c.homeReach) return zero("can't walk home");
@@ -521,6 +534,7 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
     case 'guard': return two('Get to the bunker front', 'Watch where the intruder was');
     case 'cut': return two('Walk to the shore', 'Shoot the incoming deck');
     case 'contest': return two('Walk to the centre stations', 'Grab gold / pieces');
+    case 'assist': return two('Run to the teammate under fire', 'Shoot whoever is on them');
     case 'storm': return { steps: ['Get inside the ring', 'Hold position'], at: moving ? 0 : 1 };
     case 'cover': return { steps: ['Get to the cover spot', 'Place a wall', 'Fight from behind it'], at: a?.build ? 1 : moving ? 0 : 2 };
     case 'fortify': return { steps: ['Walk to the next fort slot', 'Build it', 'Next slot'], at: a?.build ? 1 : moving ? 0 : 1 };
@@ -609,6 +623,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     log: (bot as unknown as { switches: GoalSwitch[] }).switches.slice().reverse().map((s) => [r1(s.t), s.from, s.to, s.why.slice(0, 110)]),
     seen: seen.slice(0, 8), hurt: hurt.slice(0, 4), grudge,
     target: p.target, rivals: p.rivals.slice(0, 7),
+    ...(view?.allies ? { team: { role: I.defender ? 'defend' as const : 'push' as const, focus: view.allies.filter((x) => !x.eliminated && x.target !== null && x.target === I.targetId).map((x) => x.id) } } : {}),
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     path: me ? pathOf(I, p, me) : [],
