@@ -54,7 +54,7 @@ type Inst ={ m: THREE.Matrix4; tint: number; tier: number };
 export class PropLayer {
   readonly root = new THREE.Group();
   private pending = new Map<PropType, Inst[]>();
-  /** instanced types: chunked (16 m grid, frustum + distance culled per chunk, near-cascade shadows only) */
+  /** instanced types: chunked (48 m grid: draws cost more than triangles, frustum + distance culled per chunk, near-cascade shadows only) */
   private layers: { layer: ChunkedInstances; type: PropType; n: number }[] = [];
   private quality: Quality = 'high';
   private counts = { baked: 0, instanced: 0, skipped: 0 };
@@ -108,7 +108,7 @@ export class PropLayer {
       }
       const parts = [...byMat].map(([material, geos]) => ({ material, geometry: geos.length === 1 ? geos[0] : merge(geos), cast, receive: true }));
       // tiny ground pieces: full detail near, gone past 60 m (they shrink below a pixel well before that)
-      const layer = new ChunkedInstances({ name: `props:${type}`, levels: [{ parts, maxDist: 60 }], small: true, chunk: 16 });
+      const layer = new ChunkedInstances({ name: `props:${type}`, levels: [{ parts, maxDist: 60 }], small: true, chunk: 48 });
       for (const it of list) layer.add(it.m, _c.set(it.tint), it.tier);
       this.root.add(layer.build());
       this.layers.push({ layer, type, n: list.length });

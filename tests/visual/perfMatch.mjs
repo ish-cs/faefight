@@ -2,7 +2,7 @@
 // resolution + governor off. Per preset (fresh page each): load time, avg fps, p99 frame ms, draw calls, triangles,
 // averaged over fixed camera spots. Optional same-view screenshots.
 // Needs a dev server (`pnpm vite --port 5299`); run under the heavy lock:
-//   node tests/visual/perfMatch.mjs [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
+//   node tests/visual/perfMatch.mjs [--query=noprops] [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
 import { chromium } from '@playwright/test';
 
 const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? d;
@@ -30,7 +30,7 @@ async function run(quality) {
   await page.addInitScript((q) => {
     try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q, dynamicResolution: false } })); } catch { /* fresh profile */ }
   }, quality);
-  await page.goto(`${url}/?debug=1&bots=7&gputime=1${stress > 1 ? `&stress=${stress}` : ''}`);
+  await page.goto(`${url}/?debug=1&bots=7&gputime=1${stress > 1 ? `&stress=${stress}` : ''}${arg('query', '') ? `&${arg('query', '')}` : ''}`);
   const t0 = Date.now();
   await page.getByTestId('play-easy').click();
   await page.waitForFunction(() => window.__faefight?.snapshot?.(), null, { timeout: 120_000 });
