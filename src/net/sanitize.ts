@@ -177,6 +177,8 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
       const req = buildReq(x.req);
       return req && Number.isInteger(x.key) ? { t: 'preview', req, key: x.key as number } : null;
     }
+    case 'follow':
+      return x.id === null || (Number.isInteger(x.id) && (x.id as number) > 0 && (x.id as number) <= 64) ? { t: 'follow', id: x.id as number | null } : null;
     case 'chat':
       // Generous bound here; cleanChat trims to CHAT_MAX_LEN after stripping junk.
       return typeof x.text === 'string' && x.text.length <= CHAT_MAX_LEN * 4 ? { t: 'chat', text: x.text } : null;

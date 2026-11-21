@@ -4,7 +4,7 @@ import type { HostRoom, Link, Transport } from '../net/transport';
 import { ChatLimiter, cleanChat } from '../net/chat';
 import { Lobby } from '../net/lobby';
 import { SnapshotEncoder } from '../net/snapshotCodec';
-import { InterestManager } from '../net/interest';
+import { InterestManager, spectateTarget } from '../net/interest';
 import { WireEncoder, wireHeader } from '../net/wire';
 import { SnapRate } from '../net/snapRate';
 import { PeerGuard, type Verdict } from '../net/rateLimit';
@@ -54,6 +54,8 @@ export class HostSession {
   private seatIds: (number | null)[] = [];
   /** The host's own player in the running match; null while it spectates (from the start or after a handoff). */
   private hostPlayerId: number | null = null;
+  /** Per remote player: who they follow while spectating (their 'follow' message; vetted every snapshot by spectateTarget). */
+  private follows = new Map<number, number | null>();
 
   private constructor(private room: HostRoom, readonly hostName: string, private ev: HostEvents) {
     this.lobby = new Lobby(hostName, HOST_PEER);
@@ -200,6 +202,9 @@ export class HostSession {
         case 'chat':
           this.relayChat(link.peerId, this.nameOf(seat), msg.text);
           break;
+        case 'follow':
+          if (playerId !== null) this.follows.set(playerId, msg.id);
+          break;
       }
     });
   }
@@ -220,7 +225,7 @@ export class HostSession {
     const seat = this.lobby.seatOf(peerId);
     this.links.delete(peerId);
     if (seat === null) return;
-    { const gone = this.idOf(seat); if (gone !== null) { this.interest?.forget(gone); this.streams.delete(gone); } }
+    { const gone = this.idOf(seat); if (gone !== null) { this.interest?.forget(gone); this.streams.delete(gone); this.follows.delete(gone); } }
     if (!this.started) { this.lobby.removePeer(peerId); this.broadcastLobby(); return; }
     const playerId = this.idOf(seat);
     if (playerId === null) throw new Error(`HostSession.onLeave: seat ${seat} has no player`);
@@ -310,6 +315,7 @@ export class HostSession {
     this.worker = worker;
     this.encoder = new SnapshotEncoder();
     this.streams.clear();
+    this.follows.clear();
     this.tickNo = 0;
     this.previewBudget.clear();
   }
@@ -341,8 +347,9 @@ export class HostSession {
       if (!st) { st = { wire: new WireEncoder(), rate: new SnapRate() }; this.streams.set(id, st); }
       if (!st.rate.due(tick)) continue;
       if (!updated) { this.interest?.update(snap); updated = true; }
-      const s = this.encoder.take(id, true);
-      const b = st.wire.encode(snap.tick, this.interest ? this.interest.apply(id, s) : s);
+      const follow = spectateTarget(snap, id, this.follows.get(id));
+      const s = this.encoder.take(id, true, follow);
+      const b = st.wire.encode(snap.tick, this.interest ? this.interest.apply(id, s, follow) : s);
       st.rate.sent(b.byteLength, wireHeader(b).baseSeq === 0);
       this.send(link, { t: 'snap', b });
     }

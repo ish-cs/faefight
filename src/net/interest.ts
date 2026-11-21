@@ -77,6 +77,19 @@ function segmentHits(ax: number, ay: number, az: number, bx: number, by: number,
 
 const r = (n: number, g: number) => Math.round(n / g) * g;
 
+/**
+ * Whose private HUD state (inventory, hotbar, ammo, stamina, bot brain) a client may receive: the
+ * player it asked to follow, but only while the client's own player is dead or eliminated (a living
+ * player never learns anything about anyone else's kit), and never itself. Null = nobody.
+ */
+export function spectateTarget(snap: Snapshot, viewerId: number, follow: number | null | undefined): number | null {
+  if (follow == null || follow === viewerId) return null;
+  const me = snap.players.find((p) => p.id === viewerId);
+  if (!me || me.alive) return null;
+  const t = snap.players.find((p) => p.id === follow);
+  return t && t.alive ? t.id : null;
+}
+
 export class InterestManager {
   private statics: Obb[];
   private pieceBoxes: Obb[] = [];
@@ -106,8 +119,11 @@ export class InterestManager {
     }
   }
 
-  /** Redact `net` (from SnapshotEncoder.take(viewerId)) to what viewerId's player could perceive. */
-  apply(viewerId: number, net: NetSnapshot): NetSnapshot {
+  /**
+   * Redact `net` (from SnapshotEncoder.take(viewerId, _, follow)) to what viewerId's player could perceive.
+   * `follow` (from spectateTarget): a dead spectator watching that player also perceives what they do.
+   */
+  apply(viewerId: number, net: NetSnapshot, follow: number | null = null): NetSnapshot {
     const t0 = performance.now();
     const s = this.latest;
     if (!s) throw new Error('InterestManager.apply: update() was never called');
@@ -117,8 +133,15 @@ export class InterestManager {
     const sent = this.mapFor(this.lastSent, viewerId);
     const omniscient = me.eliminated || s.winner !== null;
     const eye = v3(me.pos.x, me.pos.y + PLAYER.eyeHeight, me.pos.z);
+    const target = spectateTarget(s, viewerId, follow);
+    const watched = target === null ? null : s.players.find((p) => p.id === target)!;
+    const watchedEye = watched ? v3(watched.pos.x, watched.pos.y + PLAYER.eyeHeight, watched.pos.z) : null;
+    if (watched) seen.set(watched.id, s.time);
 
-    for (const p of s.players) if (p.id !== viewerId && (omniscient || this.perceives(me, eye, p))) seen.set(p.id, s.time);
+    for (const p of s.players) {
+      if (p.id === viewerId || p.id === target) continue;
+      if (omniscient || this.perceives(me, eye, p) || (watched && this.perceives(watched, watchedEye!, p))) seen.set(p.id, s.time);
+    }
 
     // You know who just shot at / hurt you.
     for (const e of net.events) {
@@ -145,6 +168,8 @@ export class InterestManager {
     };
     if (hidden.length) out.hidden = hidden;
     else delete out.hidden;
+    // Defence in depth: a brain only ever goes to a spectator of that very bot.
+    if (out.brain && out.brain.id !== target) delete out.brain;
     this.costMs += performance.now() - t0;
     return out;
   }

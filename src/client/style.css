@@ -432,3 +432,46 @@ canvas.shake { animation: screen-shake 0.55s ease-out; }
 .gate-icon { color: var(--accent); }
 .gate-icon svg { width: 56px; height: 56px; }
 .gate-msg { font-size: 16px; line-height: 1.5; margin: 0 0 22px; }
+
+/* ---- stamina ("stress") bar under HP ---- */
+.hud .stamina { --sta-hue: 170; position: relative; width: 260px; height: 7px; border-radius: 4px; overflow: visible; background: rgba(14, 18, 24, 0.55); border: 1px solid var(--line); backdrop-filter: blur(12px); transition: opacity 0.4s; }
+.hud .stamina-fill { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: linear-gradient(90deg, hsl(var(--sta-hue) 75% 45%), hsl(var(--sta-hue) 85% 62%)); box-shadow: 0 0 8px hsla(var(--sta-hue), 90%, 55%, 0.45); transition: width 0.08s linear; }
+.hud .stamina.full { opacity: 0.55; }
+.hud .stamina.low .stamina-fill { animation: sta-pulse 0.7s ease-in-out infinite; }
+.hud .stamina.critical { border-color: rgba(255, 77, 77, 0.6); }
+.hud .stamina.exhausted { border-color: rgba(255, 77, 77, 0.85); box-shadow: 0 0 10px rgba(255, 60, 60, 0.45); }
+.hud .stamina-text { position: absolute; left: 100%; top: 50%; transform: translate(8px, -50%); font-size: 11px; font-weight: 800; letter-spacing: 1.2px; color: #ff6b6b; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7); white-space: nowrap; }
+.hud .stamina.exhausted .stamina-text { animation: sta-flash 0.5s steps(2, jump-none) infinite; }
+@keyframes sta-pulse { 50% { filter: brightness(1.5); } }
+@keyframes sta-flash { 50% { opacity: 0.25; } }
+
+/* ---- spectating someone: their HUD, a name tag, and (bots) the brain panel ---- */
+.hud .watch-tag { display: none; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #cfe9ff; padding: 3px 10px; border-radius: 999px; background: rgba(47, 134, 240, 0.28); border: 1px solid rgba(108, 194, 255, 0.5); }
+.hud.watching .watch-tag { display: block; }
+.hud.watching .hotbar { pointer-events: none; }
+.hud .brain-panel { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); width: 300px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; pointer-events: none; background: rgba(12, 16, 24, 0.72); }
+.brain-panel .bb-head { display: flex; align-items: center; gap: 6px; }
+.brain-panel .bb-title { font-weight: 800; letter-spacing: 1.6px; font-size: 11px; color: #c9a7ff; margin-right: auto; }
+.brain-panel .bb-tag { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; padding: 2px 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--line); }
+.brain-panel .bb-tag.diff-easy { color: #7ee2a8; } .brain-panel .bb-tag.diff-medium { color: #ffd166; }
+.brain-panel .bb-tag.diff-hard { color: #ff8a65; } .brain-panel .bb-tag.diff-pro { color: #ff5a8a; }
+.brain-panel .bb-label { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.brain-panel .bb-goal { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.brain-panel .bb-goal-name { font-size: 17px; font-weight: 800; letter-spacing: 0.8px; color: var(--gold); }
+.brain-panel .bb-target { font-weight: 700; color: #ff8a65; }
+.brain-panel .bb-reason { color: var(--text); opacity: 0.85; font-style: italic; }
+.brain-panel .bb-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 2px; }
+.brain-panel .bb-steps li { color: var(--muted); }
+.brain-panel .bb-steps li.done { text-decoration: line-through; opacity: 0.55; }
+.brain-panel .bb-steps li.cur { color: #fff; font-weight: 700; }
+.brain-panel .bb-steps li.cur::marker { color: var(--accent); }
+.brain-panel .bb-odds, .brain-panel .bb-opt { display: grid; grid-template-columns: 82px 1fr 38px; align-items: center; gap: 8px; }
+.brain-panel .bb-odds-bar, .brain-panel .bb-opt-bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.brain-panel .bb-odds-bar i, .brain-panel .bb-opt-bar i { display: block; height: 100%; background: linear-gradient(90deg, #ff4d4d, #ffd166 50%, #3ddc84); background-size: 300px 100%; }
+.brain-panel .bb-opt-bar i { background: rgba(201, 167, 255, 0.55); }
+.brain-panel .bb-opt.chosen .bb-opt-bar i { background: #c9a7ff; }
+.brain-panel .bb-opt.chosen .bb-opt-name { color: #fff; font-weight: 700; }
+.brain-panel .bb-opt-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brain-panel .bb-odds-val, .brain-panel .bb-opt-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11px; }
+.brain-panel .bb-opts { display: flex; flex-direction: column; gap: 3px; }
+.brain-panel .bb-thought { padding-top: 6px; border-top: 1px solid var(--line); color: #e8dcff; line-height: 1.35; }
