@@ -224,7 +224,8 @@ export const SEAL = { cell: 0.25, half: 8, blockHeight: 1.3, exitRadius: 4 };
  * - sealDoors: blocked doorways that count as sealed (current rule: all 3).
  * - elimDeathsAfterSeal: once your bunker has been sealed, eliminated at this many deaths after it (0 = off).
  */
-export const RULE_EXP = { trappedSpawnProtect: true, sealDoors: 3, elimDeathsAfterSeal: 0 };
+export const RULE_EXP = { trappedSpawnProtect: true, sealDoors: 3, elimDeathsAfterSeal: 0, lives: 0 };
+// lives: eliminated at this many deaths in total, sealed or not (0 = off).
 
 export const MAP = {
   islandRadius: 22,

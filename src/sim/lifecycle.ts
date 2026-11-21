@@ -207,7 +207,8 @@ export function tickLifecycle(
     }
     // EXPERIMENT: eliminated at N deaths after your bunker was first sealed.
     const mark = sealedDeaths.get(p.id);
-    if (RULE_EXP.elimDeathsAfterSeal > 0 && mark !== undefined && p.deaths - mark >= RULE_EXP.elimDeathsAfterSeal) {
+    if ((RULE_EXP.elimDeathsAfterSeal > 0 && mark !== undefined && p.deaths - mark >= RULE_EXP.elimDeathsAfterSeal) ||
+        (RULE_EXP.lives > 0 && p.deaths >= RULE_EXP.lives)) {
       p.eliminated = true;
       out.push(ev(now, 'eliminated', { player: p.id }));
       continue;
