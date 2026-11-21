@@ -3,7 +3,7 @@ import { buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
 import { canAdd, countOf } from '../hotbar';
 import { uselessReason } from '../potions';
 import type { Doorway } from '../map';
-import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, PotionKind, ShopItem, Vec3, WeaponKind } from '../types';
+import type { Difficulty, HotbarItem, Inventory, PieceKind, PieceState, PlayerState, PotionKind, ShopItem, Vec3, WeaponKind } from '../types';
 import { add, dist2D, forward, scale, v3 } from '../vec';
 
 export const GUNS: Exclude<WeaponKind, 'fists'>[] = ['rifle', 'smg', 'pistol', 'shotgun'];
@@ -66,6 +66,8 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
  */
 export type Needs = {
   scaffolds: number; kit: number; charge: boolean; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
+  /** Pieces wanted for building (fortifications, combat cover, bridge walls) on top of the seal kit. */
+  build?: Partial<Record<PieceKind, number>>;
 };
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
@@ -84,6 +86,8 @@ export type ShopStyle = {
   coverWood: number;
   /** Upgrade the generator as soon as the essentials are covered (economists, turtles). */
   invest?: boolean;
+  /** Buy building pieces before bridging gear (builders/turtles fortify home early). */
+  buildFirst?: boolean;
 };
 export const PLAIN_STYLE: ShopStyle = { upgradeFirst: false, longGun: false, closeGun: false, metal: false, steel: false, coverWood: 0 };
 
@@ -100,8 +104,11 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
   const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
-  if ((inv.pieces.scaffold ?? 0) < needs.scaffolds) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
-  if (sealKit(inv) < needs.kit) {
+  // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
+  const room = (k: HotbarItem) => countOf(inv, k) > 0 || canAdd(p.hotbar, k);
+  if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
+  if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
+  if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
     if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price) return 'steel';
     const skilled = difficulty === 'hard' || difficulty === 'pro';
     const wantMetal = skilled ? cash >= PIECES.metal.price
@@ -109,6 +116,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     if (wantMetal) return 'metal';
     return cash >= PIECES.wood.price ? 'wood' : null;
   }
+  { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
   if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && cash >= WEAPONS.smg.price) return 'smg';
@@ -122,6 +130,29 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (genPrice !== null && cash >= 3 * genPrice) return 'genUpgrade';
   const fav = GUNS.find((g) => inv.weapons[g]);
   if (fav && !p.locked.includes(fav) && cash >= 2 * lockPrice(fav)) return lockItem(fav);
+  return null;
+}
+
+/** Sandbags held for building that the seal-kit count must not lean on. */
+function reservedBagPlugs(inv: Inventory, needs: Needs): number {
+  const bags = inv.pieces.sandbags ?? 0;
+  const reserved = Math.min(bags, (needs.build?.sandbags ?? 0));
+  return Math.floor(bags / 2) - Math.floor((bags - reserved) / 2);
+}
+
+/** Next building piece to buy (batch: everything the build list still lacks), or null when it's all carried. */
+function buildPurchase(inv: Inventory, needs: Needs, room: (k: PieceKind) => boolean): PieceKind | null {
+  const b = needs.build;
+  if (!b) return null;
+  if ((inv.pieces.sandbags ?? 0) < (b.sandbags ?? 0) && room('sandbags')) return 'sandbags';
+  if ((inv.pieces.ramp ?? 0) < (b.ramp ?? 0) && room('ramp')) return 'ramp';
+  if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (b.scaffold ?? 0)) return 'scaffold';
+  // Tall pieces: the seal kit comes out of them first.
+  const spare = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0) - needs.kit;
+  if (spare < (b.metal ?? 0) + (b.wood ?? 0)) {
+    const k = (inv.pieces.metal ?? 0) < (b.metal ?? 0) ? 'metal' : 'wood';
+    if (room(k)) return k;
+  }
   return null;
 }
 

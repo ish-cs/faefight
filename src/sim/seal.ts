@@ -14,11 +14,11 @@ const inside = (f: Footprint, x: number, z: number) => {
 };
 
 /** Could this piece stop a player anywhere on this bunker's seal grid? (Walkable kinds, out-of-reach and off-band pieces can't.) */
-function blocksNear(bunker: Bunker, p: PieceState): boolean {
+function blocksNear(bunker: Bunker, p: PieceState, margin = 0): boolean {
   if (p.kind === 'ramp' || p.kind === 'scaffold') return false;
   const s = PIECES[p.kind];
   // Skip pieces whose footprint can't reach the grid around this bunker.
-  const reach = SEAL.half + Math.hypot(s.w, s.d) / 2 + PLAYER.radius;
+  const reach = SEAL.half + Math.hypot(s.w, s.d) / 2 + PLAYER.radius + margin;
   if (Math.abs(p.pos.x - bunker.center.x) > reach || Math.abs(p.pos.z - bunker.center.z) > reach) return false;
   const bottom = p.pos.y - bunker.center.y, top = bottom + s.h;
   return top >= SEAL.blockHeight && bottom < BODY_TOP;
@@ -27,7 +27,8 @@ function blocksNear(bunker: Bunker, p: PieceState): boolean {
 type Grid = { n: number; blocked: Uint8Array; cx: (i: number) => number; cz: (j: number) => number };
 
 /** The seal grid around a bunker: 1 where a player's center can't stand (walls and blocking pieces, grown by the body radius). */
-function sealGrid(bunker: Bunker, pieces: Iterable<PieceState>): Grid {
+/** `margin` grows piece footprints (not walls) by that much per side. */
+function sealGrid(bunker: Bunker, pieces: Iterable<PieceState>, margin = 0): Grid {
   const r = PLAYER.radius;
   const blockers: Footprint[] = [];
   for (const b of bunkerWallBoxes(bunker, false)) { // slits never count: whole walls
@@ -35,9 +36,9 @@ function sealGrid(bunker: Bunker, pieces: Iterable<PieceState>): Grid {
     blockers.push({ center: b.center, hx: b.half.x + r, hz: b.half.z + r, rotY: b.rotY });
   }
   for (const p of pieces) {
-    if (!blocksNear(bunker, p)) continue;
+    if (!blocksNear(bunker, p, margin)) continue;
     const s = PIECES[p.kind];
-    blockers.push({ center: p.pos, hx: s.w / 2 + r, hz: s.d / 2 + r, rotY: p.rotY });
+    blockers.push({ center: p.pos, hx: s.w / 2 + r + margin, hz: s.d / 2 + r + margin, rotY: p.rotY });
   }
   const n = Math.round((2 * SEAL.half) / SEAL.cell);
   const x0 = bunker.center.x - SEAL.half, z0 = bunker.center.z - SEAL.half;
@@ -89,9 +90,11 @@ function trapped(bunker: Bunker, g: Grid, blocked: Uint8Array): boolean {
  * True when no walkable path leads from the bunker's spawn to open ground more than
  * SEAL.exitRadius from the bunker center. Ramps and scaffold are walkable; a piece blocks
  * only if its top is at least SEAL.blockHeight above ground and it reaches body height.
+ * `pieceMargin` grows every piece's footprint (not the bunker walls) by that much per side: with 0.3 the
+ * answer is "is there still a path at least 2 × (radius + 0.3) = 1.3 m wide out of here?".
  */
-export function isSealed(bunker: Bunker, pieces: PieceState[]): boolean {
-  const g = sealGrid(bunker, pieces);
+export function isSealed(bunker: Bunker, pieces: PieceState[], pieceMargin = 0): boolean {
+  const g = sealGrid(bunker, pieces, pieceMargin);
   return trapped(bunker, g, g.blocked);
 }
 
