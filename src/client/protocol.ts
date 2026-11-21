@@ -1,5 +1,5 @@
 import type { Placement } from '../sim/building';
-import type { IslandLayout } from '../sim/map';
+import type { MapDef } from '../sim/map';
 import type { MoveCmd } from '../sim/movement';
 import type { MatchSetup } from '../sim/matchApi';
 import type { BuildRequest, Inventory, PlayerInput, Snapshot } from '../sim/types';
@@ -31,7 +31,7 @@ export type ToWorker =
 /** worker → main thread */
 export type FromWorker =
   /** islands[id - 1] = island index of player id; humanId 0 / humanIsland -1 = no local player. */
-  | { type: 'map'; map: IslandLayout[]; humanId: number; humanIsland: number; islands: number[] }
+  | { type: 'map'; map: MapDef; humanId: number; humanIsland: number; islands: number[] }
   | { type: 'snapshot'; snap: Snapshot }
   | { type: 'preview'; playerId: number; result: Placement; key: number }
   | { type: 'error'; message: string };

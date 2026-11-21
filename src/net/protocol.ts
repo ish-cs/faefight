@@ -1,6 +1,6 @@
 import type { MoveCmd } from '../sim/movement';
 import type { Placement } from '../sim/building';
-import type { IslandLayout } from '../sim/map';
+import type { MapChoice, MapDef } from '../sim/map';
 import type { BuildRequest, Difficulty, PlayerInput } from '../sim/types';
 
 /**
@@ -28,8 +28,8 @@ export type ClientMsg =
 
 /** Host → remote client. */
 export type HostMsg =
-  | { t: 'lobby'; slots: Slot[]; you: number }
-  | { t: 'start'; map: IslandLayout[]; playerId: number; island: number }
+  | { t: 'lobby'; slots: Slot[]; you: number; map: MapChoice }
+  | { t: 'start'; map: MapDef; playerId: number; island: number }
   /** A NetSnapshot, binary + delta-compressed (wire.ts). */
   | { t: 'snap'; b: ArrayBuffer }
   | { t: 'preview'; result: Placement; key: number }
@@ -42,4 +42,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 6;
+export const NET_VERSION = 7;

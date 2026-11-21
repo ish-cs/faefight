@@ -144,7 +144,8 @@ export function tryFire(ctx: CombatCtx, p: PlayerState, now: number): MatchEvent
     const hits: MatchEvent[] = [];
     for (let i = 0; i < spec.pellets; i++) {
       const dir = pelletDir(p.yaw, p.pitch, cone, seed, i, spec.pellets, ring);
-      const hit = ctx.castShot ? ctx.castShot(eye, dir, spec.range, p.id) : ctx.physics.raycast(eye, dir, spec.range, p.id);
+      // Bullets pass bunker firing slits.
+      const hit = ctx.castShot ? ctx.castShot(eye, dir, spec.range, p.id) : ctx.physics.raycast(eye, dir, spec.range, p.id, true);
       const to = hit ? hit.point : add(eye, scale(dir, spec.range));
       if (i === 0) shot.to = to; else tos.push(rv(to));
       if (!hit) continue;

@@ -134,7 +134,7 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -149,6 +149,10 @@ export type Snapshot = {
   /** In flight now (the sim always sends it; optional so older/partial snapshots stay valid). */
   projectiles?: Projectile[];
   generators: { island: number; stored: number }[];
+  /** Center island bonus stations: cash at the gold generator, free pieces at the supply generator. */
+  center?: { gold: number; bags: number; steel: number };
+  /** Ids of broken cosmetic props (MapDef.cosmetics), in the order they broke. */
+  broken?: number[];
   /** Generator level (1-4) of each island, by island index. */
   genLevels: number[];
   sealed: boolean[];

@@ -1,6 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { HEAD, PIECES, PLAYER } from './constants';
-import { bunkerWallBoxes, type IslandLayout } from './map';
+import { bunkerSlitBoxes, bunkerWallBoxes, type IslandLayout, type MapDef } from './map';
 import type { PieceState, Vec3 } from './types';
 import { v3 } from './vec';
 
@@ -28,12 +28,19 @@ const quatY = (r: number) => ({ x: 0, y: Math.sin(r / 2), z: 0, w: Math.cos(r / 
 
 /** Station props (generator, vault, shop NPC) as solid boxes: half extents. */
 export const PROP_HALF = { generator: v3(0.6, 0.7, 0.6), vault: v3(0.6, 1.0, 0.5), shop: v3(0.3, 0.9, 0.3) };
+/** Center island stations as solid boxes (the shield well is a flat pad: no collider). */
+export const CENTER_PROP_HALF = { goldGen: v3(0.6, 0.7, 0.6), supplyGen: v3(0.7, 0.6, 0.7), potionShop: v3(0.3, 0.9, 0.3) };
+
+/** Center stations face the island middle. */
+export const centerPropYaw = (p: { x: number; z: number }, c: { x: number; z: number }) => Math.atan2(p.x - c.x, p.z - c.z);
 
 export class Physics {
   private world: RAPIER.World;
   private cc: RAPIER.KinematicCharacterController;
   private entities = new Map<number, HitTarget>();
   private pieces = new Map<number, RAPIER.Collider>();
+  /** Collider handles of bunker firing-slit plugs (see raycast `throughSlits`). */
+  private readonly slits = new Set<number>();
   private pieceKinds = new Map<number, PieceState['kind']>();
   private players = new Map<number, RAPIER.Collider>();
   private dirty = true;
@@ -46,14 +53,33 @@ export class Physics {
     this.cc.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
   }
 
-  static async create(map: IslandLayout[]): Promise<Physics> {
+  /** A full map, or (tests) bare player islands with no center island or cover. */
+  static async create(mapOrIslands: MapDef | IslandLayout[]): Promise<Physics> {
     await ensureInit();
+    const def: Pick<MapDef, 'islands' | 'statics'> & { center: MapDef['center'] | null } = Array.isArray(mapOrIslands)
+      ? { islands: mapOrIslands, statics: [], center: null }
+      : mapOrIslands;
     const ph = new Physics();
-    for (const isl of map) {
-      const desc = RAPIER.ColliderDesc.cylinder(ISLAND_DEPTH / 2, isl.radius)
-        .setTranslation(isl.center.x, isl.groundY - ISLAND_DEPTH / 2, isl.center.z);
+    const disc = (center: Vec3, radius: number, groundY: number) => {
+      const desc = RAPIER.ColliderDesc.cylinder(ISLAND_DEPTH / 2, radius)
+        .setTranslation(center.x, groundY - ISLAND_DEPTH / 2, center.z);
       ph.track(ph.world.createCollider(desc), { type: 'world' });
+    };
+    const c = def.center;
+    if (c) {
+      disc(c.center, c.radius, c.groundY);
+      for (const key of ['goldGen', 'supplyGen', 'potionShop'] as const) {
+        const p = c[key], h = CENTER_PROP_HALF[key];
+        ph.addStaticBox(v3(p.x, p.y + h.y, p.z), h, centerPropYaw(p, c.center));
+      }
+    }
+    // Built-in cover: solid and indestructible (a `world` hit, like the islands and bunkers).
+    for (const b of def.statics) ph.addStaticBox(b.center, b.half, b.rotY);
+    for (const isl of def.islands) {
+      disc(isl.center, isl.radius, isl.groundY);
       for (const b of bunkerWallBoxes(isl.bunker)) ph.addStaticBox(b.center, b.half, b.rotY);
+      // Firing slits: plugged for players, grenades and rockets; bullets and sight rays pass (raycast throughSlits).
+      for (const b of bunkerSlitBoxes(isl.bunker)) ph.slits.add(ph.addStaticBox(b.center, b.half, b.rotY).handle);
       for (const key of ['generator', 'vault', 'shop'] as const) {
         const p = isl[key], h = PROP_HALF[key];
         ph.addStaticBox(v3(p.x, p.y + h.y, p.z), h, isl.bunker.facingYaw);
@@ -78,7 +104,7 @@ export class Physics {
     const desc = RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
       .setTranslation(center.x, center.y, center.z)
       .setRotation(quatY(rotY));
-    this.track(this.world.createCollider(desc), { type: 'world' });
+    return this.track(this.world.createCollider(desc), { type: 'world' });
   }
 
   addPiece(p: PieceState): void {
@@ -161,11 +187,13 @@ export class Physics {
     return this.players.has(id);
   }
 
-  raycast(origin: Vec3, dir: Vec3, maxDist: number, ignorePlayer?: number): RayHit | null {
+  /** `throughSlits`: bullets and line of sight pass bunker firing slits; everything else (explosives) is stopped. */
+  raycast(origin: Vec3, dir: Vec3, maxDist: number, ignorePlayer?: number, throughSlits = false): RayHit | null {
     this.sync();
     const ray = new RAPIER.Ray(origin, dir);
     const exclude = ignorePlayer !== undefined ? this.players.get(ignorePlayer) : undefined;
-    const h = this.world.castRay(ray, maxDist, true, undefined, undefined, exclude);
+    const h = this.world.castRay(ray, maxDist, true, undefined, undefined, exclude, undefined,
+      throughSlits ? (c) => !this.slits.has(c.handle) : undefined);
     if (!h) return null;
     const t = h.timeOfImpact;
     const hit = this.entities.get(h.collider.handle) ?? { type: 'world' as const };
@@ -181,10 +209,11 @@ export class Physics {
   }
 
   /** Like raycast, but players are ignored (only the world and pieces): lag compensation tests them itself. */
+  /** Shots against everything but players (lag-compensated hits test players separately); passes firing slits. */
   raycastStatic(origin: Vec3, dir: Vec3, maxDist: number): RayHit | null {
     this.sync();
     const h = this.world.castRay(new RAPIER.Ray(origin, dir), maxDist, true, undefined, undefined, undefined, undefined,
-      (c) => this.entities.get(c.handle)?.type !== 'player');
+      (c) => this.entities.get(c.handle)?.type !== 'player' && !this.slits.has(c.handle));
     if (!h) return null;
     const t = h.timeOfImpact;
     return { dist: t, point: v3(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t), hit: this.entities.get(h.collider.handle) ?? { type: 'world' } };

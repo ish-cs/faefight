@@ -4,8 +4,10 @@ import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosiv
 import { DT, ECONOMY, LIFECYCLE, PIECES, PLAYER, SHIELD_MAX, SEAL } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
-import { buildMap, type IslandLayout } from './map';
-import { defaultPotionShops, potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
+import { buildMapDef, type IslandLayout, type MapDef } from './map';
+import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
+import { Cosmetics } from './cosmetics';
+import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
 import { HitboxHistory, LAG_COMP, rayPlayer } from './lagComp';
@@ -61,6 +63,11 @@ export class Match implements MatchApi {
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
   private feed: FeedLine[] = [];
+  readonly map: IslandLayout[];
+  private center: CenterState = newCenterState();
+  private cosmetics: Cosmetics;
+  /** Potion sellers: the NPC on the center island. */
+  potionShops: PotionShop[];
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
   private history = new HitboxHistory();
   private rewindT: number | null = null;
@@ -71,11 +78,14 @@ export class Match implements MatchApi {
   cloneSnapshots = true;
   /** Lag-compensated shots resolved so far, and the total rewind (tests/debug). */
   lagStats = { shots: 0, rewindSec: 0 };
-  /** Potion sellers (temporary default until the centre island lands; see potions.ts). */
-  potionShops: PotionShop[] = defaultPotionShops();
 
-  private constructor(readonly map: IslandLayout[], private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
+  private constructor(readonly def: MapDef, private physics: Physics, setup: MatchSetup, opts: MatchOptions) {
+    const map = def.islands;
+    this.map = map;
+    this.cosmetics = new Cosmetics(def.cosmetics);
+    this.potionShops = potionShopsAt([def.center.potionShop]);
     this.s = newMatchState(map);
+    this.s.waterY = def.waterY;
     this.sealed = map.map(() => false);
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
@@ -117,7 +127,7 @@ export class Match implements MatchApi {
         p.vel.y = Math.max(p.vel.y, 0) + dv.y;
         if (dv.y > 0 && p.mv) { p.mv.grounded = false; p.mv.airTime = 1; }
       },
-      castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
+      castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, true) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
       onKill: (victim, killer) => {
         this.kills.push({ victim, killer });
         this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer));
@@ -131,8 +141,8 @@ export class Match implements MatchApi {
   ): Promise<Match> {
     const n = setup.players.length;
     if (n < 2 || n > 8) throw new Error(`Match.create: need 2..8 players, got ${n}`);
-    const map = buildMap(n);
-    return new Match(map, await Physics.create(map), setup, opts);
+    const def = buildMapDef(n, setup.map ?? 'harbor', setup.seed ?? 1);
+    return new Match(def, await Physics.create(def), setup, opts);
   }
 
   humanIds(): number[] {
@@ -164,7 +174,10 @@ export class Match implements MatchApi {
     this.events.push(...tickExplosives(this.ctx, now));
     this.collapseUnsupported(now);
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
-    this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT));
+    tickCenter(this.center, DT, !this.s.suddenDeath);
+    for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
+    this.events.push(...this.cosmetics.onEvents(this.events, now));
+    this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT, this.def.tideRate));
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
     this.updateSeals(now);
@@ -304,12 +317,25 @@ export class Match implements MatchApi {
     const isl = this.map[p.island];
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
 
-    if (input.interact)
+    if (input.interact) {
       for (const g of this.s.generators) if (near(this.map[g.island].generator)) {
         const before = p.inv.cash;
         collect(p, g);
         this.stats.earned(p.id, p.inv.cash - before);
       }
+      const c = this.def.center;
+      if (near(c.goldGen)) {
+        const cash = collectGold(p, this.center);
+        if (cash > 0) {
+          this.stats.earned(p.id, cash);
+          this.events.push({ t: now, type: 'centerCollect', data: { by: p.id, station: 'gold', cash } });
+        }
+      }
+      if (near(c.supplyGen)) {
+        const got = collectSupply(p, this.center);
+        if (got.sandbags + got.steel > 0) this.events.push({ t: now, type: 'centerCollect', data: { by: p.id, station: 'supply', ...got } });
+      }
+    }
     // Shop NPCs serve anyone standing at them, on any island (vaults stay owner-only); potions only at the
     // potion seller; generator upgrades and gun locks only at your own island's shop.
     if (input.shop) {
@@ -477,7 +503,7 @@ export class Match implements MatchApi {
       const chest = v3(o.pos.x, o.pos.y + 1.2, o.pos.z);
       const d = dist(eye, chest);
       if (d > SIGHT_RANGE) continue;
-      const hit = this.physics.raycast(eye, norm(sub(chest, eye)), d + 0.5, self.id);
+      const hit = this.physics.raycast(eye, norm(sub(chest, eye)), d + 0.5, self.id, true); // sight passes firing slits
       if (hit?.hit.type === 'player' && hit.hit.id === o.id) enemies.push(o);
     }
     return {
@@ -487,6 +513,8 @@ export class Match implements MatchApi {
       others: [...this.s.players.values()].filter((o) => o.id !== self.id)
         .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills })),
       map: this.map,
+      center: { island: this.def.center, gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
+      statics: this.def.statics,
       pieces: [...this.s.pieces.values()],
       generators: this.s.generators.map((g) => g.stored),
       genLevels: [...this.s.genLevels],
@@ -512,6 +540,8 @@ export class Match implements MatchApi {
       loot: [...this.s.loot.values()],
       projectiles: projectiles(this.explosives),
       generators: this.s.generators,
+      center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
+      broken: this.cosmetics.broken,
       genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,

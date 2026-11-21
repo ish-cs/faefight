@@ -9,7 +9,7 @@ import { WireEncoder, wireHeader } from '../net/wire';
 import { SnapRate } from '../net/snapRate';
 import { PeerGuard, type Verdict } from '../net/rateLimit';
 import type { Placement } from '../sim/building';
-import type { IslandLayout } from '../sim/map';
+import { resolveMapChoice, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import type { Snapshot } from '../sim/types';
 import type { ToWorker } from './protocol';
@@ -27,7 +27,7 @@ const TAKEOVER_DIFFICULTY = 'medium' as const;
 export type SpectateResult = { text: string; handoff: boolean };
 
 export type HostEvents = {
-  lobby(slots: Slot[]): void;
+  lobby(slots: Slot[], map: MapChoice): void;
   chat(from: string, text: string): void;
   /** Connection quality (every ~2 s during a match): RTT by seat (host = 0) and the host's tick health. */
   net?(rtt: (number | null)[], host: HostTick): void;
@@ -51,6 +51,9 @@ export class HostSession {
   /** Per-peer budgets: build previews (the ghost only re-asks when it moves) and malformed-message warnings. */
   private previewBudget = new Map<string, { windowStart: number; n: number }>();
   private warned = new Map<string, number>();
+  /** Host's map pick ('random' is resolved per match), and the last map played: Random never repeats it. */
+  private mapChoice: MapChoice = 'harbor';
+  private lastMap: MapTemplate | null = null;
   /** Per-client anti-ESP filter; created once the map is known. */
   private interest: InterestManager | null = null;
   /** Round trips per peer, and whether the worker keeps 30 Hz. */
@@ -62,7 +65,7 @@ export class HostSession {
   private tokens = new Map<number, string>();
   private reserved = new Map<number, ReturnType<typeof setTimeout>>();
   /** Last map (and island per seat) sent with 'start', for a friend who reconnects mid-match. */
-  private startInfo: { map: IslandLayout[]; islands: number[] } | null = null;
+  private startInfo: { map: MapDef; islands: number[] } | null = null;
   /** Per remote player: binary delta encoder (baseline = their last ack) and adaptive send rate. */
   private streams = new Map<number, { wire: WireEncoder; rate: SnapRate }>();
   /** Seat → player id for the running match (frozen at start: /spectate mid-match only affects the next one). */
@@ -98,6 +101,20 @@ export class HostSession {
     this.broadcastLobby();
     if (link) { this.send(link, { t: 'ended', reason: 'kicked' }); setTimeout(() => link.close(), 200); }
   }
+  get map(): MapChoice { return this.mapChoice; }
+  get lastPlayedMap(): MapTemplate | null { return this.lastMap; }
+  setMap(choice: MapChoice) {
+    if (this.started) return;
+    this.mapChoice = choice;
+    this.broadcastLobby();
+  }
+  /** The template the next match plays: the choice, or for Random any map but the last one played. */
+  nextMap(rng: () => number = Math.random): MapTemplate {
+    const map = resolveMapChoice(this.mapChoice, this.lastMap, rng);
+    this.lastMap = map;
+    return map;
+  }
+
   canStart() {
     return !this.started && this.lobby.playerCount() >= 2 && this.lobby.slots().every((x) => x.kind !== 'open');
   }
@@ -155,9 +172,9 @@ export class HostSession {
     const slots = this.lobby.slots();
     for (const [peerId, link] of this.links) {
       const you = this.lobby.seatOf(peerId);
-      if (you !== null) this.send(link, { t: 'lobby', slots, you });
+      if (you !== null) this.send(link, { t: 'lobby', slots, you, map: this.mapChoice });
     }
-    this.ev.lobby(slots);
+    this.ev.lobby(slots, this.mapChoice);
   }
 
   private send(link: Link, m: HostMsg) {
@@ -295,7 +312,7 @@ export class HostSession {
     this.encoder.resync(playerId);
     this.streams.delete(playerId); // fresh binary stream: the new client has no delta baseline
     this.worker?.postMessage({ type: 'humanize', playerId });
-    this.send(link, { t: 'lobby', slots: this.lobby.slots(), you: seat });
+    this.send(link, { t: 'lobby', slots: this.lobby.slots(), you: seat, map: this.mapChoice });
     this.send(link, { t: 'start', map: this.startInfo.map, playerId, island: this.startInfo.islands[playerId - 1] ?? playerId - 1 });
     this.send(link, { t: 'rejoin', token });
     console.info(`[host] ${slot.name} reclaimed seat ${seat}`);
@@ -368,7 +385,8 @@ export class HostSession {
     const setup = this.lobby.toMatchSetup();
     this.seatIds = this.lobby.playerIds();
     this.hostPlayerId = this.seatIds[0];
-    return { setup, humanId: this.hostPlayerId ?? 0 };
+    // Same map choice every match (rematches too); Random never repeats the map just played.
+    return { setup: { ...setup, map: this.nextMap() }, humanId: this.hostPlayerId ?? 0 };
   }
 
   /**
@@ -425,8 +443,8 @@ export class HostSession {
   }
 
   /** Worker sent the map (islands[id - 1] = island of player id): tell every remote to start. */
-  onMap(map: IslandLayout[], islands: number[]) {
-    this.interest = new InterestManager(map);
+  onMap(map: MapDef, islands: number[]) {
+    this.interest = new InterestManager(map.islands, map.statics);
     this.startInfo = { map, islands };
     for (const [peerId, link] of this.links) {
       const seat = this.lobby.seatOf(peerId);

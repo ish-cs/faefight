@@ -25,7 +25,7 @@ function script(seq: number, yaw0: number): MoveCmd {
 async function setup() {
   const m = await Match.create(humans);
   const s0 = m.tick(new Map());
-  const pr = await Predictor.create(m.map, 1);
+  const pr = await Predictor.create(m.def, 1);
   pr.onSnapshot(s0);
   return { m, pr, yaw0: m.map[0].bunker.facingYaw };
 }

@@ -190,5 +190,28 @@ export const MAP = {
   groundY: 2,
   waterY: 0,
   gap: 36,
-  bunker: { interior: 4, wall: 0.3, height: 2.6, doorWidth: 1.6, doorHeight: 2.2 },
+  tideRate: LIFECYCLE.tideRate,
+  bunker: {
+    interior: 4, wall: 0.3, height: 2.6, doorWidth: 1.6, doorHeight: 2.2,
+    /** Firing slits: horizontal gaps (width × y0..y1 above the floor) in each door wall segment and the back wall. */
+    slit: { width: 0.6, y0: 1.35, y1: 1.53 },
+  },
+};
+
+/** Neutral center island stations (anyone may use them). */
+export const CENTER = {
+  /** Stations sit this far from the island middle. */
+  stationRadius: 5,
+  /** Gold generator: twice the home generator rate, much higher cap. */
+  goldRate: ECONOMY.generatorRate * 2,
+  goldCap: 1000,
+  /** Supply generator: a free sandbag every bagSec (up to bagCap), a steel plate every steelSec (up to steelCap). */
+  supplyBagSec: 8,
+  supplyBagCap: 10,
+  supplySteelSec: 60,
+  supplySteelCap: 2,
+  /** Shield well: standing within wellRadius refills shield by wellPerSec up to wellCap. */
+  wellRadius: 1.6,
+  wellPerSec: 4,
+  wellCap: 50,
 };

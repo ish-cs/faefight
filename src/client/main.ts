@@ -11,7 +11,7 @@ import { BuildAim, type AimOutcome } from './buildAim';
 import { DT, HEAD, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
-import type { IslandLayout } from '../sim/map';
+import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { moveForAim } from './aim';
@@ -23,7 +23,7 @@ import { InputAccumulator } from './inputAccum';
 import { InputController } from './input';
 import { ACTIONS, activeKeymap, bindingLabel, isAction, type Action } from './keymap';
 import { loadingScreen as loadingOverlay } from './loading';
-import { LobbyUi } from './lobbyUi';
+import { LobbyUi, MapPicker } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom, type SpectateResult } from './session';
 import { HELP_TEXT, HOST_ONLY, MONEY_HOST_ONLY, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven, parseCommand, unknownCommand } from './commands';
@@ -56,6 +56,9 @@ const AIM_RANGE = 120;
 const REDUNDANT_CMDS = 2;
 const NAME_KEY = 'faefight.name';
 const NAME_MAX = 16;
+const MAP_KEY = 'faefight.map';
+/** Last map played vs bots this page session: Random never repeats it. */
+let lastBotMap: MapTemplate | null = null;
 /** Created at load so M-mute works from the menu; the AudioContext itself starts on the first click/key. */
 const audio = new AudioSystem();
 
@@ -94,7 +97,7 @@ function keyHelp(): string {
 // ---------------------------------------------------------------------------------------------
 
 type GameSink = {
-  map(map: IslandLayout[], humanId: number, island: number): void;
+  map(def: MapDef, humanId: number, island: number): void;
   snapshot(snap: Snapshot): void;
   preview(result: Placement, key: number): void;
   chat(from: string, text: string): void;
@@ -240,6 +243,10 @@ function showMenu() {
   const lockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach((x) => (x.disabled = true));
   const unlockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach((x) => (x.disabled = false));
   const bots = botCountControl();
+  const mapSel = new MapPicker(storedMapChoice(), 'menu-map', (c) => localStorage.setItem(MAP_KEY, c));
+  const mapRow = document.createElement('div');
+  mapRow.className = 'map-row';
+  mapRow.append('Map', mapSel.root);
   for (const d of ['easy', 'medium', 'hard', 'pro'] as Difficulty[]) {
     const b = document.createElement('button');
     b.className = `btn${d === 'medium' ? ' primary' : ''}`;
@@ -247,8 +254,9 @@ function showMenu() {
     b.dataset.testid = `play-${d}`;
     b.onclick = () => {
       lockMenu();
-      status.textContent = 'Loading…';
-      playSolo(d, menu, bots.count()).catch((err) => {
+      const choice = mapSel.value as MapChoice;
+      status.textContent = choice === 'random' ? 'Loading…' : `Loading ${MAP_NAMES[choice]}…`;
+      playSolo(d, choice, menu, bots.count()).catch((err) => {
         console.error('[main] failed to start', err);
         status.textContent = `Failed to start: ${err?.message ?? err}`;
       });
@@ -335,7 +343,7 @@ function showMenu() {
   menuBtns.className = 'menu-btns';
   menuBtns.append(howBtn, settingsButton());
   rememberDifficulty(play);
-  card.append(play, bots.root, online, status, menuBtns, keys);
+  card.append(mapRow, play, bots.root, online, status, menuBtns, keys);
   menu.append(card);
   app.append(menu);
   if (!currentIsChromium()) menu.append(chromeBanner());
@@ -367,6 +375,12 @@ function chromeBanner(): HTMLElement {
   return b;
 }
 
+
+function storedMapChoice(): MapChoice {
+  const v = localStorage.getItem(MAP_KEY);
+  return v === 'random' || (MAP_TEMPLATES as string[]).includes(v ?? '') ? (v as MapChoice) : 'harbor';
+}
+
 /** Full-screen "starting…" card shown while a rematch tears down the old game and builds the new one. */
 function loadingScreen(text: string): HTMLElement {
   const el = document.createElement('div');
@@ -380,13 +394,15 @@ function loadingScreen(text: string): HTMLElement {
   return el;
 }
 
-/** Vs bot (`bots` opponents, 1-7). Play again = same difficulty and bot count on a fresh worker. */
-async function playSolo(d: Difficulty, menu: HTMLElement, bots = 1) {
+/** Vs `bots` opponents (1-7) on the chosen map (Random: a different map than the last one played). Play again keeps difficulty, map choice and bot count. */
+async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bots = 1) {
+  const map = resolveMapChoice(choice, lastBotMap);
+  lastBotMap = map;
   const urlBots = DEBUG ? Number(new URLSearchParams(location.search).get('bots')) : 0;
   const backend = workerBackend(() => ({
     // ?debug=1&bots=N (1-7) overrides the menu's bot count (perf testing)
     setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: Math.min(7, Math.max(1, urlBots || bots)) },
-      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))] },
+      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map },
     humanId: 1,
   }), null);
   let game: Game | null = null;
@@ -413,7 +429,7 @@ async function playSolo(d: Difficulty, menu: HTMLElement, bots = 1) {
       kind: 'solo',
       playAgain: () => {
         game?.destroy();
-        playSolo(d, loadingScreen('Starting a new match…'), bots).catch((err) => {
+        playSolo(d, choice, loadingScreen('Starting a new match…'), bots).catch((err) => {
           console.error('[main] play again failed', err);
           toast(`Could not restart: ${err?.message ?? err}`);
         });
@@ -431,7 +447,7 @@ function showJoinError(menu: HTMLElement, message: string) {
 async function hostLobby(name: string, menu: HTMLElement) {
   let ui: LobbyUi | null = null;
   const session = await HostSession.create(pickTransport(location.search), name, {
-    lobby: (slots) => ui?.render(slots, 0),
+    lobby: (slots, map) => ui?.render(slots, 0, map),
     chat: (from, text) => { chat?.add(from, text); ui?.addChat(from, text); },
     net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; },
   });
@@ -473,6 +489,7 @@ async function hostLobby(name: string, menu: HTMLElement) {
     addSeat: () => session.addSeat(),
     removeSeat: (i) => session.removeSeat(i),
     kick: (i) => session.kick(i),
+    setMap: (c) => { session.setMap(c); localStorage.setItem(MAP_KEY, c); },
     start: () => { savePrefs({ seats: seatPrefsOf(session.lobby.slots()) }); launch((w) => session.start(w), ui!.root); },
     back: () => location.reload(),
   }, () => location.reload(), (text) => {
@@ -482,7 +499,7 @@ async function hostLobby(name: string, menu: HTMLElement) {
     else if (c.kind === 'money') ui!.addChat('', c.amount === null ? MONEY_USAGE : MONEY_NOT_IN_MATCH);
     else ui!.addChat('', c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
   });
-  ui.render(session.lobby.slots(), 0);
+  session.setMap(storedMapChoice());
   addInviteButton(ui.root, session.code);
   console.info(`[host] room ${session.code} open`);
 }
@@ -498,7 +515,7 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     if (!c) link.send({ t: 'chat', text });
     else ui.addChat('', c.kind === 'spectate' ? HOST_ONLY : c.kind === 'money' ? MONEY_HOST_ONLY : c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
   });
-  ui.render(lobby.slots, lobby.you);
+  ui.render(lobby.slots, lobby.you, lobby.map);
   addInviteButton(ui.root, code);
   let slots = lobby.slots;
   let phase: 'lobby' | 'starting' | 'game' | 'over' = 'lobby';
@@ -529,13 +546,13 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     if (phase === 'game') {
       // The game's backend handles everything else; the host restarting or returning to the lobby is ours.
       if (m.t === 'start') { game?.destroy(); game = null; launch(m, loadingScreen('Host started a rematch…')); }
-      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; app.append(ui.root); ui.render(m.slots, m.you); }
+      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; app.append(ui.root); ui.render(m.slots, m.you, m.map); }
       return;
     }
-    if (m.t === 'lobby') { slots = m.slots; ui.render(m.slots, m.you); }
+    if (m.t === 'lobby') { slots = m.slots; ui.render(m.slots, m.you, m.map); }
     else if (m.t === 'chat') ui.addChat(m.from, m.text);
     else if (m.t === 'ended') { phase = 'over'; ui.error(m.reason === 'host-left' ? 'The host closed the lobby.' : `Removed from lobby (${m.reason}).`); }
-    else if (m.t === 'start') launch(m, ui.root);
+    else if (m.t === 'start') { ui.loading(m.map.name); launch(m, ui.root); }
   });
 }
 
@@ -636,6 +653,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let adsWas = false;
 
   let map: IslandLayout[] = [];
+  let mapDef: MapDef | null = null;
   let humanId = 0;
   /** No player of our own this match (spectating host, or handed to a bot via /spectate). */
   let watching = false;
@@ -955,15 +973,19 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   };
 
   backend.connect({
-    map: (m, id, island) => {
-      map = m;
+    map: (def, id, island) => {
+      mapDef = def;
+      map = def.islands;
       humanId = id;
-      renderer.setMap(map, humanId);
-      loading.progress('map', 1, 'Building islands');
+      console.info(`[main] map: ${def.name} (${def.template}, ${map.length} islands)`);
+      loading.progress('map', 0, `Loading ${def.name}`);
+      renderer.setMap(def, humanId);
+      loading.progress('map', 1, `Building ${def.name}`);
       maybeWarm();
       watching = id === 0;
       if (id === 0) {
         // Spectating host: no player of our own; start the free-fly camera high over the islands.
+        const m = map;
         const cx = m.reduce((a, i) => a + i.center.x, 0) / m.length, cz = m.reduce((a, i) => a + i.center.z, 0) / m.length;
         const r = Math.max(...m.map((i) => Math.hypot(i.center.x - cx, i.center.z - cz) + i.radius));
         renderer.camera.position.set(cx, m[0].groundY + r * 0.55, cz + r * 1.05);
@@ -971,9 +993,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         input.pitch = -0.45;
       } else
       // Client-side prediction of our own movement (same movement code + a local collision world).
-      import('./predict').then(({ Predictor: P }) => P.create(m, id)).then((p) => { predictor = p; },
+      import('./predict').then(({ Predictor: P }) => P.create(def, id)).then((p) => { predictor = p; },
         (err) => console.error('[predict] could not start; falling back to server positions', err));
-      hud.setMap(map, humanId, island);
+      hud.setMap(map, humanId, island, def.center);
       qol.setMap(map, humanId, island);
       audio.setMap(map, humanId);
     },
@@ -1016,6 +1038,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       ...(backend.debug ?? {}),
       snapshot: () => snap,
       map: () => map,
+      mapDef: () => mapDef,
       humanId: () => humanId,
       renderInfo: () => renderer.info(),
       renderer,
