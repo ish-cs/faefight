@@ -53,6 +53,8 @@ const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, sm
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
+/** Seconds without getting closer to a loot bag before giving up on it. */
+const LOOT_GIVE_UP_SEC = 5;
 const RAID_AT = 60;
 /** Sandbags carried into sudden death to climb above the tide, bought in the last minutes before it. */
 const TOWER_BAGS = 10, TOWER_PREP_SEC = 150;
@@ -176,6 +178,8 @@ export class Bot {
   private perch: { ramp: Vec3; pos: Vec3; until: number } | null = null;
   private fightSince: number | null = null;
   private retreatSince: number | null = null;
+  private lootProgress: { bag: Vec3; best: number; since: number } | null = null;
+  private badLoot: { pos: Vec3; until: number }[] = [];
   private lastPieceAt = -Infinity;
   private slots: Slot[] | null = null;
   private buildMemo: { at: number; total: number; b: Partial<Record<PieceKind, number>> | undefined } | null = null;
@@ -618,6 +622,7 @@ export class Bot {
     for (const p of c.view.loot) {
       const d = dist2D(p, c.me.pos);
       if (d >= bestD || p.y < c.view.waterY + 0.2) continue;
+      if (this.badLoot.some((b) => b.until > c.view.now && dist2D(b.pos, p) < 0.5)) continue;
       const i = islandAt(c.view.map, p);
       if (i !== c.on && !this.nav.routeTo(p)) continue;
       best = p; bestD = d;
@@ -1270,6 +1275,16 @@ export class Bot {
   private doLoot(c: Ctx): Act {
     const bag = this.nearestLoot(c);
     if (!bag) { this.nextScoreAt = c.view.now; return IDLE; }
+    // A bag I can't get to (on a ledge, under a deck): give up on it after a few seconds without getting closer.
+    const now = c.view.now, d = dist2D(bag, c.me.pos);
+    const lp = this.lootProgress;
+    if (!lp || dist2D(lp.bag, bag) > 0.5 || d < lp.best - 0.5) this.lootProgress = { bag, best: d, since: now };
+    else if (now - lp.since > LOOT_GIVE_UP_SEC) {
+      this.badLoot = [...this.badLoot.filter((b) => b.until > now), { pos: bag, until: now + 60 }];
+      this.lootProgress = null;
+      this.nextScoreAt = now;
+      return IDLE;
+    }
     return this.goTo(bag, 0.3);
   }
 
