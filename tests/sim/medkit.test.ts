@@ -92,7 +92,6 @@ describe('medkit in a match', () => {
 
   test('select + click heals after 2 s; Q drops one; death drops the rest', async () => {
     const m = await Match.create(humans1v1);
-    m.debugClearLoadout(1); m.debugClearLoadout(2); // blank slate: no spawn pistol
     m.debugTeleport(1, add(m.map[0].center, scale(forward(m.map[0].bunker.facingYaw), 6)));
     m.debugGive(1, { medkits: 3 });
     m.debugSetHp(1, 20);
@@ -117,7 +116,6 @@ describe('medkit in a match', () => {
 
   test('a click with the medkit not selected does nothing', async () => {
     const m = await Match.create(humans1v1);
-    m.debugClearLoadout(1); m.debugClearLoadout(2); // blank slate: no spawn pistol
     m.debugGive(1, { medkits: 1, grenades: 1 });
     m.debugSetHp(1, 20);
     let snap = m.tick(inputs({ select: 0, useMedkit: true }));

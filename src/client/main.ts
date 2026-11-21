@@ -144,7 +144,7 @@ type Backend = {
   practice?(cmd: PracticeCmd): void;
   debug?: {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
-    eliminate(playerId: number): void; kill(playerId: number): void; clearLoadout(id?: number): void;
+    eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
     /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
     time(t: number): void; strike(x: number, z: number): void;
@@ -231,7 +231,6 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
-      clearLoadout: (id) => send({ type: 'debug', cmd: 'clearLoadout', id }),
     },
     close() {
       if (closed) return;

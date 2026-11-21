@@ -183,8 +183,6 @@ describe('lightning', () => {
 describe('bots and the storm', () => {
   test.each(['medium', 'hard', 'pro'] as Difficulty[])('%s bots get inside the ring ahead of it and stay there', async (difficulty) => {
     const m = await Match.create({ players: [{ name: 'a', isBot: true, difficulty }, { name: 'b', isBot: true, difficulty }], seed: 5 });
-    // Movement only: unarmed, so the pair can't shoot each other out of the test with their spawn pistols.
-    m.debugClearLoadout(1); m.debugClearLoadout(2);
     run(m, 1);
     // Ring at SD+90 s ~49 m: the bunkers (~63 m out) are in the storm; the islands' near halves are inside.
     m.debugSetTime(SD + 90);
@@ -217,11 +215,9 @@ describe('bots and the storm', () => {
 describe('8 bots and the storm', () => {
   // 8 players: the islands sit ~80 m from the center island, so the only land inside the late ring is the
   // center island. Medium+ bots bridge there ahead of the storm instead of dying to it on their shore.
-  // Seed-sensitive (tracked bot issue): with falloff + bots-build, medium seeds 1-6 passed this whole check only on 4
-  // and 6. Since everyone spawns armed (more early deaths, more broke bots at sudden death), seeds 1-6 pass on
-  // medium 1 and 3 only (2/6: the rest lose 2+ bots to the storm or stall in the final ring at the time cap) and on
-  // hard 1-4 (4/6: seeds 5 and 6 stall at the cap). Pinned to passing seeds; the stall rate is the tracked issue.
-  test.each([['medium', 3], ['hard', 2]] as [Difficulty, number][])('%s: the survivor ends inside the ring, nobody lost to the storm on the shore', async (difficulty, seed) => {
+  // Seed-sensitive (tracked bot issue): with falloff + bots-build, medium seeds 1-6 pass this whole check only on 4
+  // and 6. The others lose 2+ bots to the storm or end with 2-3 bots idling in the final ring at the time cap.
+  test.each([['medium', 4], ['hard', 5]] as [Difficulty, number][])('%s: the survivor ends inside the ring, nobody lost to the storm on the shore', async (difficulty, seed) => {
     const m = await Match.create({ players: Array.from({ length: 8 }, (_, i) => ({ name: `b${i}`, isBot: true, difficulty })), seed });
     run(m, 1);
     for (let id = 1; id <= 8; id++) m.debugGive(id, { cash: 800 }); // what they'd have earned by 12:30

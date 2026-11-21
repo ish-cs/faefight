@@ -27,7 +27,6 @@ test('shield bar, potion seller, drinking', async ({ page }) => {
   await page.getByTestId('play-easy').click();
   await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });
   const humanId = await dbg<number>(page, 'humanId');
-  await dbg(page, 'clearLoadout'); // blank-slate hotbar: no spawn pistol
   const map = await dbg<Isl[]>(page, 'map');
   const me = async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!;
   const home = map[(await me()).island];

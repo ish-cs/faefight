@@ -22,12 +22,9 @@ const expectFacesFront = (m: Match, p: Pick<PlayerState, 'yaw' | 'pitch' | 'pos'
   expect(offBy(p.yaw, p.pos, b.doorways[0].center)).toBeLessThan(TOL);
   expect(p.pitch).toBe(0);
 };
-const expectPistol = (p: Pick<PlayerState, 'hotbar' | 'selected' | 'equipped' | 'inv'>) => {
-  expect(p.hotbar[p.selected]).toBe('pistol');
-  expect(p.equipped).toBe('pistol');
+/** Respawns come back with a pistol + one spare mag (unchanged by the facing work). */
+const expectRespawnPistol = (p: Pick<PlayerState, 'inv'>) =>
   expect(p.inv.weapons.pistol).toEqual({ mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag });
-  expect(WEAPONS.pistol.mag).toBe(12);
-};
 
 describe('front doorway', () => {
   test.each(MAP_TEMPLATES)('%s: doorways[0] faces out toward the island front', async (map) => {
@@ -42,19 +39,15 @@ describe('front doorway', () => {
   });
 });
 
-describe('spawn facing + loadout', () => {
+describe('spawn facing', () => {
   for (const map of MAP_TEMPLATES) for (const n of [2, 4, 8]) {
-    test(`${map}, ${n} players: match start faces the front door with a selected pistol`, async () => {
+    test(`${map}, ${n} players: match start faces the front door`, async () => {
       const m = await Match.create(setup(n, map));
       const snap = m.tick(new Map());
       expect(snap.players).toHaveLength(n);
       for (const p of snap.players) {
         expectFacesFront(m, p);
-        expectPistol(p);
       }
-      // Bots get the same loadout.
-      const mb = await Match.create(setup(n, map, true));
-      for (const p of mb.tick(new Map()).players) expectPistol(p);
     });
 
     test(`${map}, ${n} players: respawn (also from a shifted free spot) faces the front door`, async () => {
@@ -73,7 +66,7 @@ describe('spawn facing + loadout', () => {
       expect(me.alive).toBe(true);
       expect(dist2D(me.pos, isl.spawn)).toBeLessThan(0.05);
       expectFacesFront(m, me);
-      expectPistol(me);
+      expectRespawnPistol(me);
       const ev = snap.events.find((e) => e.type === 'spawn' && e.data.player === 1)!;
       expect(ev.data.yaw).toBeCloseTo(me.yaw, 9);
 
@@ -89,7 +82,7 @@ describe('spawn facing + loadout', () => {
       me = snap.players.find((p) => p.id === 1)!;
       expect(dist2D(me.pos, isl.spawn)).toBeGreaterThan(0.2);
       expectFacesFront(m, me);
-      expectPistol(me);
+      expectRespawnPistol(me);
     });
   }
 });

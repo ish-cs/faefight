@@ -1,8 +1,8 @@
-import { buyAt, collect, grantSpawnLoadout, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
+import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
-import { emptyHotbar, equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
+import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
@@ -109,7 +109,6 @@ export class Match implements MatchApi {
       const id = i + 1;
       const name = cfg.isBot && isPlaceholderBotName(cfg.name) ? nickname(nameRng, taken) : cfg.name;
       const p = newPlayer(id, name, cfg.isBot, i, map[i].spawn, this.settings.startCash);
-      grantSpawnLoadout(p);
       p.yaw = spawnYaw(map[i].bunker, p.pos);
       p.pitch = 0;
       this.s.players.set(id, p);
@@ -385,15 +384,6 @@ export class Match implements MatchApi {
     mergeInventory(p.inv, { ...emptyInventory(), ...inv });
     const overflow = syncFromInventory(p.hotbar, p.inv);
     if (overflow.length) console.warn(`debugGive: hotbar full, ${overflow.join(', ')} carried without a slot`);
-  }
-
-  /** Tests: take away the spawn loadout (guns + hotbar) for a blank-slate inventory. Cash is kept. */
-  debugClearLoadout(playerId: number): void {
-    const p = this.mustPlayer(playerId);
-    p.inv.weapons = {};
-    p.hotbar = emptyHotbar();
-    p.selected = 0;
-    p.equipped = 'fists';
   }
 
   debugSetHp(playerId: number, hp: number): void {

@@ -33,7 +33,6 @@ test('drag a hotbar slot out over the game view to drop it; Shift drops one; Esc
   await page.getByTestId('play-easy').click();
   await expect(page.getByTestId('cash')).toHaveText(/\$\d+/, { timeout: 60_000 });
   const humanId = await dbg<number>(page, 'humanId');
-  await dbg(page, 'clearLoadout'); // blank-slate hotbar: no spawn pistol
   const me = async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!;
   const bagsWith = async (k: string) => (await dbg<Snap>(page, 'snapshot')).loot.filter((b) => (b.inv.pieces[k] ?? 0) > 0).map((b) => b.inv.pieces[k]);
 

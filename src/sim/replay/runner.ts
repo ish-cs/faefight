@@ -17,7 +17,6 @@ export function applyOp(m: Match, op: ReplayOp): void {
     case 'eliminate': m.debugEliminate(op.id); break;
     case 'kill': m.debugKill(op.id); break;
     case 'give': m.debugGive(op.id, op.inv); break;
-    case 'clearLoadout': m.debugClearLoadout(op.id); break;
     case 'piece': m.debugPlacePiece(op.kind, op.pos, op.rotY); break;
     default: throw new Error(`applyOp: unknown op ${(op as { k: string }).k}`);
   }

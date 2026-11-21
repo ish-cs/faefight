@@ -13,7 +13,6 @@ const me = (s: Snapshot) => s.players.find((p) => p.id === 1)!;
 
 async function match() {
   const m = await Match.create(humans);
-  m.debugClearLoadout(1); m.debugClearLoadout(2); // blank slate: no spawn pistol
   let s = m.tick(new Map());
   const c = m.map[0].center; // open ground (you spawn under the bunker roof)
   m.debugTeleport(1, v3(c.x + 3, m.map[0].groundY, c.z + 3));

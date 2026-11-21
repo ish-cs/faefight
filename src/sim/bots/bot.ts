@@ -14,7 +14,7 @@ import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from '
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
-  GUNS, TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
+  TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
   shoppingPlan,
   type Needs, type ShopStyle,
 } from './plans';
@@ -79,8 +79,8 @@ const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, har
 const STEEL_RICH = 800;
 /** Torching wooden bases: rocket range window (m), one rocket per gap (s), and the cash it takes to buy in. */
 const TORCH_RANGE = [9, 45] as const, TORCH_GAP = 8, TORCH_RICH = 900;
-/** Rebuy money for after a death: a box of ammo (every spawn already hands out a pistol). */
-const INSURANCE = 25;
+/** Rebuy money for after a death: pistol + a box of ammo. */
+const INSURANCE = WEAPONS.pistol.price + 25;
 /** HP at or below which a bot uses a medkit it carries. */
 const MEDKIT_AT: Record<Difficulty, number> = { easy: 35, medium: 45, hard: 55, pro: 55 };
 /**
@@ -925,11 +925,7 @@ export class Bot {
   private offensive(c: Ctx): boolean {
     const me = c.me;
     if (c.view.suddenDeath || !ownsGun(me.inv)) return false;
-    // First life on just the free spawn pistol: count it as the pistol I'd otherwise have bought, so the push
-    // waits for the same money it did before everyone spawned armed (not a rush with the starting cash).
-    const spawnKitOnly = me.deaths === 0 && GUNS.every((g) => g === 'pistol' || !me.inv.weapons[g]);
-    const need = DRIVE.offenseCash[this.difficulty] + (spawnKitOnly ? WEAPONS.pistol.price : 0);
-    return c.view.now >= DRIVE.offenseAt[this.difficulty] || me.inv.cash + me.vault.cash >= need;
+    return c.view.now >= DRIVE.offenseAt[this.difficulty] || me.inv.cash + me.vault.cash >= DRIVE.offenseCash[this.difficulty];
   }
 
   /**
@@ -1690,11 +1686,7 @@ export class Bot {
   private buyDecks(c: Ctx): Act | null {
     const me = c.me, now = c.view.now, price = PIECES.scaffold.price;
     if (me.inv.cash < price) {
-      if (me.vault.cash < price) {
-        // Broke (e.g. just respawned with nothing): empty my generator first (interact fires at it).
-        if (c.view.generators[c.home.index] >= price) return { ...this.goTo(c.home.generator, 1.5), sprint: true };
-        return null;
-      }
+      if (me.vault.cash < price) return null;
       const walk = this.goTo(c.home.vault, 1.8);
       if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > now) return walk;
       return { ...walk, vault: { withdraw: { cash: Math.min(me.vault.cash, price * 20) } } };

@@ -62,7 +62,6 @@ export type ReplayOp =
   | { k: 'eliminate'; id: number }
   | { k: 'kill'; id: number }
   | { k: 'give'; id: number; inv: Partial<Inventory> }
-  | { k: 'clearLoadout'; id: number }
   | { k: 'piece'; kind: PieceKind; pos: Vec3; rotY: number };
 
 /**

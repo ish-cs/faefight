@@ -158,11 +158,11 @@ describe('gun lock', () => {
     m.debugGive(1, { cash: 1000 });
     m.debugTeleport(1, add(m.map[0].shop, scale(forward(yaw), 1.5)));
     m.tick(new Map());
-    expect(m.tick(new Map()).players[0].inv.weapons.pistol).toBeDefined(); // everyone spawns with one
+    m.tick(inputs(1, { shop: { buy: 'pistol' } }));
     m.tick(inputs(1, { shop: { buy: 'smg' } }));
     let snap = m.tick(inputs(1, { shop: { buy: 'lock:smg' } }));
     expect(snap.players[0].locked).toEqual(['smg']);
-    expect(snap.players[0].inv.cash).toBe(1050 - 150 - 600);
+    expect(snap.players[0].inv.cash).toBe(1050 - 50 - 150 - 600);
 
     m.debugKill(1);
     snap = m.tick(new Map());

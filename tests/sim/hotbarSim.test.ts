@@ -147,7 +147,6 @@ describe('hotbar: death and loot', () => {
 describe('hotbar: in a match', () => {
   async function atShop() {
     const m = await Match.create(humans1v1);
-    m.debugClearLoadout(1); m.debugClearLoadout(2); // blank slate: no spawn pistol
     const yaw = m.map[0].bunker.facingYaw;
     m.debugTeleport(1, add(m.map[0].shop, scale(forward(yaw), 1.5)));
     return m;
@@ -261,7 +260,6 @@ describe('hotbar: in a match', () => {
 
   test('using up the last piece frees its slot', async () => {
     const m = await Match.create(humans1v1);
-    m.debugClearLoadout(1); m.debugClearLoadout(2); // blank slate: no spawn pistol
     const isl = m.map[0];
     const yaw = isl.bunker.facingYaw;
     const stand = add(add(isl.center, scale(forward(yaw), 4)), scale(right(yaw), 3));

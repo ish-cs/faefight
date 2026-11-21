@@ -34,7 +34,6 @@ test('generator upgrade shows Lv2; a locked pistol comes back after death', asyn
   await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });
 
   const humanId = await dbg<number>(page, 'humanId');
-  await dbg(page, 'clearLoadout'); // blank-slate hotbar: no spawn pistol
   const map = await dbg<Isl[]>(page, 'map');
   const me = async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!;
   const home = map[(await me()).island];
