@@ -1087,6 +1087,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       gpuMs: () => renderer.gpuStats(),
       renderScale: () => ({ dyn: governor.knobs.res, pixelRatio: renderer.world.sky.pixelRatio, smoothedMs: governor.smoothedMs }),
       pbr: () => pbrStats,
+      /** Input→render latency probe: synthetic look events (no pointer lock needed), then stats. */
+      latency: () => latency.stats(),
+      resetLatency: () => { latency.cpu.length = 0; latency.gpu.length = 0; },
+      lookProbe: (on: boolean) => { input.debugLocked = on; },
       governor: () => ({ level: governor.level, knobs: governor.knobs, enabled: governor.enabled, lodTargets: lods.count, lodScale: lods.scale }),
       interpDelay: () => renderer.interpDelay,
       shotPredict: () => ({ ...shots.stats, inFlight: shots.inFlight, times: shotTimes }),
@@ -1160,6 +1164,24 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     };
   };
   const workMs: number[] = [];
+  /**
+   * Input → render latency (mouse look): from the oldest undrawn look event to (a) the frame's draw submission
+   * (CPU) and (b) the GPU finishing that frame (queue.onSubmittedWorkDone). Display scan-out comes on top.
+   */
+  const latency = {
+    cpu: [] as number[], gpu: [] as number[],
+    drawn(t0: number) {
+      const cpu = performance.now() - t0;
+      this.cpu.push(cpu); if (this.cpu.length > 300) this.cpu.shift();
+      const dev = (renderer.gpu.backend as { device?: { queue: { onSubmittedWorkDone(): Promise<void> } } }).device;
+      dev?.queue.onSubmittedWorkDone().then(() => { this.gpu.push(performance.now() - t0); if (this.gpu.length > 300) this.gpu.shift(); }, () => {});
+    },
+    stats() {
+      const q = (xs: number[], k: number) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * k))] ?? 0; };
+      const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
+      return { n: this.cpu.length, cpuAvg: avg(this.cpu), cpuP95: q(this.cpu, 0.95), gpuAvg: avg(this.gpu), gpuP95: q(this.gpu, 0.95) };
+    },
+  };
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
   const frame = () => {
@@ -1304,6 +1326,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     fpv.applyShake(dt); // visual only: the aim ray above was taken without it
     renderer.render(input.yaw);
     fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+    if (input.lookEventT !== null) { latency.drawn(input.lookEventT); input.lookEventT = null; }
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());
     if (warmed && !revealed) {
