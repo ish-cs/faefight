@@ -1,0 +1,285 @@
+/*
+ * FAEFight UI theme: "Harbor Ops".
+ * Dockside industrial signage under a tropical sun: condensed stencil type, crane orange, sea teal,
+ * hazard yellow, solid navy steel panels with hazard-stripe edges and chamfered buttons.
+ * Docs: docs/ui-style.md. Imported LAST in main.ts, so equal-specificity rules here win over
+ * style.css / qol.css / settings.css (the skin section at the bottom relies on that).
+ * Fonts are self-hosted in public/fonts (SIL OFL 1.1, licences alongside).
+ */
+
+/* ============================================================================================
+ * 1. Fonts
+ * ========================================================================================== */
+@font-face { font-family: "Big Shoulders Display"; font-weight: 600; font-display: swap; src: url("/fonts/big-shoulders-display-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Big Shoulders Display"; font-weight: 700; font-display: swap; src: url("/fonts/big-shoulders-display-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Big Shoulders Display"; font-weight: 800; font-display: swap; src: url("/fonts/big-shoulders-display-latin-800-normal.woff2") format("woff2"); }
+@font-face { font-family: "Big Shoulders Display"; font-weight: 900; font-display: swap; src: url("/fonts/big-shoulders-display-latin-900-normal.woff2") format("woff2"); }
+@font-face { font-family: "Big Shoulders Stencil Display"; font-weight: 900; font-display: swap; src: url("/fonts/big-shoulders-stencil-display-latin-900-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 400; font-display: swap; src: url("/fonts/barlow-semi-condensed-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 500; font-display: swap; src: url("/fonts/barlow-semi-condensed-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 600; font-display: swap; src: url("/fonts/barlow-semi-condensed-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 700; font-display: swap; src: url("/fonts/barlow-semi-condensed-latin-700-normal.woff2") format("woff2"); }
+
+/* ============================================================================================
+ * 2. Tokens
+ * ========================================================================================== */
+:root {
+  /* -- type -- */
+  --ff-display: "Big Shoulders Display", "Barlow Semi Condensed", "Arial Narrow", sans-serif;
+  --ff-stencil: "Big Shoulders Stencil Display", "Big Shoulders Display", "Arial Narrow", sans-serif;
+  --ff-body: "Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --fs-2xs: 10.5px; --fs-xs: 12px; --fs-sm: 13.5px; --fs-md: 15px; --fs-lg: 18px; --fs-xl: 24px;
+  --fs-2xl: 32px; --fs-3xl: 44px; --fs-4xl: 64px; --fs-5xl: 96px;
+  --track-label: 0.16em; --track-btn: 0.07em;
+
+  /* -- colour: steel navy (surfaces) -- */
+  --c-ink-950: #040b11;
+  --c-ink-900: #07131c;
+  --c-ink-800: #0b1c28;
+  --c-ink-700: #102736;
+  --c-ink-600: #173548;
+  --c-ink-500: #21475e;
+  --c-ink-400: #2f6079;
+  --c-line: rgba(150, 210, 228, 0.15);
+  --c-line-strong: rgba(150, 210, 228, 0.3);
+  /* -- colour: sun-bleached text -- */
+  --c-text: #f5efe4;
+  --c-text-dim: rgba(245, 239, 228, 0.68);
+  --c-text-faint: rgba(245, 239, 228, 0.44);
+  /* -- colour: harbor accents -- */
+  --c-orange: #ff6a1f;       /* crane orange: primary action, selection */
+  --c-orange-hi: #ff8a45;
+  --c-orange-lo: #d24f0c;
+  --c-teal: #1fc9b6;         /* sea teal: secondary accent, info, "you" */
+  --c-teal-hi: #6ae6d6;
+  --c-yellow: #ffc62e;       /* hazard yellow: cash, warnings, focus ring */
+  --c-yellow-lo: #e0a400;
+  --c-red: #ff4436;          /* danger, sealed, damage */
+  --c-red-lo: #c4241a;
+  --c-green: #6ee36a;        /* health */
+  --c-blue: #4fb4ff;         /* shield */
+  --c-violet: #b892ff;       /* upgrades, potions */
+  --c-on-orange: #1c0900;
+  --c-on-yellow: #1d1500;
+  --c-on-teal: #00201c;
+
+  /* -- spacing (4px grid) -- */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+
+  /* -- shape -- */
+  --r-xs: 2px; --r-sm: 4px; --r-md: 6px; --r-lg: 10px; --r-pill: 999px;
+  --cut: 9px; /* chamfer size on buttons; set it on the element, the clip-path reads it there */
+
+  /* -- elevation -- */
+  --sh-1: 0 2px 0 rgba(0, 0, 0, 0.35);
+  --sh-2: 0 10px 28px rgba(0, 0, 0, 0.38), 0 2px 0 rgba(0, 0, 0, 0.3);
+  --sh-3: 0 28px 80px rgba(0, 0, 0, 0.55), 0 3px 0 rgba(0, 0, 0, 0.35);
+  --sh-inset: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+
+  /* -- surfaces -- */
+  --noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --hazard: repeating-linear-gradient(-45deg, var(--c-yellow) 0 10px, #15110a 10px 20px);
+  --hazard-red: repeating-linear-gradient(-45deg, var(--c-red) 0 14px, #1a0505 14px 28px);
+  --panel-bg: linear-gradient(180deg, rgba(22, 50, 68, 0.97) 0%, rgba(11, 28, 40, 0.98) 100%);
+  --panel-bg-tx: var(--noise), var(--panel-bg);
+  /* HUD backplate: no backdrop blur over the 3D canvas (blur re-composites every frame). */
+  --plate: rgba(5, 15, 22, 0.74);
+  --plate-strong: rgba(5, 15, 22, 0.86);
+  --hud-shadow: 0 1px 0 rgba(0, 0, 0, 0.75), 0 0 6px rgba(0, 0, 0, 0.55);
+  --hud-shadow-big: 0 2px 0 rgba(0, 0, 0, 0.7), 0 0 14px rgba(0, 0, 0, 0.55);
+
+  /* -- motion -- */
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.25, 1.15);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-1: 90ms; --dur-2: 160ms; --dur-3: 260ms;
+
+  /* -- focus -- */
+  --focus: 0 0 0 2px var(--c-ink-950), 0 0 0 4px var(--c-yellow);
+  --focus-inset: inset 0 0 0 2px var(--c-yellow), inset 0 0 0 4px var(--c-ink-950);
+
+  /* -- legacy aliases used across style.css / qol.css / settings.css and other agents' CSS -- */
+  --glass: rgba(8, 22, 32, 0.8);
+  --glass-strong: rgba(7, 19, 28, 0.92);
+  --line: var(--c-line);
+  --text: var(--c-text);
+  --muted: var(--c-text-dim);
+  --accent: var(--c-orange);
+  --danger: var(--c-red);
+  --gold: var(--c-yellow);
+
+  font-family: var(--ff-body);
+  color: var(--c-text);
+  -webkit-font-smoothing: antialiased;
+}
+html, body { background: var(--c-ink-950); }
+button, input { font-family: inherit; }
+::selection { background: var(--c-orange); color: var(--c-on-orange); }
+
+/* ============================================================================================
+ * 3. Primitives (new UI: use these classes)
+ * ========================================================================================== */
+
+/* -- type helpers -- */
+.ui-display { font-family: var(--ff-display); font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; line-height: 0.95; }
+.ui-stencil { font-family: var(--ff-stencil); font-weight: 900; text-transform: uppercase; letter-spacing: 0.03em; line-height: 0.9; }
+.ui-kicker { font-family: var(--ff-display); font-weight: 700; font-size: var(--fs-xs); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--c-text-dim); }
+.ui-num { font-family: var(--ff-display); font-weight: 800; font-variant-numeric: tabular-nums; }
+.ui-hud-text { text-shadow: var(--hud-shadow); }
+
+/* -- panel -- */
+.ui-panel {
+  position: relative; color: var(--c-text); background: var(--panel-bg-tx); border: 1px solid var(--c-line);
+  border-radius: var(--r-md); box-shadow: var(--sh-3), var(--sh-inset);
+}
+/* Hazard-stripe top edge. */
+.ui-panel--striped::before, .ui-stripe {
+  content: ""; position: absolute; left: -1px; right: -1px; top: -1px; height: 5px; background: var(--hazard);
+  border-radius: var(--r-md) var(--r-md) 0 0; pointer-events: none;
+}
+.ui-stripe { position: static; display: block; height: 5px; border-radius: 0; }
+/* Orange corner brackets: the "target frame" accent. */
+.ui-panel--brackets::after {
+  content: ""; position: absolute; inset: -5px; pointer-events: none;
+  --b: 2px; --l: 16px; --bc: var(--c-orange);
+  background:
+    linear-gradient(var(--bc), var(--bc)) top left / var(--l) var(--b), linear-gradient(var(--bc), var(--bc)) top left / var(--b) var(--l),
+    linear-gradient(var(--bc), var(--bc)) top right / var(--l) var(--b), linear-gradient(var(--bc), var(--bc)) top right / var(--b) var(--l),
+    linear-gradient(var(--bc), var(--bc)) bottom left / var(--l) var(--b), linear-gradient(var(--bc), var(--bc)) bottom left / var(--b) var(--l),
+    linear-gradient(var(--bc), var(--bc)) bottom right / var(--l) var(--b), linear-gradient(var(--bc), var(--bc)) bottom right / var(--b) var(--l);
+  background-repeat: no-repeat;
+}
+.ui-plate { background: var(--plate); border: 1px solid rgba(150, 210, 228, 0.12); border-radius: var(--r-sm); box-shadow: var(--sh-1); }
+
+/* -- buttons: .ui-btn (+ .btn legacy) -- */
+.ui-btn, .btn {
+  --btn-bg: var(--c-ink-600); --btn-bg-hover: var(--c-ink-500); --btn-fg: var(--c-text); --btn-ring: var(--c-line-strong);
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  min-height: 42px; padding: 0 20px; border: 0; border-radius: 0;
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+  font-family: var(--ff-display); font-weight: 800; font-size: 17px; letter-spacing: var(--track-btn); text-transform: uppercase; line-height: 1;
+  color: var(--btn-fg); background: var(--btn-bg); cursor: pointer; white-space: nowrap; user-select: none;
+  box-shadow: inset 0 0 0 1px var(--btn-ring), inset 0 -3px 0 rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transition: transform var(--dur-1) var(--ease-snap), background-color var(--dur-2), color var(--dur-2), box-shadow var(--dur-2);
+}
+.ui-btn svg, .btn svg { width: 18px; height: 18px; flex: none; stroke-width: 2.2; }
+.ui-btn:hover:not(:disabled), .btn:hover:not(:disabled) { background: var(--btn-bg-hover); transform: translateY(-1px); }
+.ui-btn:active:not(:disabled), .btn:active:not(:disabled) { transform: translateY(1px) scale(0.985); box-shadow: inset 0 0 0 1px var(--btn-ring), inset 0 2px 0 rgba(0, 0, 0, 0.3); }
+.ui-btn:focus-visible, .btn:focus-visible { outline: none; box-shadow: var(--focus-inset); }
+.ui-btn:disabled, .btn:disabled { opacity: 0.4; cursor: not-allowed; filter: saturate(0.4); }
+.ui-btn--primary, .btn.primary {
+  --btn-bg: var(--c-orange); --btn-bg-hover: var(--c-orange-hi); --btn-fg: var(--c-on-orange); --btn-ring: rgba(255, 255, 255, 0.18);
+}
+/* Sheen sweep on hover: transform-only. */
+.ui-btn--primary::after, .btn.primary::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  transform: translateX(-160%) skewX(-18deg); transition: transform 0s;
+}
+.ui-btn--primary:hover:not(:disabled)::after, .btn.primary:hover:not(:disabled)::after { transform: translateX(330%) skewX(-18deg); transition: transform 0.55s var(--ease-out); }
+.ui-btn--secondary { --btn-bg: var(--c-ink-600); }
+.ui-btn--teal, .btn.teal { --btn-bg: var(--c-teal); --btn-bg-hover: var(--c-teal-hi); --btn-fg: var(--c-on-teal); --btn-ring: rgba(255, 255, 255, 0.2); }
+.ui-btn--danger, .btn.danger { --btn-bg: rgba(255, 68, 54, 0.1); --btn-bg-hover: var(--c-red); --btn-fg: #ffb3ab; --btn-ring: rgba(255, 68, 54, 0.55); }
+.ui-btn--danger:hover:not(:disabled), .btn.danger:hover:not(:disabled) { color: #fff; }
+.ui-btn--ghost, .btn.ghost { --btn-bg: transparent; --btn-bg-hover: rgba(255, 255, 255, 0.06); --btn-fg: var(--c-text-dim); --btn-ring: transparent; box-shadow: none; }
+.ui-btn--ghost:hover:not(:disabled), .btn.ghost:hover:not(:disabled) { color: var(--c-text); }
+.ui-btn--sm, .btn.small { min-height: 32px; padding: 0 12px; font-size: 14px; --cut: 6px; gap: 6px; }
+.ui-btn--lg { min-height: 54px; padding: 0 28px; font-size: 22px; --cut: 12px; }
+.ui-btn--block { display: flex; width: 100%; }
+/* Key hint inside a button, e.g. <span class="ui-kbd">Esc</span>. */
+.ui-btn .ui-kbd, .btn .ui-kbd { margin-left: auto; }
+
+/* -- keycap -- */
+.ui-kbd {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 20px; padding: 0 5px;
+  font-family: var(--ff-display); font-weight: 800; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; line-height: 1;
+  color: currentColor; border: 1px solid currentColor; border-bottom-width: 2px; border-radius: var(--r-sm); opacity: 0.75;
+}
+
+/* -- inputs -- */
+.ui-input {
+  font-family: var(--ff-body); font-size: var(--fs-md); font-weight: 600; color: var(--c-text); min-height: 42px; padding: 0 12px;
+  background: var(--c-ink-900); border: 1px solid var(--c-line-strong); border-radius: var(--r-sm); outline: none;
+  box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.3); transition: border-color var(--dur-2), box-shadow var(--dur-2);
+}
+.ui-input::placeholder { color: var(--c-text-faint); }
+.ui-input:focus { border-color: var(--c-orange); box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.3), 0 0 0 3px rgba(255, 106, 31, 0.22); }
+
+/* -- segmented control (no dropdowns) -- */
+.ui-seg { display: inline-flex; padding: 3px; gap: 3px; background: var(--c-ink-900); border: 1px solid var(--c-line); border-radius: var(--r-sm); box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.3); }
+.ui-seg > button {
+  font-family: var(--ff-display); font-weight: 800; font-size: 15px; letter-spacing: 0.05em; text-transform: uppercase; line-height: 1;
+  color: var(--c-text-dim); background: transparent; border: 0; border-radius: var(--r-xs); padding: 8px 12px; cursor: pointer;
+  transition: background-color var(--dur-2), color var(--dur-2), transform var(--dur-1) var(--ease-snap);
+}
+.ui-seg > button:hover:not(:disabled) { color: var(--c-text); background: rgba(255, 255, 255, 0.06); }
+.ui-seg > button:active:not(:disabled) { transform: scale(0.96); }
+.ui-seg > button.on, .ui-seg > button.selected, .ui-seg > button[aria-checked="true"] { color: var(--c-on-orange); background: var(--c-orange); box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.25); }
+.ui-seg > button:focus-visible { outline: none; box-shadow: var(--focus-inset); }
+
+/* -- toggle: <label class="ui-toggle"><input type="checkbox"><span class="knob"></span></label> -- */
+.ui-toggle { position: relative; display: inline-block; width: 46px; height: 24px; flex: none; cursor: pointer; }
+.ui-toggle input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.ui-toggle .knob { position: absolute; inset: 0; border-radius: var(--r-sm); background: var(--c-ink-900); box-shadow: inset 0 0 0 1px var(--c-line-strong), inset 0 2px 0 rgba(0, 0, 0, 0.35); transition: background-color var(--dur-2); pointer-events: none; }
+.ui-toggle .knob::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: var(--r-xs); background: var(--c-text-dim); box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4); transition: transform var(--dur-2) var(--ease-snap), background-color var(--dur-2); }
+.ui-toggle input:checked + .knob { background: var(--c-orange); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
+.ui-toggle input:checked + .knob::after { transform: translateX(22px); background: #fff; }
+.ui-toggle input:focus-visible + .knob { box-shadow: var(--focus); }
+
+/* -- slider: <input type="range" class="ui-slider" style="--fill: 40%"> -- */
+.ui-slider { -webkit-appearance: none; appearance: none; height: 6px; border-radius: var(--r-xs); cursor: pointer; background: linear-gradient(90deg, var(--c-orange) var(--fill, 50%), var(--c-ink-900) var(--fill, 50%)); box-shadow: inset 0 0 0 1px var(--c-line); }
+.ui-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 22px; border-radius: var(--r-xs); background: var(--c-text); box-shadow: 0 2px 0 rgba(0, 0, 0, 0.45), inset 0 -3px 0 rgba(0, 0, 0, 0.15); transition: transform var(--dur-1) var(--ease-snap); }
+.ui-slider:hover::-webkit-slider-thumb { transform: scaleY(1.12); }
+.ui-slider::-moz-range-thumb { width: 14px; height: 22px; border: 0; border-radius: var(--r-xs); background: var(--c-text); }
+.ui-slider:focus-visible { outline: none; box-shadow: var(--focus); }
+
+/* -- chip / tag -- */
+.ui-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: var(--r-xs);
+  font-family: var(--ff-display); font-weight: 800; font-size: 12.5px; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1;
+  color: var(--c-text-dim); background: rgba(255, 255, 255, 0.08); box-shadow: inset 0 0 0 1px var(--c-line);
+}
+.ui-chip--accent { color: var(--c-on-orange); background: var(--c-orange); box-shadow: none; }
+.ui-chip--teal { color: var(--c-teal-hi); background: rgba(31, 201, 182, 0.14); box-shadow: inset 0 0 0 1px rgba(31, 201, 182, 0.4); }
+.ui-chip--warn { color: var(--c-yellow); background: rgba(255, 198, 46, 0.12); box-shadow: inset 0 0 0 1px rgba(255, 198, 46, 0.4); }
+.ui-chip--danger { color: #ffb3ab; background: rgba(255, 68, 54, 0.14); box-shadow: inset 0 0 0 1px rgba(255, 68, 54, 0.5); }
+
+/* -- toast: .ui-toast (+ --ok / --warn / --danger) -- */
+.ui-toast {
+  --tone: var(--c-teal);
+  position: fixed; top: 18px; left: 50%; z-index: 95; max-width: min(560px, 86vw); padding: 12px 16px 12px 18px;
+  font-family: var(--ff-body); font-size: var(--fs-sm); font-weight: 600; line-height: 1.4; color: var(--c-text); white-space: pre-wrap;
+  background: var(--panel-bg); border: 1px solid var(--c-line); border-left: 4px solid var(--tone); border-radius: var(--r-sm); box-shadow: var(--sh-2);
+  transform: translateX(-50%); animation: ui-toast-in var(--dur-3) var(--ease-snap) both;
+}
+.ui-toast--ok { --tone: var(--c-green); }
+.ui-toast--warn { --tone: var(--c-yellow); }
+.ui-toast--danger { --tone: var(--c-red); }
+@keyframes ui-toast-in { from { opacity: 0; transform: translate(-50%, -14px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* -- tooltip: any element with data-tip and class ui-tip -- */
+.ui-tip { position: relative; }
+.ui-tip[data-tip]::after {
+  content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 10; padding: 5px 9px; white-space: nowrap; pointer-events: none;
+  font-family: var(--ff-body); font-size: var(--fs-xs); font-weight: 600; color: var(--c-text); background: var(--c-ink-950); border: 1px solid var(--c-line-strong); border-radius: var(--r-xs);
+  opacity: 0; transform: translate(-50%, 4px); transition: opacity var(--dur-2), transform var(--dur-2) var(--ease-out);
+}
+.ui-tip[data-tip]:hover::after, .ui-tip[data-tip]:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+
+/* -- info bar: one-line details strip at the bottom of a panel -- */
+.ui-infobar {
+  display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 6px 12px; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-dim);
+  background: var(--c-ink-950); border: 1px solid var(--c-line); border-left: 3px solid var(--c-yellow); border-radius: var(--r-xs);
+}
+
+/* -- backdrop for modal overlays over the game -- */
+.ui-backdrop { position: fixed; inset: 0; background: radial-gradient(120% 90% at 50% 50%, rgba(4, 11, 17, 0.45), rgba(4, 11, 17, 0.85)); backdrop-filter: blur(8px) saturate(0.75); -webkit-backdrop-filter: blur(8px) saturate(0.75); animation: ui-fade var(--dur-2) ease-out both; }
+@keyframes ui-fade { from { opacity: 0; } }
+@keyframes ui-pop { from { opacity: 0; transform: translateY(10px) scale(0.98); } }
+
+/* -- generic keyboard focus ring for anything focusable that has no own style -- */
+:where(a, [tabindex], input, button):focus-visible { outline: 2px solid var(--c-yellow); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-btn, .btn, .ui-seg > button, .ui-toast { transition: none; animation: none; }
+  .ui-btn--primary::after, .btn.primary::after { display: none; }
+}

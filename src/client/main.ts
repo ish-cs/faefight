@@ -48,6 +48,8 @@ import { loadPrefs, savePrefs, seatPrefsOf } from './qol/prefs';
 import { clearRejoin, loadRejoin, markAutoRejoin, saveRejoin, touchRejoin } from './qol/rejoin';
 import { isPieceItem } from '../sim/hotbar';
 import { aimDirection, ShotPredictor } from './shotPredict';
+// UI theme last: its tokens and skin win over style.css / qol.css / settings.css (docs/ui-style.md).
+import './ui/theme.css';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
