@@ -49,6 +49,8 @@ export type BrainDigest = {
   hurt: [number, number, number][];
   grudge: [number, number][];
   target: { id: number; why: string } | null;
+  /** Pushing a dead rival's bunker in their respawn window: [id, seconds left], or null. */
+  window: [number, number] | null;
   /** Rivals as it weighs them: [id, score]. */
   rivals: [number, number][];
   plan: string[]; planAt: number;
@@ -101,7 +103,7 @@ type Internals = {
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
-  params: BrainParams; P: BotParams;
+  params: BrainParams; P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
 
@@ -304,8 +306,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (rivalDown) {
         const wait = gun && sealKit(me.inv) === 0;
         const back = c.rival.respawnAt! - now;
+        const win: [string, number][] = I.inWindow(c) ? [['respawn window', I.P.drive.windowPush * 0.5]] : [];
         return {
-          f: wait ? [['camp respawn', 0.35], ['opportunism', 0.3 * t.opportunism]] : [['rival down', 0.3]],
+          f: [...(wait ? [['camp respawn', 0.35], ['opportunism', 0.3 * t.opportunism]] as [string, number][] : [['rival down', 0.3]] as [string, number][]), ...win],
           why: `${rivalName(c)} is dead, back in ${secs(back)}${wait ? ': waiting at their door for the unarmed respawn' : ''}`,
         };
       }
@@ -327,6 +330,8 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const seen = c.rival && c.rival.alive ? I.mem.recent(c.rival.id, now, 20) : null;
       const ownerAway = !!seen && seen.island !== c.rival!.island;
       const f: [string, number][] = [[kit >= c.openDoors.length ? 'full kit' : 'partial kit', kit >= c.openDoors.length ? 0.6 : 0.3]];
+      f.push(['seals win', I.P.drive.sealBonus]);
+      if (I.inWindow(c)) f.push(['respawn window', I.P.drive.windowPush]);
       if (rivalDown) f.push(['rival dead', 0.5], ['opportunism', 0.3 * t.opportunism]);
       if (near) f.push(['near bunker', 0.1]);
       if (ownerAway) f.push(['owner away', 0.2 * t.opportunism]);
@@ -613,6 +618,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     log: (bot as unknown as { switches: GoalSwitch[] }).switches.slice().reverse().map((s) => [r1(s.t), s.from, s.to, s.why.slice(0, 110)]),
     seen: seen.slice(0, 8), hurt: hurt.slice(0, 4), grudge,
     target: p.target, rivals: p.rivals.slice(0, 7),
+    window: I.respawnWindow ? [I.respawnWindow.id, r1(I.respawnWindow.left)] : null,
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     path: me ? pathOf(I, p, me) : [],

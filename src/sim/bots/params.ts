@@ -28,10 +28,15 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  * - sealAway: seal bonus for a rival seen away from home, or not seen on their island for emptyHomeSec while I'm
  *   on it (their bunker is empty); sealAwayTarget: rival-choice
  *   bonus for such a rival while I carry a full kit and can walk to their island.
- * - sealRaceM: a rival who just died with their open bunker within this many metres is worth dropping all for.
+ * - Respawn window (5 s): a dead rival whose bunker is within sealRaceM m and that I can sprint to before they're
+ *   back (+ windowSlackSec) gets pushed: seal it with a kit (windowPush added to seal), else hold their door
+ *   (half of it added to attack). respawnCautionSec: right after my own respawn no pushes or offense (re-gear).
  * - siegeDist: camping a sealed bunker this far out from its weakest doorway; siegeAfterDeath: how long after the
  *   owner's death the camp holds without seeing them; siegeScore: attack score while camping.
  * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
+ * - sealBonus: added to the seal goal (seals win games); sealedHunt: added to attack/fight against a rival whose
+ *   bunker is sealed (each death of theirs eliminates them); sealedFocus: among visible enemies, one with a sealed
+ *   bunker counts as this many times closer when choosing whom to shoot.
  * - stallSec / stallDist / stallBanSec: goal watchdog (a goal with no progress for stallSec is dropped for
  *   stallBanSec; moving stallDist counts as progress).
  */
@@ -52,6 +57,9 @@ export type DriveParams = {
   sealAwayTarget: number;
   emptyHomeSec: number;
   sealRaceM: number;
+  windowSlackSec: number;
+  windowPush: number;
+  respawnCautionSec: number;
   siegeDist: number;
   siegeAfterDeath: number;
   siegeScore: number;
@@ -59,6 +67,9 @@ export type DriveParams = {
   stallDist: number;
   stallBanSec: number;
   fireRangeMult: number;
+  sealBonus: number;
+  sealedHunt: number;
+  sealedFocus: number;
 };
 
 /**
@@ -283,7 +294,10 @@ export const DRIVE: DriveParams = {
   sealAway: 0.25,
   sealAwayTarget: 0.6,
   emptyHomeSec: 8,
-  sealRaceM: 30,
+  sealRaceM: 60,
+  windowSlackSec: 2,
+  windowPush: 0.6,
+  respawnCautionSec: 8,
   siegeDist: 6.5,
   siegeAfterDeath: 16,
   siegeScore: 0.75,
@@ -291,6 +305,9 @@ export const DRIVE: DriveParams = {
   stallDist: 2.5,
   stallBanSec: 20,
   fireRangeMult: 2,
+  sealBonus: 0.35,
+  sealedHunt: 0.6,
+  sealedFocus: 1.6,
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
@@ -376,8 +393,10 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sprintGap', [3, 15]], ['drive.reengageSec', [5, 40]], ['drive.reengageHp', [0.1, 0.6]],
   ['drive.guardFreshSec', [1, 10]], ['drive.collectCarried', [50, 500]], ['drive.steelRich', [450, 1500]],
   ['drive.sealAway', [0, 0.8]], ['drive.sealAwayTarget', [0, 1.5]], ['drive.emptyHomeSec', [3, 20]],
-  ['drive.sealRaceM', [10, 60]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
+  ['drive.sealRaceM', [10, 120]], ['drive.windowSlackSec', [0, 6]], ['drive.windowPush', [0, 1.5]],
+  ['drive.respawnCautionSec', [0, 30]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]],
+  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedFocus', [1, 3]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
   ['buildSkill.*.peekOut', [0.3, 3]],

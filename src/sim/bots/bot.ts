@@ -239,6 +239,10 @@ export class Bot {
   /** Telegraphed strikes already judged (easy bots notice only some), keyed by spot and time. */
   private bolts = new Map<string, boolean>();
   private wander: { to: Vec3; until: number } | null = null;
+  /** Respawn-window push on a dead rival (sealRace), and when I last came back from the dead. */
+  private window: { id: number; until: number } | null = null;
+  private respawnedAt = -Infinity;
+  private lastDeaths = 0;
   /** Goal watchdog: where I was when the current goal last made progress (moved, built, bought, shot). */
   private prog: { goal: Goal; at: number; pos: Vec3 } | null = null;
   private lastDidAt = -Infinity;
@@ -376,6 +380,8 @@ export class Bot {
     this.view = view;
     this.nav.begin(view);
     this.checkPurchase(me, now);
+    // Came back from a death (bots aren't ticked while dead): note it for respawnCautionSec.
+    if (me.deaths !== this.lastDeaths) { this.lastDeaths = me.deaths; this.respawnedAt = now; this.window = null; }
     this.sealRace(view);
     const rescore = now >= this.nextScoreAt;
     const facts = rescore ? this.rivalFacts(view) : null;
@@ -716,23 +722,41 @@ export class Bot {
   }
 
   /**
-   * Seal race: someone just died (kill feed) and their bunker is close with its doors open while I carry the kit
-   * to plug them all: they respawn in a few seconds, so drop everything and go plug it.
+   * Respawn window: a rival is dead (kill feed / scoreboard shows when they're back) and I can sprint to their
+   * bunker before they respawn, give or take windowSlackSec: push it now. With a seal kit that's the seal race
+   * (plug their doors while they're down: they respawn trapped); without one, hold their door for the respawn.
+   * Like a strong player, not right after my own respawn (respawnCautionSec): re-gear first.
    */
   private sealRace(view: BotView) {
-    const me = view.self, now = view.now;
-    if (view.suddenDeath || sealKit(me.inv) < MAP_DOORS) return;
+    const me = view.self, now = view.now, D = this.P.drive;
+    if (this.window && (now > this.window.until || !view.others.some((o) => o.id === this.window!.id && !o.alive && !o.eliminated))) this.window = null;
+    if (view.suddenDeath || this.cautious(now)) return;
     for (const o of view.others) {
-      if (o.alive || o.eliminated || o.respawnAt === null || o.id === this.targetId || o.island === me.island) continue;
-      if (now - (this.mem.diedAt.get(o.id) ?? -Infinity) > 1) continue;
+      if (o.alive || o.eliminated || o.respawnAt === null || o.island === me.island || this.window?.id === o.id) continue;
       const isl = view.map[o.island];
-      if (view.sealed[isl.index] || dist2D(me.pos, isl.bunker.center) > this.P.drive.sealRaceM) continue;
+      const d = dist2D(me.pos, isl.bunker.center);
+      if (view.sealed[isl.index] || d > D.sealRaceM || d / PLAYER.sprint > o.respawnAt - now + D.windowSlackSec) continue;
       const n = this.nav.nodeAt(me.pos);
       if (n !== isl.index && (n < 0 || this.nav.hop(n, isl.index) === null)) continue;
+      this.window = { id: o.id, until: o.respawnAt + D.windowSlackSec };
       this.targetId = o.id;
       this.nextScoreAt = now;
       return;
     }
+  }
+
+  /** Just respawned (empty-handed): play it safe for a few seconds, no pushes. */
+  private cautious(now: number): boolean {
+    return now - this.respawnedAt < this.P.drive.respawnCautionSec;
+  }
+
+  /** Pushing a dead rival's bunker in their respawn window: who, and seconds left (spectators / debugBrain). */
+  get respawnWindow(): { id: number; left: number } | null {
+    return this.window && this.view ? { id: this.window.id, left: Math.max(0, this.window.until - this.view.now) } : null;
+  }
+  /** Am I in the respawn window on my current target? */
+  private inWindow(c: Ctx): boolean {
+    return !!this.window && !!c.rival && this.window.id === c.rival.id && !c.rival.alive;
   }
 
   /** Score every rival; keep the current one unless another is clearly better. */
@@ -830,8 +854,12 @@ export class Bot {
       if (!e.alive || e.invulnUntil > now) continue;
       const d = dist2D(e.pos, me.pos);
       if (e.equipped !== 'fists' && d < 35) armedNear++;
-      const s = -d * P.tgtDist + (1 - e.hp / 100) * P.tgtLowHp + (e.id === shooter ? P.tgtShootingMe : 0) +
-        (e.id === this.targetId ? P.tgtPlanTarget : 0) + (e.id === this.lastEnemy ? P.tgtKeep : 0) - (d > 60 ? 1 : 0);
+      // Shoot first at whoever's bunker is sealed (their next death eliminates them), unless someone is much closer.
+      const sealedFoe = !view.suddenDeath && view.sealed[e.island];
+      const dEff = sealedFoe ? d / this.P.drive.sealedFocus : d;
+      const s = -dEff * P.tgtDist + (1 - e.hp / 100) * P.tgtLowHp + (e.id === shooter ? P.tgtShootingMe : 0) +
+        (e.id === this.targetId ? P.tgtPlanTarget : 0) + (e.id === this.lastEnemy ? P.tgtKeep : 0) - (d > 60 ? 1 : 0) +
+        (sealedFoe ? 0.5 * (this.P.drive.sealedFocus - 1) : 0);
       if (s > bestScore) { bestScore = s; enemy = e; enemyDist = d; }
     }
     this.lastEnemy = enemy?.id ?? null;
@@ -1109,7 +1137,8 @@ export class Bot {
         const sameIsland = islandAt(view.map, c.enemy.pos) === islandAt(view.map, me.pos);
         if (!sameIsland && c.enemyDist > P.engageRange) return 0.2;
         // Sudden death with no ammo left anywhere to buy it: fists are all there is.
-        return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression;
+        const sealedFoe = !view.suddenDeath && view.sealed[c.enemy.island] ? this.P.drive.sealedHunt : 0;
+        return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression + (gun ? sealedFoe : 0);
       }
       case 'disengage': {
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
@@ -1225,13 +1254,16 @@ export class Bot {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
         // Sealed in (or about to respawn into a sealed bunker): be there to finish it.
-        if (this.sieging(c)) return this.P.drive.siegeScore + 0.2 * t.opportunism;
+        if (this.sieging(c)) return this.P.drive.siegeScore + this.P.drive.sealedHunt + 0.2 * t.opportunism;
+        const push = this.inWindow(c) ? this.P.drive.windowPush * 0.5 : 0;
         // Respawn window with no kit: a kill that can't be followed by a seal is wasted (and respawns are
         // protected), so go get a kit rather than camp the door.
-        if (rivalDown || this.sealWindow(c)) return sealKit(me.inv) === 0 && c.homeReach ? 0.1 : 0.3;
+        if (rivalDown || this.sealWindow(c)) return (sealKit(me.inv) === 0 && c.homeReach ? 0.1 : 0.3) + push;
         if (!gun) return 0.1;
         const upgraded = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
-        return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution));
+        // Their bunker is sealed: every death of theirs is an elimination, so hunting them is worth the most.
+        const sealedHunt = c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive ? this.P.drive.sealedHunt : 0;
+        return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution)) + sealedHunt;
       }
       case 'seal': {
         const kit = sealKit(me.inv);
@@ -1244,7 +1276,8 @@ export class Bot {
           this.mem.recent(c.rival.id, view.now, this.P.drive.emptyHomeSec)?.island !== c.rival.island;
         // Dead, respawning or spawn-protected rival: sealing now is an elimination; it beats every fight.
         const window = rivalDown || this.sealWindow(c);
-        return (kit >= c.openDoors.length ? 0.6 : 0.3) + (window ? 1.0 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
+        return this.P.drive.sealBonus + (this.inWindow(c) ? this.P.drive.windowPush : 0) + (kit >= c.openDoors.length ? 0.6 : 0.3) +
+          (window ? 1.0 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
           (ownerAway || empty ? this.P.drive.sealAway + 0.2 * t.opportunism : 0) + (this.endgame(c) ? 0.25 : 0);
       }
       case 'cut': {
@@ -1338,7 +1371,7 @@ export class Bot {
   /** On an offensive plan: gun in hand and either the money for a few walls or enough time gone by. */
   private offensive(c: Ctx): boolean {
     const me = c.me;
-    if (c.view.suddenDeath || !ownsGun(me.inv)) return false;
+    if (c.view.suddenDeath || !ownsGun(me.inv) || this.cautious(c.view.now)) return false;
     return c.view.now >= this.P.drive.offenseAt[this.difficulty] || me.inv.cash + me.vault.cash >= this.P.drive.offenseCash[this.difficulty];
   }
 
