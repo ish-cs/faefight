@@ -52,13 +52,39 @@ export class Physics {
   /** No-build zones by group ('islands', 'potion'), see building.ts. */
   private zones = new Map<string, NoBuildZone[]>();
 
-  private constructor() {
-    this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+  private constructor(world?: RAPIER.World) {
+    this.world = world ?? new RAPIER.World({ x: 0, y: 0, z: 0 });
     this.cc = this.world.createCharacterController(0.02);
     this.cc.enableAutostep(0.35, 0.2, false);
     this.cc.enableSnapToGround(0.3);
     this.cc.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
   }
+
+  /** Independent copy of the collision world (replay seeking: Match.fork). Same handles, same state. */
+  clone(): Physics {
+    const snap = this.world.takeSnapshot();
+    const world = RAPIER.World.restoreSnapshot(snap);
+    if (!world) throw new Error('Physics.clone: Rapier could not restore the world snapshot');
+    const ph = new Physics(world);
+    const same = (c: RAPIER.Collider) => {
+      const copy = world.getCollider(c.handle);
+      if (!copy) throw new Error(`Physics.clone: collider ${c.handle} missing from the snapshot`);
+      return copy;
+    };
+    for (const [h, t] of this.entities) ph.entities.set(h, { ...t });
+    for (const [id, c] of this.pieces) ph.pieces.set(id, same(c));
+    for (const [id, k] of this.pieceKinds) ph.pieceKinds.set(id, k);
+    for (const [id, c] of this.players) ph.players.set(id, same(c));
+    for (const h of this.slits) ph.slits.add(h);
+    ph.dirty = this.dirty;
+    return ph;
+  }
+
+  /** Free the WASM-side world (it is never garbage collected). The instance is unusable afterwards. */
+  dispose(): void {
+    this.world.free();
+  }
+
 
   /** A full map, or (tests) bare player islands with no center island or cover. */
   static async create(mapOrIslands: MapDef | IslandLayout[]): Promise<Physics> {

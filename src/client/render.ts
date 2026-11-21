@@ -40,6 +40,8 @@ export class Renderer {
   /** Display-rate playback of other players: adaptive clock + per-player Hermite tracks (interp.ts). */
   private clock = new RenderClock();
   private tracks = new Map<number, PlayerTrack>();
+  /** Interpolation clock source (s). Replays swap in their own (paused / 0.25–8×); default wall time. */
+  clockNow: () => number = () => performance.now() / 1000;
   private playT: number | null = null;
   /** The local player's predicted render state (predict.ts), when prediction is running. */
   private local: { pos: Vec3; vel: Vec3 } | null = null;
@@ -154,7 +156,7 @@ export class Renderer {
 
   /** Every snapshot as soon as it arrives (before any event delay): drives player interpolation. */
   ingest(snap: Snapshot) {
-    this.clock.push(snap.time, performance.now() / 1000);
+    this.clock.push(snap.time, this.clockNow());
     if (snap.time > this.newestSim) this.newestSim = snap.time;
     for (const p of snap.players) {
       let tr = this.tracks.get(p.id);
@@ -170,7 +172,13 @@ export class Renderer {
 
   /** Advance the interpolation clock; call once per frame before reading positions. */
   beginFrame() {
-    this.playT = this.clock.advance(performance.now() / 1000);
+    this.playT = this.clock.advance(this.clockNow());
+  }
+
+  /** Forget interpolation history (replay seek: sim time jumps, possibly backwards). */
+  resetInterp() {
+    this.clock = new RenderClock();
+    this.tracks.clear();
   }
 
   /**
