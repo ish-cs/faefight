@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { boxUV, mat, StaticBatch } from './geo';
+import { cylinderLabel, dent, faceLabel, labelMaterial } from './labels';
 import { mats } from './materials';
 import { bollard, container, generatorProp, keeper, palm } from './props';
 import { makeRng } from './textures';
@@ -157,7 +158,13 @@ export function rtg(b: StaticBatch, B: THREE.Matrix4, span = 22, depth = 12, hei
 /** Oil drum: body takes the per-instance colour, rims a little darker. */
 export function barrelModel(b: StaticBatch) {
   const M = mats();
-  b.add(M.paint, cyl(0.3, 0.9, 16), mat(0, 0.45, 0));
+  // dented steel shell: a knock low on one side, a shallow one near the top rim on the other
+  const shell = dent(new THREE.CylinderGeometry(0.3, 0.3, 0.9, 20, 6), [
+    { at: new THREE.Vector3(0.22, -0.18, 0.2), radius: 0.2, depth: 0.035 },
+    { at: new THREE.Vector3(-0.27, 0.3, -0.1), radius: 0.14, depth: 0.02 },
+  ]);
+  b.add(M.paint, shell, mat(0, 0.45, 0));
+  b.add(labelMaterial(), cylinderLabel(0.303, 0.45, 0.28, 1.45, 0), null, 0xffffff, false);
   for (const y of [0.3, 0.6]) b.add(M.paint, cyl(0.308, 0.03, 16), mat(0, y, 0), 0x9a9a9a);
   b.add(M.paint, cyl(0.29, 0.015, 16), mat(0, 0.905, 0), 0x777777);
   b.add(M.paint, cyl(0.04, 0.03, 8), mat(0.15, 0.92, 0.05), 0x555555);
@@ -170,6 +177,8 @@ export function crateModel(b: StaticBatch) {
   for (const y of [0.04, 0.66]) for (const z of [-0.29, 0.29]) b.add(M.wood, boxUV(0.76, 0.08, 0.04, 0.8), mat(0, y, z), 0x8f6e47);
   for (const x of [-0.36, 0.36]) for (const z of [-0.29, 0.29]) b.add(M.wood, boxUV(0.06, 0.7, 0.05, 0.8), mat(x, 0.35, z), 0x8f6e47);
   for (const z of [-0.29, 0.29]) b.add(M.wood, boxUV(0.9, 0.07, 0.03, 0.8), mat(0, 0.35, z, 0, 0, 0.72), 0x8f6e47);
+  // spray stencil on both ends
+  for (const s of [-1, 1]) b.add(labelMaterial(), faceLabel(0.42, 0.42, new THREE.Vector3(s * 0.36, 0.38, 0), new THREE.Vector3(s, 0, 0), 1), null, 0xffffff, false);
 }
 
 /** Temporary chain-link fence panel, 2 m along local X, concrete feet. */

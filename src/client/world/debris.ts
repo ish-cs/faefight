@@ -3,6 +3,8 @@ import type { MapDef } from '../../sim/map';
 import type { MatchEvent, PieceState, Vec3 } from '../../sim/types';
 import { DEBRIS_KINDS, DEBRIS_SPEC, type DebrisKind, placeDebris } from './debrisPlace';
 import { DebrisSim } from './debrisSim';
+import { merge, part } from './geo';
+import { boxTape, faceLabel, labelMaterial } from './labels';
 import { mats } from './materials';
 import type { Quality } from './sky';
 import { movingVariant, weather } from './weathering';
@@ -31,6 +33,16 @@ function geometryFor(kind: DebrisKind): THREE.BufferGeometry {
   }
 }
 
+/** Printed/taped overlay per kind (a second instanced mesh sharing the body's matrices). */
+function overlayFor(kind: DebrisKind): THREE.BufferGeometry | null {
+  if (kind !== 'box') return null;
+  const [hx, hy, hz] = DEBRIS_SPEC.box.half;
+  return merge([
+    ...boxTape(hx, hy, hz).map((g) => part(g, null)),
+    part(faceLabel(0.16, 0.16, new THREE.Vector3(hx * 0.3, -hy * 0.15, hz), new THREE.Vector3(0, 0, 1), 2), null),
+  ]);
+}
+
 function material(name: string, o: ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0]) {
   const m = new THREE.MeshStandardNodeMaterial(o);
   m.name = name;
@@ -40,9 +52,9 @@ function material(name: string, o: ConstructorParameters<typeof THREE.MeshStanda
 export class Debris {
   readonly root = new THREE.Group();
   sim: DebrisSim | null = null;
-  private meshes = new Map<DebrisKind, { mesh: THREE.InstancedMesh; ids: number[] }>();
-  /** prop index → (kind mesh, instance slot) */
-  private slot: { mesh: THREE.InstancedMesh; i: number }[] = [];
+  private meshes = new Map<DebrisKind, { mesh: THREE.InstancedMesh; ids: number[]; overlay: THREE.InstancedMesh | null }>();
+  /** prop index → (kind mesh + overlay, instance slot) */
+  private slot: { mesh: THREE.InstancedMesh; overlay: THREE.InstancedMesh | null; i: number }[] = [];
   private building: Promise<void> | null = null;
   private gen = 0;
   private m4 = new THREE.Matrix4();
@@ -82,11 +94,21 @@ export class Debris {
         mesh.receiveShadow = true;
         mesh.frustumCulled = false; // spans the map
         mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        const og = overlayFor(kind);
+        let overlay: THREE.InstancedMesh | null = null;
+        if (og) {
+          overlay = new THREE.InstancedMesh(og, movingVariant(labelMaterial()), ids.length);
+          overlay.name = `debris:${kind}:labels`;
+          overlay.frustumCulled = false;
+          overlay.receiveShadow = true;
+          overlay.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+          this.root.add(overlay);
+        }
         ids.forEach((pi, i) => {
-          this.slot[pi] = { mesh, i };
+          this.slot[pi] = { mesh, overlay, i };
           mesh.setColorAt(i, col.setHex(sim.props[pi].spawn.tint));
         });
-        this.meshes.set(kind, { mesh, ids });
+        this.meshes.set(kind, { mesh, ids, overlay });
         this.root.add(mesh);
       }
       this.writeMatrices(true);
@@ -106,6 +128,7 @@ export class Debris {
       this.m4.compose(this.p.set(o.x, o.y, o.z), this.q.set(o.qx, o.qy, o.qz, o.qw), p.sunk ? this.zero : this.one);
       s.mesh.setMatrixAt(s.i, this.m4);
       touched.add(s.mesh);
+      if (s.overlay) { s.overlay.setMatrixAt(s.i, this.m4); touched.add(s.overlay); }
     });
     for (const m of touched) m.instanceMatrix.needsUpdate = true;
     if (all) for (const { mesh } of this.meshes.values()) if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -141,7 +164,7 @@ export class Debris {
     this.gen++;
     this.sim?.dispose();
     this.sim = null;
-    for (const { mesh } of this.meshes.values()) { mesh.geometry.dispose(); mesh.removeFromParent(); mesh.dispose(); }
+    for (const { mesh, overlay } of this.meshes.values()) for (const m of overlay ? [mesh, overlay] : [mesh]) { m.geometry.dispose(); m.removeFromParent(); m.dispose(); }
     this.meshes.clear();
     this.slot = [];
   }

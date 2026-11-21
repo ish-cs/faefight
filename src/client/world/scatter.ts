@@ -22,6 +22,8 @@ export type ScatterKind = {
    * (metres in the kind's unit size). One extra instanced draw per kind; shrinks away with the instance.
    */
   blob?: number;
+  /** overlay kind: gets a copy of every instance added to that kind (same transform, same thinning order) */
+  follows?: string;
 };
 
 type Item = { m: THREE.Matrix4; c: THREE.Color; p: THREE.Vector3; yaw: number; sx: number; sz: number };
@@ -48,14 +50,17 @@ export class Scatter {
     if (!k) throw new Error(`[world/scatter] unknown kind "${key}"`);
     const sc = typeof s === 'number' ? _s.set(s, s, s) : _s.set(s[0], s[1], s[2]);
     const m = new THREE.Matrix4().compose(_p.set(x, y, z), _q.setFromEuler(_e.set(tilt[0], yaw, tilt[1], 'YXZ')), sc);
-    k.items.push({ m, c: new THREE.Color(color), p: new THREE.Vector3(x, y, z), yaw, sx: sc.x, sz: sc.z });
+    const it = { m, c: new THREE.Color(color), p: new THREE.Vector3(x, y, z), yaw, sx: sc.x, sz: sc.z };
+    k.items.push(it);
+    for (const f of this.kinds.values()) if (f.follows === key) f.items.push({ ...it, c: new THREE.Color(0xffffff) });
   }
 
   build() {
-    const rng = makeRng(8128);
     let total = 0;
     for (const [key, k] of this.kinds) {
       if (k.items.length === 0) continue;
+      // per-kind seed: equal-length kinds (an overlay and the kind it follows) get the same permutation
+      const rng = makeRng(8128 + k.items.length);
       // deterministic shuffle → truncating `count` thins uniformly
       for (let i = k.items.length - 1; i > 0; i--) { const j = Math.floor(rng.rnd() * (i + 1)); [k.items[i], k.items[j]] = [k.items[j], k.items[i]]; }
       const geo = k.geo.clone();

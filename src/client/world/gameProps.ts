@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { PROP_KIND_LIST, type PropKind, type PropPose, type PropSpawn } from '../../sim/props';
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrelModel } from './mapProps';
+import { faceLabel, labelMaterial } from './labels';
 import { mats } from './materials';
 import { movingVariant } from './weathering';
 
@@ -23,6 +24,8 @@ const MODELS: Record<PropKind, (b: StaticBatch) => void> = {
       b.add(M.wood, boxUV(0.08, 0.9, 0.08, 0.8), mat(s * 0.41, 0, t * 0.41), 0x8f6e47);
       b.add(M.wood, boxUV(0.08, 0.08, 0.9, 0.8), mat(s * 0.41, t * 0.41, 0), 0x8f6e47);
     }
+    // spray stencils on two opposite sides
+    for (const s of [-1, 1]) b.add(labelMaterial(), faceLabel(0.62, 0.62, new THREE.Vector3(0, 0, s * 0.431), new THREE.Vector3(0, 0, s), 1), null, 0xffffff, false);
   },
   drum: (b) => {
     const inner = new StaticBatch();

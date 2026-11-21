@@ -7,6 +7,8 @@ import { mat, StaticBatch, strut } from './geo';
 import { mats } from './materials';
 import { pbrSample, worldNoise } from './pbr';
 import type { Scatter } from './scatter';
+import { boxTape, faceLabel, labelMaterial } from './labels';
+import { merge, part } from './geo';
 import { makeRng, signTex } from './textures';
 
 /**
@@ -70,7 +72,12 @@ export function defineDetailKinds(sc: Scatter) {
     card.computeVertexNormals();
   }
   sc.define('cardboard', { geo: card, material: matte, far: 35, density: all(0.2, 0.8) });
-  sc.define('box', { geo: new THREE.BoxGeometry(0.45, 0.35, 0.4).translate(0, 0.175, 0), material: matte, far: 45, density: all(0.3, 0.9), blob: 0.34 });
+  sc.define('box', { geo: new THREE.BoxGeometry(0.45, 0.35, 0.4).translate(0, 0.175, 0), material: M.matte, far: 45, density: all(0.3, 0.9), blob: 0.34 });
+  // tape + shipping label on every scatter box (placed alongside each 'box', same transform)
+  sc.define('boxLabel', {
+    geo: merge([...boxTape(0.225, 0.175, 0.2).map((g) => part(g.translate(0, 0.175, 0), null)), part(faceLabel(0.15, 0.15, new THREE.Vector3(0.06, 0.15, 0.2), new THREE.Vector3(0, 0, 1), 2), null)]),
+    material: labelMaterial(), far: 30, density: all(0.3, 0.9), follows: 'box',
+  });
   const shell = new THREE.SphereGeometry(1, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.4, 1.25);
   sc.define('shell', { geo: shell, material: matte, far: 16, density: all(0, 0.6) });
   const weed = new THREE.PlaneGeometry(0.08, 0.6, 1, 4).rotateX(-Math.PI / 2).translate(0, 0.012, 0);

@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { boxUV, mat, StaticBatch, strut } from './geo';
+import { cylinderLabel, labelMaterial } from './labels';
 import { CONTAINER_COLORS, mats } from './materials';
 import { makeRng, signTex } from './textures';
 
@@ -147,7 +148,11 @@ export function bollard(b: StaticBatch, B: THREE.Matrix4) {
 export function drums(b: StaticBatch, B: THREE.Matrix4, n: number, rng: Rng) {
   const M = mats();
   const cols = [0x1f5fa8, 0xb23a26, 0x2f6b3a];
-  for (let i = 0; i < n; i++) b.add(M.paint, cyl(0.29, 0.88, 14), at(B, mat((i % 2) * 0.62, 0.44, -Math.floor(i / 2) * 0.62)), cols[Math.floor(rng.rnd() * 3)]);
+  for (let i = 0; i < n; i++) {
+    const D = at(B, mat((i % 2) * 0.62, 0.44, -Math.floor(i / 2) * 0.62, 0, rng.rr(0, 6), 0));
+    b.add(M.paint, cyl(0.29, 0.88, 14), D, cols[Math.floor(rng.rnd() * 3)]);
+    b.add(labelMaterial(), cylinderLabel(0.293, 0, 0.27, 1.4, 0), D, 0xffffff, false);
+  }
 }
 
 export function pallet(b: StaticBatch, B: THREE.Matrix4) {
