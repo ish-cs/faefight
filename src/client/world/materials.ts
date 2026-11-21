@@ -47,8 +47,8 @@ function make() {
     /** bunker walls, coping, cast concrete */
     concrete: weather(mossyBase(pbrMaterial('concrete', 'concrete_wall', { lum: 0.237, tint: 0xb4b0a8, macro: 0.15, untile: 'shift' })), { grime: 0.35, streaks: 0.55, vary: 0.1 }),
     /** flat paving (quay slab) */
-    slab: weather(pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1 }), { grime: 0, vary: 0.12 }),
-    asphalt: weather(pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1 }), { grime: 0, vary: 0.12 }),
+    slab: pbrMaterial('slab', 'concrete', { tint: 0xf2ede4, gain: 3.6, macro: 0.2, uvScale: 1 }),
+    asphalt: pbrMaterial('asphalt', 'asphalt', { tint: 0xe6e2da, gain: 1.7, macro: 0.2, uvScale: 1 }),
     seawall: quayWall(),
     /** dark painted iron (bitts, cleats, chains, frames): repainted paint set + rust, chips, grime */
     dark: weather(pbrMaterial('dark', 'painted_metal', { lum: 0.069, lumPow: 0.3, tint: 0x2a2c2e, normalScale: 0.5, roughMul: 0.8, metalness: 0.35, untile: false }), { rust: 0.4, edge: 0.6, grime: 0.6, streaks: 0.3 }),

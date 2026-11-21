@@ -86,13 +86,18 @@ export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) 
   const ik = hash(instanceIndex);
   // object space: raw vertex position (before the instance matrix) + a per-instance offset into the noise
   const p: V3 = obj ? (attribute('position', 'vec3') as V3).add(vec3(ik.mul(37.1), ik.mul(11.3), ik.mul(23.7))) : (positionWorld as V3);
-  const ny: F = (obj ? normalLocal.y : normalWorld.y) as F;
-  const nLo = noiseAt(p, 0.45), nHi = noiseAt(p, 3.1, 'g'), nMid = noiseAt(p, 1.2, 'g');
+  // Compile cost matters (every weathered material is its own pipeline): two noise fetches (r/g = independent
+  // fields) shared by every layer, intermediate results pinned as shader vars so no sub-graph is ever duplicated.
+  const lo = texture(noiseTex(), vec2(p.x.add(p.y.mul(0.71)), p.z.sub(p.y.mul(0.53))).mul(0.45)).toVar();
+  const hi = texture(noiseTex(), vec2(p.x.add(p.y.mul(0.71)), p.z.sub(p.y.mul(0.53))).mul(3.1)).toVar();
+  const nLo = lo.r as F, nMid = lo.g as F, nHi = hi.g as F;
   const objK: F = inst ? ik : noiseAt(positionWorld as V3, 0.07);
   const vary = o.vary ?? 0.15;
-  let col: V3 = raw.base.mul(mix(float(1 - vary), float(1 + vary * 0.6), objK)).mul(vec3(1, mix(float(0.97), float(1.02), nLo), mix(float(1.03), float(0.95), objK)));
-  let rough: F = raw.rough.add(nMid.sub(0.5).mul(0.18));
+  let col: V3 = raw.base.mul(mix(float(1 - vary), float(1 + vary * 0.6), objK)).mul(vec3(1, mix(float(0.97), float(1.02), nLo), mix(float(1.03), float(0.95), objK))).toVar() as unknown as V3;
+  let rough: F = raw.rough.add(nMid.sub(0.5).mul(0.18)).toVar() as unknown as F;
   let metal: F = raw.metal;
+  const ny: F = (obj ? normalLocal.y : normalWorld.y) as F;
+  const streak: F | null = o.streaks || o.rust ? (streakMask(p, ny).toVar() as unknown as F) : null;
 
   const g = o.grime ?? 0.6;
   if (g > 0) {
@@ -100,11 +105,11 @@ export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) 
     const h = obj ? (attribute('position', 'vec3') as V3).y.add(0.5) : positionWorld.y.sub(o.ground ?? MAP.groundY);
     const band = float(1).sub(smoothstep(0, o.grimeHeight ?? 0.7, h.add(nMid.sub(0.5).mul(0.3)))).mul(obj ? float(1) : smoothstep(-0.2, 0, h));
     const k = band.mul(g).mul(nLo.mul(0.6).add(0.5)).min(1);
-    col = mix(col, col.mul(DIRT).mul(2.4), k);
+    col = col.mul(mix(float(1), DIRT.mul(2.4), k)) as V3;
     rough = mix(rough, float(0.95), k);
   }
-  if (o.streaks) {
-    const k = streakMask(p, ny).mul(o.streaks);
+  if (streak && o.streaks) {
+    const k = streak.mul(o.streaks);
     col = col.mul(float(1).sub(k.mul(0.38)));
     rough = mix(rough, float(0.92), k.mul(0.5));
   }
@@ -113,7 +118,7 @@ export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) 
     const amount = float(o.rust).mul(objK.mul(0.7).add(0.5));
     const field = nLo.mul(0.55).add(nHi.mul(0.45));
     const patch = smoothstep(float(1).sub(amount.mul(0.55)), float(1.08).sub(amount.mul(0.55)), field);
-    const run = streakMask(p, ny).mul(smoothstep(0.45, 0.7, nLo)).mul(amount.mul(0.8));
+    const run = streak!.mul(smoothstep(0.45, 0.7, nLo)).mul(amount.mul(0.8));
     const k = max(patch, run.mul(0.7)).min(1);
     col = mix(col, RUST.mul(nHi.mul(0.7).add(0.65)), k);
     rough = mix(rough, float(0.88), k);
@@ -122,8 +127,7 @@ export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) 
   if (o.edge) {
     const chips = edgeMask().mul(smoothstep(0.42, 0.62, nHi)).mul(o.edge).mul(objK.mul(0.6).add(0.6)).min(1);
     const ex = o.chip ?? 'steel';
-    const cc = ex === 'steel' ? vec3(0.42, 0.42, 0.4) : ex === 'wood' ? vec3(0.62, 0.5, 0.34) : col.mul(1.35);
-    col = mix(col, cc, chips);
+    col = ex === 'light' ? col.mul(mix(float(1), float(1.35), chips)) : mix(col, ex === 'steel' ? vec3(0.42, 0.42, 0.4) : vec3(0.62, 0.5, 0.34), chips);
     if (ex === 'steel') { metal = mix(metal, float(0.85), chips); rough = mix(rough, float(0.42), chips); }
     else rough = mix(rough, float(0.8), chips);
   }
