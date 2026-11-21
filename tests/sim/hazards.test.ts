@@ -349,4 +349,18 @@ describe('bots and hazards', () => {
       expect(closest, `${fusing ? 'fusing' : 'fight'} seed ${seed}`).toBeGreaterThan(fusing ? HAZARD.barrel.radius * 0.5 : 2.5);
     }
   });
+
+  test('a bot breaks a supply crate it is standing near when nothing else is going on', async () => {
+    let broke = 0;
+    for (const seed of [1, 2, 3, 4]) {
+      const m = await Match.create({ players: [{ name: 'me', isBot: false }, { name: 'Bot', isBot: true, difficulty: 'hard' }], seed });
+      const c = firstOf(m, 'crate', 1);
+      place(m, 1, m.def.islands[0].center);
+      place(m, 2, beside(m, c, 4));
+      m.debugGive(2, { weapons: { pistol: { mag: 12, spare: 24 } } });
+      const { events } = tick(m, 10);
+      if (events.some((e) => e.type === 'hazard' && e.data.what === 'break' && e.data.id === c.id && e.data.by === 2)) broke++;
+    }
+    expect(broke).toBeGreaterThan(1);
+  });
 });
