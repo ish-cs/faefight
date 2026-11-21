@@ -340,7 +340,7 @@
 .hud .hp-text::before { --ic: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21s-8-5.2-8-11.2A4.6 4.6 0 0 1 12 7a4.6 4.6 0 0 1 8 2.8C20 15.8 12 21 12 21z'/%3E%3C/svg%3E"); }
 .hud .shield-text { gap: 6px; padding-left: 9px; }
 .hud .shield-text::before { width: 10px; height: 10px; --ic: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2l8 3v6c0 5.3-3.4 9.4-8 11-4.6-1.6-8-5.7-8-11V5z'/%3E%3C/svg%3E"); }
-.hud .shield { height: 13px; width: 296px; }
+.hud .shield { height: 13px; width: 300px; }
 .hud .shield-fill { background: linear-gradient(180deg, #9ad5ff, var(--c-blue) 60%, #2a86d8); box-shadow: none; }
 .hud .shield-segs { background: linear-gradient(90deg, transparent calc(25% - 1px), rgba(4, 11, 17, 0.9) calc(25% - 1px), rgba(4, 11, 17, 0.9) calc(25% + 1px), transparent calc(25% + 1px), transparent calc(50% - 1px), rgba(4, 11, 17, 0.9) calc(50% - 1px), rgba(4, 11, 17, 0.9) calc(50% + 1px), transparent calc(50% + 1px), transparent calc(75% - 1px), rgba(4, 11, 17, 0.9) calc(75% - 1px), rgba(4, 11, 17, 0.9) calc(75% + 1px), transparent calc(75% + 1px)); }
 .hud .shield-text { transform: skewX(14deg); font-family: var(--ff-display); font-weight: 900; font-size: 12px; }
