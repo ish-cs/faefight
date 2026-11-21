@@ -1621,7 +1621,8 @@ export class Bot {
     }
 
     const gapM = c.enemyDist - want;
-    const radial = Math.abs(gapM) < 2 ? 0 : Math.sign(gapM);
+    // Hold range within a couple of metres; with fists (reach 2 m) only a step's slack, or they circle out of reach.
+    const radial = Math.abs(gapM) < (want < 2 ? 0.4 : 2) ? 0 : Math.sign(gapM);
     const dir = add(scale(to, radial), side);
     const rush = this.difficulty !== 'easy' && gapM > this.P.drive.sprintGap;
     // Chasing across water needs a route; otherwise just strafe in place.

@@ -8,7 +8,7 @@ const env = (globalThis as { process?: { env: Record<string, string | undefined>
 /**
  * Bots used to drown 10-13 times a match (medium) without anyone touching them: stuck-recovery hops sideways off
  * decks and island rims, and standing on a rim with nothing under the centre. A water death with no hit in the
- * 4 s before it (and no storm) is unexplained. DROWN_SEEDS=1-10 widens the sweep.
+ * 4 s before it, no deck shot out under them and no storm is unexplained. DROWN_SEEDS=1-10 widens the sweep.
  */
 const cases: [Difficulty | 'mixed', number][] = (env.DROWN_SEEDS ?? '').length
   ? (env.DROWN_SEEDS as string).split(',').flatMap((r) => {
@@ -24,14 +24,20 @@ describe('bots stay out of the water', () => {
     const m = await Match.create({ players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed });
     let snap: Snapshot = m.tick(new Map());
     const lastHurt = new Map<number, number>();
+    const lastPos = new Map<number, { x: number; z: number }>();
+    const lost: { t: number; x: number; z: number }[] = [];
     const unexplained: string[] = [];
     for (let i = 0; i < 30 * LIFECYCLE.suddenDeathAt && snap.winner === null; i++) {
+      for (const p of snap.players) if (p.alive) lastPos.set(p.id, { x: p.pos.x, z: p.pos.z });
       snap = m.tick(new Map());
       for (const e of snap.events) {
         if (e.type === 'hit') lastHurt.set(e.data.target as number, e.t);
+        // A deck shot out (or collapsing) under someone drops them in the water: that's the shooter's doing.
+        if (e.type === 'destroyed') { const q = e.data.pos as { x: number; z: number }; lost.push({ t: e.t, x: q.x, z: q.z }); }
         if (e.type !== 'kill' || !e.data.inWater || e.data.killer != null || e.data.cause) continue;
-        const v = e.data.victim as number;
-        if (e.t - (lastHurt.get(v) ?? -Infinity) > 4) unexplained.push(`#${v} (${diffs[v - 1]}) at ${e.t.toFixed(0)} s`);
+        const v = e.data.victim as number, at = lastPos.get(v);
+        const cut = !!at && lost.some((q) => e.t - q.t < 4 && Math.hypot(q.x - at.x, q.z - at.z) < 6);
+        if (e.t - (lastHurt.get(v) ?? -Infinity) > 4 && !cut) unexplained.push(`#${v} (${diffs[v - 1]}) at ${e.t.toFixed(0)} s`);
       }
     }
     expect(unexplained, unexplained.join(', ')).toEqual([]);
