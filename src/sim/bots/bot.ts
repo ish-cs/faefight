@@ -1745,7 +1745,11 @@ export class Bot {
     if ((bestD > want || this.needCenterBridge(c)) && c.bridgeTo !== null && c.bridgeTo === this.nav.centerNode) {
       const have = me.inv.pieces.scaffold ?? 0, need = this.scaffoldsNeeded(c);
       // Stock up in one shop visit (not one deck per trip) while still on my island.
-      const buy = have < need && c.homeReach && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
+      // Only while the shop (and the vault, if I need cash from it) is still inside the ring: a trip out into the
+      // storm to shop kills just as surely.
+      const shopSafe = [c.home.shop, ...(me.inv.cash < PIECES.scaffold.price ? [c.home.vault] : [])]
+        .every((p) => dist2D(p, ctr) < st.r - 2);
+      const buy = have < need && c.homeReach && shopSafe && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
       if (buy) return buy;
       if (have > 0) {
         const b = this.doBridge(c);
