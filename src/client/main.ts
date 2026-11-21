@@ -23,7 +23,7 @@ import { InputAccumulator } from './inputAccum';
 import { InputController } from './input';
 import { ACTIONS, activeKeymap, bindingLabel, isAction, type Action } from './keymap';
 import { loadingScreen as loadingOverlay } from './loading';
-import { LobbyUi, mapSelect } from './lobbyUi';
+import { LobbyUi, MapPicker } from './lobbyUi';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom, type SpectateResult } from './session';
 import { HELP_TEXT, HOST_ONLY, parseCommand, unknownCommand } from './commands';
@@ -224,11 +224,10 @@ function showMenu() {
   status.dataset.testid = 'menu-status';
   const lockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach((x) => (x.disabled = true));
   const unlockMenu = () => card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach((x) => (x.disabled = false));
-  const mapSel = mapSelect(storedMapChoice(), (c) => localStorage.setItem(MAP_KEY, c));
-  mapSel.dataset.testid = 'menu-map';
-  const mapRow = document.createElement('label');
+  const mapSel = new MapPicker(storedMapChoice(), 'menu-map', (c) => localStorage.setItem(MAP_KEY, c));
+  const mapRow = document.createElement('div');
   mapRow.className = 'map-row';
-  mapRow.append('Map', mapSel);
+  mapRow.append('Map', mapSel.root);
   for (const d of ['easy', 'medium', 'hard', 'pro'] as Difficulty[]) {
     const b = document.createElement('button');
     b.className = `btn${d === 'medium' ? ' primary' : ''}`;

@@ -29,11 +29,16 @@ test('host picks Container Yard in the lobby; the joiner sees it, and both play 
   await b.getByTestId('join-game').click();
   await expect(a.getByTestId('seat-1')).toContainText('Bob');
 
-  await a.getByTestId('lobby-map').selectOption('yard');
+  // A segmented control, not a dropdown: the chosen tile is highlighted.
+  await expect(a.locator('select')).toHaveCount(0);
+  await expect(a.getByTestId('lobby-map-harbor')).toHaveAttribute('aria-checked', 'true');
+  await a.getByTestId('lobby-map-yard').click();
+  await expect(a.getByTestId('lobby-map-yard')).toHaveClass(/selected/);
+  await expect(a.getByTestId('lobby-map-harbor')).not.toHaveClass(/selected/);
   await expect(b.getByTestId('lobby-map-name')).toHaveText('Container Yard');
-  await a.getByTestId('lobby-map').selectOption('random');
+  await a.getByTestId('lobby-map-random').click();
   await expect(b.getByTestId('lobby-map-name')).toHaveText('Random');
-  await a.getByTestId('lobby-map').selectOption('yard');
+  await a.getByTestId('lobby-map-yard').click();
   await expect(b.getByTestId('lobby-map-name')).toHaveText('Container Yard');
   await a.getByTestId('start-match').click();
 
@@ -51,7 +56,8 @@ test('vs bot: the menu map choice is played and remembered', async ({ page }) =>
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto('/?debug=1');
-  await page.getByTestId('menu-map').selectOption('yard');
+  await expect(page.locator('select')).toHaveCount(0);
+  await page.getByTestId('menu-map-yard').click();
   await page.getByTestId('play-easy').click();
   await expect.poll(async () => (await dbg<Def | null>(page, 'mapDef'))?.template ?? null, { timeout: 30_000 }).toBe('yard');
   // Walk to the center island's gold generator via debug teleport and collect.
@@ -64,6 +70,7 @@ test('vs bot: the menu map choice is played and remembered', async ({ page }) =>
   await expect.poll(async () => (await dbg<{ players: { id: number; inv: { cash: number } }[] }>(page, 'snapshot'))!.players[0].inv.cash, { timeout: 10_000 })
     .toBeGreaterThan(50);
   await page.reload();
-  await expect(page.getByTestId('menu-map')).toHaveValue('yard');
+  await expect(page.getByTestId('menu-map-yard')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByTestId('menu-map')).toHaveAttribute('data-value', 'yard');
   expect(errors).toEqual([]);
 });

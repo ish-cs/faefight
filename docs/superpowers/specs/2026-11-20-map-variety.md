@@ -201,8 +201,8 @@ every map with bonus generators · potions sold by an NPC on the center island.
   lists `broken` ids, `cosmeticBroken` events drive debris. They can never affect movement, seals or support.
 - [x] **Container Yard** template: r 19 islands, 26 m gaps (the ring grows a few cm at n = 3 to keep the center gap), three
   container statics per island (1-high and 2-high flank stacks, a 1-high front wall), all ≥ 9 m from the bunker.
-- [x] Map picking: lobby dropdown (Harbor / Container Yard / Random) for the host, read-only for joiners; vs-bot menu
-  dropdown (remembered). Random never repeats the previous map of that host session (rematches included).
+- [x] Map picking: lobby segmented control [Harbor] [Container Yard] [Random] for the host, read-only for joiners; the
+  same control on the vs-bot menu (remembered). No dropdowns. Random never repeats the previous map of that host session (rematches included).
 - [x] Bots: nav nodes = islands + center; Dijkstra over finished bridges; per-node 0.5 m walk grid + A* around cover
   (straight line when clear); walk to a bridge's start around cover first; `contest` goal (gold/supplies);
   greedy/opportunist bots bridge to the center first when it's not much further than their rival.

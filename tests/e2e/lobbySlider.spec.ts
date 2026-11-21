@@ -26,7 +26,7 @@ test('seat slider: click, drag and keys set open / bot difficulty', async ({ pag
   const errors = watchErrors(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await host(page);
-  await expect(page.locator('select:not(.map-select)')).toHaveCount(0); // no seat dropdowns (the map picker is the only select)
+  await expect(page.locator('select')).toHaveCount(0); // no dropdowns anywhere in the lobby
   const s1 = page.getByTestId('seat-slider-1');
   await expect(s1).toHaveAttribute('data-value', 'open');
   await expect(page.getByTestId('start-match')).toBeDisabled();
