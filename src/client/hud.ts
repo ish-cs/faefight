@@ -1,4 +1,4 @@
-import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, WEAPONS } from '../sim/constants';
+import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, TRAP, WEAPONS } from '../sim/constants';
 import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
 import type { CenterIsland, IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem, isPotionItem } from '../sim/hotbar';
@@ -20,7 +20,7 @@ const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
 const LABEL: Record<string, string> = {
   fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
-  ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit',
+  ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit', trap: 'Spike trap',
   shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
 };
 
@@ -43,6 +43,7 @@ function priceOf(item: ShopItem, genLevel = 1, me?: PlayerState | null): number 
   if (item === 'ammo') return ammoPrice(me ? ammoTarget(me) : undefined);
   if (item === 'grenade') return GRENADE.price;
   if (item === 'medkit') return MEDKIT.price;
+  if (item === 'trap') return TRAP.price;
   if (isPotionItem(item)) return POTIONS[item].price;
   return CHARGE.price;
 }
@@ -76,6 +77,7 @@ function detailsOf(item: ShopItem, price: number, genLevel: number, me: PlayerSt
   }
   if (item === 'grenade') return `Grenade · ${GRENADE.dmg} dmg in a ${GRENADE.radius} m blast · $${price}`;
   if (item === 'charge') return `Breach charge · cracks walls and sealed doors · $${price}`;
+  if (item === 'trap') return `Spike trap · set on a floor or wall; ${TRAP.dmg} dmg to enemies who step in, never you · max ${TRAP.maxPerPlayer} out · $${price}`;
   if (item === 'medkit') return `Medkit · heals ${MEDKIT.heal} HP over ${MEDKIT.useSec}s · $${price}`;
   return `${name} · $${price}`;
 }
@@ -105,7 +107,7 @@ const fmtClock = (s: number) => {
 const SHORT: Record<HotbarItem, string> = {
   pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
-  grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit',
+  grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit', trap: 'Trap',
   shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed',
 };
 
@@ -955,7 +957,7 @@ export class Hud {
       } else {
         section('Weapons', [...GUNS, 'ammo']);
         section('Building', PIECE_ORDER);
-        section('Gear', ['grenade', 'charge', 'medkit']);
+        section('Gear', ['grenade', 'charge', 'trap', 'medkit']);
         // Lock cards only show up once you own (or have locked) that gun.
         section('Upgrades', ['genUpgrade', ...GUNS.map(lockItem)]);
       }
@@ -1088,6 +1090,7 @@ export class Hud {
       if (inv.grenades) row(`Grenades ×${inv.grenades}`, { grenades: inv.grenades });
       if (inv.charges) row(`Charges ×${inv.charges}`, { charges: inv.charges });
       if (inv.medkits) row(`Medkits ×${inv.medkits}`, { medkits: inv.medkits });
+      if (inv.traps) row(`Spike traps ×${inv.traps}`, { traps: inv.traps });
       for (const [k, n] of Object.entries(inv.potions ?? {})) if (n) row(`${LABEL[k]} ×${n}`, { potions: { [k]: n } });
       if (rows.length === 1) rows.push(el('div', 'vault-empty', 'No gear'));
       node.replaceChildren(...rows);

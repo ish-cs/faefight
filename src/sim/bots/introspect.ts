@@ -8,7 +8,7 @@
  *
  * Player references inside text are written `@<id>` and turned into names by the client.
  */
-import { AMMO_BOX, CHARGE, GRENADE, MEDKIT, PIECES, POTIONS, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, GRENADE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
 import type { Doorway, IslandLayout } from '../map';
 import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
 import { dist2D } from '../vec';
@@ -503,7 +503,7 @@ function invValue(inv: Inventory): number {
   for (const [k, a] of Object.entries(inv.weapons)) if (k !== 'fists') v += (WEAPONS[k as WeaponKind]?.price ?? 0) + (a && a.spare > 0 ? AMMO_BOX.price * Math.min(1, a.spare / 30) : 0);
   for (const [k, n] of Object.entries(inv.pieces)) v += (PIECES[k as PieceKind]?.price ?? 0) * (n ?? 0);
   for (const [k, n] of Object.entries(inv.potions ?? {})) v += (POTIONS[k as keyof typeof POTIONS]?.price ?? 0) * (n ?? 0);
-  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price);
+  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price + inv.traps * TRAP.price);
 }
 
 /** Steps of the current goal, and which one it's on (from what it did this tick). */
