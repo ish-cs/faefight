@@ -18,9 +18,22 @@ const jpeg = require('jpeg-js');
 const ROOT = 'public/assets/textures';
 const only = process.argv.slice(2);
 const sets = readdirSync(ROOT).filter((d) => statSync(join(ROOT, d)).isDirectory() && (!only.length || only.includes(d)));
+// Block-compressed GPU formats need the base level to be a multiple of 4 in both axes (WebGPU rejects the texture
+// otherwise: linen is 1024×1026). Resample (nearest, keeps tiling) down to the multiple of 4 below.
 const imageDecoder = async (buf) => {
   const img = jpeg.decode(buf, { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 1024 });
-  return { data: new Uint8Array(img.data), width: img.width, height: img.height };
+  const W = img.width & ~3, H = img.height & ~3;
+  if (W === img.width && H === img.height) return { data: new Uint8Array(img.data), width: W, height: H };
+  const out = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    const sy = Math.min(img.height - 1, Math.round((y * img.height) / H));
+    for (let x = 0; x < W; x++) {
+      const sx = Math.min(img.width - 1, Math.round((x * img.width) / W));
+      out.set(img.data.subarray((sy * img.width + sx) * 4, (sy * img.width + sx) * 4 + 4), (y * W + x) * 4);
+    }
+  }
+  console.log(`  resampled ${img.width}×${img.height} → ${W}×${H} (block size)`);
+  return { data: out, width: W, height: H };
 };
 const OPTS = {
   albedo: { isUASTC: false, qualityLevel: 200, compressionLevel: 2, isPerceptual: true },

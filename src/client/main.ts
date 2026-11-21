@@ -8,12 +8,13 @@ import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import type { Placement } from '../sim/building';
 import { BuildAim, type AimOutcome } from './buildAim';
-import { DT, HEAD, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
+import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import type { MatchSetup } from '../sim/matchApi';
-import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { BuildPredictor } from './buildPredict';
 import { moveForAim } from './aim';
 import { AudioSystem } from './audio/engine';
 import { errors, installErrorReporting } from './telemetry/errors';
@@ -27,6 +28,9 @@ import { InputController } from './input';
 import { ACTIONS, activeKeymap, bindingLabel, isAction, type Action } from './keymap';
 import { loadingScreen as loadingOverlay } from './loading';
 import { LobbyUi, MapPicker } from './lobbyUi';
+import { GameSettingsPanel } from './gameSettingsUi';
+import { sanitizeSettings } from '../net/sanitize';
+import type { GameSettings } from '../sim/settings';
 import type { FromWorker, ToWorker } from './protocol';
 import { HostSession, JOIN_ERRORS, JoinError, joinRoom, type SpectateResult } from './session';
 import { HELP_TEXT, HOST_ONLY, MONEY_HOST_ONLY, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven, parseCommand, unknownCommand } from './commands';
@@ -50,11 +54,17 @@ import { botCountControl, prepareJoin, rememberDifficulty } from './qol/menu';
 import { loadPrefs, savePrefs, seatPrefsOf } from './qol/prefs';
 import { clearRejoin, loadRejoin, markAutoRejoin, saveRejoin, touchRejoin } from './qol/rejoin';
 import { isPieceItem } from '../sim/hotbar';
-import { aimDirection, ShotPredictor } from './shotPredict';
+import { aimDirection, predictedHit, ShotPredictor } from './shotPredict';
 import { BUILD, saveReplay, savesSettled, trackSave } from './replay/save';
 import { ReplayLink } from './replay/link';
 import { showReplays } from './replay/replaysUi';
 import { ReplayControls } from './replay/viewerUi';
+import { followNewHost, GuestMigration, hostReachable, takeOver, type HeldLink, type HostWorker } from './migration';
+import type { PracticeCmd } from '../sim/practice';
+import { PracticePanel } from './practicePanel';
+// UI theme last: its tokens and skin win over style.css / qol.css / settings.css (docs/ui-style.md).
+import './ui/theme.css';
+import './ui/skin.css';
 
 const app = document.getElementById('app')!;
 const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
@@ -86,6 +96,23 @@ function settingsButton(onClose?: () => void) {
   b.innerHTML = `${GEAR}<span>Settings</span>`;
   b.dataset.testid = 'open-settings';
   b.onclick = () => openSettings({ onClose });
+  return b;
+}
+
+const PAUSE_ICONS = {
+  help: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg>',
+  exit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h5v16h-5"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h10"/></svg>',
+};
+
+/** Pause-card button: icon + label, same shape as the Settings button. */
+function pauseButton(icon: string, label: string, cls: string) {
+  const b = document.createElement('button');
+  b.className = `${cls} pause-btn`;
+  b.innerHTML = icon;
+  const span = document.createElement('span');
+  span.textContent = label;
+  b.append(span);
   return b;
 }
 
@@ -134,6 +161,8 @@ type Backend = {
   pause?(paused: boolean): void;
   /** Watching a recording (forced spectator camera, playback controls). */
   replay?: ReplayLink;
+  /** Local worker only: practice range panel commands. */
+  practice?(cmd: PracticeCmd): void;
   debug?: {
     teleport(x: number, z: number): void; give(inv: Partial<Inventory>, id?: number): void; hp(hp: number): void;
     eliminate(playerId: number): void; kill(playerId: number): void;
@@ -141,6 +170,10 @@ type Backend = {
     /** Jump the match clock (e.g. straight to sudden death), and call a lightning strike (storm running). */
     time(t: number): void; strike(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
+    /** Place one piece (rules skipped) on the ground at (x, z) + `up` m, owned by `owner` (default: nobody). */
+    place(kind: PieceKind, x: number, z: number, rotY: number, up?: number, owner?: number): void;
+    /** Detonate a rocket / grenade / charge at (x, ground + up, z). */
+    explode(kind: 'rocket' | 'grenade' | 'charge', x: number, z: number, up?: number): void;
     plugDoor(door: number, owner: number): void; removePiece(id: number): void; genStored(stored: number): void;
   };
 };
@@ -183,6 +216,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
           else session?.onPreview(m.playerId, m.result, m.key);
         } else if (m.type === 'replay') {
           gotReplay(m);
+        } else if (m.type === 'checkpoint') {
+          session?.onCheckpoint(m.match, m.tick);
         } else if (m.type === 'error') {
           console.error(`[worker] ${m.message}`);
           errors?.report('worker', m.message);
@@ -198,6 +233,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     preview: (req, key) => send({ type: 'preview', playerId: humanId, req, key }),
     chat: (text) => session?.localChat(text),
     pause: session ? undefined : (paused) => send({ type: 'pause', paused }),
+    practice: (cmd) => send({ type: 'practice', cmd }),
     /** Vs bot /spectate: a bot takes over the local player. */
     handOff: () => send({ type: 'botify', playerId: humanId }),
     debug: {
@@ -209,6 +245,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       time: (t) => send({ type: 'debug', cmd: 'time', t }),
       strike: (x, z) => send({ type: 'debug', cmd: 'strike', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
+      place: (kind, x, z, rotY, up = 0, owner = 0) => send({ type: 'debug', cmd: 'place', kind, x, z, rotY, up, owner }),
+      explode: (kind, x, z, up = 0) => send({ type: 'debug', cmd: 'explode', kind, x, z, up }),
       plugDoor: (door, owner) => send({ type: 'debug', cmd: 'plugDoor', door, owner }),
       removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
       genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
@@ -234,12 +272,33 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
   };
 }
 
-/** Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived before the game was ready. */
-function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, early: HostMsg[]): Backend {
-  const decoder = new SnapshotDecoder();
-  const wire = new WireDecoder();
+/** Host migration hooks for a guest's backend (migration.ts); joinLobby owns the lobby-level bookkeeping. */
+type MigrationCtx = {
+  gm: GuestMigration;
+  name: string;
+  /** Room code of the current host. */
+  code(): string;
+  /** Another guest took over: its link replaces the old one (flush() is called after the handlers attach). */
+  relink(link: HeldLink, code: string): void;
+  /** This guest now hosts the match. */
+  promoted(): void;
+};
+
+/**
+ * Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived
+ * before the game was ready. With `mig`, losing the host mid-match migrates it (migration.ts): either this
+ * tab takes over (a restored worker + HostSession feed the same game) or it follows the guest who did.
+ */
+function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>, early: HostMsg[], mig?: MigrationCtx): Backend {
+  let link = firstLink;
+  let decoder = new SnapshotDecoder();
+  let wire = new WireDecoder();
   let closed = false;
   let disposed = false;
+  /** Newest snapshot tick and when it arrived; whether the match already has a result. */
+  let lastTick = 0, lastTickAt = 0, over = false;
+  /** Set once this guest has taken over as host. */
+  let hosting: { worker: Worker; session: HostSession | null; humanId: number } | null = null;
   return {
     buffered: true,
     inputHz: TICK_HZ,
@@ -249,27 +308,122 @@ function remoteBackend(link: Link, start: Extract<HostMsg, { t: 'start' }>, earl
         if (disposed) return;
         if (m.t === 'snap') {
           const n = wire.decode<NetSnapshot>(m.b);
-          if (n) sink.snapshot(decoder.decode(n));
+          if (n) {
+            const snap = decoder.decode(n);
+            lastTick = snap.tick;
+            lastTickAt = performance.now();
+            if (snap.winner !== null) over = true;
+            sink.snapshot(snap);
+          }
         }
+        else if (mig?.gm.onHostMsg(m)) return;
         else if (m.t === 'preview') sink.preview(m.result, m.key);
         else if (m.t === 'chat') sink.chat(m.from, m.text);
-        else if (m.t === 'ended') { closed = true; if (m.reason === 'host-left') sink.fatal('Host left', 'Match over: the host left the game.'); else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`); }
+        else if (m.t === 'ended') {
+          closed = true;
+          if (m.reason === 'host-left') { if (!migrate(false)) sink.fatal('Host left', 'Match over: the host left the game.'); }
+          else sink.fatal('Disconnected', JOIN_ERRORS[m.reason] ?? `Disconnected by the host (${m.reason}).`);
+        }
+      };
+      const attach = (l: Link) => {
+        l.onMessage((raw) => { if (l === link) handle(raw as HostMsg); });
+        l.onClose(() => {
+          if (l !== link || closed || disposed) return;
+          closed = true;
+          if (migrate(true)) return;
+          // No goodbye from the host: maybe just our connection. With a fresh rejoin token, try to take the seat back.
+          if (sink.reconnect && loadRejoin()) sink.reconnect();
+          else sink.fatal('Host left', 'Match over: lost the connection to the host.');
+        });
+      };
+      /** Host lost mid-match: move the match to the backup. False if this guest can't (no plan/checkpoint yet, match over). */
+      const migrate = (probe: boolean): boolean => {
+        if (!mig || over || disposed || !mig.gm.ready) return false;
+        const { gm, name } = mig;
+        const transport = pickTransport(location.search);
+        const run = async () => {
+          // Our own connection may be what dropped: if the old host still answers, rejoin it as before.
+          if (probe && await hostReachable(transport, mig.code())) {
+            console.info('[migrate] old host still up; reconnecting to it instead');
+            if (sink.reconnect && loadRejoin()) { sink.reconnect(); return; }
+            throw new Error('lost the connection to the host');
+          }
+          toast('Host left: migrating…');
+          const t0 = performance.now();
+          if (gm.isBackup) {
+            const w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+            const h: { worker: Worker; session: HostSession | null; humanId: number } = { worker: w, session: null, humanId: start.playerId };
+            hosting = h;
+            const ready = new Promise<HostWorker>((resolve, reject) => {
+              w.onerror = (e) => { console.error('[worker] crashed', e.message); reject(new Error(e.message)); };
+              w.onmessage = (e: MessageEvent<FromWorker>) => {
+                const m = e.data;
+                if (disposed) return;
+                if (m.type === 'restored') resolve(w);
+                else if (m.type === 'snapshot') { sink.snapshot(m.snap); h.session?.onSnapshot(m.snap); }
+                else if (m.type === 'preview') { if (m.playerId === h.humanId) sink.preview(m.result, m.key); else h.session?.onPreview(m.playerId, m.result, m.key); }
+                else if (m.type === 'checkpoint') h.session?.onCheckpoint(m.match, m.tick);
+                else if (m.type === 'error') { console.error(`[worker] ${m.message}`); reject(new Error(m.message)); toast(m.message); }
+              };
+            });
+            const { session } = await takeOver({
+              transport, gm, name, map: start.map, lastTick, lastTickAt,
+              startWorker: (match, humanId, botify, toTick) => {
+                w.postMessage({ type: 'restore', match, humanId, botify, toTick } satisfies ToWorker, [match.buffer]);
+                return ready;
+              },
+              events: { lobby: () => {}, chat: (from, text) => sink.chat(from, text), net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; } },
+            });
+            h.session = session;
+            mig.promoted();
+            session.system(`${name} is now hosting`);
+            toast('You are now hosting');
+          } else {
+            const token = loadRejoin()?.token;
+            if (!token || !gm.plan) throw new Error('no seat token for the new host');
+            const plan = gm.plan;
+            const f = await followNewHost({ transport, plan, name, token });
+            gm.plan = null;
+            gm.sealed = null; // the new host sends its own plan
+            link = f.link;
+            decoder = new SnapshotDecoder();
+            wire = new WireDecoder();
+            closed = false;
+            attach(f.link);
+            mig.relink(f.link, plan.code);
+            f.link.flush();
+            toast(`${f.hostName || 'Another player'} is now hosting`);
+          }
+          console.info(`[migrate] done in ${Math.round(performance.now() - t0)} ms (${hosting ? 'now hosting' : 'following the new host'})`);
+          if (DEBUG) (window as unknown as { __faefightMigrated?: string }).__faefightMigrated = hosting ? 'host' : 'guest';
+        };
+        run().catch((err) => {
+          console.warn('[migrate] failed', err);
+          if (hosting) { hosting.worker.terminate(); hosting = null; }
+          sink.fatal('Host left', `Match over: the host left and the match could not move to another player (${err?.message ?? err}).`);
+        });
+        return true;
       };
       early.forEach(handle);
-      link.onMessage((raw) => handle(raw as HostMsg));
-      link.onClose(() => {
-        if (closed || disposed) return;
-        closed = true;
-        // No goodbye from the host: maybe just our connection. With a fresh rejoin token, try to take the seat back.
-        if (sink.reconnect && loadRejoin()) sink.reconnect();
-        else sink.fatal('Host left', 'Match over: lost the connection to the host.');
-      });
+      attach(link);
     },
-    input: (input, cmds) => { if (!disposed) link.send({ t: 'input', input, cmds, ack: wire.ack || undefined }); },
-    preview: (req, key) => { if (!disposed) link.send({ t: 'preview', req, key }); },
-    chat: (text) => link.send({ t: 'chat', text }),
-    follow: (id) => { if (!disposed) link.send({ t: 'follow', id }); },
-    close: () => { disposed = true; },
+    input: (input, cmds) => {
+      if (disposed) return;
+      if (hosting) hosting.worker.postMessage({ type: 'input', input, cmds } satisfies ToWorker);
+      else link.send({ t: 'input', input, cmds, ack: wire.ack || undefined });
+    },
+    preview: (req, key) => {
+      if (disposed) return;
+      if (hosting) hosting.worker.postMessage({ type: 'preview', playerId: hosting.humanId, req, key } satisfies ToWorker);
+      else link.send({ t: 'preview', req, key });
+    },
+    chat: (text) => { if (hosting) hosting.session?.localChat(text); else link.send({ t: 'chat', text }); },
+    close: () => {
+      disposed = true;
+      if (hosting) { hosting.session?.close(); hosting.worker.terminate(); hosting = null; }
+    },
+    // Spectator follow is for a remote host; a guest hosting after a migration has the full snapshot.
+    follow: (id) => { if (!disposed && !hosting) link.send({ t: 'follow', id }); },
   };
 }
 
@@ -347,6 +501,20 @@ function showMenu() {
   const mapRow = document.createElement('div');
   mapRow.className = 'map-row';
   mapRow.append('Map', mapSel.root);
+  // Game settings for vs-bot matches (same panel and remembered values as the host's lobby). Hidden behind a toggle.
+  const soloSettings = new GameSettingsPanel(loadPrefs().settings, (st) => savePrefs({ settings: st }), 'menu-settings');
+  soloSettings.root.hidden = true;
+  const settingsToggle = document.createElement('button');
+  settingsToggle.type = 'button';
+  settingsToggle.className = 'btn small toggle gs-toggle';
+  settingsToggle.textContent = 'Game settings';
+  settingsToggle.dataset.testid = 'menu-settings-toggle';
+  settingsToggle.setAttribute('aria-pressed', 'false');
+  settingsToggle.onclick = () => {
+    soloSettings.root.hidden = !soloSettings.root.hidden;
+    settingsToggle.classList.toggle('selected', !soloSettings.root.hidden);
+    settingsToggle.setAttribute('aria-pressed', String(!soloSettings.root.hidden));
+  };
   for (const d of ['easy', 'medium', 'hard', 'pro'] as Difficulty[]) {
     const b = document.createElement('button');
     b.className = `btn${d === 'medium' ? ' primary' : ''}`;
@@ -356,7 +524,7 @@ function showMenu() {
       lockMenu();
       const choice = mapSel.value as MapChoice;
       status.textContent = choice === 'random' ? 'Loading…' : `Loading ${MAP_NAMES[choice]}…`;
-      playSolo(d, choice, menu, bots.count()).catch((err) => {
+      playSolo(d, choice, menu, bots.count(), soloSettings.value).catch((err) => {
         console.error('[main] failed to start', err);
         status.textContent = `Failed to start: ${err?.message ?? err}`;
       });
@@ -448,7 +616,26 @@ function showMenu() {
   replaysBtn.onclick = () => { menu.remove(); openReplays(); };
   menuBtns.append(howBtn, settingsButton(), replaysBtn);
   rememberDifficulty(play);
-  card.append(mapRow, play, bots.root, online, status, menuBtns, keys);
+  // Practice range: offline sandbox (targets, dummies, free shop and building). Not a difficulty, so not in `play`.
+  const practiceRow = document.createElement('div');
+  practiceRow.className = 'practice-play';
+  const practiceBtn = document.createElement('button');
+  practiceBtn.className = 'btn';
+  practiceBtn.textContent = 'Practice';
+  practiceBtn.dataset.testid = 'play-practice-range';
+  practiceBtn.onclick = () => {
+    lockMenu();
+    status.textContent = 'Loading the practice range…';
+    playPractice(menu).catch((err) => {
+      console.error('[main] failed to start practice', err);
+      status.textContent = `Failed to start: ${err?.message ?? err}`;
+      unlockMenu();
+    });
+  };
+  const practiceNote = document.createElement('span');
+  practiceNote.textContent = 'Targets, dummies, free shop & building';
+  practiceRow.append(practiceBtn, practiceNote);
+  card.append(mapRow, play, bots.root, practiceRow, settingsToggle, soloSettings.root, online, status, menuBtns, keys);
   menu.append(card);
   app.append(menu);
   if (!currentIsChromium()) menu.append(chromeBanner());
@@ -500,14 +687,14 @@ function loadingScreen(text: string): HTMLElement {
 }
 
 /** Vs `bots` opponents (1-7) on the chosen map (Random: a different map than the last one played). Play again keeps difficulty, map choice and bot count. */
-async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bots = 1) {
+async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bots = 1, settings: GameSettings = loadPrefs().settings) {
   const map = resolveMapChoice(choice, lastBotMap);
   lastBotMap = map;
   const urlBots = DEBUG ? Number(new URLSearchParams(location.search).get('bots')) : 0;
   const backend = workerBackend(() => ({
     // ?debug=1&bots=N (1-7) overrides the menu's bot count (perf testing)
     setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: Math.min(7, Math.max(1, urlBots || bots)) },
-      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map },
+      (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map, settings: sanitizeSettings(settings) },
     humanId: 1,
   }), null);
   let game: Game | null = null;
@@ -534,12 +721,23 @@ async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bot
       kind: 'solo',
       playAgain: () => {
         game?.destroy();
-        playSolo(d, choice, loadingScreen('Starting a new match…'), bots).catch((err) => {
+        playSolo(d, choice, loadingScreen('Starting a new match…'), bots, settings).catch((err) => {
           console.error('[main] play again failed', err);
           toast(`Could not restart: ${err?.message ?? err}`);
         });
       },
     },
+  });
+}
+
+/** Practice range: you alone on the range layout (sim/practice.ts); no timer, no result, Esc → Quit to menu. */
+async function playPractice(menu: HTMLElement) {
+  const backend = workerBackend(() => ({ setup: { players: [{ name: 'You', isBot: false }], practice: true }, humanId: 1 }), null);
+  await startGame(backend, menu, undefined, {
+    hostId: null,
+    practice: true,
+    money: () => 'Practice: cash is already unlimited',
+    role: { kind: 'solo', playAgain: () => location.reload() },
   });
 }
 
@@ -552,7 +750,7 @@ function showJoinError(menu: HTMLElement, message: string) {
 async function hostLobby(name: string, menu: HTMLElement) {
   let ui: LobbyUi | null = null;
   const session = await HostSession.create(pickTransport(location.search), name, {
-    lobby: (slots, map) => ui?.render(slots, 0, map),
+    lobby: (slots, map, settings) => ui?.render(slots, 0, map, settings),
     chat: (from, text) => { chat?.add(from, text); ui?.addChat(from, text); },
     net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; },
   });
@@ -595,6 +793,8 @@ async function hostLobby(name: string, menu: HTMLElement) {
     removeSeat: (i) => session.removeSeat(i),
     kick: (i) => session.kick(i),
     setMap: (c) => { session.setMap(c); localStorage.setItem(MAP_KEY, c); },
+    setColor: (c) => { session.setColor(0, c); savePrefs({ color: c }); },
+    setSettings: (st) => { session.setSettings(st); savePrefs({ settings: session.settings }); },
     start: () => { savePrefs({ seats: seatPrefsOf(session.lobby.slots()) }); launch((w) => session.start(w), ui!.root); },
     back: () => location.reload(),
   }, () => location.reload(), (text) => {
@@ -605,31 +805,49 @@ async function hostLobby(name: string, menu: HTMLElement) {
     else ui!.addChat('', c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
   });
   session.setMap(storedMapChoice());
+  // The host's last game settings and colour.
+  { const p = loadPrefs(); session.setSettings(p.settings); if (p.color !== null) session.setColor(0, p.color); }
   addInviteButton(ui.root, session.code);
   console.info(`[host] room ${session.code} open`);
 }
 
-async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?: string) {
-  const { link, lobby } = await joinRoom(pickTransport(location.search), code, name, rejoin).catch((err) => {
+async function joinLobby(firstCode: string, name: string, menu: HTMLElement, rejoin?: string) {
+  let code = firstCode;
+  const joined = await joinRoom(pickTransport(location.search), code, name, rejoin).catch((err) => {
     clearRejoin(); // the seat is gone (grace over / match ended / host left): no more offers
     throw err;
   });
+  let link: Link = joined.link;
+  const lobby = joined.lobby;
   menu.remove();
   const ui = new LobbyUi(app, code, null, () => { clearRejoin(); link.close(); location.reload(); }, (text) => {
     const c = parseCommand(text);
     if (!c) link.send({ t: 'chat', text });
     else ui.addChat('', c.kind === 'spectate' ? HOST_ONLY : c.kind === 'money' ? MONEY_HOST_ONLY : c.kind === 'help' ? HELP_TEXT : unknownCommand(c.name));
+  }, {
+    setReady: (ready) => link.send({ t: 'ready', ready }),
+    setColor: (color) => { link.send({ t: 'color', color }); savePrefs({ color }); },
   });
-  ui.render(lobby.slots, lobby.you, lobby.map);
+  ui.render(lobby.slots, lobby.you, lobby.map, sanitizeSettings(lobby.settings));
+  // Ask for the colour this player picked last time (the host refuses it if someone else has it).
+  { const c = loadPrefs().color; if (c !== null) link.send({ t: 'color', color: c }); }
   addInviteButton(ui.root, code);
   let slots = lobby.slots;
+  /** Our seat (host migration: the plan names the backup by seat). */
+  let you = lobby.you;
   let phase: 'lobby' | 'starting' | 'game' | 'over' = 'lobby';
   let early: HostMsg[] = [];
   let game: Game | null = null;
   const launch = (m: Extract<HostMsg, { t: 'start' }>, screen: HTMLElement) => {
     phase = 'starting';
     early = [];
-    const backend = remoteBackend(link, m, early);
+    const backend = remoteBackend(link, m, early, {
+      gm: new GuestMigration(you),
+      name,
+      code: () => code,
+      relink: (l, c) => { link = l; code = c; l.onMessage(onHostMsg); },
+      promoted: () => { phase = 'over'; clearRejoin(); link.close(); },
+    });
     // A spectating host has no player for the scoreboard to mark.
     startGame(backend, screen, undefined, { hostId: slots[0]?.kind === 'human' && slots[0].spectator ? null : 1, role: { kind: 'client' } }).then((g) => { game = g; phase = 'game'; }, (err) => {
       console.error('[join] failed to start', err);
@@ -640,7 +858,7 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     });
   };
   link.onClose(() => { if (phase === 'lobby') ui.error('The host closed the lobby.'); });
-  link.onMessage((raw) => {
+  const onHostMsg = (raw: unknown) => {
     const m = raw as HostMsg;
     // Connection quality + reconnect bookkeeping, in any phase.
     if (m.t === 'ping') { link.send({ t: 'pong', n: m.n }); return; }
@@ -651,14 +869,15 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
     if (phase === 'game') {
       // The game's backend handles everything else; the host restarting or returning to the lobby is ours.
       if (m.t === 'start') { game?.destroy(); game = null; launch(m, loadingScreen('Host started a rematch…')); }
-      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; app.append(ui.root); ui.render(m.slots, m.you, m.map); }
+      else if (m.t === 'lobby') { game?.destroy(); game = null; phase = 'lobby'; slots = m.slots; you = m.you; app.append(ui.root); ui.render(m.slots, m.you, m.map, sanitizeSettings(m.settings)); }
       return;
     }
-    if (m.t === 'lobby') { slots = m.slots; ui.render(m.slots, m.you, m.map); }
+    if (m.t === 'lobby') { slots = m.slots; you = m.you; ui.render(m.slots, m.you, m.map, sanitizeSettings(m.settings)); }
     else if (m.t === 'chat') ui.addChat(m.from, m.text);
     else if (m.t === 'ended') { phase = 'over'; ui.error(m.reason === 'host-left' ? 'The host closed the lobby.' : `Removed from lobby (${m.reason}).`); }
     else if (m.t === 'start') { ui.loading(m.map.name); launch(m, ui.root); }
-  });
+  };
+  link.onMessage(onHostMsg);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -668,7 +887,7 @@ async function joinLobby(code: string, name: string, menu: HTMLElement, rejoin?:
 /** A running game; destroy() removes every trace of it (rematch / back to lobby). */
 type Game = { destroy(): void };
 /** spectate / money: what /spectate and /money do here (host / vs bot); absent for a joined friend. */
-type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult; money?: (amount: number) => string; exitReplay?: () => void };
+type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult; money?: (amount: number) => string; exitReplay?: () => void; practice?: boolean };
 
 /** Loading-screen phases for a match and their share of the bar (real progress, see loading.ts). */
 const MATCH_PHASES = { code: 15, gpu: 10, characters: 25, map: 15, shaders: 30, frames: 5 };
@@ -723,7 +942,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
    */
   const governor = new FrameGovernor();
   const sky = renderer.world.sky;
-  const govSkip = () => governor.setSkip((a, b) => !sky.presetHasAo && a.ao !== b.ao && a.shadowScale === b.shadowScale && a.grass === b.grass && a.lodBias === b.lodBias && a.res === b.res);
+  const govSkip = () => governor.setSkip((s) => s === 'ao' && !sky.presetHasAo);
   govSkip();
   governor.enabled = settings.get().video.dynamicResolution;
   const applyGovernor = () => {
@@ -802,8 +1021,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let aim: AimOutcome | null = null;
   /** Newest snapshot as received (not delayed by the interpolation buffer): busy state, pieces. */
   let latest: Snapshot | null = null;
-  /** A sent build not yet confirmed by a 'placed' event (one at a time, so drag-build can't double-place). */
-  let buildPending: { at: number } | null = null;
+  /** Own placements shown at once and reconciled with the host's pieces (buildPredict.ts); also paces placing. */
+  const builds = new BuildPredictor();
   /** A click that couldn't place yet (busy placing the last piece) still counts for a moment. */
   let placeWantedAt = -Infinity;
   let lastSnapKey = '';
@@ -827,6 +1046,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     input.enabled = !hud.ended && !dead;
     chat.enabled = !hud.ended && !dead;
     canvas.focus();
+    // Same click / key press that closed the panel re-captures the mouse: no extra click needed.
+    if (input.enabled) input.requestLock();
   };
 
   /** Back to the menu (a page reload) once this match's recording is stored. */
@@ -865,6 +1086,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Same as the drop key: select that slot and drop from it in the same input (the sim selects first).
     dropSlot: (slot, amount) => { input.select(slot); input.queue({ drop: amount }); },
   });
+  if (end.practice) hud.setPractice();
   const online = backend.buffered || !!onChat;
   const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
@@ -891,10 +1113,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         hud.setEndVisible(true);
         return;
       }
-      if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead) showPause();
+      if (wasLocked && !input.inventory && !hud.panelOpen && !hud.ended && !paused && !chat.open && !dead && !practice?.open) showPause();
     },
     inventoryChange: (open) => {
-      hint.textContent = open ? `Drag hotbar items to reorder · ${bindingLabel(activeKeymap(), 'inventory')} to resume` : 'Click to capture the mouse';
+      hint.textContent = open ? `Drag hotbar items to reorder · ${bindingLabel(activeKeymap(), 'inventory')} to resume` : 'Click to resume';
       hint.classList.toggle('inventory', open);
     },
   });
@@ -990,7 +1212,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   const hint = document.createElement('div');
   hint.className = 'click-hint glass';
-  hint.textContent = 'Click to capture the mouse';
+  hint.textContent = 'Click to resume';
   document.body.append(hint);
 
   /** Remove the pause card; vs bot, the simulation runs again. */
@@ -1005,30 +1227,86 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     input.enabled = false;
     backend.pause?.(true); // vs bot: the world stops (online it can't)
     paused = document.createElement('div');
-    paused.className = 'overlay';
+    paused.className = 'overlay pause-overlay';
+    paused.dataset.testid = 'pause';
     const card = document.createElement('div');
-    card.className = 'card glass';
-    const title = document.createElement('div');
-    title.style.cssText = 'font-size:28px;font-weight:800';
-    title.textContent = 'Paused';
-    const resume = document.createElement('button');
-    resume.className = 'btn';
-    resume.textContent = 'Resume';
+    card.className = 'card glass pause-card';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', 'Paused');
+    const head = document.createElement('div');
+    head.className = 'pause-head';
+    // The kicker says whether the world stopped; no separate note repeating "paused".
+    head.innerHTML = `<div class="pause-kicker${backend.pause ? '' : ' live'}"></div><div class="pause-title">Paused</div>`;
+    head.firstElementChild!.textContent = backend.pause ? 'Match paused · vs bots' : 'Online · the match keeps running';
+    // Compact match info: time left, map, and your own numbers.
+    const me = snap?.players.find((p) => p.id === humanId);
+    const info = document.createElement('div');
+    info.className = 'pause-info';
+    info.dataset.testid = 'pause-info';
+    const stat = (k: string, v: string) => { const d = document.createElement('div'); d.className = 'pause-stat'; d.innerHTML = '<span class="k"></span><span class="v"></span>'; d.children[0].textContent = k; d.children[1].textContent = v; return d; };
+    info.append(
+      stat('Time', document.querySelector('.hud .timer')?.textContent || '–'),
+      stat('Map', mapDef?.name ?? '–'),
+      stat('K / D', me ? `${me.kills} / ${me.deaths}` : '–'),
+      stat('Cash', me ? `$${me.inv.cash}` : '–'),
+    );
+    const resume = pauseButton(PAUSE_ICONS.play, 'Resume', 'btn primary');
     resume.onclick = () => { input.enabled = true; input.requestLock(); hidePause(); };
     resume.dataset.testid = 'resume';
-    paused.dataset.testid = 'pause';
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size:12px;color:var(--muted)';
-    note.textContent = backend.pause ? 'Match paused.' : 'Online matches keep running while this menu is open.';
-    const quit = document.createElement('button');
-    quit.className = 'btn';
-    quit.textContent = online ? 'Leave match' : 'Quit to menu';
+    // Settings / How to play open in place of the card (same backdrop), and the card comes back on close.
+    const under = (open: (onClose: () => void) => void) => () => {
+      paused?.classList.add('under');
+      open(() => paused?.classList.remove('under'));
+    };
+    const set = settingsButton();
+    set.className = 'btn pause-btn';
+    set.onclick = under((onClose) => openSettings({ onClose }));
+    const how = pauseButton(PAUSE_ICONS.help, 'How to play', 'btn');
+    how.dataset.testid = 'pause-how-to';
+    how.onclick = under((onClose) => openHowTo(onClose));
+    const quit = pauseButton(PAUSE_ICONS.exit, online ? 'Leave match' : 'Quit to menu', 'btn danger');
     quit.dataset.testid = 'pause-quit';
     quit.onclick = leave;
-    card.append(title, resume, settingsButton(), quit, note);
+    const btns = document.createElement('div');
+    btns.className = 'pause-btns';
+    btns.append(resume, set, how, quit);
+    card.append(head, info, btns);
     paused.append(card);
     document.body.append(paused);
+    resume.focus({ preventScroll: true });
   }
+
+  // ---- practice range panel (practicePanel.ts): O opens the controls, O / Esc / Resume closes them ----
+  const practice = end.practice ? new PracticePanel(app, {
+    send: (cmd) => {
+      if (!backend.practice) throw new Error('practice panel: backend has no practice channel');
+      backend.practice(cmd);
+    },
+    faceRange: () => { input.yaw = 0; input.pitch = 0; },
+    closed: () => closePractice(),
+  }) : null;
+  function openPractice() {
+    practice!.setOpen(true);
+    input.enabled = false;
+    chat.enabled = false;
+    if (document.pointerLockElement) document.exitPointerLock();
+  }
+  function closePractice() {
+    practice!.setOpen(false);
+    input.enabled = !hud.ended && !dead;
+    chat.enabled = !hud.ended && !dead;
+    canvas.focus();
+    input.requestLock();
+  }
+  if (practice) window.addEventListener('keydown', (e) => {
+    if (e.repeat || e.target instanceof HTMLInputElement) return;
+    if (practice.open && (e.code === 'Escape' || e.code === 'KeyO')) { e.preventDefault(); e.stopPropagation(); closePractice(); return; }
+    // O, unless the player bound it to a game action.
+    if (e.code === 'KeyO' && !ACTIONS.some((a) => isAction(a.id, 'KeyO')) && !hud.panelOpen && !paused && !chat.open && !dead && !input.inventory) {
+      e.preventDefault();
+      openPractice();
+    }
+  }, { capture: true });
 
   function showFatal(titleText: string, detail: string) {
     if (dead) return;
@@ -1078,20 +1356,37 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const ghostState = () => (aim ? aim.ok : null);
   const buildNote = () => (!aim ? null : !aim.ok ? `✕ ${aim.reason}` : SNAP_LABEL[aim.tag] ?? null);
 
-  /** Place from the current ghost if it's valid, we have the piece and aren't still placing the last one. */
+  /** Pieces of this kind we can still place: the newest host count minus our predictions it doesn't show yet. */
+  const piecesLeft = (me: Snapshot['players'][number], kind: PieceKind) =>
+    (me.inv.pieces[kind] ?? 0) - builds.unconfirmed(latest?.pieces ?? [], kind);
+
+  /**
+   * Place from the current ghost if it's valid, we have the piece and the last placement's placeSec has passed
+   * (paced locally; the host enforces the same rate). The piece shows at once as a prediction.
+   */
   function tryPlace(): boolean {
     const now = performance.now();
-    if (buildPending && now - buildPending.at > 1500) buildPending = null; // lost / rejected
-    if (!aim?.ok || !aim.req || buildPending) return false;
-    const me = latest?.players.find((p) => p.id === humanId);
-    if (!me || !me.alive || (me.inv.pieces[aim.req.kind] ?? 0) <= 0) return false;
-    if (me.busyUntil > latest!.time) return false;
+    if (!aim?.ok || !aim.req || !builds.canPlace(now) || !latest) return false;
+    const me = latest.players.find((p) => p.id === humanId);
+    if (!me || !me.alive || piecesLeft(me, aim.req.kind) <= 0) return false;
+    if (me.healAt !== null || me.drinking) return false; // busy with a medkit/potion: the host would refuse it
     input.queue({ build: aim.req });
-    buildPending = { at: now };
+    const afterId = latest.pieces.reduce((m, p) => Math.max(m, p.id), 0);
+    const piece = builds.place(aim.req.kind, aim.ghost, aim.rotY, humanId, now, afterId);
+    predictor?.addLocalPiece(piece);
+    renderer.setPredictedPieces(builds.pieces);
     placeWantedAt = -Infinity;
     renderer.pulseGhost();
     return true;
   }
+
+  /** Host pieces about to be drawn: confirmed predictions give way to the real piece, refused ones fade. */
+  const reconcileBuilds = (pieces: readonly PieceState[]) => {
+    const r = builds.reconcile(pieces, performance.now());
+    if (!r.confirmed.length && !r.rejected.length) return;
+    for (const p of [...r.confirmed, ...r.rejected]) predictor?.removeLocalPiece(p.id);
+    renderer.setPredictedPieces(builds.pieces);
+  };
 
   /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
   const gunHud = (me: Snapshot['players'][number] | undefined, own = true) => {
@@ -1115,6 +1410,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (DEBUG) for (const e of s.events) if (e.type === 'shot' && e.data.by === humanId) shotTimes.applied.push(performance.now());
     snap = s;
     snapTime = s.time; snapAt = performance.now();
+    reconcileBuilds(s.pieces); // before pushSnapshot: a confirmed prediction hands over to the real piece in the same draw
     hud.pushEvents(renderer.pushSnapshot(s));
     const meSnap = s.players.find((p) => p.id === humanId);
     fpv.onEvents(s.events, humanId, meSnap?.alive ? meSnap.pos : null);
@@ -1134,6 +1430,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       maybeWarm();
     }
     damageFx.onSnapshot(s, humanId);
+    practice?.onSnapshot(s, humanId);
     sealAnnouncer.onSnapshot(s, humanId);
     const meNow = s.players.find((p) => p.id === humanId);
     input.held = meNow?.hotbar[input.selected] ?? null;
@@ -1180,6 +1477,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       import('./predict').then(({ Predictor: P }) => P.create(def, id)).then((p) => { predictor = p; },
         (err) => console.error('[predict] could not start; falling back to server positions', err));
       hud.setMap(map, humanId, island, def.center);
+      hud.suddenDeathAt = def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt;
+      hud.genMult = def.settings?.genMult ?? 1;
+      if (practice && map[island]) practice.setBunker(map[island].bunker);
       qol.setMap(map, humanId, island);
       audio.setMap(map, humanId);
     },
@@ -1189,7 +1489,6 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       latest = s;
       if (buffer) qol.onNetSnapshot();
       shots.reconcile(s.events, humanId, performance.now());
-      if (buildPending && s.events.some((e) => e.type === 'placed' && (e.data as { by?: number }).by === humanId)) buildPending = null;
       renderer.ingest(s);
       if (buffer) buffer.push(s); else applySnapshot(s);
     },
@@ -1247,6 +1546,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         selfVisible: renderer.characters.hiddenId !== humanId &&
           !!(renderer.characters as unknown as { avatars: Map<number, { group: Object3D }> }).avatars.get(humanId)?.group.visible,
       }),
+      /** Free-fly camera position while spectating (offline map thumbnails: tests/visual/mapThumbs.mjs). */
+      spectateAt: (x: number, y: number, z: number) => { spectator.pos.set(x, y, z); },
       scoreboard: () => scoreboard.visible,
       /** Loot on the ground as drawn: label lines, label shown, model count. */
       loot: () => renderer.lootView.info(),
@@ -1271,6 +1572,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       replayState: () => (replay ? replay.last : null),
       /** Current build ghost: snap tag, ghost/rest position, rotation, validity (+ reason) and the exact request a click sends. */
       buildAim: () => aim,
+      /** Build prediction: unconfirmed pieces and placed/confirmed/rejected counts. */
+      buildPredict: () => ({ pending: builds.pieces, ...builds.stats }),
       /** The sim's own verdict for a build request (round trip), to cross-check the local ghost. */
       serverPreview: (req: BuildRequest) => new Promise<Placement>((res) => { const k = ++debugPreviewSeq; debugPreviews.set(k, res); backend.preview(req, k); }),
     };
@@ -1303,10 +1606,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const cone = spreadDeg(w, { ads: fpv.adsK > 0.5, bloom: meNew.bloom, lastShotAt: meNew.lastShotAt }, simNow(),
       { speed: Math.hypot(meNew.vel.x, meNew.vel.z), grounded: Math.abs(meNew.vel.y) < 0.5 });
     if (WEAPONS[w].pellets === 1 && Math.atan2(PLAYER.radius * 0.8, hit!.distance) < (cone * Math.PI) / 180) return;
+    const head = to.y >= victimFeet.y + HEAD.y - HEAD.r;
     shots.markHit();
-    hud.hitmarker(to.y >= victimFeet.y + HEAD.y - HEAD.r);
+    hud.hitmarker(head);
     audio.predicted('hitmarker');
-    renderer.gunFx.onEvent({ t: ev.t, type: 'hit', data: { target: victim, by: humanId, pos: { x: to.x, y: to.y, z: to.z }, part: to.y >= victimFeet.y + HEAD.y - HEAD.r ? 'head' : 'body', weapon: w } }, humanId);
+    renderer.gunFx.onEvent({ t: ev.t, type: 'hit', data: { target: victim, by: humanId, pos: { x: to.x, y: to.y, z: to.z }, part: head ? 'head' : 'body', weapon: w, ...predictedHit(w, hit!.distance, head) } }, humanId);
   };
 
   // ---- frame loop ----
@@ -1369,7 +1673,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
-      if (governor.frame(now - last, 1000 / (cap || 60))) applyGovernor();
+      // main-thread work of the previous frame tells the governor whether frames are GPU- or CPU-bound
+      if (governor.frame(now - last, 1000 / (cap || 60), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
     }
     frameMs.push(now - last);
     errors?.frame(now - last);
@@ -1385,12 +1690,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         hud.setFpsDetail([
           `${((now - fpsSince) / fpsFrames).toFixed(1)} ms${g !== null ? ` · gpu ${g.toFixed(1)} ms` : ''}`,
           `${ri.drawCalls} draws · ${(ri.triangles / 1e6).toFixed(2)}M tris`,
-          `gov ${governor.level} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
+          `gov ${governor.level}${governor.gpuBound ? ' gpu' : ' cpu'} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
         ]);
       }
       fpsFrames = 0; fpsSince = now;
     }
     if (buffer) for (const r of buffer.advance(dt)) applySnapshot(r.snap);
+    if (snap) reconcileBuilds(snap.pieces); // refusals time out between snapshots too
+    renderer.setPieceFades(builds.fades(now));
     renderer.beginFrame();
 
     // Movement: the raw (camera-frame) move axes become numbered fixed-step commands. The sim and
@@ -1413,7 +1720,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (unsent.length > MAX_CMDS_PER_MSG) unsent = unsent.slice(-MAX_CMDS_PER_MSG);
     const predicting = !!predictor && predictor.renderState(liveCmd(moveSeq + 1), moveAcc / DT, dt, predicted);
     renderer.setLocal(predicting ? predicted : null);
-    hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead ? '' : 'none';
+    hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead && !practice?.open ? '' : 'none';
 
     const me = snap?.players.find((p) => p.id === humanId);
     // No player of our own (spectating host / handed to a bot), dead (respawning or eliminated), or free
@@ -1459,9 +1766,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
           physics: predictor.world, kind: buildKind,
           ray: { eye: { x: cam.position.x, y: cam.position.y, z: cam.position.z }, dir: { x: aimDir.x, y: aimDir.y, z: aimDir.z } },
           player: { x: feet.x, y: feet.y, z: feet.z }, yaw: input.yaw, buildRot: input.buildRot, free: input.free,
-          humanId, pieces: (latest ?? snap!).pieces, islands: map, myIsland: me.island,
+          // predicted pieces too: a held place keeps building along the aim instead of re-aiming at the same spot
+          humanId, pieces: (latest ?? snap!).pieces.concat(builds.pieces), islands: map, myIsland: me.island,
         });
-        if (!(me.inv.pieces[buildKind] ?? 0)) { aim.ok = false; aim.reason = 'none left'; aim.req = null; }
+        const meLatest = latest?.players.find((p) => p.id === humanId) ?? me;
+        if (piecesLeft(meLatest, buildKind) <= 0) { aim.ok = false; aim.reason = 'none left'; aim.req = null; }
         const snapKey = aim.tag === 'aim' ? '' : `${aim.tag}${aim.ghost.x.toFixed(1)}${aim.ghost.z.toFixed(1)}`;
         if (snapKey && snapKey !== lastSnapKey && aim.ok) audio.ui('tick', 0.15);
         lastSnapKey = snapKey;
@@ -1519,6 +1828,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     }
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());
+    audio.fires(renderer.world.fire.burning());
     if (warmed && !revealed) {
       framesAfterWarm++;
       loading.progress('frames', framesAfterWarm / WARM_FRAMES);

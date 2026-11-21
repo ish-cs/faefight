@@ -82,6 +82,10 @@ export async function preloadPbr(gpu: THREE.WebGPURenderer, quality: 'low' | 'hi
     if (!listed.has(name)) return;
     try {
       const t = await ktx.loadAsync(`${BASE}${name}.ktx2`) as THREE.CompressedTexture;
+      // compressed formats need a base level that's a multiple of 4: WebGPU rejects anything else, and one invalid
+      // texture invalidates every pass that samples it (the whole world went missing)
+      const img = t.image as { width: number; height: number };
+      if (img.width % 4 || img.height % 4) { t.dispose(); throw new Error(`${img.width}×${img.height} is not a multiple of 4`); }
       setup(t, m === 'albedo');
       texCache.set(name, t);
       files++;

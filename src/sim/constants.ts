@@ -18,14 +18,16 @@ export type PieceSpec = { w: number; h: number; d: number; hp: number; price: nu
 
 // w = width along local X, h = height, d = depth along local Z. Ramp rises along local +Z.
 // Piece HP was cut 20% (2026-11-20) so walls break a little faster.
+// placeSec = the short busy time after placing, the authoritative build-rate cap. Cut 2026-11-20 so building
+// feels instant (holding place builds ~5-7 light pieces/s); moving, looking and switching are never blocked.
 export const PIECES: Record<PieceKind, PieceSpec> = {
-  sandbags: { w: 2, h: 1.0, d: 0.8, hp: 120, price: 10, placeSec: 0.5 },
-  wood: { w: 2, h: 2.0, d: 0.2, hp: 200, price: 25, placeSec: 0.8 },
-  metal: { w: 2, h: 2.5, d: 0.1, hp: 400, price: 60, placeSec: 1.2 },
-  steel: { w: 2, h: 2.5, d: 0.15, hp: 960, price: 150, placeSec: 2.0 },
-  scaffold: { w: 2, h: 0.2, d: 4, hp: 160, price: 20, placeSec: 0.6 },
-  ramp: { w: 2, h: 1.5, d: 3, hp: 160, price: 30, placeSec: 0.8 },
-  container: { w: 6, h: 2.6, d: 2.4, hp: 2000, price: 300, placeSec: 3.0 },
+  sandbags: { w: 2, h: 1.0, d: 0.8, hp: 120, price: 10, placeSec: 0.15 },
+  wood: { w: 2, h: 2.0, d: 0.2, hp: 200, price: 25, placeSec: 0.2 },
+  metal: { w: 2, h: 2.5, d: 0.1, hp: 400, price: 60, placeSec: 0.25 },
+  steel: { w: 2, h: 2.5, d: 0.15, hp: 960, price: 150, placeSec: 0.4 },
+  scaffold: { w: 2, h: 0.2, d: 4, hp: 160, price: 20, placeSec: 0.15 },
+  ramp: { w: 2, h: 1.5, d: 3, hp: 160, price: 30, placeSec: 0.2 },
+  container: { w: 6, h: 2.6, d: 2.4, hp: 2000, price: 300, placeSec: 1.0 },
 };
 
 /** Spread cone half-angles in degrees. Bloom grows per shot and recovers at `recover` deg/s. */
@@ -55,6 +57,9 @@ export type WeaponSpec = {
 const NO_SPREAD: SpreadSpec = { base: 0, ads: 0, perShot: 0, max: 0, recover: 1, move: 0, sprint: 0, air: 0 };
 const NO_FALLOFF = { start: 1e9, end: 1e9 + 1, minMult: 1 };
 
+// Range falloff (2026-11-20): long-range plinking stops paying; close fights win. Bullets keep full
+// damage to `start`, fall linearly to `minMult` at `end`, and hold that floor beyond. Applies to players
+// and pieces alike (gunplay.shotDamage); fists, rockets and grenades have none.
 export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   fists: {
     price: 0, dmg: 10, pellets: 1, rps: 2, mag: Infinity, reloadSec: 0, reloadEmptySec: 0, chamber: false, range: 2,
@@ -62,7 +67,7 @@ export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   },
   pistol: {
     price: 50, dmg: 20, pellets: 1, rps: 4, mag: 12, reloadSec: 1.5, reloadEmptySec: 1.9, chamber: true, range: 60,
-    falloff: { start: 15, end: 45, minMult: 0.6 },
+    falloff: { start: 15, end: 40, minMult: 0.5 },
     spread: { base: 0.8, ads: 0.3, perShot: 0.9, max: 4, recover: 9, move: 1.4, sprint: 3, air: 5 },
     recoil: { up: 1.3, upGrow: 0, side: 0.35, sideBias: 0 }, adsZoom: 1.3, adsMove: 0.75,
   },
@@ -75,14 +80,14 @@ export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   shotgun: {
     // Tube-fed: loads shell by shell (reloadTime), so no chamber bonus.
     price: 200, dmg: 9, pellets: 10, rps: 1.1, mag: 6, reloadSec: 0.45, reloadEmptySec: 0.45, chamber: false, range: 30,
-    falloff: { start: 6, end: 22, minMult: 0.2 },
+    falloff: { start: 8, end: 25, minMult: 0.2 },
     spread: { base: 0.5, ads: 0.25, perShot: 1.0, max: 3, recover: 4, move: 0.8, sprint: 2, air: 3 },
     recoil: { up: 4.2, upGrow: 0, side: 1.0, sideBias: 0 }, adsZoom: 1.2, adsMove: 0.75,
   },
   rifle: {
     price: 300, dmg: 30, pellets: 1, rps: 6, mag: 25, reloadSec: 2.3, reloadEmptySec: 2.8, chamber: true, range: 150,
-    falloff: { start: 60, end: 150, minMult: 0.85 },
-    spread: { base: 2.2, ads: 0.12, perShot: 0.5, max: 5, recover: 7, move: 2.5, sprint: 5, air: 7 },
+    falloff: { start: 25, end: 60, minMult: 0.55 },
+    spread: { base: 2.2, ads: 0.12, perShot: 0.7, max: 5, recover: 7, move: 2.5, sprint: 5, air: 7 },
     recoil: { up: 0.75, upGrow: 0.05, side: 0.4, sideBias: 0.15 }, adsZoom: 2, adsMove: 0.6,
   },
   rocket: {
@@ -160,7 +165,9 @@ export const GENERATOR_MAX_LEVEL = GENERATOR_LEVELS.length;
 /** Locking a gun (respawn with it) costs this many times the gun. */
 export const LOCK_PRICE_MULT = 4;
 
-export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5 };
+/** queueSec: a build that arrives while still busy from the last one is held this long and placed the tick the
+ *  busy time ends, so network jitter can't eat a held-place stream (still at most one piece per placeSec). */
+export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5, queueSec: 0.25 };
 
 export const LIFECYCLE = {
   respawnSec: 3,
@@ -243,4 +250,38 @@ export const CENTER = {
   wellRadius: 1.6,
   wellPerSec: 4,
   wellCap: 50,
+};
+
+/**
+ * Fire (sim/fire.ts). Explosions ignite flammable things inside their blast; burning pieces lose `dps` HP/s
+ * (resolved every `stepSec`) until they burn out after `burnSec` (uniform in [min, max], seeded) or break.
+ * Metal, steel and containers never burn: they are the counter to a rocket on a wooden base.
+ * After `spreadAfterSec` a burning piece rolls `spreadChance` per step for every touching flammable piece.
+ * Players touching flames take `playerDps` (shield first). Ground patches (grass, crates, palms) burn the same way.
+ */
+export const FIRE = {
+  stepSec: 0.5,
+  pieces: {
+    wood: { dps: 13, burnSec: [14, 20] },
+    scaffold: { dps: 10, burnSec: [12, 18] },
+    ramp: { dps: 10, burnSec: [12, 18] },
+    sandbags: { dps: 4, burnSec: [4, 6] },
+  } as Partial<Record<PieceKind, { dps: number; burnSec: [number, number] }>>,
+  spreadAfterSec: 3,
+  spreadChance: 0.15,
+  /** Pieces this close (m, box to box) count as touching for spread. */
+  touchEps: 0.25,
+  playerDps: 6,
+  /** How close (m) to burning surfaces a player body has to be to catch the heat. */
+  playerReach: 0.3,
+  /** Radius (m) of each source's ignition: the whole blast. */
+  igniteRadius: { rocket: ROCKET.radius, grenade: GRENADE.radius, charge: CHARGE.radius + 0.5 } as Record<'rocket' | 'grenade' | 'charge', number>,
+  patch: {
+    r: 1.4, grassSec: [8, 12] as [number, number], spreadAfterSec: 2, spreadChance: 0.12, spreadStep: 1.8, max: 40,
+    /** A patch sets touching wooden pieces alight with this chance per step (after spreadAfterSec). */
+    pieceChance: 0.12,
+  },
+  /** Storm rain (sudden death): burn timers run this many times faster, so fires go out sooner. */
+  rainMult: 2.5,
+  props: { crate: { dps: 6, sec: 10, r: 0.8 }, palm: { dps: 6, sec: 16, r: 0.7 } } as Record<'crate' | 'palm', { dps: number; sec: number; r: number }>,
 };

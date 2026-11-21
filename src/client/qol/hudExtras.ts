@@ -2,7 +2,7 @@ import { WEAPONS } from '../../sim/constants';
 import { isGunItem } from '../../sim/hotbar';
 import type { IslandLayout } from '../../sim/map';
 import type { PlayerState, PlayerStats, ShopItem, Snapshot } from '../../sim/types';
-import { ISLAND_COLORS } from '../colors';
+import { islandColor } from '../colors';
 import { ICONS, type IconKind } from '../icons';
 import { ammoWarning, slotAmmoState } from './combatQol';
 import { barX, headingDeg, relAngle, yawToward } from './compassMath';
@@ -113,7 +113,7 @@ class Compass {
       if (!owner) continue; // centre island (no owner): marked below
       const key = `isl${isl.index}`;
       const m = this.marker(key, 'island', '');
-      m.node.style.setProperty('--c', hex(ISLAND_COLORS[isl.index % 8]));
+      m.node.style.setProperty('--c', hex(islandColor(isl.index)));
       const out = owner.eliminated, sealed = !!snap.sealed[isl.index];
       m.node.classList.toggle('out', out);
       m.node.classList.toggle('sealed', sealed && !out);
@@ -139,7 +139,8 @@ class Compass {
     labelled.sort((p, q) => rank(p.m) - rank(q.m) || p.d - q.d);
     const taken: number[] = [];
     for (const { m } of labelled) {
-      const clash = taken.some((x) => Math.abs(x - m.x!) < 74);
+      // Labels run right of their dot and are capped at 84px (CSS), so 100px apart never overlaps.
+      const clash = taken.some((x) => Math.abs(x - m.x!) < 100);
       if (!clash) taken.push(m.x!);
       if (m.node.classList.contains('nolabel') !== clash) m.node.classList.toggle('nolabel', clash);
     }
@@ -160,12 +161,12 @@ function recapCard(r: Recap): HTMLElement {
   const head = el('div', 'qr-head');
   const icon = el('span', 'qr-icon');
   if (r.weapon && Object.hasOwn(ICONS, r.weapon)) icon.innerHTML = ICONS[r.weapon as IconKind];
-  else icon.textContent = r.weapon === 'water' ? '≈' : r.weapon === 'fall' ? '↓' : r.weapon === 'lightning' ? 'ϟ' : r.weapon === 'storm' ? '◎' : '✕';
+  else icon.textContent = r.weapon === 'water' ? '≈' : r.weapon === 'fall' ? '↓' : r.weapon === 'lightning' ? 'ϟ' : r.weapon === 'storm' ? '◎' : r.weapon === 'fire' ? '✹' : '✕';
   const title = el('div', 'qr-title', r.title);
   head.append(icon, title);
   if (r.killer) {
     const dot = el('span', 'dot');
-    dot.style.background = hex(ISLAND_COLORS[r.killer.island % 8]);
+    dot.style.background = hex(islandColor(r.killer.island));
     title.prepend(dot);
   }
   card.append(head);
@@ -232,7 +233,7 @@ function summaryNode(stats: PlayerStats[], snap: Snapshot, humanId: number): HTM
     const tr = el('tr', s.id === humanId ? 'you' : '');
     tr.dataset.testid = `summary-${s.id}`;
     const dot = el('span', 'dot');
-    dot.style.background = hex(ISLAND_COLORS[(p?.island ?? 0) % 8]);
+    dot.style.background = hex(islandColor(p?.island ?? 0));
     const dc = el('td');
     dc.append(dot);
     const name = el('td', 'qs-name', p?.name ?? `#${s.id}`);
@@ -357,7 +358,14 @@ export class QolHud {
       b.onclick = () => { if (this.lastBuy) this.act.quickBuy(this.lastBuy); };
       head.insertBefore(b, head.lastElementChild);
     }
-    setText(b, `↻ ${ITEM_NAME[item!] ?? item}  (B)`);
+    // Only offer what can be bought again: hidden when owned/locked/hotbar full, disabled when unaffordable.
+    const card = head.closest('.panel')?.querySelector<HTMLElement>(`.shop-item[data-item="${item}"]`);
+    const blocked = !card || card.hidden || card.classList.contains('blocked');
+    if (b.hidden !== blocked) b.hidden = blocked;
+    const poor = !!card?.classList.contains('poor');
+    if (b.disabled !== poor) b.disabled = poor;
+    const price = card?.querySelector('.iprice')?.textContent ?? '';
+    setText(b, `↻ ${ITEM_NAME[item!] ?? item} ${price}  (B)`);
   }
 
   private updateSummary(s: Snapshot) {
