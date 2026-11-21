@@ -199,6 +199,12 @@ export class SoundDirector {
           if (pc) out.push({ sound: 'destroyed', kind: String(d.kind), pos: { x: pc.pos.x, y: pc.pos.y + 1, z: pc.pos.z }, gain: 1 });
           break;
         }
+        case 'dockBroken': {
+          // A pier section giving way: the wooden-piece break, a little heavier.
+          const at = d.pos as { x: number; y: number; z: number } | undefined;
+          if (at) out.push({ sound: 'destroyed', kind: 'wood', pos: at, gain: 1.2 });
+          break;
+        }
         case 'sealed':
           // Every seal is a big moment: a heavy non-positional boom for everyone, plus the alarm if it's yours.
           out.push({ sound: 'explosion', kind: 'charge', pos: null, gain: 1.6 });
