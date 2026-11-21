@@ -12,6 +12,9 @@ const shots = arg('shots', '');
 const label = arg('label', stress > 1 ? `stress${stress}` : 'base');
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
 const sampleMs = Number(arg('sample', '3000'));
+/** device pixel ratio of the page (2 = a Retina MacBook: the presets' render scale then applies) */
+const dpr = Number(arg('dpr', '1'));
+const competitive = arg('competitive', '0') === '1';
 
 const SPOTS = [
   { name: 'harbor', at: [6, 13], look: [14, 60], pitch: 0.02 },
@@ -22,14 +25,14 @@ const SPOTS = [
 
 async function run(quality) {
   const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
-  const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+  const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: dpr });
   page.setDefaultTimeout(240_000);
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript((q) => {
-    try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q, dynamicResolution: false } })); } catch { /* fresh profile */ }
-  }, quality);
+    try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q.q, dynamicResolution: false, competitive: q.c } })); } catch { /* fresh profile */ }
+  }, { q: quality, c: competitive });
   await page.goto(`${url}/?debug=1&bots=7&gputime=1${stress > 1 ? `&stress=${stress}` : ''}`);
   const t0 = Date.now();
   await page.getByTestId('play-easy').click();
