@@ -232,6 +232,11 @@ export class AudioSystem {
     this.play(cue);
   }
 
+  /** HUD alerts (bunker threat alarm, generator ping): 2D, through the usual effects bus and volume settings. */
+  alert(cue: Cue) {
+    this.play(cue);
+  }
+
   /** UI-originated sounds (e.g. opening the vault). */
   ui(sound: 'vault' | 'tick', gain = 0.8) {
     this.play({ sound, pos: null, gain });

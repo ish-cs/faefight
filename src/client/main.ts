@@ -126,6 +126,7 @@ type Backend = {
     eliminate(playerId: number): void; kill(playerId: number): void;
     shield(shield: number, id?: number): void; potionShop(x: number, z: number): void;
     pieces(x: number, z: number, n: number): void;
+    plugDoor(door: number, owner: number): void; removePiece(id: number): void; genStored(stored: number): void;
   };
 };
 
@@ -172,6 +173,9 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       shield: (shield, id) => send({ type: 'debug', cmd: 'shield', shield, id }),
       potionShop: (x, z) => send({ type: 'debug', cmd: 'potionShop', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
+      plugDoor: (door, owner) => send({ type: 'debug', cmd: 'plugDoor', door, owner }),
+      removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
+      genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
       eliminate: (playerId) => send({ type: 'debug', cmd: 'eliminate', playerId }),
       kill: (playerId) => send({ type: 'debug', cmd: 'kill', playerId }),
     },
@@ -720,7 +724,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     moveSlot: (from, to) => input.queue({ moveSlot: { from, to } }),
   });
   const online = backend.buffered || !!onChat;
-  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item) }, { online, isHost: !!onChat });
+  const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
   let rejoinTouchedAt = 0;
 

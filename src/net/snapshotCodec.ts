@@ -85,7 +85,7 @@ export class SnapshotEncoder {
       bloom: r2(p.bloom),
     };
     if (!own) {
-      delete out.inv; delete out.vault; delete out.hotbar; delete out.locked;
+      delete out.inv; delete out.vault; delete out.hotbar; delete out.locked; delete out.doorsBlocked;
       // Spread/recoil bookkeeping only drives your own crosshair.
       delete out.bloom; delete out.lastShotAt; delete out.burst;
       // Host-side bookkeeping a remote client never reads for other players (keeps 8 players under budget).

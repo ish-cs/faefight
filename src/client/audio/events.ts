@@ -14,7 +14,7 @@ export type SoundId =
   | 'explosion' | 'placed' | 'destroyed'
   | 'coin' | 'loot' | 'purchase' | 'vault'
   | 'kill' | 'death' | 'eliminated' | 'win' | 'lose' | 'draw'
-  | 'alarm' | 'tick' | 'escaped' | 'horn' | 'footstep'
+  | 'alarm' | 'ping' | 'tick' | 'escaped' | 'horn' | 'footstep'
   | 'shieldHit' | 'shieldBreak' | 'drink' | 'potionDone'
   | 'reload' | 'dry' | 'ads';
 

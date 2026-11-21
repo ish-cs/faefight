@@ -25,6 +25,10 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
   | { type: 'debug'; cmd: 'potionShop'; x: number; z: number }
+  /** Alert testing: a steel plate on doorway `door` of the human's bunker (placed by `owner`), removing one, generator cash. */
+  | { type: 'debug'; cmd: 'plugDoor'; door: number; owner: number }
+  | { type: 'debug'; cmd: 'removePiece'; id: number }
+  | { type: 'debug'; cmd: 'genStored'; stored: number }
   /** Perf testing: n pieces on rings around (x, z), placement rules skipped. */
   | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number };
 
