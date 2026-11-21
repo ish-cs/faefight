@@ -6,6 +6,7 @@ import { newStorm, stormCenterOf, stormFinalRadius, stormRadius, stormStartRadiu
 import { dist2D, v3 } from '../../src/sim/vec';
 import type { Difficulty, MatchEvent, Snapshot } from '../../src/sim/types';
 
+const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
 const SD = LIFECYCLE.suddenDeathAt;
 const humans = (seed = 3) => Match.create({ players: [{ name: 'a', isBot: false }, { name: 'b', isBot: false }], seed });
 const run = (m: Match, sec: number) => {
@@ -215,9 +216,15 @@ describe('bots and the storm', () => {
 describe('8 bots and the storm', () => {
   // 8 players: the islands sit ~80 m from the center island, so the only land inside the late ring is the
   // center island. Medium+ bots bridge there ahead of the storm instead of dying to it on their shore.
-  // Seed-sensitive (tracked bot issue): with falloff + bots-build, medium seeds 1-6 pass this whole check only on 4
-  // and 6. The others lose 2+ bots to the storm or end with 2-3 bots idling in the final ring at the time cap.
-  test.each([['medium', 4], ['hard', 5]] as [Difficulty, number][])('%s: the survivor ends inside the ring, nobody lost to the storm on the shore', async (difficulty, seed) => {
+  // Everyone left in the final ring is a rival: the endgame always resolves before the cap. Medium 5/6/9 used to
+  // end with 2-4 bots idling there (an empty mag never got reloaded with an enemy in sight; out of ammo they
+  // wouldn't punch). Seed 7 exercises the bridge-to-center path.
+  // Seed sweep: STORM_SEEDS=1-20 (medium) widens it, e.g. for a series.
+  const range = (env.STORM_SEEDS ?? '1-9').split(',').flatMap((r) => {
+    const [a, b] = r.split('-').map(Number);
+    return Array.from({ length: (b ?? a) - a + 1 }, (_, i) => a + i);
+  });
+  test.each([...range.map((s) => ['medium', s]), ['hard', 5]] as [Difficulty, number][])('%s seed %i: the survivor ends inside the ring, nobody lost to the storm on the shore', async (difficulty, seed) => {
     const m = await Match.create({ players: Array.from({ length: 8 }, (_, i) => ({ name: `b${i}`, isBot: true, difficulty })), seed });
     run(m, 1);
     for (let id = 1; id <= 8; id++) m.debugGive(id, { cash: 800 }); // what they'd have earned by 12:30
