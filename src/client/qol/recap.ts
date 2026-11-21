@@ -7,9 +7,9 @@ import type { Snapshot, Vec3 } from '../../sim/types';
  */
 
 export const RECAP_WINDOW_SEC = 10;
-export type DamageSource = 'bullets' | 'melee' | 'explosion' | 'fall' | 'water' | 'other';
+export type DamageSource = 'bullets' | 'melee' | 'explosion' | 'fire' | 'fall' | 'water' | 'other';
 export const SOURCE_LABEL: Record<DamageSource, string> = {
-  bullets: 'Bullets', melee: 'Melee', explosion: 'Explosions', fall: 'Fall', water: 'Water', other: 'Other',
+  bullets: 'Bullets', melee: 'Melee', explosion: 'Explosions', fire: 'Fire', fall: 'Fall', water: 'Water', other: 'Other',
 };
 
 export type Recap = {
@@ -36,6 +36,7 @@ export function sourceOf(weapon: unknown, by: unknown): DamageSource {
   if (typeof weapon === 'string' && GUNS.has(weapon)) return 'bullets';
   if (typeof weapon === 'string' && BLASTS.has(weapon)) return 'explosion';
   if (weapon === 'fall') return 'fall';
+  if (weapon === 'fire') return 'fire';
   return typeof by === 'number' ? 'explosion' : 'other';
 }
 
@@ -78,12 +79,13 @@ export class RecapTracker {
     const kLast = kHits[kHits.length - 1];
     const hidden = k ? !!s.hidden?.includes(k.id) : true;
     let weapon: string | null = inWater ? 'water' : kLast?.weapon ?? (k && !hidden && k.equipped !== 'fists' ? k.equipped : null) ?? lastHit?.weapon ?? null;
-    if (!k && !inWater && lastHit?.source === 'fall') weapon = 'fall';
+    if (!k && !inWater && (lastHit?.source === 'fall' || lastHit?.source === 'fire')) weapon = lastHit.source;
     const distance = k && !hidden && k.alive && this.lastPos ? Math.round(Math.hypot(k.pos.x - this.lastPos.x, k.pos.y - this.lastPos.y, k.pos.z - this.lastPos.z)) : null;
     const title = k ? `Killed by ${k.name}`
       : inWater ? 'You drowned'
       : self ? 'You blew yourself up'
       : weapon === 'fall' ? 'You fell to your death'
+      : weapon === 'fire' ? 'You burned to death'
       : 'You died';
     this.hits = [];
     return {

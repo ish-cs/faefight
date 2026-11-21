@@ -1290,6 +1290,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());
+    audio.fires(renderer.world.fire.burning());
     if (warmed && !revealed) {
       framesAfterWarm++;
       loading.progress('frames', framesAfterWarm / WARM_FRAMES);

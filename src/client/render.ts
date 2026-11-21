@@ -1,3 +1,4 @@
+import { CASING_CAP } from './world/casings';
 import * as THREE from 'three/webgpu';
 import { GENERATOR_MAX_LEVEL, PLAYER } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
@@ -181,7 +182,7 @@ export class Renderer {
   pushSnapshot(snap: Snapshot): MatchEvent[] {
     this.curr = snap;
     this.waterY = snap.waterY;
-    this.world.syncPieces(snap.pieces);
+    this.world.syncPieces(snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
@@ -203,6 +204,8 @@ export class Renderer {
   private onEvent(e: MatchEvent) {
     if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
+    if ((e.type === 'shot' || e.type === 'explosion') && this.curr)
+      this.world.impactEvent(e, { pieces: this.curr.pieces, players: this.curr.players, waterY: this.waterY, broken: this.curr.broken ?? [] });
     if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {
@@ -351,6 +354,7 @@ export class Renderer {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
+    this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }

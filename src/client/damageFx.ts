@@ -21,6 +21,11 @@ export function damageNumbers(events: MatchEvent[], me: number): { target: numbe
   });
 }
 
+/** Did fire hurt me in these events? (Drives the burning indicator; the sim sends fire damage as `hit` with weapon 'fire'.) */
+export function burnedBy(events: MatchEvent[], me: number): boolean {
+  return events.some((e) => e.type === 'hit' && e.data.target === me && e.data.weapon === 'fire');
+}
+
 /** Screen-relative bearing of an attacker: 0 ahead, +PI/2 right, ±PI behind (camera yaw 0 looks toward -Z). */
 export function hitDirection(me: { x: number; z: number }, attacker: { x: number; z: number }, camYaw: number): number {
   const dx = attacker.x - me.x, dz = attacker.z - me.z;
@@ -42,14 +47,23 @@ export class DamageFx {
   private floaters: Floater[] = [];
   private arrows: Arrow[] = [];
   private v = new THREE.Vector3();
+  /** "Burning" badge + warm screen edge while fire is hurting me. */
+  private burning = document.createElement('div');
+  private burnUntil = 0;
 
   constructor(parent: HTMLElement) {
     this.root.className = 'damage-fx';
+    this.burning.className = 'burning-indicator';
+    this.burning.innerHTML = '<span class="burning-flame"></span><span>BURNING</span>';
+    this.burning.dataset.on = '0';
+    this.root.append(this.burning);
     parent.append(this.root);
   }
 
   onSnapshot(snap: Snapshot, me: number) {
     const now = performance.now() / 1000;
+    // Fire ticks every 0.5 s: keep the badge up a little past the last one.
+    if (burnedBy(snap.events, me)) this.burnUntil = now + 0.8;
     for (const { target, amount, shield } of damageNumbers(snap.events, me)) {
       if (amount <= 0) continue;
       const jitter = (Math.random() - 0.5) * 40;
@@ -78,6 +92,8 @@ export class DamageFx {
   /** Call every frame. `posOf` gives a player's interpolated feet position. */
   frame(camera: THREE.Camera, camYaw: number, me: THREE.Vector3 | null, posOf: (id: number) => THREE.Vector3 | null) {
     const now = performance.now() / 1000;
+    const on = me && now < this.burnUntil ? '1' : '0';
+    if (this.burning.dataset.on !== on) { this.burning.dataset.on = on; this.root.dataset.burning = on; }
     const w = this.root.clientWidth, h = this.root.clientHeight;
     this.floaters = this.floaters.filter((f) => {
       const age = now - f.born;
