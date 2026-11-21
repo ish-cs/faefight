@@ -33,6 +33,8 @@ export type SessionMeta = {
   tokens: [number, string][];
   /** The match tick of the checkpoint. */
   tick: number;
+  /** The host's recording of this match (sim/replay/format.ts RecordingLink): the next host records the next segment. */
+  recording?: unknown;
 };
 
 export type Checkpoint = { meta: SessionMeta; match: Uint8Array };

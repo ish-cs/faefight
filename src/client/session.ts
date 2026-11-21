@@ -19,6 +19,7 @@ import { PING_EVERY_MS, PingTracker, TickMonitor, type HostTick } from './qol/ne
 import { newRejoinToken, REJOIN_GRACE_MS } from './qol/rejoin';
 import { HostMigrator } from './migration';
 import type { SessionMeta } from '../net/checkpoint';
+import type { RecordingLink } from '../sim/replay/format';
 
 const HELLO_TIMEOUT_MS = 10_000;
 // Lobby key for the host. Contains a NUL so no remote peer id (PeerJS, BroadcastChannel, loopback) can equal it.
@@ -148,10 +149,10 @@ export class HostSession {
   /** A link from a room someone else listened on (migration.ts), with its hello if already read. */
   accept(link: Link, hello?: ClientMsg) { this.onJoin(link, hello); }
 
-  /** Worker checkpoint (gzipped match at `tick`) for the backup host. */
-  onCheckpoint(match: Uint8Array, tick: number) {
+  /** Worker checkpoint (gzipped match at `tick`, and its recording's link) for the backup host. */
+  onCheckpoint(match: Uint8Array, tick: number, rec?: RecordingLink) {
     if (!this.started) return;
-    this.migrator.onCheckpoint(match, tick).catch((err) => console.error('[migrate] sealing the checkpoint failed', err));
+    this.migrator.onCheckpoint(match, tick, rec).catch((err) => console.error('[migrate] sealing the checkpoint failed', err));
   }
 
   static async create(transport: Transport, hostName: string, ev: HostEvents): Promise<HostSession> {

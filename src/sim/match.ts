@@ -184,6 +184,9 @@ export class Match implements MatchApi {
     return new Match(def, await Physics.create(def), setup, opts);
   }
 
+  /** Ticks run so far (the next snapshot's tick is this + 1). */
+  get tickCount(): number { return this.tickNo; }
+
   humanIds(): number[] {
     return [...this.s.players.values()].filter((p) => !p.isBot).map((p) => p.id);
   }

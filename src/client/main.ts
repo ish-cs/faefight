@@ -157,24 +157,47 @@ type Backend = {
   };
 };
 
+// Every match is recorded by the machine running its sim (vs bot, online host, or the guest that took over
+// after a host migration: the next segment), always: kept locally (Replays screen) and, in deployed builds,
+// uploaded so the bots learn from it. No setting turns this off.
+function gotReplay(m: Extract<FromWorker, { type: 'replay' }>) {
+  if (!m.partial) saveReplay(m.bytes, m.meta);
+  void replayUploader?.share(m.bytes, { id: m.meta.id, unfinished: m.partial || m.meta.unfinished, duration: m.meta.duration });
+}
+
+/** Tab hidden mid-match (often the last chance before it's closed): upload what's recorded so far, once, after 60 s of play. */
+function peekWhenHidden(worker: Worker, simTime: () => number): () => void {
+  let peeked = false;
+  const onHidden = () => {
+    if (document.visibilityState !== 'hidden' || peeked || simTime() < MIN_UNFINISHED_SEC) return;
+    peeked = true;
+    worker.postMessage({ type: 'peekRecording' } satisfies ToWorker);
+  };
+  document.addEventListener('visibilitychange', onHidden);
+  return () => document.removeEventListener('visibilitychange', onHidden);
+}
+
+/** Left before a result: keep what was recorded (the worker sends it, then says it's done), then stop the worker. */
+function finishAndTerminate(worker: Worker) {
+  worker.onerror = null;
+  trackSave(new Promise<void>((resolve) => {
+    const stop = () => { clearTimeout(timer); worker.onmessage = null; worker.terminate(); resolve(); };
+    const timer = setTimeout(() => { console.warn('[replays] recording did not finish in time; dropped'); stop(); }, 5000);
+    worker.onmessage = (e: MessageEvent<FromWorker>) => {
+      if (e.data.type === 'replay') gotReplay(e.data);
+      else if (e.data.type === 'recordingDone') stop();
+    };
+    worker.postMessage({ type: 'finishRecording' } satisfies ToWorker);
+  }));
+}
+
 /** Simulation in a local worker: vs-bot (session = null) or online host. */
 function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: number }, session: HostSession | null): Backend & { handOff(): void } {
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
   const send = (m: ToWorker) => worker.postMessage(m);
   let humanId = 0;
-  // Every match is recorded here (vs bot, or online as host), always: kept locally (Replays screen) and,
-  // in deployed builds, uploaded so the bots learn from it. No setting turns this off.
-  const gotReplay = (m: Extract<FromWorker, { type: 'replay' }>) => {
-    if (!m.partial) saveReplay(m.bytes, m.meta);
-    void replayUploader?.share(m.bytes, { id: m.meta.id, unfinished: m.partial || m.meta.unfinished, duration: m.meta.duration });
-  };
-  // Tab hidden mid-match (often the last chance before it's closed): upload what's recorded so far, once, after 60 s of play.
-  let simTime = 0, peeked = false;
-  const onHidden = () => {
-    if (document.visibilityState !== 'hidden' || peeked || simTime < MIN_UNFINISHED_SEC) return;
-    peeked = true;
-    send({ type: 'peekRecording' });
-  };
+  let simTime = 0;
+  let unpeek = () => {};
   let closed = false;
   return {
     buffered: false,
@@ -196,14 +219,14 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
         } else if (m.type === 'replay') {
           gotReplay(m);
         } else if (m.type === 'checkpoint') {
-          session?.onCheckpoint(m.match, m.tick);
+          session?.onCheckpoint(m.match, m.tick, m.rec);
         } else if (m.type === 'error') {
           console.error(`[worker] ${m.message}`);
           errors?.report('worker', m.message);
           toast(m.message);
         }
       };
-      document.addEventListener('visibilitychange', onHidden);
+      unpeek = peekWhenHidden(worker, () => simTime);
       const s = setupFor(worker);
       humanId = s.humanId;
       send({ type: 'start', setup: s.setup, humanId: s.humanId, record: { kind: session ? 'host' : 'solo', build: BUILD } });
@@ -235,18 +258,8 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
     close() {
       if (closed) return;
       closed = true;
-      worker.onerror = null;
-      document.removeEventListener('visibilitychange', onHidden);
-      // Left before a result: keep what was recorded. The worker sends it, then says it's done.
-      trackSave(new Promise<void>((resolve) => {
-        const stop = () => { clearTimeout(timer); worker.onmessage = null; worker.terminate(); resolve(); };
-        const timer = setTimeout(() => { console.warn('[replays] recording did not finish in time; dropped'); stop(); }, 5000);
-        worker.onmessage = (e: MessageEvent<FromWorker>) => {
-          if (e.data.type === 'replay') gotReplay(e.data);
-          else if (e.data.type === 'recordingDone') stop();
-        };
-        send({ type: 'finishRecording' });
-      }));
+      unpeek();
+      finishAndTerminate(worker);
     },
   };
 }
@@ -263,6 +276,9 @@ type MigrationCtx = {
   promoted(): void;
 };
 
+/** A guest that took the match over (host migration): its restored worker and session. */
+type Hosting = { worker: Worker; session: HostSession | null; humanId: number; simTime: number; unpeek: () => void };
+
 /**
  * Remote client: no simulation; the host link is the source of truth. `early` = messages that arrived
  * before the game was ready. With `mig`, losing the host mid-match migrates it (migration.ts): either this
@@ -277,7 +293,7 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
   /** Newest snapshot tick and when it arrived; whether the match already has a result. */
   let lastTick = 0, lastTickAt = 0, over = false;
   /** Set once this guest has taken over as host. */
-  let hosting: { worker: Worker; session: HostSession | null; humanId: number } | null = null;
+  let hosting: Hosting | null = null;
   return {
     buffered: true,
     inputHz: TICK_HZ,
@@ -331,7 +347,8 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
           const t0 = performance.now();
           if (gm.isBackup) {
             const w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
-            const h: { worker: Worker; session: HostSession | null; humanId: number } = { worker: w, session: null, humanId: start.playerId };
+            const h: Hosting = { worker: w, session: null, humanId: start.playerId, simTime: 0, unpeek: () => {} };
+            h.unpeek = peekWhenHidden(w, () => h.simTime);
             hosting = h;
             const ready = new Promise<HostWorker>((resolve, reject) => {
               w.onerror = (e) => { console.error('[worker] crashed', e.message); reject(new Error(e.message)); };
@@ -339,16 +356,17 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
                 const m = e.data;
                 if (disposed) return;
                 if (m.type === 'restored') resolve(w);
-                else if (m.type === 'snapshot') { sink.snapshot(m.snap); h.session?.onSnapshot(m.snap); }
+                else if (m.type === 'snapshot') { h.simTime = m.snap.time; sink.snapshot(m.snap); h.session?.onSnapshot(m.snap); }
                 else if (m.type === 'preview') { if (m.playerId === h.humanId) sink.preview(m.result, m.key); else h.session?.onPreview(m.playerId, m.result, m.key); }
-                else if (m.type === 'checkpoint') h.session?.onCheckpoint(m.match, m.tick);
+                else if (m.type === 'replay') gotReplay(m);
+                else if (m.type === 'checkpoint') h.session?.onCheckpoint(m.match, m.tick, m.rec);
                 else if (m.type === 'error') { console.error(`[worker] ${m.message}`); reject(new Error(m.message)); toast(m.message); }
               };
             });
             const { session } = await takeOver({
               transport, gm, name, map: start.map, lastTick, lastTickAt,
-              startWorker: (match, humanId, botify, toTick) => {
-                w.postMessage({ type: 'restore', match, humanId, botify, toTick } satisfies ToWorker, [match.buffer]);
+              startWorker: (match, humanId, botify, toTick, link) => {
+                w.postMessage({ type: 'restore', match, humanId, botify, toTick, record: { kind: 'host', build: BUILD, link } } satisfies ToWorker, [match.buffer]);
                 return ready;
               },
               events: { lobby: () => {}, chat: (from, text) => sink.chat(from, text), net: (rtt, host) => { netStatus.rtt = rtt; netStatus.host = host; } },
@@ -378,7 +396,7 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
         };
         run().catch((err) => {
           console.warn('[migrate] failed', err);
-          if (hosting) { hosting.worker.terminate(); hosting = null; }
+          if (hosting) { hosting.unpeek(); hosting.worker.terminate(); hosting = null; }
           sink.fatal('Host left', `Match over: the host left and the match could not move to another player (${err?.message ?? err}).`);
         });
         return true;
@@ -399,7 +417,8 @@ function remoteBackend(firstLink: Link, start: Extract<HostMsg, { t: 'start' }>,
     chat: (text) => { if (hosting) hosting.session?.localChat(text); else link.send({ t: 'chat', text }); },
     close: () => {
       disposed = true;
-      if (hosting) { hosting.session?.close(); hosting.worker.terminate(); hosting = null; }
+      // The rest of the match was recorded here (the next segment): keep it, like any host leaving early.
+      if (hosting) { hosting.session?.close(); hosting.unpeek(); finishAndTerminate(hosting.worker); hosting = null; }
     },
     // Spectator follow is for a remote host; a guest hosting after a migration has the full snapshot.
     follow: (id) => { if (!disposed && !hosting) link.send({ t: 'follow', id }); },
@@ -1028,10 +1047,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (input.enabled) input.requestLock();
   };
 
-  /** Back to the menu (a page reload) once this match's recording is stored. */
+  /** Back to the menu (a page reload) once this match's recording is stored and uploaded (bounded: see both). */
   function leaveToMenu() {
     backend.close();
-    void savesSettled().then(() => location.reload());
+    void savesSettled().then(() => replayUploader?.settled()).then(() => location.reload());
   }
 
   const fxPos = new THREE.Vector3();
