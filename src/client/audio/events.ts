@@ -19,7 +19,9 @@ export type SoundId =
   | 'reload' | 'dry' | 'ads' | 'thunder'
   | 'headshot' | 'shieldCrack' | 'land'
   /** Barrels / tanks / crates: kind 'hiss' (fuse), 'clang' (bullet on a drum), 'crateHit', 'crate' (breaks). */
-  | 'hazard';
+  | 'hazard'
+  /** Grappling hook (sim/grapple.ts): kind 'fire' (launch whoosh), 'latch' (claw bites / yank snaps taut), 'release'. */
+  | 'grapple';
 
 export type Cue = {
   sound: SoundId;
@@ -170,6 +172,15 @@ export class SoundDirector {
           else if (d.killer === this.humanId) out.push({ sound: 'kill', pos: null, gain: 0.9 });
           if (d.inWater) { const at = chest(d.victim); if (at) out.push({ sound: 'splash', pos: at, gain: 0.8 }); }
           break;
+        case 'grapple': {
+          const own = d.by === this.humanId || d.target === this.humanId;
+          const phase = String(d.phase);
+          if (phase === 'miss') break;
+          const kind = phase === 'yank' ? 'latch' : phase;
+          const at = chest(d.by);
+          if (own || at) out.push({ sound: 'grapple', kind, pos: own ? null : at, gain: own ? 0.7 : 0.6, own });
+          break;
+        }
         case 'dry': {
           const own = d.by === this.humanId;
           const at = chest(d.by);

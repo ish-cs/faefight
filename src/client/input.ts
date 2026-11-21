@@ -236,6 +236,7 @@ export class InputController {
     if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }
     if (this.held === 'medkit') { this.oneShot.useMedkit = true; return; }
     if (isPotionItem(this.held)) { this.oneShot.drink = true; return; }
+    if (this.held === 'grapple') { this.oneShot.grapple = true; return; } // fires, or lets go of the one that's out
     this.fireHeld = true;
     this.oneShot.fire = true; // a click shorter than a frame still fires once
   }

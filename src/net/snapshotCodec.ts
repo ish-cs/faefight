@@ -104,6 +104,9 @@ export class SnapshotEncoder {
     // Emote / speech bubble start times on the ms grid (cheap on the wire; the animation doesn't need more).
     if (p.emote) out.emote = { id: p.emote.id, at: r3(p.emote.at) };
     if (p.quip) out.quip = { id: p.quip.id, at: r3(p.quip.at) };
+    // The rope everyone draws: cm / ms grid. Its cooldown is the owner's business.
+    if (p.hook) out.hook = { ...p.hook, x: r2(p.hook.x), y: r2(p.hook.y), z: r2(p.hook.z), t0: r3(p.hook.t0), at: r3(p.hook.at) };
+    if (!own && !followed) delete (out as Partial<PlayerState>).hookReadyAt;
     if (own) delete out.stamina; // the owner gets it inside mv (prediction)
     if (followed) {
       // A spectator's view of the player they follow: their whole HUD, but nothing host-side.

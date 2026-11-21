@@ -117,7 +117,26 @@ export type BuildTuning = {
   coverScore: number; fortifyScore: number;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning };
+/**
+ * Grappling hook (sim/grapple.ts): when to buy one and when to use it.
+ * - buyAt: cash (carried + banked) from which this skill carries a hook (Infinity = never).
+ * - crossMax: hook over to an island I want but can't walk to once its near edge is this close to my eye.
+ * - crossInset: aim this far in from that island's edge (so I land on it, not on the cliff face).
+ * - escapeHp: hp + shield under this with an enemy in sight within escapeNear: hook away (at least escapeMin m).
+ * - yankMin / yankMax: yank an enemy in this distance band when it pays: open water between us (they drop in), they
+ *   hold high ground (yankHigh m above me), or my gun wants them closer (past yankFalloff × its falloff start).
+ * - yankRate: yank tries per second while one would pay (seeded rng: not every chance).
+ * - keepForTravel: uses held back for crossing while my target island is out of walking reach.
+ */
+export type HookParams = {
+  buyAt: Record<Difficulty, number>;
+  crossMax: number; crossInset: number;
+  escapeHp: number; escapeNear: number; escapeMin: number;
+  yankMin: number; yankMax: number; yankHigh: number; yankFalloff: number; yankRate: number;
+  keepForTravel: number;
+};
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -175,7 +194,15 @@ export const BUILD_TUNING: BuildTuning = {
   coverScore: 1.05, fortifyScore: 0.5,
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING });
+export const HOOK: HookParams = {
+  buyAt: D(1200, 450, 350, 300),
+  crossMax: 39, crossInset: 2.5,
+  escapeHp: 45, escapeNear: 20, escapeMin: 12,
+  yankMin: 8, yankMax: 30, yankHigh: 2.5, yankFalloff: 1.2, yankRate: 0.6,
+  keepForTravel: 1,
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -230,6 +257,10 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['buildTuning.slotBackoffSec', [10, 90]], ['buildTuning.pushLead', [0, 80]], ['buildTuning.bridgeRetrySec', [0.2, 2]],
   ['buildTuning.bridgeStuckSec', [1, 10]], ['buildTuning.bridgeHoldSec', [5, 60]], ['buildTuning.freeSlots', [1, 4]],
   ['buildTuning.coverScore', [0.5, 1.5]], ['buildTuning.fortifyScore', [0.1, 1]],
+  ['hook.buyAt.*', [150, 1500]], ['hook.crossMax', [20, 40]], ['hook.crossInset', [1, 6]],
+  ['hook.escapeHp', [0, 120]], ['hook.escapeNear', [8, 35]], ['hook.escapeMin', [6, 30]],
+  ['hook.yankMin', [3, 15]], ['hook.yankMax', [15, 40]], ['hook.yankHigh', [1, 6]], ['hook.yankFalloff', [0.5, 3]],
+  ['hook.yankRate', [0, 3]], ['hook.keepForTravel', [0, 2]],
 ];
 const ruleMatch = (pattern: string, key: string) => {
   const a = pattern.split('.'), b = key.split('.');

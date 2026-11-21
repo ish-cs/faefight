@@ -335,6 +335,16 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
   switch (cue.sound) {
     case 'shot': return gunshot(k, out, t, cue, d);
     case 'reload': return handling(k, out, t, cue);
+    case 'grapple': // grappling hook: launch whoosh + cable rattle; claw bite; rope slack
+      if (cue.kind === 'fire') {
+        noise(k, out, t, { type: 'bandpass', freq: 900 * p, freqEnd: 3200, q: 1.1, dur: 0.22, peak: 0.55, attack: 0.01 });
+        return noise(k, out, t + 0.02, { type: 'highpass', freq: 4200 * p, dur: 0.3, peak: 0.18, attack: 0.02 });
+      }
+      if (cue.kind === 'latch') {
+        noise(k, out, t, { type: 'bandpass', freq: 2400 * p, q: 3, dur: 0.035, peak: 0.8 });
+        return partials(k, out, t, 820 * p, 0.25, [[1, 1, 0.18], [2.4, 0.5, 0.1]]);
+      }
+      return noise(k, out, t, { type: 'bandpass', freq: 1400 * p, freqEnd: 600, q: 1.5, dur: 0.12, peak: 0.3, attack: 0.01 });
     case 'dry': // hammer on an empty chamber
       noise(k, out, t, { type: 'highpass', freq: 5200 * p, dur: 0.01, peak: 0.6 });
       return tone(k, out, t, { f0: 1700 * p, f1: 1300, dur: 0.018, peak: 0.35, attack: 0.001 });

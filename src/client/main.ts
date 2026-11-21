@@ -2045,7 +2045,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (sample.fire && me?.alive && !spectating) predictShot(sample.yaw, sample.pitch);
     // Lag compensation: tell the host which moment of everyone else we were looking at when we fired.
     const viewT = renderer.renderTime;
-    if (sample.fire && viewT !== null) sample.viewT = viewT;
+    if ((sample.fire || sample.grapple) && viewT !== null) sample.viewT = viewT;
     // Camera mode rides along (cosmetic): spectators watching us see through the same camera.
     sample.view = fpv.mode === 'first' ? 1 : 0;
     if (backend.inputHz === null) { backend.input(sample, unsent); unsent = []; }

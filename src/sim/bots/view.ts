@@ -50,6 +50,11 @@ export type BotView = {
   hazards?: { id: number; kind: 'barrel' | 'propane' | 'crate'; pos: Vec3; center: Vec3; radius: number; fusing: boolean }[];
   /** Clear line of fire from my eye to this point (bullets pass firing slits)? */
   clearShot?(to: Vec3): boolean;
+  /**
+   * A grappling hook's ray from my eye along `dir` (unit): where it would catch (GRAPPLE.range max; firing slits
+   * block it), and the player it would hit, if any. Absent in hand-made test views.
+   */
+  castHook?(dir: Vec3): { point: Vec3; dist: number; player: number | null } | null;
   /** Positions of loot bags within sight range. */
   loot: Vec3[];
   waterY: number;
