@@ -1649,7 +1649,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       hud.genMult = def.settings?.genMult ?? 1;
       if (practice && map[island]) practice.setBunker(map[island].bunker);
       qol.setMap(map, humanId, island);
-      audio.setMap(map, humanId);
+      audio.setMap(map, humanId, def.docks ?? []);
     },
     snapshot: (s) => {
       // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.

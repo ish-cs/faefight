@@ -5,7 +5,7 @@
 //                                                        sfxBus ─ reverbSend ─ convolver ─┘
 //   ambience (waves, foam, wind) ─ ambientLP ─ world                 uiBus (stingers, heartbeat) ─┘
 
-import type { IslandLayout } from '../../sim/map';
+import type { DockDef, IslandLayout } from '../../sim/map';
 import type { Snapshot, Vec3 } from '../../sim/types';
 import { type Cue, type Env, SoundDirector } from './events';
 import { clank, critterCall, fireLoop, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
@@ -261,8 +261,8 @@ export class AudioSystem {
   /** Whose ears: the followed player while spectating, else the local player (viewed.ts). */
   setViewed(id: number) { this.director.setViewed(id); }
 
-  setMap(map: IslandLayout[], humanId: number) {
-    this.director.setMap(map, humanId);
+  setMap(map: IslandLayout[], humanId: number, docks: readonly DockDef[] = []) {
+    this.director.setMap(map, humanId, docks);
   }
 
   /** Debug (?debug=1): play any cue directly, bypassing the event mapping. */

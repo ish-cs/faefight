@@ -2,7 +2,8 @@
 
 import { insideBunker } from '../../sim/bots/nav';
 import { MAP, PIECES } from '../../sim/constants';
-import type { IslandLayout } from '../../sim/map';
+import type { DockDef, IslandLayout } from '../../sim/map';
+import { overDock } from '../../sim/docks';
 import type { PieceKind, PieceState, PlayerState, Snapshot, Vec3, WeaponKind } from '../../sim/types';
 import { beatsBetween } from '../../sim/gunplay';
 import { reloadClock } from '../firstPerson';
@@ -57,7 +58,7 @@ export function landGain(prevVy: number, own: boolean): number {
 }
 
 /** Ground the player stands on: a piece top under their feet, else the island (bunker floor / shore sand / grass). */
-export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[]): Surface {
+export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[], docks: readonly DockDef[] = [], broken: readonly number[] = []): Surface {
   for (const pc of pieces) {
     const s = PIECES[pc.kind];
     const dx = p.x - pc.pos.x, dz = p.z - pc.pos.z;
@@ -68,6 +69,8 @@ export function surfaceAt(p: Vec3, pieces: PieceState[], map: IslandLayout[]): S
     if (p.y < pc.pos.y + 0.05 || p.y > pc.pos.y + s.h + 0.35) continue;
     return pieceSurface(pc.kind);
   }
+  // Pier planks (standing sections only: a broken one is water).
+  for (const d of docks) if (overDock(d, p, 0.2) && Math.abs(p.y - (d.center.y + d.half.y)) < 0.4 && !broken.includes(d.id)) return 'wood';
   for (const isl of map) {
     const d = Math.hypot(p.x - isl.center.x, p.z - isl.center.z);
     if (d > isl.radius + 2) continue;
@@ -101,6 +104,7 @@ type StepTrack = { x: number; z: number; acc: number };
 
 export class SoundDirector {
   private map: IslandLayout[] = [];
+  private docks: readonly DockDef[] = [];
   private humanId = -1;
   private prev: Snapshot | null = null;
   private steps = new Map<number, StepTrack>();
@@ -110,8 +114,9 @@ export class SoundDirector {
   env: Env = { alive: false, hp: 100, inBunker: false, shoreDist: 50, inWater: false };
 
   /** A new match (also a rematch): forget the previous match's snapshot so nothing is diffed across them. */
-  setMap(map: IslandLayout[], humanId: number) {
+  setMap(map: IslandLayout[], humanId: number, docks: readonly DockDef[] = []) {
     this.map = map;
+    this.docks = docks;
     this.humanId = humanId;
     this.prev = null;
     this.steps.clear();
@@ -313,7 +318,7 @@ export class SoundDirector {
       if (!was || !p.alive || !was.alive || s.hidden?.includes(p.id)) continue;
       if (!isLanding(was.vel.y, p.vel.y, Math.hypot(p.pos.x - was.pos.x, p.pos.z - was.pos.z), p.pos.y > s.waterY + 0.2)) continue;
       const own = p.id === this.humanId;
-      out.push({ sound: 'land', kind: surfaceAt(p.pos, s.pieces, this.map), pos: own ? null : { ...p.pos }, gain: landGain(was.vel.y, own), own });
+      out.push({ sound: 'land', kind: surfaceAt(p.pos, s.pieces, this.map, this.docks, s.docks), pos: own ? null : { ...p.pos }, gain: landGain(was.vel.y, own), own });
     }
   }
 
@@ -332,7 +337,7 @@ export class SoundDirector {
         t.acc -= STRIDE;
         const own = p.id === this.humanId;
         // Enemy steps are louder than your own: they're information (capped by HEARING.footstep).
-        out.push({ sound: 'footstep', kind: surfaceAt(p.pos, s.pieces, this.map), pos: { ...p.pos }, gain: own ? 0.4 : ENEMY_STEP_GAIN, own });
+        out.push({ sound: 'footstep', kind: surfaceAt(p.pos, s.pieces, this.map, this.docks, s.docks), pos: { ...p.pos }, gain: own ? 0.4 : ENEMY_STEP_GAIN, own });
       }
     }
   }
