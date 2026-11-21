@@ -5,17 +5,28 @@ import { defineConfig } from '@playwright/test';
 // run two checkouts' e2e suites side by side.
 const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
 const port = Number(env.E2E_PORT ?? 5199);
+const CI = !!env.CI;
+
+// Local (macOS): channel 'chromium' = full Chromium in new headless mode, which keeps a real GPU (WebGPU);
+// the default headless shell loses its WebGPU device right after init.
+// CI (GitHub Linux runners, no GPU): no WebGPU adapter, so three/webgpu's WebGPURenderer falls back to
+// WebGL2, rendered in software by SwiftShader through ANGLE. Slower, so CI gets a longer test timeout.
+const launchArgs = CI
+  ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
+  : ['--enable-unsafe-webgpu'];
 
 export default defineConfig({
   testDir: 'tests/e2e',
-  timeout: 90_000,
-  // channel 'chromium' = full Chromium in new headless mode, which keeps a real GPU (WebGPU) on macOS;
-  // the default headless shell loses its WebGPU device right after init.
+  timeout: CI ? 180_000 : 90_000,
+  // CI: one retry, so a one-off runner hiccup doesn't block a merge; Playwright still reports it as "flaky".
+  retries: CI ? 1 : 0,
+  ...(CI ? { workers: 1, reporter: [['list'], ['html', { open: 'never' }]] as const } : {}),
   // Every test starts as a returning player (How to play already seen) so the first-launch card doesn't
   // cover the menu; tests/e2e/menuExtras.spec.ts clears this to test the first launch itself.
   use: {
-    baseURL: `http://localhost:${port}`, channel: 'chromium', launchOptions: { args: ['--enable-unsafe-webgpu'] },
+    baseURL: `http://localhost:${port}`, channel: 'chromium', launchOptions: { args: launchArgs },
     storageState: { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: 'faefight.settings.v1', value: JSON.stringify({ v: 2, onboarding: { howToSeen: true } }) }] }] },
+    ...(CI ? { trace: 'retain-on-failure' as const } : {}),
   },
-  webServer: { command: `pnpm vite --port ${port} --strictPort`, url: `http://localhost:${port}`, reuseExistingServer: false },
+  webServer: { command: `pnpm vite --port ${port} --strictPort`, url: `http://localhost:${port}`, reuseExistingServer: false, timeout: 120_000 },
 });
