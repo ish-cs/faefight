@@ -3,7 +3,7 @@ import { emptyInventory } from '../sim/economy';
 import { bunkerWallBoxes, type Box, type IslandLayout } from '../sim/map';
 import type { MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
 import { add, rotateY, v3 } from '../sim/vec';
-import type { NetPlayer, NetSnapshot } from './snapshotCodec';
+import type { NetPlayer, NetProp, NetSnapshot } from './snapshotCodec';
 
 /**
  * Per-client interest management (anti-ESP): the host only tells each remote client what that
@@ -30,6 +30,8 @@ export const INTEREST = {
   generatorRevealM: 15,
   /** Occluder boxes are shrunk by this (under-occlude on grazing rays rather than over-occlude). */
   shrink: 0.05,
+  /** Gameplay props farther than this (m) from the viewer keep the pose that viewer last got (no updates). */
+  propRange: 80,
 };
 
 type Obb = {
@@ -87,6 +89,8 @@ export class InterestManager {
   private seenAt = new Map<number, Map<number, number>>();
   /** viewer → target → position last sent to that viewer. */
   private lastSent = new Map<number, Map<number, Vec3>>();
+  /** viewer → prop id → pose last sent to that viewer (props out of range stay frozen at it). */
+  private propSent = new Map<number, Map<number, NetProp>>();
   /** Total time spent in apply(), for perf logging. */
   costMs = 0;
 
@@ -147,9 +151,33 @@ export class InterestManager {
         ? g : { island: g.island, stored: 0 })),
       loot: net.loot.map((b) => ({ ...b, inv: emptyInventory() })),
     };
+    if (net.pr || this.propSent.get(viewerId)?.size) {
+      const pr = this.props(viewerId, me.pos, omniscient, net.pr ?? []);
+      if (pr.length) out.pr = pr;
+      else delete out.pr;
+    }
     if (hidden.length) out.hidden = hidden;
     else delete out.hidden;
     this.costMs += performance.now() - t0;
+    return out;
+  }
+
+  /**
+   * Props near the viewer are sent as they are; far ones repeat the pose this viewer last got (so the binary
+   * delta sends nothing for them), or are left out if it never got one. A prop back at its spawn (not listed)
+   * is dropped from the viewer's memory too, so its next listing is fresh.
+   */
+  private props(viewerId: number, at: Vec3, all: boolean, pr: NetProp[]): NetProp[] {
+    const sent = this.mapFor(this.propSent, viewerId);
+    const out: NetProp[] = [];
+    const listed = new Set<number>();
+    for (const x of pr) {
+      listed.add(x.id);
+      if (all || Math.hypot(x.p[0] - at.x, x.p[2] - at.z) <= INTEREST.propRange) { sent.set(x.id, x); out.push(x); continue; }
+      const old = sent.get(x.id);
+      if (old) out.push(old);
+    }
+    for (const id of [...sent.keys()]) if (!listed.has(id)) sent.delete(id);
     return out;
   }
 
@@ -157,6 +185,7 @@ export class InterestManager {
   forget(viewerId: number): void {
     this.seenAt.delete(viewerId);
     this.lastSent.delete(viewerId);
+    this.propSent.delete(viewerId);
   }
 
   private mapFor<T>(m: Map<number, Map<number, T>>, id: number): Map<number, T> {

@@ -1,10 +1,11 @@
 import * as THREE from 'three/webgpu';
 import type { MapDef } from '../../sim/map';
-import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
+import type { MatchEvent, PieceState, PlayerState, Snapshot } from '../../sim/types';
 import { CosmeticLayer } from './cosmetics';
 import { Debris } from './debris';
 import { Boats, gullPerches, Gulls } from './dressing';
 import { defineDetailKinds } from './detail';
+import { GameProps } from './gameProps';
 import { Grass } from './grass';
 import { buildGroundAO } from './groundAO';
 import { Scatter } from './scatter';
@@ -31,6 +32,8 @@ export class World {
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
   private cosmetics: CosmeticLayer | null = null;
+  /** Tier A gameplay props (sim-owned rigid bodies), posed from snapshots. */
+  private gameProps: GameProps | null = null;
   /** instanced grass beds (high/ultra) */
   readonly grass = new Grass();
   /** instanced small detail (litter, rubble, shells, seaweed…) */
@@ -90,6 +93,8 @@ export class World {
     this.scene.add(this.cosmetics.root);
     this.scene.add(this.debris.root);
     void this.debris.build(def, this.sky.quality);
+    this.gameProps = new GameProps(def.props ?? []);
+    this.scene.add(this.gameProps.root);
     console.info(`[world] built ${def.name}: ${map.length} islands + center, ${def.statics.length} cover, ${def.cosmetics.length} cosmetics in ${Math.round(performance.now() - t0)} ms`);
   }
 
@@ -114,6 +119,8 @@ export class World {
     this.cosmetics?.dispose();
     this.cosmetics = null;
     this.debris.clear();
+    this.gameProps?.dispose();
+    this.gameProps = null;
   }
 
   /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
@@ -124,6 +131,9 @@ export class World {
     if (e.type !== 'cosmeticBroken') return;
     this.cosmetics?.onBroken(e.data, this.pieceFx.particles);
   }
+
+  /** Snapshot `props` (displaced gameplay props; the rest are at spawn). */
+  syncProps(poses: Snapshot['props']) { this.gameProps?.sync(poses); }
 
   syncPieces(pieces: PieceState[]) { this.pieces.sync(pieces); this.pieceFx.sync(pieces); this.debris.syncPieces(pieces); }
 
@@ -145,6 +155,7 @@ export class World {
     this.scatter.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
     this.pieceFx.update(performance.now());
+    this.gameProps?.update(dt);
     this.sky.render(); // cascaded shadows follow the camera themselves
   }
 }

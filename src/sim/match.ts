@@ -10,6 +10,7 @@ import { Cosmetics } from './cosmetics';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
+import { PropSim } from './props';
 import { HitboxHistory, LAG_COMP, rayPlayer } from './lagComp';
 import { newMoveState, stepMove, type MoveCmd } from './movement';
 import { adsMoveCmd, adsSpeed } from './gunplay';
@@ -66,6 +67,8 @@ export class Match implements MatchApi {
   readonly map: IslandLayout[];
   private center: CenterState = newCenterState();
   private cosmetics: Cosmetics;
+  /** Tier A gameplay props (dynamic bodies); null on a map without any. */
+  private props: PropSim | null;
   /** Potion sellers: the NPC on the center island. */
   potionShops: PotionShop[];
   /** Recent player hitboxes, and the time the shot being resolved right now is rewound to (lagComp.ts). */
@@ -83,6 +86,7 @@ export class Match implements MatchApi {
     const map = def.islands;
     this.map = map;
     this.cosmetics = new Cosmetics(def.cosmetics);
+    this.props = def.props?.length ? new PropSim(physics, map, def.center, def.props, DT) : null;
     this.potionShops = potionShopsAt([def.center.potionShop]);
     this.s = newMatchState(map);
     this.s.waterY = def.waterY;
@@ -173,6 +177,7 @@ export class Match implements MatchApi {
 
     this.events.push(...tickExplosives(this.ctx, now));
     this.collapseUnsupported(now);
+    this.props?.tick(now, this.s.players.values(), this.s.pieces, this.events, this.s.waterY);
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
     tickCenter(this.center, DT, !this.s.suddenDeath);
     for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
@@ -247,6 +252,9 @@ export class Match implements MatchApi {
     this.sealDirty = true;
     return id;
   }
+
+  /** Tests/debug: the prop simulation (poses, debugPlace). */
+  debugProps(): PropSim | null { return this.props; }
 
   debugTeleport(playerId: number, pos: Vec3): void {
     const p = this.mustPlayer(playerId);
@@ -542,6 +550,7 @@ export class Match implements MatchApi {
       generators: this.s.generators,
       center: { gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       broken: this.cosmetics.broken,
+      ...(this.props ? { props: this.props.poses() } : {}),
       genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,

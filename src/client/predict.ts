@@ -127,6 +127,8 @@ export class Predictor {
       if (!this.pieceIds.has(p.id)) { this.physics.addPiece(p); this.pieceIds.add(p.id); }
     }
     for (const id of this.pieceIds) if (!seen.has(id)) { this.physics.removePiece(id); this.pieceIds.delete(id); }
+    // Gameplay props are obstacles at their last known pose (no prediction of the prop itself).
+    this.physics.setPropPoses(snap.props);
 
     const live = new Set<number>();
     for (const p of snap.players) {

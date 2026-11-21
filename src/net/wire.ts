@@ -52,6 +52,8 @@ const DICT = [
   'kill', 'dry', 'victim', 'killer', 'piece', 'source', 'bullet', 'maxHp', 'fists', 'pistol', 'smg', 'shotgun', 'rifle', 'rocket',
   'wood', 'metal', 'steel', 'sandbags', 'scaffold', 'ramp', 'container', 'grenade', 'charge', 'medkit', 'noPickup', 'until',
   'ack', 'grounded', 'airTime',
+  // appended (keep earlier indices stable): gameplay props
+  'pr', 'p', 'q',
 ];
 
 const enc = new TextEncoder();

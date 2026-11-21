@@ -1,5 +1,6 @@
 import { emptyInventory } from '../sim/economy';
 import { emptyHotbar } from '../sim/hotbar';
+import type { PropPose } from '../sim/props';
 import type { MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
 
 /**
@@ -13,7 +14,9 @@ export type NetPlayer = Omit<PlayerState, Private> & Partial<Pick<PlayerState, P
 /** A live projectile on the wire: [id, kind (0 grenade, 1 charge, 2 rocket), x, y, z, vx, vy, vz]. */
 export type NetProjectile = [number, number, number, number, number, number, number, number];
 const PROJ_KINDS = ['grenade', 'charge', 'rocket'] as const;
-export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players' | 'projectiles'> & { pieces?: PieceState[]; players: NetPlayer[]; proj?: NetProjectile[] };
+/** A displaced gameplay prop on the wire: position in cm, quaternion in 1/1000 (delta-encoded per id by wire.ts). */
+export type NetProp = PropPose;
+export type NetSnapshot = Omit<Snapshot, 'pieces' | 'players' | 'projectiles' | 'props'> & { pieces?: PieceState[]; players: NetPlayer[]; proj?: NetProjectile[]; pr?: NetProp[] };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -64,6 +67,10 @@ export class SnapshotEncoder {
       const p = rv(e.pos), v = r1v(e.vel);
       return [e.id, PROJ_KINDS.indexOf(e.kind), p.x, p.y, p.z, v.x, v.y, v.z];
     });
+    // Gameplay props away from their spawn (the sim only lists those), quantized; a resting prop's entry is
+    // unchanged between updates, so the binary wire's per-id delta sends nothing for it.
+    delete (out as Partial<Snapshot>).props;
+    if (s.props?.length) out.pr = s.props.map((x) => ({ id: x.id, p: [r2(x.p[0]), r2(x.p[1]), r2(x.p[2])], q: [r3(x.q[0]), r3(x.q[1]), r3(x.q[2]), r3(x.q[3])] }));
     delete (out as Partial<Snapshot>).pieces;
     if (allPieces || this.sentPiecesKey.get(forPlayerId) !== this.piecesKey) {
       this.sentPiecesKey.set(forPlayerId, this.piecesKey);
@@ -110,8 +117,8 @@ export class SnapshotDecoder {
       bloom: p.bloom ?? 0, lastShotAt: p.lastShotAt ?? -1e9, burst: p.burst ?? 0,
       reloadUntil: p.reloadUntil ?? 0, reloadSec: p.reloadSec ?? 0, reloadMag: p.reloadMag ?? 0, ads: p.ads ?? false,
     }));
-    const { proj, ...rest } = n;
+    const { proj, pr, ...rest } = n;
     const projectiles = (proj ?? []).map(([id, k, x, y, z, vx, vy, vz]) => ({ id, kind: PROJ_KINDS[k] ?? 'grenade', pos: { x, y, z }, vel: { x: vx, y: vy, z: vz } }));
-    return { ...rest, players, pieces: this.pieces, projectiles };
+    return { ...rest, players, pieces: this.pieces, projectiles, ...(pr ? { props: pr } : {}) };
   }
 }
