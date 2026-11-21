@@ -8,7 +8,7 @@ import { boxTape, faceLabel, labelMaterial } from './labels';
 import { SMALL_CASTER_LAYER } from './lod';
 import { mats } from './materials';
 import type { Quality } from './sky';
-import { movingVariant, weather } from './weathering';
+import { movingVariant } from './weathering';
 
 /**
  * Tier-B cosmetic debris (bottles, cans, small boxes, cones, planks, small buoys): instanced meshes driven by the
@@ -44,12 +44,6 @@ function overlayFor(kind: DebrisKind): THREE.BufferGeometry | null {
   ]);
 }
 
-function material(name: string, o: ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0]) {
-  const m = new THREE.MeshStandardNodeMaterial(o);
-  m.name = name;
-  return m;
-}
-
 export class Debris {
   readonly root = new THREE.Group();
   sim: DebrisSim | null = null;
@@ -65,10 +59,12 @@ export class Debris {
   private zero = new THREE.Vector3(0, 0, 0);
   /** weathered in object space (they tumble): instance colour tints, instance hash varies wear */
   private mats = {
-    shiny: weather(material('debrisShiny', { roughness: 0.15, metalness: 0.3 }), { objectSpace: true, grime: 0.35, grimeHeight: 0.3, edge: 0.5, chip: 'light', vary: 0.2 }),
+    // Shared with the gameplay props (same moving variants, same vertex layout via part()): no debris-only pipelines.
+    // Per-prop look comes from the instance colour (tint) and the instance hash (wear).
+    shiny: movingVariant(mats().galv),
     cardboard: movingVariant(mats().matte),
     wood: movingVariant(mats().wood),
-    plastic: weather(material('debrisPlastic', { roughness: 0.45 }), { objectSpace: true, grime: 0.55, grimeHeight: 0.4, streaks: 0.3, edge: 0.4, chip: 'light', vary: 0.18 }),
+    plastic: movingVariant(mats().paint),
   };
 
   constructor() { this.root.name = 'debris'; }
@@ -89,7 +85,7 @@ export class Debris {
         const ids = byKind.get(kind);
         if (!ids) continue;
         const mat = kind === 'bottle' || kind === 'can' ? this.mats.shiny : kind === 'box' ? this.mats.cardboard : kind === 'plank' ? this.mats.wood : this.mats.plastic;
-        const mesh = new THREE.InstancedMesh(geometryFor(kind), mat, ids.length);
+        const mesh = new THREE.InstancedMesh(part(geometryFor(kind), null), mat, ids.length);
         mesh.name = `debris:${kind}`;
         mesh.castShadow = kind === 'box' || kind === 'cone';
         mesh.layers.set(SMALL_CASTER_LAYER); // near shadow cascades only
