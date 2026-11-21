@@ -170,7 +170,12 @@ export const LOCK_PRICE_MULT = 4;
 export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5, queueSec: 0.25 };
 
 export const LIFECYCLE = {
-  respawnSec: 3,
+  /**
+   * Death to respawn (2026-11-21: 3 → 5 s, the user's call). CI, 20 seeds: 8-bot FFAs about the same as 3 s,
+   * Hard 1v1 decided before sudden death 14 → 19/20, PRO vs Hard 75 → 85 %. 10 s gave 1-2/20 more decided
+   * FFAs but cut PRO-vs-Hard 1v1s to a 4.6 min average (16/20 under 5 min).
+   */
+  respawnSec: 5,
   /** Respawning into a sealed bunker: break out within this long or you're eliminated. */
   breakoutSec: 10,
   invulnSec: 3,

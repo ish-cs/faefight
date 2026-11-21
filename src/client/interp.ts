@@ -91,7 +91,7 @@ export function hermite(p0: number, m0: number, p1: number, m1: number, h: numbe
   };
 }
 
-const angleLerp = (a: number, b: number, s: number) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * s;
+export const angleLerp = (a: number, b: number, s: number) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * s;
 const dist = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
 const ZERO: Readonly<Vec3> = Object.freeze({ x: 0, y: 0, z: 0 });
@@ -198,5 +198,37 @@ export class VerticalSmoother {
     this.offset *= Math.exp(-STEP_RATE * dt);
     this.offset = Math.max(-0.5, Math.min(0.5, this.offset));
     return y + this.offset;
+  }
+}
+
+/** Shortest signed angle from a to b (radians, in [-π, π]). */
+export const angleDiff = (a: number, b: number) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
+
+/** View smoothing time constant (s) for a watched player's camera: hides 30 Hz kinks, ~1 frame of lag at 30 fps. */
+export const LOOK_TAU = 0.03;
+/** A view change bigger than this within one frame is a cut (respawn, new target): snap, don't swing. */
+export const LOOK_SNAP = 1.5;
+
+/**
+ * Light smoothing of a watched player's view angles (spectator / mirror camera only — never the local player's
+ * own camera, which must not lag their mouse). Exponential follow of the interpolated yaw/pitch, frame-rate
+ * independent; the yaw step is wrapped so a ±π crossing turns the short way instead of spinning round. Snaps on
+ * a new player or a cut larger than LOOK_SNAP.
+ */
+export class LookSmoother {
+  private id: number | null = null;
+  yaw = 0;
+  pitch = 0;
+
+  update(id: number, yaw: number, pitch: number, dt: number): { yaw: number; pitch: number } {
+    const dy = angleDiff(this.yaw, yaw), dp = pitch - this.pitch;
+    if (id !== this.id || Math.abs(dy) > LOOK_SNAP || Math.abs(dp) > LOOK_SNAP) {
+      this.id = id; this.yaw = yaw; this.pitch = pitch;
+    } else {
+      const k = 1 - Math.exp(-Math.max(0, dt) / LOOK_TAU);
+      this.yaw += dy * k;
+      this.pitch += dp * k;
+    }
+    return { yaw: this.yaw, pitch: this.pitch };
   }
 }

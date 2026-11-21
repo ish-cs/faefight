@@ -3,6 +3,7 @@ import { color, float, uv } from 'three/tsl';
 import type { CosmeticDef } from '../../sim/map';
 import { dayLook, dayPhase, lightAngles, lightStepPhase, newDayLook, type Rgb } from './dayCycle';
 import { dayNightState, lightU } from './lightUniforms';
+import { setDaylight } from '../audio/api';
 import type { SkyLighting } from './sky';
 
 /** Clear-weather lighting of the moment: what the storm (storm.ts) darkens from. */
@@ -106,6 +107,7 @@ export class DayNight {
     t.multiplyScalar(0.6 * k).addScalar(0.4 * (b.env / BAKE.env));
     (lightU.impostor.value as THREE.Color).copy(t);
     dayNightState.night = L.night;
+    setDaylight(1 - L.night); // ambience: gulls by day, crickets and owls at night
     dayNightState.key = k;
     dayNightState.env = b.env / BAKE.env;
     dayNightState.keyColor.copy(b.sunC);

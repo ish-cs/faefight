@@ -27,3 +27,16 @@ https://polyhaven.com/license.
 
 Everything else (signage, palm fronds, bark, crack masks, ground markings/decals, grass blades, pebbles, gulls, boats) is
 generated procedurally at runtime in `src/client/world/`.
+
+## Audio
+
+There are no audio files. Every sound effect, ambience loop and the music is synthesized at runtime with the
+Web Audio API (oscillators, filtered noise, envelopes) by original code in this repo, so nothing is downloaded or
+decoded and there is no third-party audio licence to track. The synthesized audio is dedicated to the public
+domain (CC0 1.0, https://creativecommons.org/publicdomain/zero/1.0/).
+
+| What | Source | Licence |
+|---|---|---|
+| Weapons, impacts, footsteps, building, explosions, UI, feature hooks | `src/client/audio/sfx.ts` (procedural recipes) | CC0, original |
+| Ocean waves, wind, rain, thunder, gulls, wildlife, crickets/owls, fire crackle | `src/client/audio/engine.ts`, `sfx.ts` (procedural) | CC0, original |
+| Adaptive music (calm / tense / intense) | `src/client/audio/music.ts` (procedural, live-sequenced) | CC0, original |
