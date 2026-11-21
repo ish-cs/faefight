@@ -5,6 +5,7 @@ import {
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
+import { perfOff } from './perfFlags';
 
 export type PostOptions = { samples: number; bloom: boolean; ao: false | { resolution: number; samples: number }; flare?: boolean };
 
@@ -72,7 +73,7 @@ export function buildPipeline(
     const lum = luminance(col.rgb);
     const notSky = step(scenePass.getTextureNode('depth').r, 0.9999);
     const hot = col.rgb.mul(smoothstep(grade.bloomThreshold, grade.bloomThreshold.mul(2.5), lum)).mul(notSky).mul(0.35);
-    hdr = hdr.add(bloom(vec4(scenePass.getTextureNode('emissive').rgb.add(hot), 1), 0.75, 0.45, 0).rgb);
+    hdr = hdr.add(bloom(perfOff('nohotbloom') ? scenePass.getTextureNode('emissive') : vec4(scenePass.getTextureNode('emissive').rgb.add(hot), 1), 0.75, 0.45, 0).rgb);
   }
 
   let flare: THREE.Node<'vec3'> | null = null;

@@ -4,6 +4,7 @@ import type { Quality } from './sky';
 import { STATIC_CHUNKS } from './geo';
 import { lods, type LodTarget, SMALL_CASTER_LAYER } from './lod';
 import { chunkCoord, chunkKey, distToSphere, LOD_HYSTERESIS } from './lodMath';
+import { perfOff } from './perfFlags';
 import { stressOffsets } from './stress';
 import { makeRng } from './textures';
 
@@ -109,7 +110,7 @@ export class Scatter {
         mesh.userData.far = k.far;
         this.root.add(mesh);
         k.chunks.push(mesh);
-        if (k.blob) { // contact blobs for this chunk: same items, culled and thinned with it
+        if (k.blob && !perfOff('noblob')) { // contact blobs for this chunk: same items, culled and thinned with it
           const b = this.buildBlobs(key, k.blob, items, centers);
           b.computeBoundingSphere();
           b.userData.full = items.length;

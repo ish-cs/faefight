@@ -11,6 +11,7 @@ import { GameProps } from './gameProps';
 import { PROP_KINDS } from '../../sim/props';
 import { Grass } from './grass';
 import { buildGroundAO } from './groundAO';
+import { perfOff } from './perfFlags';
 import { Scatter } from './scatter';
 import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
@@ -101,7 +102,7 @@ export class World {
     wm.envMap = this.scene.environment;
     wm.envMapIntensity = 0.62;
     this.waterEnv = wm;
-    this.groundAO = buildGroundAO(def);
+    this.groundAO = perfOff('nogroundao') ? null : buildGroundAO(def);
     if (this.groundAO) this.scene.add(this.groundAO);
     this.sky.setInteriors(map);
     // grass follows the harbor surface mask (sand/grass beds); the Container Yard is bare asphalt

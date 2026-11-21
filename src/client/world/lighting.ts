@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { cameraPosition, color, dot, exp, float, fog, luminance, max, mix, normalize, positionView, positionWorld, pow, smoothstep, uniform, vec3, vec4 } from 'three/tsl';
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
+import { perfOff } from './perfFlags';
 
 /**
  * The scene's lighting rig in one place: sky dome, image-based lighting (PMREM of the sky above a sand/sea bounce
@@ -112,7 +113,8 @@ export class Lighting {
     s.shadow.camera.far = 700;
     this.hemi.name = 'hemiBounce';
     this.hemi.position.set(0, 1, 0);
-    scene.add(s, s.target, this.hemi);
+    scene.add(s, s.target);
+    if (!perfOff('nohemi')) scene.add(this.hemi);
 
     // Aerial perspective: exponential distance haze that thins with altitude (so the far sea and hills soften toward
     // the horizon while nearby props stay crisp), warmer when looking toward the sun.
