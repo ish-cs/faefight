@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 type XZ = { x: number; z: number };
 type Def = { template: string; name: string; islands: unknown[]; center: { center: XZ; goldGen: XZ }; cosmetics: { id: number }[] };

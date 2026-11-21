@@ -1,5 +1,6 @@
 import { CENTER, MAP } from './constants';
 import type { Vec3 } from './types';
+import type { GameSettings } from './settings';
 import { add, forward, right, rotateY, scale, v3, yawOf } from './vec';
 
 export type Doorway = { center: Vec3; yaw: number; width: number };
@@ -70,6 +71,9 @@ export type MapDef = {
   center: CenterIsland;
   statics: StaticBox[];
   cosmetics: CosmeticDef[];
+  /** Set by the match: the rules in force (clamped) and the palette colour per island (index = island). */
+  settings?: GameSettings;
+  colors?: number[];
 };
 
 type TemplateSpec = {

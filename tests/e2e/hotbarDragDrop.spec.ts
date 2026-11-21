@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 // Dragging a hotbar slot out over the game view drops it (the sim's drop action); Shift drops one.
 type Snap = { loot: { inv: { pieces: Record<string, number> } }[]; players: { id: number; hotbar: (string | null)[]; inv: { pieces: Record<string, number> } }[] };

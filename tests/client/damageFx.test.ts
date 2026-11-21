@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { damageNumbers, hitDirection } from '../../src/client/damageFx';
+import { burnedBy, damageNumbers, hitDirection } from '../../src/client/damageFx';
 import type { MatchEvent } from '../../src/sim/types';
 
 const hit = (target: number, by: number, amount: number, shieldAmount = 0): MatchEvent => ({ t: 1, type: 'hit', data: { target, by, amount, shieldAmount } });
@@ -42,5 +42,14 @@ describe('hitDirection', () => {
   });
   test('turning the camera left makes a fixed attacker swing right', () => {
     expect(hitDirection({ x: 0, z: 0 }, { x: 0, z: -10 }, Math.PI / 2)).toBeCloseTo(Math.PI / 2);
+  });
+});
+
+describe('burning indicator', () => {
+  test('lights up only for fire damage to me', () => {
+    const hit = (target: number, weapon: string): MatchEvent => ({ t: 1, type: 'hit', data: { target, by: 2, amount: 3, weapon } });
+    expect(burnedBy([hit(1, 'fire')], 1)).toBe(true);
+    expect(burnedBy([hit(2, 'fire'), hit(1, 'rifle')], 1)).toBe(false);
+    expect(burnedBy([], 1)).toBe(false);
   });
 });

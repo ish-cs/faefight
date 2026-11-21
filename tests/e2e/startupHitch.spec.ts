@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 /**
  * Start-of-match hitches: 8-player vs-bot match on high. For the first 20 s after the loading screen

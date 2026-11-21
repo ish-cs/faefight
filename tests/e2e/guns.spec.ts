@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
   page.evaluate(([f, a]) => {
@@ -61,6 +64,8 @@ test('rocket launcher: buy it, blow up a steel wall; ADS zooms', async ({ page }
     if ((await steel()) === 0) await page.mouse.click(640, 360);
     await expect.poll(steel, { timeout: 1000 }).toBe(1);
   }).toPass({ timeout: 10_000 });
+  // The click on the game that captured the mouse (launcher in hand) must not have fired the rocket.
+  expect((await me()).inv.weapons.rocket).toEqual({ mag: 1, spare: 3 });
   await page.keyboard.down('KeyS');
   await page.waitForTimeout(700);
   await page.keyboard.up('KeyS');
