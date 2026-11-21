@@ -72,6 +72,58 @@ class Builder {
     return this;
   }
 
+  /**
+   * Smooth tapered tube through `pts` (radius per point; ry/rx = `flat` squashes it) — necks, bills, legs.
+   * `w(i)` = limb amount weight per point (legs: 0 at the hip → 1 at the foot).
+   */
+  tube(pts: number[][], radii: number[], col: number, kind = 0, amt = 0, sides = 7, flat = 1, w: (i: number) => number = () => 1, colEnd = col) {
+    const base = this.p.pos.length / 3, c0 = C(col), c1 = C(colEnd);
+    const n = pts.length, up = new THREE.Vector3(0, 1, 0), t = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      const p = pts[i], q = pts[Math.min(n - 1, i + 1)], o = pts[Math.max(0, i - 1)];
+      t.set(q[0] - o[0], q[1] - o[1], q[2] - o[2]).normalize();
+      a.crossVectors(t, Math.abs(t.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : up).normalize();
+      b.crossVectors(a, t).normalize();
+      const cc = c0.clone().lerp(c1, i / Math.max(1, n - 1));
+      for (let k = 0; k < sides; k++) {
+        const ang = (k / sides) * Math.PI * 2, ca = Math.cos(ang) * radii[i], sa = Math.sin(ang) * radii[i] * flat;
+        this.v(p[0] + a.x * ca + b.x * sa, p[1] + a.y * ca + b.y * sa, p[2] + a.z * ca + b.z * sa, cc, kind, amt * w(i));
+      }
+    }
+    for (let i = 0; i < n - 1; i++) for (let k = 0; k < sides; k++) {
+      const p0 = base + i * sides + k, p1 = base + i * sides + ((k + 1) % sides), q0 = p0 + sides, q1 = p1 + sides;
+      this.p.idx.push(p0, q0, p1, p1, q0, q1);
+    }
+    return this;
+  }
+
+  /** Jointed bird leg: hip → knee (ankle, bends backward) → foot, with three forward toes. */
+  birdLeg(x: number, hipY: number, kneeY: number, z: number, r: number, col: number, kind: 1 | 2, amt: number) {
+    const w = (i: number) => [0, 0.5, 1][i];
+    this.tube([[x, hipY, z], [x, kneeY, z + 0.035 + hipY * 0.04], [x, 0.01, z]], [r * 1.4, r, r * 0.8], col, kind, amt, 5, 1, w);
+    for (const dx of [-1, 0, 1]) this.tube([[x, 0.01, z], [x + dx * r * 4, 0.005, z - r * 6]], [r * 0.6, r * 0.3], col, kind, amt, 4);
+    return this;
+  }
+
+  /**
+   * Folded / spreading wing pair with layered feathers: a covert panel and 6 primaries fanning to a darker tip,
+   * trailing edge serrated. Shoulder at (±x, y, z), span `s`, chord `c` (folds to the flanks at rest in the shader).
+   */
+  featherWings(x: number, y: number, z: number, s: number, c: number, col: number, tip: number) {
+    for (const sx of [-1, 1]) {
+      // inner wing (coverts)
+      this.tri([sx * x, y, z - c * 0.45], [sx * (x + s * 0.55), y + 0.015, z - c * 0.2], [sx * x, y, z + c * 0.45], col, 3, 1);
+      this.tri([sx * (x + s * 0.55), y + 0.015, z - c * 0.2], [sx * (x + s * 0.5), y + 0.01, z + c * 0.4], [sx * x, y, z + c * 0.45], col, 3, 1);
+      // primaries: slim overlapping feathers, darker toward the tip
+      for (let k = 0; k < 6; k++) {
+        const u = k / 5, x0 = x + s * (0.45 + u * 0.1), zz = z - c * 0.15 + u * c * 0.45;
+        const tipC = new THREE.Color(col).lerp(new THREE.Color(tip), 0.35 + 0.65 * (1 - u)).getHex();
+        this.tri([sx * x0, y + 0.012, zz - c * 0.1], [sx * (x + s * (1 - u * 0.12)), y + 0.02, zz + c * 0.05], [sx * x0, y + 0.01, zz + c * 0.12], tipC, 3, 1);
+      }
+    }
+    return this;
+  }
+
   private v(x: number, y: number, z: number, c: THREE.Color, kind: number, amt: number) {
     this.p.pos.push(x, y, z); this.p.col.push(c.r, c.g, c.b); this.p.limb.push(kind, amt);
   }
@@ -100,10 +152,19 @@ const BUILD: Record<string, () => THREE.BufferGeometry> = {
     .ell(0, 0.12, 0, 0.055, 0.055, 0.1, 0x8d93a0).ell(0, 0.19, -0.075, 0.032, 0.035, 0.034, 0x5c6f78, 5, 0.07)
     .ell(0, 0.185, -0.11, 0.008, 0.008, 0.016, 0x2a2a2a, 5, 0.07).box(-0.03, 0.11, 0.08, 0.03, 0.125, 0.17, 0x4c5058)
     .wings(0.045, 0.14, 0, 0.22, 0.12, 0x9aa0ac, 0x3c4048).eyes(0.024, 0.2, -0.09, 0.006, 0.07).build(),
-  gull: () => new Builder().leg(-0.03, 0.09, 0, 0.007, 0xe0a040, 1, 0.04).leg(0.03, 0.09, 0, 0.007, 0xe0a040, 2, 0.04)
-    .ell(0, 0.19, 0, 0.08, 0.08, 0.17, 0xf2f2ee).ell(0, 0.29, -0.13, 0.05, 0.05, 0.055, 0xf6f6f2, 5, 0.09)
-    .box(-0.008, 0.27, -0.27, 0.008, 0.29, -0.17, 0xe8c030, 5, 0.09).box(-0.05, 0.17, 0.12, 0.05, 0.2, 0.27, 0x222222)
-    .wings(0.07, 0.22, 0, 0.42, 0.18, 0x9aa2ac, 0x181818).eyes(0.035, 0.305, -0.15, 0.007, 0.09).build(),
+  gull: () => {
+    const w = (n: number) => (i: number) => i / (n - 1);
+    return new Builder()
+      .birdLeg(-0.03, 0.1, 0.05, 0, 0.006, 0xe0a070, 1, 0.04).birdLeg(0.03, 0.1, 0.05, 0, 0.006, 0xe0a070, 2, 0.04)
+      .ell(0, 0.19, 0, 0.075, 0.075, 0.17, 0xf2f2ee)
+      .tri([-0.05, 0.19, 0.13], [0, 0.18, 0.26], [0.05, 0.19, 0.13], 0xf4f4f0)
+      .tube([[0, 0.22, -0.1], [0, 0.26, -0.13], [0, 0.29, -0.14]], [0.05, 0.04, 0.035], 0xf4f4f0, 5, 0.09, 7, 1, w(3))
+      .ell(0, 0.3, -0.155, 0.042, 0.042, 0.05, 0xf8f8f4, 5, 0.09)
+      .tube([[0, 0.295, -0.2], [0, 0.29, -0.25], [0, 0.282, -0.285]], [0.011, 0.007, 0.0015], 0xe8c030, 5, 0.09, 6, 0.7)
+      .ell(0, 0.284, -0.255, 0.004, 0.004, 0.006, 0xd02020, 5, 0.09)
+      .featherWings(0.065, 0.22, 0.02, 0.42, 0.18, 0xa4acb6, 0x141414)
+      .eyes(0.03, 0.31, -0.17, 0.006, 0.09).build();
+  },
   crow: () => new Builder().leg(-0.025, 0.07, 0, 0.006, 0x202020, 1, 0.03).leg(0.025, 0.07, 0, 0.006, 0x202020, 2, 0.03)
     .ell(0, 0.15, 0, 0.065, 0.065, 0.13, 0x16161a).ell(0, 0.23, -0.1, 0.04, 0.042, 0.045, 0x1c1c22, 5, 0.03)
     .ell(0, 0.225, -0.155, 0.012, 0.011, 0.03, 0x111111, 5, 0.03).box(-0.04, 0.14, 0.1, 0.04, 0.155, 0.24, 0x121216)
@@ -136,14 +197,34 @@ const BUILD: Record<string, () => THREE.BufferGeometry> = {
     }
     return b.build();
   },
-  heron: () => new Builder().leg(-0.04, 0.55, 0, 0.008, 0x8a8070, 1, 0.12).leg(0.04, 0.55, 0, 0.008, 0x8a8070, 2, 0.12)
-    .ell(0, 0.65, 0.02, 0.09, 0.1, 0.2, 0x8a98a8).box(-0.018, 0.68, -0.2, 0.018, 1.0, -0.15, 0xb8c0c8, 5, 0.12)
-    .ell(0, 1.02, -0.2, 0.035, 0.035, 0.05, 0xdde0e4, 5, 0.12).box(-0.008, 1.0, -0.42, 0.008, 1.02, -0.24, 0xd8b030, 5, 0.12)
-    .wings(0.07, 0.7, 0.02, 0.75, 0.3, 0x7a8898, 0x303840).eyes(0.025, 1.03, -0.22, 0.007, 0.12).build(),
-  pelican: () => new Builder().leg(-0.06, 0.12, 0, 0.012, 0xc89a40, 1, 0.05).leg(0.06, 0.12, 0, 0.012, 0xc89a40, 2, 0.05)
-    .ell(0, 0.3, 0.02, 0.17, 0.17, 0.32, 0xe6e2da).ell(0, 0.55, -0.22, 0.08, 0.08, 0.09, 0xeeeae2, 5, 0.06)
-    .box(-0.035, 0.46, -0.65, 0.035, 0.54, -0.26, 0xe8b850, 5, 0.06).box(-0.04, 0.41, -0.6, 0.04, 0.47, -0.3, 0xd89a60, 5, 0.06)
-    .wings(0.13, 0.36, 0.02, 1.0, 0.42, 0xd8d4cc, 0x2a2a2a).eyes(0.055, 0.58, -0.26, 0.01, 0.06).build(),
+  heron: () => {
+    const w = (n: number) => (i: number) => i / (n - 1);
+    return new Builder()
+      .birdLeg(-0.04, 0.58, 0.3, 0.02, 0.007, 0xb8a070, 1, 0.12).birdLeg(0.04, 0.58, 0.3, 0.02, 0.007, 0xb8a070, 2, 0.12)
+      .ell(0, 0.66, 0.03, 0.085, 0.09, 0.2, 0x8a98a8)
+      .tri([-0.05, 0.64, 0.2], [0, 0.62, 0.32], [0.05, 0.64, 0.2], 0x6a7888)
+      // S-curved neck, slim head with a black crest, dagger bill
+      .tube([[0, 0.7, -0.12], [0, 0.8, -0.15], [0, 0.88, -0.1], [0, 0.95, -0.12], [0, 1.0, -0.18]], [0.04, 0.03, 0.025, 0.022, 0.02], 0xd8dde2, 5, 0.12, 7, 1, w(5))
+      .ell(0, 1.01, -0.2, 0.028, 0.03, 0.045, 0xeceef0, 5, 0.12)
+      .tube([[0, 1.035, -0.2], [0, 1.045, -0.13], [0, 1.025, -0.06]], [0.008, 0.005, 0.002], 0x15171a, 5, 0.12, 5)
+      .tube([[0, 1.005, -0.235], [0, 1.0, -0.33], [0, 0.994, -0.41]], [0.012, 0.007, 0.0015], 0xd8a830, 5, 0.12, 6, 0.6)
+      .featherWings(0.07, 0.72, 0.03, 0.75, 0.32, 0x7a8898, 0x262c34)
+      .eyes(0.022, 1.015, -0.215, 0.006, 0.12).build();
+  },
+  pelican: () => {
+    const w = (n: number) => (i: number) => i / (n - 1);
+    return new Builder()
+      .birdLeg(-0.06, 0.16, 0.08, 0.02, 0.012, 0xd8a060, 1, 0.05).birdLeg(0.06, 0.16, 0.08, 0.02, 0.012, 0xd8a060, 2, 0.05)
+      .ell(0, 0.32, 0.02, 0.16, 0.16, 0.32, 0xeeeae2)
+      .tri([-0.08, 0.32, 0.28], [0, 0.3, 0.42], [0.08, 0.32, 0.28], 0xd8d4cc)
+      // S-curved neck resting back on the shoulders, long flat bill with the throat pouch
+      .tube([[0, 0.4, -0.18], [0, 0.5, -0.22], [0, 0.56, -0.18], [0, 0.6, -0.2]], [0.08, 0.055, 0.05, 0.05], 0xf0ece4, 5, 0.06, 8, 1, w(4))
+      .ell(0, 0.62, -0.24, 0.055, 0.055, 0.07, 0xf4f0e8, 5, 0.06)
+      .tube([[0, 0.61, -0.29], [0, 0.6, -0.45], [0, 0.585, -0.6], [0, 0.57, -0.66]], [0.03, 0.025, 0.02, 0.006], 0xe8b850, 5, 0.06, 7, 0.45)
+      .ell(0, 0.56, -0.44, 0.028, 0.045, 0.15, 0xe89a60, 5, 0.06)
+      .featherWings(0.13, 0.38, 0.02, 1.0, 0.42, 0xd8d4cc, 0x1e1e1e)
+      .eyes(0.045, 0.635, -0.26, 0.009, 0.06).build();
+  },
   cormorant: () => new Builder().leg(-0.04, 0.1, 0, 0.01, 0x202020, 1, 0.04).leg(0.04, 0.1, 0, 0.01, 0x202020, 2, 0.04)
     .ell(0, 0.28, 0.02, 0.09, 0.15, 0.13, 0x18191c).box(-0.025, 0.38, -0.1, 0.025, 0.58, -0.05, 0x1c1d22, 5, 0.05)
     .ell(0, 0.6, -0.09, 0.04, 0.04, 0.06, 0x1e2026, 5, 0.05).box(-0.01, 0.585, -0.24, 0.01, 0.6, -0.12, 0xd0a030, 5, 0.05)
