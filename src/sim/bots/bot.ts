@@ -798,6 +798,9 @@ export class Bot {
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
         // Outside the safe ring, getting in comes first (running from a gun into the storm kills just as well).
         if (view.storm && Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm)) return 0;
+        // Final circle: nowhere left to run (backing off only buys regen, and the fight never ends); fists vs fists
+        // in sudden death likewise.
+        if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
         const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
         if (hp < low) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
