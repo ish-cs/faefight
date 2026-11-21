@@ -2,7 +2,7 @@
 // resolution + governor off. Per preset (fresh page each): load time, avg fps, p99 frame ms, draw calls, triangles,
 // averaged over fixed camera spots. Optional same-view screenshots.
 // Needs a dev server (`pnpm vite --port 5299`); run under the heavy lock:
-//   node tests/visual/perfMatch.mjs [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
+//   node tests/visual/perfMatch.mjs [--time=870] [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
 import { chromium } from '@playwright/test';
 
 const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
@@ -16,8 +16,10 @@ const sampleMs = Number(arg('sample', '3000'));
 const dpr = Number(arg('dpr', '1'));
 const competitive = arg('competitive', '0') === '1';
 const views = arg('views', 'base');
-/** extra URL params for both A and B (e.g. --params=taau=0) */
+/** extra URL params for both A and B (e.g. --params=upscale=0) */
 const params = arg('params', '');
+/** match time (s) to jump to before measuring (e.g. 870 = night under the day/night cycle); 0 = match start */
+const atTime = Number(arg('time', '0'));
 
 const SPOTS = [
   { name: 'harbor', at: [6, 13], look: [14, 60], pitch: 0.02 },
@@ -52,6 +54,7 @@ async function run(quality) {
   const yaw0 = home.bunker.facingYaw;
   const toWorld = (x, z) => ({ x: home.center.x + x * Math.cos(yaw0) + z * Math.sin(yaw0), z: home.center.z - x * Math.sin(yaw0) + z * Math.cos(yaw0) });
   const yawToward = (from, to) => { const a = toWorld(...from), b = toWorld(...to); return Math.atan2(-(b.x - a.x), -(b.z - a.z)); };
+  if (atTime > 0) { await dbg('time', atTime); await page.waitForTimeout(1500); }
   const per = [];
   // --views=extra adds 'mid' (halfway to the map centre, looking across it at the other islands and bots) and
   // 'storm' (sudden death: rain + wall, irreversible, so it runs last)

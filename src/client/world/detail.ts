@@ -9,6 +9,9 @@ import { pbrSample, worldNoise } from './pbr';
 import type { Scatter } from './scatter';
 import { makeRng, signTex } from './textures';
 
+/** Ground spots under the harbor street lamps' heads (world), for the night light pools (dayNight.ts). Reset per map build. */
+export const lampSpots: THREE.Vector3[] = [];
+
 /**
  * Second detail layer: instanced litter / rubble / shells / seaweed / footprints (via Scatter), plus the bigger
  * static set dressing on the harbor quays (pallet stacks, tarps, crab pots, chains, signs, street lamps with cables)
@@ -214,7 +217,8 @@ function streetLamps(b: StaticBatch, atF: (x: number, y: number, z: number, ry?:
     b.add(M.galv, new THREE.CylinderGeometry(0.06, 0.09, 6, 8), at(B, mat(0, 3, 0)), 0x7d8488);
     b.add(M.galv, new THREE.CylinderGeometry(0.035, 0.035, 1.1, 6).rotateX(Math.PI / 2), at(B, mat(0, 5.9, -0.5)), 0x7d8488);
     b.add(M.dark, new THREE.BoxGeometry(0.32, 0.12, 0.5), at(B, mat(0, 5.85, -1.05)), 0xffffff);
-    b.add(M.paint, new THREE.BoxGeometry(0.26, 0.02, 0.42), at(B, mat(0, 5.78, -1.05)), 0xfff2d0);
+    b.add(M.lamp, new THREE.BoxGeometry(0.26, 0.02, 0.42), at(B, mat(0, 5.78, -1.05)), 0xfff2d0);
+    lampSpots.push(new THREE.Vector3().setFromMatrixPosition(at(B, mat(0, 0, -1.05))));
     heads.push(new THREE.Vector3().setFromMatrixPosition(at(B, mat(0, 5.7, 0.06))));
   }
   // sagging power cables between consecutive posts (world-space tubes)

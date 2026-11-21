@@ -1,14 +1,21 @@
 // Web Audio graph, voice playback, listener, ambience and settings.
 //
-//   voice ─ air-absorption LP ─ HRTF panner ─┬─ sfxBus ─┬──────────── world ─ muffle LP ─┐
-//                                            └─ echoSend ─ echo (delay/LP/feedback) ─┘   ├─ compressor ─ master ─ out
-//                                                        sfxBus ─ reverbSend ─ convolver ─┘
-//   ambience (waves, foam, wind) ─ ambientLP ─ world                 uiBus (stingers, heartbeat) ─┘
+//   voice ─ air/occlusion LP ─ HRTF panner ─┬─ sfxBus ─┬──────────── world ─ muffle LP ─┐
+//                                           └─ echoSend ─ echo (delay/LP/feedback) ─┘   ├─ compressor ─ master ─ out
+//                                                       sfxBus ─ reverbSend ─ convolver ─┘                  │
+//   ambience loops (waves, foam, wind, rain) ─ ambientLP ─┬─ ambBus ─ world                                 │
+//   ambient one-shots (gulls, critters) ─ panner ─────────┘         uiBus (stingers, heartbeat) ─ comp      │
+//   music (music.ts, persistent voices) ─ musicBus ──────────────────────────────────────────────────── master
+//
+// Mixer buses = Settings → Audio: Effects (sfxBus + echo), Interface (uiBus), Ambience (ambBus), Music
+// (musicBus, also on/off), under Master. Music skips the compressor so gunfire doesn't pump it.
 
 import type { IslandLayout } from '../../sim/map';
 import type { Snapshot, Vec3 } from '../../sim/types';
-import { type Cue, type Env, SoundDirector } from './events';
+import { type Cue, type Env, occlusion, type SoundId, SoundDirector } from './events';
+import { type Mood, MUSIC_TRIM, MusicDirector, MusicPlayer } from './music';
 import { clank, critterCall, fireLoop, gull, heartbeat, type Kit, playRecipe, rocketLoop } from './sfx';
+import { registerAudio, type SfxOpts } from './api';
 import {
   audibility, DEFAULT_LIMITS, dist, distanceCutoff, echoSend, heartbeatInterval, MAX_DISTANCE, muffleCutoff,
   REF_DISTANCE, ROLLOFF, VoiceLimiter, voicePriority, waveLevel, withinHearing,
@@ -16,23 +23,29 @@ import {
 import { isAction } from '../keymap';
 import { settings, type Settings } from '../settings/store';
 
-/** 2D cues that should not be muffled by low health or reverb (UI-ish). */
-/** uiBus level at full Effects volume. */
-const UI_LEVEL = 0.8;
-const UI_SOUNDS = new Set(['hitmarker', 'headshot', 'shieldCrack', 'kill', 'death', 'eliminated', 'win', 'lose', 'draw', 'alarm', 'tick', 'escaped', 'horn', 'coin', 'loot', 'purchase', 'vault']);
+/** 2D cues on the Interface bus: not muffled by low health or reverb. */
+const UI_SOUNDS = new Set(['hitmarker', 'headshot', 'shieldCrack', 'kill', 'death', 'eliminated', 'win', 'lose', 'draw', 'alarm', 'tick', 'escaped', 'horn', 'coin', 'loot', 'purchase', 'vault', 'click', 'ping']);
+/** Past this distance a shot or blast arrives late, at the speed of sound (343 m/s), like thunder. */
+const SOUND_DELAY_FROM = 40;
+/** Low-pass cutoff (Hz) and level for a sound behind one wall / two or more. */
+const OCCLUDED = [{ hz: 1100, gain: 0.6 }, { hz: 600, gain: 0.4 }] as const;
 
-type Chain = { input: GainNode; air: BiquadFilterNode; panner: PannerNode; echo: GainNode };
+type Bus = 'sfx' | 'amb';
+type Chain = { input: GainNode; air: BiquadFilterNode; panner: PannerNode; echo: GainNode; bus: Bus };
 type CameraLike = { matrixWorld: { elements: ArrayLike<number> } };
 
 
-export type AudioStats = { state: string; played: number; dropped: number; active: number; bySound: Record<string, number> };
+export type AudioStats = { state: string; played: number; dropped: number; active: number; bySound: Record<string, number>; music: Mood | 'none' };
 
 export class AudioSystem {
   /** Master volume / mute / bus levels mirror Settings → Audio (the store persists them). */
   volume = 0.8;
   muted = false;
   effects = 1;
+  uiVol = 0.8;
   ambience = 1;
+  musicVol = 0.4;
+  musicOn = true;
   private ctx: AudioContext | null = null;
   private kit: Kit | null = null;
   private master!: GainNode;
@@ -40,10 +53,18 @@ export class AudioSystem {
   private muffle!: BiquadFilterNode;
   private sfxBus!: GainNode;
   private uiBus!: GainNode;
+  private ambBus!: GainNode;
+  private musicBus!: GainNode;
+  private music: MusicPlayer | null = null;
+  private musicDir = new MusicDirector();
+  private mood: Mood = 'calm';
+  private map: IslandLayout[] = [];
+  /** 1 = full day, 0 = night (setDaylight; the day/night cycle drives it). */
+  private daylight = 1;
   private reverbSend!: GainNode;
   private echoIn!: GainNode;
   private ambient: { bus: GainNode; lp: BiquadFilterNode; waves: GainNode; wind: GainNode; rain: GainNode } | null = null;
-  private pool: Chain[] = [];
+  private pools: Record<Bus, Chain[]> = { sfx: [], amb: [] };
   private voices = new Map<number, GainNode>();
   private limiter = new VoiceLimiter(DEFAULT_LIMITS);
   private director = new SoundDirector();
@@ -58,7 +79,13 @@ export class AudioSystem {
   private blazes = new Map<string, { ch: Chain; loop: { stop(): void } }>();
 
   constructor() {
+    registerAudio(this);
     this.applySettings(settings.get().audio);
+    // Interface clicks: any button in the menus, shop, vault or settings.
+    document.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t instanceof Element && t.closest('button, .btn, [role="button"]')) this.play({ sound: 'click', pos: null, gain: 0.5 });
+    }, { capture: true });
     settings.subscribe((s) => this.applySettings(s.audio));
     const unlock = () => this.unlock();
     window.addEventListener('pointerdown', unlock, { capture: true });
@@ -86,17 +113,25 @@ export class AudioSystem {
     this.volume = a.master;
     this.muted = a.muted;
     this.effects = a.effects;
+    this.uiVol = a.ui;
     this.ambience = a.ambience;
+    this.musicVol = a.music;
+    this.musicOn = a.musicOn;
     if (this.ctx) {
       const t = this.ctx.currentTime;
       this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, t, 0.02);
       this.sfxBus.gain.setTargetAtTime(this.effects, t, 0.02);
       this.echoIn.gain.setTargetAtTime(this.effects, t, 0.02);
-      this.uiBus.gain.setTargetAtTime(UI_LEVEL * this.effects, t, 0.02);
-      if (this.ambient) this.ambient.bus.gain.setTargetAtTime(this.ambience, t, 0.05);
+      this.uiBus.gain.setTargetAtTime(this.uiVol, t, 0.02);
+      this.ambBus.gain.setTargetAtTime(this.ambience, t, 0.05);
+      this.musicBus.gain.setTargetAtTime(this.musicLevel(), t, 0.05);
+      if (!this.musicWanted() && this.music) { this.music.dispose(); this.music = null; }
     }
     this.listeners.forEach((fn) => fn());
   }
+
+  private musicLevel() { return this.musicOn ? this.musicVol * MUSIC_TRIM : 0; }
+  private musicWanted() { return this.musicOn && this.musicVol > 0; }
 
   private critterVoices = 0;
   /**
@@ -108,7 +143,7 @@ export class AudioSystem {
     if (!ctx || ctx.state !== 'running' || !this.kit || this.muted || this.ambience <= 0) return;
     if (dist(s, this.listener) > 20 || this.critterVoices >= 4) return;
     this.critterVoices++;
-    this.spatial(s, 0.6 * this.ambience, `critter_${s.kind}`, (out, t) => {
+    this.spatial(s, 0.6, `critter_${s.kind}`, (out, t) => {
       const len = critterCall(this.kit!, out, t, s.kind);
       setTimeout(() => { this.critterVoices--; }, (len + 0.1) * 1000);
       return len;
@@ -149,8 +184,14 @@ export class AudioSystem {
     this.world = ctx.createGain();
     this.world.connect(this.muffle).connect(comp);
     this.uiBus = ctx.createGain();
-    this.uiBus.gain.value = UI_LEVEL * this.effects;
+    this.uiBus.gain.value = this.uiVol;
     this.uiBus.connect(comp);
+    this.ambBus = ctx.createGain();
+    this.ambBus.gain.value = this.ambience;
+    this.ambBus.connect(this.world);
+    this.musicBus = ctx.createGain();
+    this.musicBus.gain.value = this.musicLevel();
+    this.musicBus.connect(this.master);
 
     this.sfxBus = ctx.createGain();
     this.sfxBus.gain.value = this.effects;
@@ -199,10 +240,10 @@ export class AudioSystem {
     };
     const bus = ctx.createGain();
     bus.gain.value = 0;
-    bus.gain.setTargetAtTime(this.ambience, ctx.currentTime, 1.5); // fade in
+    bus.gain.setTargetAtTime(1, ctx.currentTime, 1.5); // fade in (the Ambience level is ambBus)
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass'; lp.frequency.value = 20000;
-    bus.connect(lp).connect(this.world);
+    bus.connect(lp).connect(this.ambBus);
 
     // Waves: brown-noise swell + a hissy foam layer on a different period.
     const waves = ctx.createGain();
@@ -259,10 +300,24 @@ export class AudioSystem {
   }
 
   /** Whose ears: the followed player while spectating, else the local player (viewed.ts). */
-  setViewed(id: number) { this.director.setViewed(id); }
+  setViewed(id: number) { this.director.setViewed(id); this.musicDir.setViewed(id); }
 
   setMap(map: IslandLayout[], humanId: number) {
     this.director.setMap(map, humanId);
+    this.map = map;
+    this.musicDir.reset();
+    this.musicDir.setViewed(humanId);
+  }
+
+  /** Day/night (0 = night, 1 = day): gulls and clanks by day, crickets and owls at night. */
+  setDaylight(k: number) { this.daylight = Math.min(1, Math.max(0, k)); }
+
+  /**
+   * Play a named sound effect (names: SoundId in events.ts, documented in api.ts). `pos` = world position
+   * for a 3D sound with distance falloff, air absorption and occlusion; null = 2D (your own body / the UI).
+   */
+  playSfx(sound: SoundId, pos: Vec3 | null = null, opts: SfxOpts = {}) {
+    this.play({ sound, pos, gain: opts.gain ?? 0.8, kind: opts.kind, own: opts.own });
   }
 
   /** Debug (?debug=1): play any cue directly, bypassing the event mapping. */
@@ -349,8 +404,11 @@ export class AudioSystem {
   /** Feed every snapshot in order (events are per snapshot). */
   snapshot(s: Snapshot) {
     const cues = this.director.update(s);
+    this.mood = this.musicDir.update(s);
     if (!this.ctx || this.ctx.state !== 'running') return;
     if (!this.started) { this.started = true; this.startAmbient(this.ctx); }
+    if (!this.music && this.musicWanted() && this.kit) this.music = new MusicPlayer(this.ctx, this.musicBus, this.kit.white);
+    this.music?.setMood(this.mood);
     for (const c of cues) this.play(c);
   }
 
@@ -371,6 +429,7 @@ export class AudioSystem {
       l.setOrientation(-e[8], -e[9], -e[10], e[4], e[5], e[6]);
     }
     if (this.started) this.environment(ctx, this.director.env);
+    this.music?.tick();
   }
 
   private environment(ctx: AudioContext, env: Env) {
@@ -395,7 +454,10 @@ export class AudioSystem {
       if (!env.inBunker) {
         const ang = Math.random() * Math.PI * 2, r = 30 + Math.random() * 35;
         const pos = { x: this.listener.x + Math.cos(ang) * r, y: this.listener.y + 4 + Math.random() * 10, z: this.listener.z + Math.sin(ang) * r };
-        this.spatial(pos, 0.5, 'ambient', (out, t) => (Math.random() < 0.65 ? gull : clank)(this.kit!, out, t));
+        const night = this.daylight < 0.3;
+        this.spatial(pos, night ? 0.35 : 0.5, 'ambient', (out, t) => night
+          ? critterCall(this.kit!, out, t, Math.random() < 0.7 ? 'cricket' : 'owl')
+          : (Math.random() < 0.65 ? gull : clank)(this.kit!, out, t));
       }
     }
   }
@@ -412,12 +474,17 @@ export class AudioSystem {
     }
     const d = cue.pos ? dist(cue.pos, this.listener) : 0;
     if (cue.pos && !withinHearing(cue.sound, d, cue.own)) return; // past its hearing cap: not a voice at all
+    if (cue.pos && !cue.own && d > SOUND_DELAY_FROM && (cue.sound === 'shot' || cue.sound === 'explosion')) delay = d / 343;
+    // Walls between you and the source: duller and quieter (one-shot cues only, tested once at start).
+    const occ = cue.pos && !cue.own ? Math.min(2, occlusion(this.listener, cue.pos, this.director.pieces, this.map)) : 0;
     const key = cue.sound === 'shot' ? `shot_${cue.kind}` : cue.sound;
-    const level = audibility(cue.gain, cue.pos, this.listener) * voicePriority(cue.sound, !!cue.pos, cue.own);
+    const level = audibility(cue.gain, cue.pos, this.listener) * voicePriority(cue.sound, !!cue.pos, cue.own) * (occ ? OCCLUDED[occ - 1].gain : 1);
     // Generous expiry backstop; the voice is released by timer when its recipe actually ends.
     const adm = this.limiter.admit(key, level, ctx.currentTime, 10);
     if (!adm.ok) return;
     if (adm.evict !== null) this.stopVoice(adm.evict);
+    if (cue.sound === 'explosion' && (!cue.pos || d < 25)) this.music?.duck(0.6, 2.5);
+    else if (cue.sound === 'death') this.music?.duck(0.7, 4);
     // Tiny start offset on repeated world sounds so simultaneous shots don't phase-lock.
     const t = ctx.currentTime + delay + (cue.own || !cue.pos ? 0.005 : 0.005 + Math.random() * 0.012);
     let len: number;
@@ -425,8 +492,9 @@ export class AudioSystem {
     if (cue.pos) {
       const ch = this.chain(cue.pos, d);
       input = ch.input;
-      input.gain.value = cue.gain;
-      len = playRecipe(this.kit, input, t, cue, d) + 0.1;
+      input.gain.value = cue.gain * (occ ? OCCLUDED[occ - 1].gain : 1);
+      if (occ) ch.air.frequency.value = Math.min(ch.air.frequency.value, OCCLUDED[occ - 1].hz);
+      len = playRecipe(this.kit, input, t, cue, d) + 0.1 + delay;
       setTimeout(() => this.releaseChain(ch), (len + 0.3) * 1000);
     } else {
       input = ctx.createGain();
@@ -442,16 +510,16 @@ export class AudioSystem {
 
   /** Ambient one-shots: positional, bypass the limiter's frame caps but still count. */
   private spatial(pos: Vec3, gain: number, key: string, recipe: (out: AudioNode, t: number) => number) {
-    const ch = this.chain(pos, dist(pos, this.listener));
+    const ch = this.chain(pos, dist(pos, this.listener), 'amb');
     ch.input.gain.value = gain;
     const len = recipe(ch.input, this.ctx!.currentTime + 0.01);
     setTimeout(() => this.releaseChain(ch), (len + 0.4) * 1000);
     this.count(key);
   }
 
-  private chain(pos: Vec3, d: number): Chain {
+  private chain(pos: Vec3, d: number, bus: Bus = 'sfx'): Chain {
     const ctx = this.ctx!;
-    let ch = this.pool.pop();
+    let ch = this.pools[bus].pop();
     if (!ch) {
       const input = ctx.createGain();
       const air = ctx.createBiquadFilter();
@@ -460,9 +528,9 @@ export class AudioSystem {
         panningModel: 'HRTF', distanceModel: 'inverse', refDistance: REF_DISTANCE, maxDistance: MAX_DISTANCE, rolloffFactor: ROLLOFF,
       });
       const echo = ctx.createGain();
-      input.connect(air).connect(panner).connect(this.sfxBus);
+      input.connect(air).connect(panner).connect(bus === 'amb' ? this.ambBus : this.sfxBus);
       panner.connect(echo).connect(this.echoIn);
-      ch = { input, air, panner, echo };
+      ch = { input, air, panner, echo, bus };
     }
     ch.air.frequency.value = distanceCutoff(d);
     ch.echo.gain.value = echoSend(d);
@@ -471,7 +539,8 @@ export class AudioSystem {
   }
 
   private releaseChain(ch: Chain) {
-    if (this.pool.length < 32) { ch.input.gain.cancelScheduledValues(0); ch.input.gain.value = 1; this.pool.push(ch); }
+    const pool = this.pools[ch.bus];
+    if (pool.length < 32) { ch.input.gain.cancelScheduledValues(0); ch.input.gain.value = 1; pool.push(ch); }
     else { ch.input.disconnect(); ch.panner.disconnect(); }
   }
 
@@ -488,7 +557,7 @@ export class AudioSystem {
   }
 
   stats(): AudioStats {
-    return { state: this.ctx?.state ?? 'none', played: this.stats_.played, dropped: this.limiter.dropped, active: this.limiter.count, bySound: { ...this.stats_.bySound } };
+    return { state: this.ctx?.state ?? 'none', played: this.stats_.played, dropped: this.limiter.dropped, active: this.limiter.count, bySound: { ...this.stats_.bySound }, music: this.music ? this.mood : 'none' };
   }
 }
 

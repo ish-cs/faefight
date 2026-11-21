@@ -37,19 +37,29 @@ A single new feature may cost at most **~2 % of frame time (≈ 0.15 ms GPU, 0.1
 | post passes | no new full-screen pass at output res without a measurement; prefer half-res | each full-res pass at 3456×2234 ≈ 0.3–0.6 ms |
 | ragdolls / footprints / shells / wet decals | pooled, capped (shells ≤ 64, footprints ≤ 128 as one instanced mesh, ragdolls ≤ 4 simulated) | |
 
-## Temporal upscaling (ultra)
+## Upscaling (ultra)
 
-Ultra renders the scene at **0.6× output resolution** (jittered, no MSAA) and reconstructs native Retina with TAAU
-(`post.ts`, three's `TAAUNode`): per-pixel motion vectors (velocity MRT), Halton jitter, variance-clipped history, then
-a contrast-adaptive sharpen. Same-frame resolve: **no added latency**. Consequences for feature work:
+Ultra renders the scene at **0.7× output resolution with MSAA ×4** and upscales to native Retina in the final grade
+pass: bilinear + a contrast-adaptive sharpen (`post.ts` `'cas'`). No extra full-resolution pass, no history, so no
+ghosting and **no added latency**. Thin wires and alpha-to-coverage foliage survive (they need MSAA).
 
-- **Everything that moves must move through its object/instance/bone matrices** (three writes motion vectors for
-  those). Vertex-shader-only animation (wind, waves) has no motion vectors and is held together by the history
-  clamp; keep it slow and low-amplitude, or it smears.
-- **Transparent effects** (rain, sparks, smoke) are reconstructed too. Keep them short-lived or bright; thin
-  sub-pixel streaks should be at least ~1.5 input pixels wide or they flicker.
-- Dynamic resolution on ultra scales the *input* resolution only; the output and TAAU history keep their size.
-- `?taau=0` turns it off (A/B), `?taau=0.7` sets the input scale.
+Tried and rejected (still selectable for A/B with `?upscale=`):
+- `taau` (three's TAAUNode, 0.6×, jittered, velocity MRT): cheapest GPU, but power-line wires vanished, foliage
+  that relies on MSAA alpha-to-coverage dithered, and characters went soft. Velocity also adds the previous instance
+  matrix to every instanced mesh, which pushed critters over WebGPU's 8 vertex buffers.
+- `fsr` (FSR 1 EASU + RCAS): looks the same as `cas` but adds two output-sized passes (~+40 % GPU timestamp vs `cas`).
+
+`?upscale=0` renders native (main's ultra), `?upscaleScale=0.8` sets the input scale. Dynamic resolution on ultra
+scales the *input* resolution only; output-sized targets keep their size.
+
+## Measuring: what to trust
+
+- **GPU-done fps** (perfMatch column, `__faefight.gpuFps()`): frames the GPU actually finished per second. This is
+  the throughput number.
+- rAF fps **overstates** throughput with vsync off: frames queue on the GPU (0.2–0.5 s look→GPU-done on main).
+- GPU timestamp ms (`?gputime=1`) are **inflated** on Apple GPUs (tile-based passes overlap; 47 ms reported while
+  the GPU finishes 120 frames/s) — use them only as *relative* per-pass shares (`tests/visual/passCost.mjs`).
+- `look→GPU done` latency is in perfMatch too; it must stay under ~3 frames.
 
 ## Frame governor
 

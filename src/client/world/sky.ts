@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { cameraPosition, color, cos, dot, exp, float, fog, luminance, max, min, mix, normalize, positionView, positionWorld, pow, sin, smoothstep, step, uniform, vec3, vec4 } from 'three/tsl';
+import { cameraPosition, color, cos, dot, exp, float, floor, fog, fract, hash, length, luminance, max, min, mix, normalize, positionView, positionWorld, pow, sin, smoothstep, step, time, uniform, vec3, vec4 } from 'three/tsl';
 import { MAP } from '../../sim/constants';
 import type { IslandLayout } from '../../sim/map';
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
@@ -9,6 +9,7 @@ import { settings } from '../settings/store';
 import { SMALL_CASTER_LAYER } from './lod';
 import { cascadeToRefresh, type CascadeCacheState, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen, upscaleInput } from './post';
+import { lightU } from './lightUniforms';
 
 export type Quality = 'low' | 'high' | 'ultra';
 const QUALITIES: Quality[] = ['low', 'high', 'ultra'];
@@ -76,6 +77,30 @@ function regradeSky(sky: SkyMesh, gain: THREE.Node<'float'> | number, saturation
 }
 
 /**
+ * Night sky on top of the (by then black) Preetham dome, scaled by lightU.night: a deep blue gradient that is
+ * lighter at the horizon, hashed twinkling stars, and the moon (disc + glow) toward the moon light. One extra
+ * hash per sky pixel; nothing when night = 0 beyond the multiply.
+ */
+function addNightSky(sky: SkyMesh) {
+  const mat = sky.material as THREE.NodeMaterial;
+  const base = mat.colorNode as THREE.Node<'vec4'>;
+  const dir = normalize(positionWorld.sub(cameraPosition));
+  const up = max(dir.y, 0);
+  const grad = mix(vec3(0.03, 0.045, 0.085), vec3(0.006, 0.011, 0.028), pow(up, 0.45));
+  const d = dir.mul(240), cell = floor(d), f = fract(d).sub(0.5);
+  const h = hash(cell.x.add(cell.y.mul(57.13)).add(cell.z.mul(113.71)));
+  const twinkle = sin(time.mul(h.mul(4).add(1.5)).add(h.mul(90))).mul(0.3).add(0.7);
+  const stars = step(0.993, h).mul(smoothstep(0.3, 0.05, length(f))).mul(h.sub(0.993).mul(260).add(0.6)).mul(twinkle)
+    .mul(smoothstep(0.04, 0.3, dir.y));
+  const md = dot(dir, lightU.moonDir);
+  const moon = smoothstep(0.99992, 0.99996, md).mul(5).add(pow(max(md, 0), 900).mul(0.25)).add(pow(max(md, 0), 24).mul(0.025));
+  const night = grad.add(vec3(0.85, 0.9, 1).mul(stars.mul(1.4).add(moon))).mul(lightU.night);
+  // blue hour: lilac at the horizon → deep blue overhead, while the sunset glow (Preetham) fades
+  const blue = mix(vec3(0.2, 0.15, 0.24), vec3(0.035, 0.07, 0.19), pow(up, 0.5)).mul(lightU.twilight);
+  mat.colorNode = vec4(base.rgb.add(night).add(blue), 1);
+}
+
+/**
  * Sky dome, image-based lighting, warm cascaded-shadow sun, aerial-perspective haze, ACES tone mapping, colour
  * grade, and (high/ultra) GTAO + bloom. Owns the frame's final draw so the post chain follows the quality preset.
  */
@@ -106,6 +131,7 @@ export class SkyLighting {
   scenePass: THREE.PassNode | null = null;
   private csm: CSMShadowNode | null = null;
   private sunTmp = new THREE.Vector3();
+  private dome: SkyMesh;
 
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
@@ -117,7 +143,11 @@ export class SkyLighting {
 
     const sky = makeSky(true);
     regradeSky(sky, this.skyGain, this.skySaturation);
+    addNightSky(sky);
     scene.add(sky);
+    this.dome = sky;
+    lightU.sunDir.value.copy(SUN_DIR);
+    lightU.keyDir.value.copy(SUN_DIR);
     this.buildEnvironment();
 
     this.sun.castShadow = true;
@@ -132,7 +162,7 @@ export class SkyLighting {
     // Aerial perspective: exponential distance haze that thins with altitude, warmer when looking toward the sun.
     const h = this.haze;
     const viewDir = normalize(positionWorld.sub(cameraPosition));
-    const toSun = pow(max(dot(viewDir, uniform(SUN_DIR.clone())), 0), 6);
+    const toSun = pow(max(dot(viewDir, lightU.sunDir), 0), 6);
     const dist = positionView.z.negate();
     const heightK = exp(max(positionWorld.y, 0).mul(h.heightFalloff).negate());
     const amount = float(1).sub(exp(dist.mul(h.density).mul(heightK).negate()));
@@ -324,15 +354,36 @@ export class SkyLighting {
     }
   }
 
+  get isCompetitive(): boolean { return this.competitive; }
+
+  /** Sun position for the sky dome, the warm haze toward it and the lens flare (day/night cycle). Uniforms only. */
+  setSunDir(dir: THREE.Vector3) {
+    this.dome.sunPosition.value.copy(dir);
+    lightU.sunDir.value.copy(dir);
+  }
+
+  /**
+   * Move the key light (sun or moon: the shadow caster). Called in small steps every few seconds, never per frame:
+   * the near cascades redraw every frame anyway; the cached far ones are marked stale and redraw one per frame
+   * (shadowCache.ts), so a step costs no more than camera movement does.
+   */
+  setLightDir(dir: THREE.Vector3) {
+    this.sun.position.copy(dir).multiplyScalar(200);
+    lightU.keyDir.value.copy(dir);
+    if (this.shadowCache) this.shadowCache.dirty.fill(true);
+  }
+
   /** Whether the current preset has screen-space AO at all (the governor skips the AO rung when not). */
   get presetHasAo(): boolean { return !!PRESETS[this.quality].post.ao; }
 
   /** Draw the frame (cascades follow the camera on their own). */
   render() {
     if (PRESETS[this.quality].post.flare) {
-      const v = this.sunTmp.copy(SUN_DIR).multiplyScalar(1000).add(this.camera.position).project(this.camera);
+      const sd = lightU.sunDir.value as THREE.Vector3;
+      const v = this.sunTmp.copy(sd).multiplyScalar(1000).add(this.camera.position).project(this.camera);
       sunScreen.uv.value.set(v.x * 0.5 + 0.5, v.y * 0.5 + 0.5);
-      sunScreen.front.value = v.z < 1 ? 1 : 0;
+      // flare fades out as the sun sets (gone ~2° below the horizon)
+      sunScreen.front.value = v.z < 1 ? THREE.MathUtils.smoothstep(sd.y, -0.035, 0.06) : 0;
       sunScreen.aspect.value = this.camera.aspect;
     }
     this.cascadeLayers();

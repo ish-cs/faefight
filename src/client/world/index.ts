@@ -9,7 +9,8 @@ import { HazardLayer } from './hazards';
 import { Critters } from './critters';
 import type { CritterSound, V3 } from './critterSim';
 import { Boats, gullPerches, Gulls } from './dressing';
-import { defineDetailKinds } from './detail';
+import { LampPools } from './dayNight';
+import { defineDetailKinds, lampSpots } from './detail';
 import { Grass } from './grass';
 import { Scatter } from './scatter';
 import { backdropFrame, buildIslands, islandMask } from './islands';
@@ -42,6 +43,8 @@ export class World {
   private islands: THREE.Group | null = null;
   private islandHulls: THREE.Object3D[] = [];
   private cosmetics: CosmeticLayer | null = null;
+  /** Night light pools under the lamps (day/night cycle). */
+  private lampPools: LampPools | null = null;
   /** Explosive barrels / propane tanks / supply crates. */
   private hazards: HazardLayer | null = null;
   /** instanced grass beds (high/ultra) */
@@ -74,6 +77,7 @@ export class World {
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
     clearNpcSpots(); // the shop/potion props below register their keepers
+    lampSpots.length = 0; // the harbor street lamps below register their light pools
     const { root, collidables } = buildIslands(def, teamColors, this.scatter);
     this.scatter.build();
     this.scene.add(this.scatter.root);
@@ -106,6 +110,8 @@ export class World {
     const cos = STRESS > 1 ? stressOffsets().flatMap(([ox, oz], k) => def.cosmetics.map((c) => k === 0 ? c : { ...c, id: 1e6 * k + c.id, pos: { ...c.pos, x: c.pos.x + ox, z: c.pos.z + oz } })) : def.cosmetics;
     this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
+    this.lampPools = new LampPools(lampSpots, cos);
+    this.scene.add(this.lampPools.mesh);
     this.hazards = new HazardLayer(def.hazards ?? []);
     this.scene.add(this.hazards.root);
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
@@ -141,12 +147,14 @@ export class World {
     this.critters = null;
     this.cosmetics?.dispose();
     this.cosmetics = null;
+    this.lampPools?.dispose();
+    this.lampPools = null;
     this.hazards?.dispose();
     this.hazards = null;
   }
 
   /** Hide every cosmetic prop whose id is in `broken` (snapshot state; late joiners see them broken too). */
-  syncCosmetics(broken: number[]) { this.cosmetics?.sync(broken); }
+  syncCosmetics(broken: number[]) { this.cosmetics?.sync(broken); this.lampPools?.sync(broken); }
 
   /** A cosmetic prop just broke: debris burst at its position. */
   cosmeticEvent(e: MatchEvent) {
