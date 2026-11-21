@@ -140,7 +140,7 @@ async function teamsBotMatch(mode: number, n: number, seed: number) {
   const checker = new InvariantChecker({ map: m.map });
   let snap: Snapshot = m.tick(new Map());
   const team = new Map(snap.players.map((p) => [p.id, p.team!]));
-  let friendlyHits = 0, enemyHits = 0, pushTicks = 0, assistTicks = 0, regroupTicks = 0, defendTicks = 0, focusTicks = 0, kills = 0;
+  let friendlyHits = 0, enemyHits = 0, pushTicks = 0, togetherTicks = 0, assistTicks = 0, regroupTicks = 0, defendTicks = 0, focusTicks = 0, kills = 0;
   for (let i = 0; i < LIMIT && snap.winner === null; i++) {
     snap = m.tick(new Map());
     checker.observe(snap);
@@ -151,14 +151,23 @@ async function teamsBotMatch(mode: number, n: number, seed: number) {
       if (e.type === 'kill' && typeof e.data.killer === 'number' && e.data.killer !== e.data.victim) kills++;
     }
     if (snap.tick % 15) continue;
-    // Group push: two teammates out together (within 15 m of each other), both off their own team's islands (on an
+    // Out together: two teammates (within 15 m of each other), both off their own team's islands (on an
     // enemy island, a bridge or the center).
     const home = (p: Snapshot['players'][number]) => m.map.some((isl) => {
       const o = snap.players.find((q) => q.island === isl.index);
       return !!o && o.team === p.team && Math.hypot(p.pos.x - isl.center.x, p.pos.z - isl.center.z) < isl.radius;
     });
     const out = snap.players.filter((p) => p.alive && !home(p));
-    if (out.some((p) => out.some((q) => q.id !== p.id && q.team === p.team && Math.hypot(p.pos.x - q.pos.x, p.pos.z - q.pos.z) < 15))) pushTicks++;
+    if (out.some((p) => out.some((q) => q.id !== p.id && q.team === p.team && Math.hypot(p.pos.x - q.pos.x, p.pos.z - q.pos.z) < 15))) togetherTicks++;
+    // Team push (brain level): two teammates on the offensive (bridge/attack/seal/regroup) against the same rival.
+    const pushing = new Map<string, number>();
+    for (const b of bots.values()) {
+      if (b.currentTarget === null || !['bridge', 'attack', 'seal', 'regroup'].includes(b.currentGoal)) continue;
+      if (!snap.players.find((p) => p.id === b.id)?.alive) continue;
+      const k = `${team.get(b.id)}:${b.currentTarget}`;
+      pushing.set(k, (pushing.get(k) ?? 0) + 1);
+    }
+    if ([...pushing.values()].some((k) => k >= 2)) pushTicks++;
     for (const b of bots.values()) {
       if (b.currentGoal === 'assist') assistTicks++;
       if (b.currentGoal === 'regroup') regroupTicks++;
@@ -171,8 +180,8 @@ async function teamsBotMatch(mode: number, n: number, seed: number) {
   }
   checker.finish(snap);
   const left = snap.players.filter((p) => !p.eliminated);
-  const res = { winner: snap.winner, winTeam: snap.winner !== null && snap.winner > 0 ? team.get(snap.winner) : null, time: snap.time, friendlyHits, enemyHits, kills, pushTicks, assistTicks, regroupTicks, defendTicks, focusTicks, left, violations: checker.violations.filter((v) => v.kind === 'sealContradiction').map((v) => v.detail) };
-  console.log(`teams mode ${mode} (${n} bots) seed ${seed}: winner #${res.winner} (team ${res.winTeam}) at ${(res.time / 60).toFixed(1)} min; kills ${kills}, enemy hits ${enemyHits}, friendly hits ${friendlyHits}; push ${pushTicks}, assist ${assistTicks}, regroup ${regroupTicks}, defend ${defendTicks}, focus ${focusTicks} (half-second samples)`);
+  const res = { winner: snap.winner, winTeam: snap.winner !== null && snap.winner > 0 ? team.get(snap.winner) : null, time: snap.time, friendlyHits, enemyHits, kills, pushTicks, togetherTicks, assistTicks, regroupTicks, defendTicks, focusTicks, left, violations: checker.violations.filter((v) => v.kind === 'sealContradiction').map((v) => v.detail) };
+  console.log(`teams mode ${mode} (${n} bots) seed ${seed}: winner #${res.winner} (team ${res.winTeam}) at ${(res.time / 60).toFixed(1)} min; kills ${kills}, enemy hits ${enemyHits}, friendly hits ${friendlyHits}; push ${pushTicks}, out together ${togetherTicks}, assist ${assistTicks}, regroup ${regroupTicks}, defend ${defendTicks}, focus ${focusTicks} (half-second samples)`);
   m.dispose();
   return res;
 }
@@ -188,6 +197,7 @@ describe('teams bot matches', () => {
     expect(r.focusTicks).toBeGreaterThan(0);
     expect(r.pushTicks).toBeGreaterThan(0);
     expect(r.defendTicks).toBeGreaterThan(0);
+    expect(r.regroupTicks).toBeGreaterThan(0);
     expect(r.violations).toEqual([]);
   }, 600_000);
 
