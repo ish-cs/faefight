@@ -6,6 +6,7 @@ import type { IslandLayout, MapDef } from '../sim/map';
 import type { MatchEvent, PieceKind, PieceState, Snapshot, Vec3, WeaponKind } from '../sim/types';
 import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import { CharacterSystem, type Motion } from './characters/avatar';
+import { NpcSystem } from './characters/npcs';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
@@ -57,6 +58,8 @@ export class Renderer {
   /** Loot on the ground drawn as its items, with labels nearby (lootView.ts). */
   readonly lootView = new LootView(this.scene);
   private potionSellers = new PotionSellers(this.scene);
+  /** Animated shop keepers (characters/npcs.ts). */
+  readonly npcs = new NpcSystem(this.scene);
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
   private fx: Fx[] = [];
   private ghost: THREE.Mesh | null = null;
@@ -143,6 +146,7 @@ export class Renderer {
     this.humanId = humanId;
     setIslandPalette(def.colors);
     this.world.setMap(def, def.islands.map((isl) => islandColor(isl.index)));
+    this.npcs.sync(); // keepers registered by the map art (before the loading warm-up compiles the scene)
     const map = def.islands;
     this.storm.setMap(map, def.center);
     this.gunFx.warmUp([this.boomMat]);
@@ -440,7 +444,9 @@ export class Renderer {
     if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
     this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
     this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
-    this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
+    const feet = this.feet.slice(0, nf);
+    this.npcs.frame(dt, this.camera, feet);
+    this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }
 
