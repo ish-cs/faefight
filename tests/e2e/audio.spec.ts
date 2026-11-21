@@ -33,6 +33,10 @@ test('audio: context starts on click, sounds play while shooting, M mutes, no co
   const before = await stats(page);
   // Hold fire (fists by default) for ~1.5 s: the sim emits 'shot' events → own punch sounds.
   const box = (await page.locator('canvas.game').boundingBox())!;
+  // A click while the pointer is free only captures it (never fires); capture first.
+  await page.locator('canvas.game').click();
+  await expect.poll(() => page.evaluate(() => !!document.pointerLockElement)).toBe(true);
+  await page.waitForTimeout(200);
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.waitForTimeout(1500);
