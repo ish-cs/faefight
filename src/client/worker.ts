@@ -9,13 +9,16 @@ import { MoveQueue } from './moveQueue';
 import { Recorder } from '../sim/replay/recorder';
 import { metaOf, type ReplayKind, type ReplayOp } from '../sim/replay/format';
 import type { FromWorker, ToWorker } from './protocol';
+import { packMatch, unpackMatch } from '../net/matchCheckpoint';
 
-const post = (m: FromWorker) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m);
+const post = (m: FromWorker, transfer: Transferable[] = []) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m, transfer);
 
 /** Difficulty a leaver's seat is handed to. */
 const TAKEOVER_DIFFICULTY: Difficulty = 'medium';
 
 let match: Match | null = null;
+/** Tick of the newest snapshot: what a checkpoint taken now is "as of". */
+let lastTick = 0;
 let humanId = 0;
 let humanIsland = -1;
 /** Vs-bot pause: the loop keeps running but takes no steps. */
@@ -78,7 +81,9 @@ function step() {
     const q = moveQueues.get(id);
     if (q) moves.set(id, q.take(input));
   }
-  post({ type: 'snapshot', snap: runTick(tickInputs, moves) });
+  const snap = runTick(tickInputs, moves);
+  lastTick = snap.tick;
+  post({ type: 'snapshot', snap });
 }
 
 function startLoop() {
@@ -116,6 +121,28 @@ async function start(setup: MatchSetup, localId: number, record: { kind: ReplayK
   startLoop();
 }
 
+/** Host migration: continue a match from another host's checkpoint (see migration.ts). */
+async function restore(bytes: Uint8Array, localId: number, botify: number[], toTick: number) {
+  if (match) throw new Error('worker: match already started');
+  const t0 = performance.now();
+  const m = await unpackMatch(bytes);
+  m.cloneSnapshots = false;
+  for (const id of botify) if (m.humanIds().includes(id)) m.setBot(id, TAKEOVER_DIFFICULTY);
+  const ids = m.humanIds();
+  if (!ids.includes(localId)) throw new Error(`worker: restored match has no human ${localId} (humans: ${ids.join(',')})`);
+  let tick = m.tick(new Map()).tick;
+  const from = tick;
+  while (tick < toTick) tick = m.tick(new Map()).tick;
+  match = m;
+  lastTick = tick;
+  humanId = localId;
+  for (const id of ids) { inputs.set(id, new InputAccumulator()); moveQueues.set(id, new MoveQueue()); }
+  groundYFor = (x, z) => m.map.find((i) => Math.hypot(i.center.x - x, i.center.z - z) <= i.radius)?.groundY ?? m.map[0].groundY;
+  console.info(`[worker] restored at tick ${from}, caught up ${tick - from} ticks in ${(performance.now() - t0).toFixed(0)} ms`);
+  post({ type: 'restored', tick });
+  startLoop();
+}
+
 self.onmessage = (e: MessageEvent<ToWorker>) => {
   const msg = e.data;
   try {
@@ -123,6 +150,16 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       case 'start':
         start(msg.setup, msg.humanId, msg.record ?? null).catch((err) => post({ type: 'error', message: `start failed: ${String(err?.stack ?? err)}` }));
         break;
+      case 'restore':
+        restore(msg.match, msg.humanId, msg.botify, msg.toTick).catch((err) => post({ type: 'error', message: `restore failed: ${String(err?.stack ?? err)}` }));
+        break;
+      case 'checkpoint': {
+        if (!match) throw new Error('checkpoint before start');
+        const tick = lastTick;
+        packMatch(match).then((b) => post({ type: 'checkpoint', match: b, tick }, [b.buffer]),
+          (err) => post({ type: 'error', message: `checkpoint failed: ${String(err?.stack ?? err)}` }));
+        break;
+      }
       case 'input':
         pushInput(humanId, msg.input, msg.cmds);
         break;
@@ -147,6 +184,10 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       case 'pause':
         paused = msg.paused;
         console.info(`[worker] ${paused ? 'paused' : 'resumed'}`);
+        break;
+      case 'practice':
+        if (!match) throw new Error('practice before start');
+        match.practiceCommand(msg.cmd);
         break;
       case 'preview':
         if (match) {

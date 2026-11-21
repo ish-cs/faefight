@@ -19,6 +19,7 @@ import { unsupportedPieces } from './support';
 import { addStrike, stormCenterOf, stormRate, stormSnap, tickStorm } from './storm';
 import { newPlayer } from './player';
 import { MatchStats } from './stats';
+import { PracticeRange, practiceMapDef, type PracticeCmd } from './practice';
 import { isPlaceholderBotName, nickname } from './names';
 import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
 import { Bot } from './bots/bot';
@@ -77,6 +78,8 @@ export class Match implements MatchApi {
   cloneSnapshots = true;
   /** Lag-compensated shots resolved so far, and the total rewind (tests/debug). */
   lagStats = { shots: 0, rewindSec: 0 };
+  /** Practice range (MatchSetup.practice); null in every real match. */
+  private practice: PracticeRange | null = null;
 
   /** Host's rules for this match (clamped; defaults = today's constants). */
   readonly settings: GameSettings;
@@ -117,6 +120,20 @@ export class Match implements MatchApi {
     });
     this.ctx = this.makeCtx();
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
+    if (setup.practice) {
+      this.s.practice = true;
+      this.practice = new PracticeRange({ s: this.s, physics: this.physics, removePiece: (id) => this.ctx.onPieceDestroyed(id) }, 1);
+    }
+  }
+
+  /**
+   * Re-create everything bound to this instance (combat/fire callbacks, fire's piece-id source) after the
+   * match was copied: fork() and checkpoint restore (net/matchCheckpoint.ts).
+   */
+  rebind(): void {
+    this.ctx = this.makeCtx();
+    this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
+    this.fire.nextId = () => this.s.nextId++;
   }
 
   /** Combat's view of this match (callbacks bound to this instance: rebuilt by fork). */
@@ -159,6 +176,11 @@ export class Match implements MatchApi {
     opts: MatchOptions = { makeBot: (id, difficulty, rng) => new Bot(id, difficulty, rng) },
   ): Promise<Match> {
     const n = setup.players.length;
+    if (setup.practice) {
+      if (n !== 1 || setup.players[0].isBot) throw new Error(`Match.create: practice needs exactly one human player, got ${n}`);
+      const def = practiceMapDef(setup.seed ?? 1);
+      return new Match(def, await Physics.create(def), setup, opts);
+    }
     if (n < 2 || n > 8) throw new Error(`Match.create: need 2..8 players, got ${n}`);
     const def = buildMapDef(n, setup.map ?? 'harbor', setup.seed ?? 1);
     return new Match(def, await Physics.create(def), setup, opts);
@@ -177,9 +199,8 @@ export class Match implements MatchApi {
     const m = Object.create(Match.prototype) as Match;
     const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
     const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
-    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx') copy[k] = deepClone(self[k], memo);
-    m.ctx = m.makeCtx();
-    m.fireCtx = { ...m.ctx, cosmetics: m.cosmetics };
+    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
+    m.rebind();
     return m;
   }
 
@@ -197,6 +218,7 @@ export class Match implements MatchApi {
     this.s.time = now;
     this.tickNo++;
     this.events = [];
+    this.practice?.before();
 
     for (const p of this.s.players.values()) {
       const cmds = this.bots.has(p.id) ? undefined : moves?.get(p.id);
@@ -208,7 +230,8 @@ export class Match implements MatchApi {
       const bot = this.bots.get(p.id);
       // No input from a human (none sent yet, e.g. right after spawning): do nothing, but keep looking where
       // they look (the spawn facing), not at yaw 0.
-      const input = bot ? bot.think(this.botView(p)) : inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
+      const input = bot ? bot.think(this.botView(p)) : this.practice?.isDummy(p.id) ? this.practice.inputFor(p, now)
+        : inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
       this.applyInput(p, input, now, cmds);
     }
 
@@ -222,6 +245,7 @@ export class Match implements MatchApi {
     for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
     this.events.push(...this.cosmetics.onEvents(this.events, now));
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT, this.settings.suddenDeathSec));
+    this.practice?.after(now);
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
     this.updateSeals(now);
@@ -235,6 +259,12 @@ export class Match implements MatchApi {
     const p = this.mustPlayer(playerId);
     const snapped = snapPlacement(req.pos, req.rotY, req.free);
     return validatePlacement(this.physics, req.kind, snapped.pos, snapped.rotY, p.pos);
+  }
+
+  /** Practice panel commands (reset, clear pieces, dummy toggles). Throws outside practice. */
+  practiceCommand(cmd: PracticeCmd): void {
+    if (!this.practice) throw new Error('Match.practiceCommand: not a practice match');
+    this.practice.command(cmd);
   }
 
   /** Hand a seat to a bot (e.g. a friend disconnected). */
@@ -444,7 +474,8 @@ export class Match implements MatchApi {
     // Shop NPCs serve anyone standing at them, on any island (vaults stay owner-only); potions only at the
     // potion seller; generator upgrades and gun locks only at your own island's shop.
     if (input.shop) {
-      if (near(isl.shop)) buyAt(p, 'home', input.shop, this.s.genLevels);
+      // Practice: your own shop serves you anywhere on the range.
+      if (near(isl.shop) || this.practice) buyAt(p, 'home', input.shop, this.s.genLevels);
       else if (this.map.some((i) => near(i.shop))) { if (!isHomeOnly(input.shop.buy)) buyAt(p, 'home', input.shop); }
       else if (this.potionShops.some((sh) => near(sh.pos))) buyAt(p, 'potion', input.shop);
     }

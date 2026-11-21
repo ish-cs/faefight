@@ -145,7 +145,6 @@ export class CritterSim {
         this.agents.forEach((a, i) => { if (a.def === def) { const d = d2(a.x, a.z, v.cam.x, v.cam.z); if (d > fd) { fd = d; far = i; } } });
         this.remove(far); n--;
       }
-      if (n >= cap) continue;
       const list = this.anchors(def);
       const cand: number[] = [];
       for (let i = 0; i < list.length; i++) {
@@ -153,7 +152,8 @@ export class CritterSim {
         const p = list[i];
         const dd = d2(p.x, p.z, v.cam.x, v.cam.z);
         if (dd > R2) continue;
-        if (def.size >= 0.3 && !def.emerges && dd < POP_R * POP_R && v.visible(p.x, p.y, p.z, 1.5)) continue;
+        // big animals never pop in on screen, except flyers: they arrive by flying in and landing
+        if (def.size >= 0.3 && !def.emerges && def.flee !== 'fly' && dd < POP_R * POP_R && v.visible(p.x, p.y, p.z, 1.5)) continue;
         cand.push(i);
       }
       // favour anchors in view and close (ahead of the camera), with some randomness
@@ -163,12 +163,32 @@ export class CritterSim {
       };
       const scores = new Map(cand.map((i) => [i, score(i)]));
       cand.sort((a, b) => scores.get(a)! - scores.get(b)!);
+      if (n >= cap) {
+        // recycle: with the cap reached, one animal that's off screen makes room for a spot in view near the
+        // camera, so the view stays populated instead of the budget piling up behind the player
+        const best = cand[0];
+        if (best === undefined) continue;
+        const bp = list[best];
+        if (!v.visible(bp.x, bp.y, bp.z, 1)) continue;
+        let far = -1, fd = -1;
+        this.agents.forEach((a, i) => {
+          if (a.def !== def || a.st === 'fly' || a.st === 'circle' || v.visible(a.x, a.y, a.z, 1 + def.size)) return;
+          const d = d2(a.x, a.z, v.cam.x, v.cam.z);
+          if (d > fd) { fd = d; far = i; }
+        });
+        if (far < 0) continue;
+        this.remove(far); n--;
+      }
       while (n < cap && cand.length) {
         const k = Math.floor(this.rnd() ** 2 * cand.length);
         const i = cand[k];
         // flocks: fill the anchor up in one go
         const group = Math.min(cap - n, def.perAnchor - (this.used.get(`${def.name}:${i}`) ?? 0));
-        for (let g = 0; g < group; g++) { this.spawn(def, i); n++; }
+        const p = list[i], inView = v.visible(p.x, p.y, p.z, 1.5) && d2(p.x, p.z, v.cam.x, v.cam.z) < POP_R * POP_R;
+        for (let g = 0; g < group; g++) {
+          const a = this.spawn(def, i); n++;
+          if (inView && def.flee === 'fly') this.flyIn(a, v);
+        }
         cand.splice(k, 1);
       }
     }
@@ -374,6 +394,15 @@ export class CritterSim {
     if (a.st !== 'hidden') a.show = Math.min(1, a.show + dt * 3);
     if (a.st !== 'fly' && a.st !== 'circle' && a.st !== 'dive') this.place(a, v.waterY);
     a.phase = (a.phase + dt * (D.mode === 'perch' || a.st === 'fly' || a.st === 'circle' ? 14 : D.stepRate * (0.4 + a.speed))) % (TAU * 64);
+  }
+
+  /** Start a just-spawned flyer up and away from its spot (away from the camera), gliding in to land there. */
+  private flyIn(a: Agent, v: View) {
+    const tx = a.x, ty = a.y, tz = a.z;
+    const ax = a.x - v.cam.x, az = a.z - v.cam.z, l = Math.hypot(ax, az) || 1;
+    a.x += (ax / l) * 14 + rr(a.rnd, -4, 4); a.z += (az / l) * 14 + rr(a.rnd, -4, 4); a.y = ty + rr(a.rnd, 7, 11);
+    this.fly(a, tx, ty, tz, 1.5, false);
+    a.show = 1;
   }
 
   private flee(a: Agent, th: V3, v: View) {

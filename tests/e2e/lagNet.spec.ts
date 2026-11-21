@@ -46,7 +46,13 @@ test('120 ms RTT: own shots are predicted, echoes are not shown twice', async ({
   const meB = async () => (await dbg<Snap>(b, 'snapshot')).players.find((p) => p.id === 2)!;
   await expect.poll(async () => (await meB()).hotbar.indexOf('rifle'), { timeout: 10_000 }).toBeGreaterThanOrEqual(0);
   await b.bringToFront();
-  await b.locator('canvas.game').click();
+  await b.locator('canvas.game').click(); // only captures the pointer (a click while unlocked never fires)
+  await expect.poll(() => b.evaluate(() => !!document.pointerLockElement)).toBe(true);
+  // Presses right after the game sees the lock are swallowed (ClickGate grace): wait until it's past.
+  await expect.poll(() => b.evaluate(() => {
+    const g = (window as unknown as { __faefight: { input: { gate: { lockedAt: number } } } }).__faefight.input.gate;
+    return performance.now() - g.lockedAt;
+  })).toBeGreaterThan(200);
   await b.keyboard.press(`Digit${(await meB()).hotbar.indexOf('rifle') + 1}`);
   await expect.poll(async () => (await meB()).equipped, { timeout: 10_000 }).toBe('rifle');
 

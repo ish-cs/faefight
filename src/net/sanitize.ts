@@ -167,7 +167,10 @@ export function sanitizeClientMsg(x: unknown): ClientMsg | null {
       const name = cleanName(x.name);
       if (!name) return null;
       const rejoin = typeof x.rejoin === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(x.rejoin) ? x.rejoin : undefined;
-      return rejoin ? { t: 'hello', name, version: x.version, rejoin } : { t: 'hello', name, version: x.version };
+      // Host migration: the checkpoint key this guest held, handed to the backup that now hosts (only with a rejoin token).
+      const mkey = rejoin && typeof x.mkey === 'string' && /^[A-Za-z0-9+/]{22}==$/.test(x.mkey) ? x.mkey : undefined;
+      if (!rejoin) return { t: 'hello', name, version: x.version };
+      return mkey ? { t: 'hello', name, version: x.version, rejoin, mkey } : { t: 'hello', name, version: x.version, rejoin };
     }
     case 'pong': {
       return Number.isInteger(x.n) && (x.n as number) > 0 ? { t: 'pong', n: x.n as number } : null;

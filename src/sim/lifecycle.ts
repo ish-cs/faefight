@@ -29,6 +29,8 @@ export type MatchStateCore = {
   /** Winning player id, -1 for a draw, null while the match is running. */
   winner: number | null;
   nextId: number;
+  /** Practice range (practice.ts): no sudden death, no breakout countdown, no result. */
+  practice?: boolean;
 };
 
 export function newMatchState(map: IslandLayout[], seed = 1): MatchStateCore {
@@ -166,7 +168,7 @@ export function tickLifecycle(
 ): MatchEvent[] {
   const out: MatchEvent[] = [];
 
-  if (!s.suddenDeath && now >= suddenDeathAt) {
+  if (!s.practice && !s.suddenDeath && now >= suddenDeathAt) {
     s.suddenDeath = true;
     s.forcedSeal = true;
     s.storm = newStorm(map, s.stormCenter, suddenDeathAt, s.seed);
@@ -230,7 +232,7 @@ export function tickLifecycle(
       p.spawnProtected = false;
     }
     // Inside your own bunker while it's sealed (however you got there): the escape clock starts.
-    if (p.breakoutUntil === null && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
+    if (!s.practice && p.breakoutUntil === null && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
       p.breakoutUntil = now + LIFECYCLE.breakoutSec;
       out.push(ev(now, 'trapped', { player: p.id, until: p.breakoutUntil }));
       continue;
@@ -244,7 +246,7 @@ export function tickLifecycle(
     }
   }
 
-  if (s.winner === null && s.players.size >= 2) {
+  if (!s.practice && s.winner === null && s.players.size >= 2) {
     const left = [...s.players.values()].filter((p) => !p.eliminated);
     if (left.length <= 1) {
       s.winner = left[0]?.id ?? -1;
