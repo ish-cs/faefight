@@ -38,19 +38,22 @@ export class RefreshProbe {
 }
 
 /**
- * Frames-in-flight limit. With vsync off, or when GPU-bound, the browser lets WebGPU work pile up: measured 0.5 s
+ * GPU queue latency cap. With vsync off, or when GPU-bound, the browser lets WebGPU work pile up: measured 0.2–0.5 s
  * from mouse-look to GPU done on ultra at 2× DPR. The frame loop asks `busy()` before starting a frame and skips the
- * rAF while `max` frames are still on the GPU, so input latency stays at ≤ max + 1 frames however heavy the GPU
- * load. A frame whose completion never arrives (device lost) is forgotten after 250 ms, so the loop can't stall.
+ * rAF while the oldest unfinished frame is older than `maxAgeMs` (or `maxFrames` are queued), so look→GPU-done
+ * latency stays near `maxAgeMs` however heavy the GPU load.
+ * The cap is on age, not count: Chrome reports `onSubmittedWorkDone` ~15–25 ms after the GPU finishes, so a
+ * 2-frame count cap starved a GPU that had headroom (ultra: 141 → 82 fps). A frame whose completion never arrives
+ * (device lost) is forgotten after 250 ms, so the loop can't stall.
  */
 export class FrameQueue {
   private times: number[] = [];
   private gen = 0;
-  constructor(private max = 2) {}
+  constructor(private maxAgeMs = 40, private maxFrames = 6) {}
   get inFlight() { return this.times.length; }
   busy(now: number): boolean {
     if (this.times.length && now - this.times[0] > 250) { this.times.length = 0; this.gen++; }
-    return this.times.length >= this.max;
+    return this.times.length >= this.maxFrames || (this.times.length > 0 && now - this.times[0] > this.maxAgeMs);
   }
   /** Call after submitting a frame; call the returned function when the GPU has finished it. */
   submitted(now: number): () => void {

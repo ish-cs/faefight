@@ -1857,15 +1857,15 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   };
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
-  // ?gpuqueue=N: frames allowed in flight (0 = unbounded, A/B only)
-  const gpuQueue = new FrameQueue(Number(new URLSearchParams(location.search).get('gpuqueue') ?? 2) || Infinity);
+  // ?gpuqueue=ms: GPU queue latency cap (0 = unbounded, A/B only)
+  const gpuQueue = new FrameQueue(Number(new URLSearchParams(location.search).get('gpuqueue') ?? 40) || Infinity, Infinity);
   const gpuDoneT: number[] = [];
   const frame = () => {
     const now = performance.now();
     // Settings → Video frame cap (rAF itself is vsync-locked; this only skips frames below it).
     const cap = settings.get().video.frameCap;
     if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
-    // GPU still busy with 2 frames: wait (input latency stays ≤ 3 frames however GPU-bound; refresh.ts FrameQueue)
+    // GPU queue too deep: wait (look→GPU-done latency stays ≈ 40 ms however GPU-bound; refresh.ts FrameQueue)
     if (gpuQueue.busy(now)) { requestAnimationFrame(frame); return; }
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);

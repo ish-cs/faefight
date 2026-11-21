@@ -2,26 +2,36 @@ import { describe, expect, it } from 'vitest';
 import { FrameQueue, RefreshProbe, frameBudgetMs, snapHz } from '../../src/client/refresh';
 
 describe('GPU frame queue limit', () => {
-  it('holds new frames while 2 are in flight, releases as the GPU finishes', () => {
-    const q = new FrameQueue(2);
-    expect(q.busy(0)).toBe(false);
-    const a = q.submitted(0), b = q.submitted(1);
-    expect(q.busy(2)).toBe(true);
+  it('lets frames pipeline while the oldest unfinished one is young (completion callbacks arrive late)', () => {
+    const q = new FrameQueue(40, 6);
+    for (let t = 0; t < 30; t += 7) { expect(q.busy(t)).toBe(false); q.submitted(t); }
+    expect(q.inFlight).toBe(5);
+  });
+
+  it('holds new frames once the oldest unfinished frame is older than the latency cap, releases as it finishes', () => {
+    const q = new FrameQueue(40, 6);
+    const a = q.submitted(0);
+    q.submitted(10);
+    expect(q.busy(41)).toBe(true);
     a();
-    expect(q.busy(3)).toBe(false);
-    b();
-    expect(q.inFlight).toBe(0);
+    expect(q.busy(42)).toBe(false); // oldest is now 32 ms old
+  });
+
+  it('caps the count too', () => {
+    const q = new FrameQueue(40, 2);
+    q.submitted(0); q.submitted(1);
+    expect(q.busy(2)).toBe(true);
   });
 
   it('never deadlocks: a frame the GPU never reports done is dropped after 250 ms', () => {
-    const q = new FrameQueue(1);
+    const q = new FrameQueue(40, 6);
     q.submitted(0);
     expect(q.busy(100)).toBe(true);
     expect(q.busy(300)).toBe(false);
   });
 
   it('a late completion after the reset does not go negative', () => {
-    const q = new FrameQueue(1);
+    const q = new FrameQueue(40, 6);
     const done = q.submitted(0);
     q.busy(300);
     done();
