@@ -258,7 +258,7 @@ describe('bridge craft (real physics)', () => {
 
 describe('bridge craft: alternate route', () => {
   test('main bridge shot out while under fire → a hard bot lays a new one on the other lane', async () => {
-    const { m } = await duel('hard', 'Turtle', 2); // a seed where it bridges to the rival first (with traps + piers: seeds 2-6, 8 do; 1 and 9 go elsewhere first)
+    const { m } = await duel('hard', 'Turtle', 3); // a seed where it bridges to the rival first (with traps + piers + gameplay props: seeds 3-6, 8 do; 1, 2 and 9 go elsewhere first)
     m.debugGive(1, { weapons: { pistol: { mag: WEAPONS.pistol.mag, spare: 36 } }, pieces: { scaffold: 16, wood: 3 } });
     const main = lane(m.map, 0, 1), mirror = lane(m.map, 1, 0);
     let snap = m.tick(new Map());
