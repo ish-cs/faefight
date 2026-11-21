@@ -57,11 +57,11 @@ async function run(quality) {
   if (atTime > 0) { await dbg('time', atTime); await page.waitForTimeout(1500); }
   const per = [];
   // --views=extra adds 'mid' (halfway to the map centre, looking across it at the other islands and bots) and
-  // 'storm' (sudden death: rain + wall, irreversible, so it runs last)
+  // 'storm' (sudden death, inside the closing ring looking out at the wall through the rain; irreversible, so last)
   const L = Math.hypot(home.center.x, home.center.z), ux = home.center.x / L, uz = home.center.z / L;
   const spots = [...SPOTS, ...(views === 'extra' ? [
     { name: 'mid', world: { x: ux * L * 0.45, z: uz * L * 0.45 }, yaw: Math.atan2(ux, uz), pitch: 0.0 },
-    { name: 'storm', storm: true, world: { x: ux * (L - 12), z: uz * (L - 12) }, yaw: Math.atan2(-ux, -uz), pitch: 0.04 },
+    { name: 'storm', storm: true, world: { x: ux * 20, z: uz * 20 }, yaw: Math.atan2(-ux, -uz), pitch: 0.04 },
   ] : [])];
   for (const s of spots) {
     await dbg('hp', 100000);
