@@ -67,6 +67,20 @@ for (const n of profile.nodes) {
   byFile.set(file, (byFile.get(file) ?? 0) + c * dt);
 }
 const total = profile.samples.length * dt;
+// --stack=fnName: who calls it (self time of fnName, by its 5 nearest callers)
+const stackOf = arg('stack', '');
+const stacks = new Map();
+if (stackOf) {
+  const parent = new Map(), byId = new Map(profile.nodes.map((n) => [n.id, n]));
+  for (const n of profile.nodes) for (const c of n.children ?? []) parent.set(c, n.id);
+  for (const n of profile.nodes) {
+    if (n.callFrame.functionName !== stackOf || !count.get(n.id)) continue;
+    const chain = [];
+    for (let id = parent.get(n.id); id && chain.length < 5; id = parent.get(id)) { const f = byId.get(id).callFrame; chain.push(`${f.functionName || '(anon)'}:${(f.url.split('/').pop() || '').replace(/\?.*$/, '')}:${f.lineNumber + 1}`); }
+    const k = chain.join(' < ');
+    stacks.set(k, (stacks.get(k) ?? 0) + count.get(n.id) * dt);
+  }
+}
 const top = (m, n) => [...m].sort((a, b) => b[1] - a[1]).slice(0, n);
 const perFrame = (ms) => (ms / (frames.n || 1)).toFixed(3);
 
@@ -84,7 +98,7 @@ if (await page.evaluate(() => typeof window.__faefight.lookProbe === 'function')
   await dbg('lookProbe', false);
 }
 // draw census at this view: visible meshes inside the camera frustum, grouped by name prefix
-const census = await page.evaluate(() => {
+const census = await page.evaluate((full) => {
   const r = window.__faefight.renderer, cam = r.camera, scene = r.scene;
   const m = cam.projectionMatrix.clone().multiply(cam.matrixWorldInverse);
   const e = m.elements, planes = [[e[3] + e[0], e[7] + e[4], e[11] + e[8], e[15] + e[12]], [e[3] - e[0], e[7] - e[4], e[11] - e[8], e[15] - e[12]], [e[3] + e[1], e[7] + e[5], e[11] + e[9], e[15] + e[13]], [e[3] - e[1], e[7] - e[5], e[11] - e[9], e[15] - e[13]], [e[3] + e[2], e[7] + e[6], e[11] + e[10], e[15] + e[14]], [e[3] - e[2], e[7] - e[6], e[11] - e[10], e[15] - e[14]]];
@@ -99,7 +113,8 @@ const census = await page.evaluate(() => {
         for (const p of planes) { const n = Math.hypot(p[0], p[1], p[2]); if ((p[0] * c.x + p[1] * c.y + p[2] * c.z + p[3]) / n < -rad) { inside = false; break; } }
       }
       if (inside && !(o.isInstancedMesh && o.count === 0)) {
-        const k = (o.name || o.parent?.name || o.type).split(/[:#\d]/)[0] || o.type;
+        const nm = o.name || o.parent?.name || o.type;
+        const k = full ? nm.replace(/\d+/g, '#').split(':').slice(0, 3).join(':') : nm.split(/[:#\d]/)[0] || o.type;
         const mats = Array.isArray(o.material) ? o.material.length : 1;
         out[k] = (out[k] ?? 0) + mats;
       }
@@ -107,8 +122,8 @@ const census = await page.evaluate(() => {
     for (const ch of o.children) visit(ch);
   };
   visit(scene);
-  return Object.entries(out).sort((a, b) => b[1] - a[1]).slice(0, 25);
-});
+  return Object.entries(out).sort((a, b) => b[1] - a[1]).slice(0, full ? 60 : 25);
+}, arg('census', '') === 'full');
 await browser.close();
 console.log('-- camera draws by group (approx) --');
 for (const [k, v] of census) console.log(`${String(v).padStart(5)}  ${k}`);
@@ -119,6 +134,7 @@ console.log(`input→submit ${lat.cpuAvg.toFixed(2)} ms (p95 ${lat.cpuP95.toFixe
 console.log(`profiled ${total.toFixed(0)} ms main thread`);
 console.log('-- top functions (self ms per frame) --');
 for (const [k, v] of top(byFn, 30)) console.log(`${perFrame(v).padStart(7)}  ${k}`);
+if (stackOf) { console.log(`-- callers of ${stackOf} (ms per frame) --`); for (const [k, v] of [...stacks].sort((a, b) => b[1] - a[1]).slice(0, 8)) console.log(`${(v / (frames.n || 1)).toFixed(3).padStart(7)}  ${k}`); }
 console.log('-- top files (self ms per frame) --');
 for (const [k, v] of top(byFile, 20)) console.log(`${perFrame(v).padStart(7)}  ${k}`);
 if (errors.length) console.log('errors', JSON.stringify(errors.slice(0, 5)));
