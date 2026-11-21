@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU);
 
 type Stats = { state: string; played: number; dropped: number; active: number; bySound: Record<string, number> };
 
@@ -30,9 +33,16 @@ test('audio: context starts on click, sounds play while shooting, M mutes, no co
   await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });
   await expect.poll(async () => (await stats(page)).state, { timeout: 10_000 }).toBe('running');
 
+  // Capture the mouse first, as a player does: that click only captures it (it doesn't fire).
+  await page.locator('canvas.game').click();
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null)).toBe('CANVAS');
   const before = await stats(page);
   // Hold fire (fists by default) for ~1.5 s: the sim emits 'shot' events → own punch sounds.
   const box = (await page.locator('canvas.game').boundingBox())!;
+  // A click while the pointer is free only captures it (never fires); capture first.
+  await page.locator('canvas.game').click();
+  await expect.poll(() => page.evaluate(() => !!document.pointerLockElement)).toBe(true);
+  await page.waitForTimeout(200);
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.waitForTimeout(1500);

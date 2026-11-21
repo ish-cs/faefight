@@ -1,6 +1,6 @@
 import type { MatchEvent, Snapshot, Vec3 } from '../../sim/types';
 import type { Motion } from '../characters/avatar';
-import { ISLAND_COLORS } from '../colors';
+import { islandColor } from '../colors';
 import { eventsBetween, planKillcam, samplePlayer, SnapshotHistory, type KillcamPlan, type PlayerSample } from './killcamBuffer';
 
 /**
@@ -87,7 +87,7 @@ export class Killcam {
     this.last = { started: true, reason: 'playing', plan };
     this.title.replaceChildren();
     const dot = el('span', 'dot');
-    dot.style.background = hex(ISLAND_COLORS[info.island % 8]);
+    dot.style.background = hex(islandColor(info.island));
     this.title.append(dot, document.createTextNode(killcamTitle(info)));
     this.root.style.display = '';
     this.frameEl.style.display = '';

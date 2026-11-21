@@ -3,7 +3,8 @@ import { Predictor, SNAP_DIST } from '../../src/client/predict';
 import { MoveQueue } from '../../src/client/moveQueue';
 import { Match } from '../../src/sim/match';
 import type { MoveCmd } from '../../src/sim/movement';
-import { NO_INPUT, type Snapshot, type Vec3 } from '../../src/sim/types';
+import { NO_INPUT, type PlayerState, type Snapshot, type Vec3 } from '../../src/sim/types';
+import { applyPlayerDamage, type CombatCtx } from '../../src/sim/combat';
 
 const humans = { players: [{ name: 'a', isBot: false }, { name: 'b', isBot: false }] };
 const d3 = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -123,5 +124,50 @@ describe('Predictor', () => {
     pr.renderState(live, 0.5, 1 / 60, out);
     expect(d3(out.pos, a)).toBeGreaterThan(0.005);
     expect(Math.hypot(out.vel.x, out.vel.z)).toBeGreaterThan(0.5);
+  });
+});
+
+describe('Predictor stamina', () => {
+  test('predicted stamina matches the sim exactly (sprint to exhaustion, rest, jumps) and adopts damage stress', async () => {
+    const { m, pr, yaw0 } = await setup();
+    const q = new MoveQueue();
+    const at = new Map<number, number>();
+    let compared = 0, worst = 0, minSeen = 100;
+    const snaps: { at: number; s: Snapshot }[] = [];
+    const sent: { at: number; c: MoveCmd }[] = [];
+    for (let tick = 1; tick <= 330; tick++) {
+      // 7 s sprinting (runs dry), then walk/stand with jumps.
+      const c: MoveCmd = { seq: tick, moveX: 0, moveZ: tick < 260 ? 1 : 0, yaw: yaw0 + tick / 15, jump: tick % 70 === 0, sprint: tick < 210 };
+      pr.step(c);
+      at.set(c.seq, pr.stamina!);
+      sent.push({ at: tick + 3, c });
+      for (const f of sent.filter((f) => f.at <= tick)) q.push([f.c]);
+      sent.splice(0, sent.length, ...sent.filter((f) => f.at > tick));
+      const s = m.tick(new Map([[1, { ...NO_INPUT }]]), new Map([[1, q.take({ moveX: 0, moveZ: 0, yaw: 0, sprint: false })]]));
+      snaps.push({ at: tick + 3, s });
+      for (const r of snaps.filter((r) => r.at <= tick)) {
+        pr.onSnapshot(r.s);
+        const mine = me(r.s);
+        const p = at.get(mine.mv!.ack);
+        if (p !== undefined) { worst = Math.max(worst, Math.abs(p - mine.mv!.stamina)); compared++; }
+        expect(mine.alive).toBe(true);
+        expect(mine.stamina).toBe(mine.mv!.stamina);
+        minSeen = Math.min(minSeen, mine.stamina);
+      }
+      snaps.splice(0, snaps.length, ...snaps.filter((r) => r.at > tick));
+    }
+    expect(compared).toBeGreaterThan(300);
+    expect(worst).toBeLessThan(1e-9);
+    expect(minSeen).toBe(0); // really ran dry
+
+    // Host-side damage stress reaches the client through the snapshot's mv.
+    const p1 = (m as unknown as { s: { players: Map<number, PlayerState> } }).s.players.get(1)!;
+    const before = p1.mv!.stamina, predBefore = pr.stamina!;
+    applyPlayerDamage((m as unknown as { ctx: CombatCtx }).ctx, p1, 20, null, 1e6);
+    const s = m.tick(new Map([[1, { ...NO_INPUT }]]), new Map([[1, []]]));
+    pr.onSnapshot(s);
+    expect(me(s).mv!.stamina).toBeLessThan(before);
+    expect(me(s).mv!.stress).toBeGreaterThan(0);
+    expect(pr.stamina!).toBeLessThan(predBefore - 20 * 0.6 + 1); // replayed from the stressed server state
   });
 });

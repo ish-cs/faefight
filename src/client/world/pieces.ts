@@ -1,12 +1,13 @@
 import * as THREE from 'three/webgpu';
 import {
-  abs, attribute, bumpMap, float, luminance, max, mix, mx_noise_float, normalGeometry, normalLocal, normalMap, positionGeometry, positionLocal,
+  abs, attribute, bumpMap, float, floor, mod, luminance, max, mix, mx_noise_float, normalGeometry, normalLocal, normalMap, positionGeometry, positionLocal,
   pow, select, sin, smoothstep, step, texture, uv, vec2, vec3, vec4,
 } from 'three/tsl';
 import { PIECES } from '../../sim/constants';
 import type { PieceKind, PieceState } from '../../sim/types';
 import { DAMAGE_TILE_M, damageTex } from './damageTex';
 import { boxUV, mat, merge, part, strut } from './geo';
+import { ConnectGraph } from './connect';
 import { CONTAINER_COLORS } from './materials';
 import { pbrTex, type PbrName } from './pbr';
 import { makeRng } from './textures';
@@ -45,10 +46,46 @@ export function pieceGeometry(kind: PieceKind): THREE.BufferGeometry {
 // ---------------------------------------------------------------- detailed visuals
 
 type Slot = 'burlap' | 'wood' | 'corr' | 'steel' | 'galv' | 'paint';
-type Visual = Partial<Record<Slot, THREE.BufferGeometry[]>>;
-const push = (v: Visual, s: Slot, g: THREE.BufferGeometry, m: THREE.Matrix4 | null = null, col: THREE.ColorRepresentation = 0xffffff) => {
-  (v[s] ??= []).push(part(g, m, col));
+
+/**
+ * Edge tags (see connect.ts): a part tagged with an end + mode is shown or hidden per instance from that piece's
+ * edge mask, so a run of pieces drops its doubled frames/poles without unique meshes. code = end * 4 + mode.
+ * Ends: L = -X, R = +X, D = bottom (scaffold/ramp: -Z), U = top (scaffold/ramp: +Z).
+ */
+const L = 1, R = 2, D = 3, U = 4;
+/** Trim: shown unless that end is merged with the same material. */
+const TRIM = 0;
+/** End cap: shown only while that end is open. */
+const CAP = 1;
+/** Bracket / corner trim: shown only where that end meets a different piece (corner, T, other material). */
+const JOINT = 2;
+/** Shown only while that end is merged/connected (bridging course, stack filler, ramp lip). */
+const JOIN = 3;
+const E = (end: number, mode: number) => end * 4 + mode;
+type Tag = [number, number];
+const NO_TAG: Tag = [0, 0];
+
+type PartSpec = { g: THREE.BufferGeometry; tag: Tag };
+type Visual = Partial<Record<Slot, PartSpec[]>>;
+const push = (v: Visual, s: Slot, g: THREE.BufferGeometry, m: THREE.Matrix4 | null = null, col: THREE.ColorRepresentation = 0xffffff, tag: Tag = NO_TAG) => {
+  (v[s] ??= []).push({ g: part(g, m, col), tag });
 };
+
+const BRACKET = 0x4d5257;
+const boltGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.014, 6).rotateX(Math.PI / 2);
+/**
+ * Galvanised U-clamp around one end (front leg + back leg + end web, bolted): the transition piece where a wall meets
+ * another material or turns a corner. Only shown on JOINT ends.
+ */
+function bracket(v: Visual, end: number, w: number, h: number, zf: number, zb: number) {
+  const sx = end === L ? -1 : 1, tag: Tag = [E(end, JOINT), 0];
+  const x = sx * (w / 2 - 0.058);
+  push(v, 'galv', boxUV(0.14, h, 0.012, 1.25), mat(x, h / 2, zf - 0.006), BRACKET, tag);
+  push(v, 'galv', boxUV(0.14, h, 0.012, 1.25), mat(x, h / 2, zb + 0.006), BRACKET, tag);
+  push(v, 'galv', boxUV(0.012, h, zb - zf + 0.024, 1.25), mat(sx * (w / 2 + 0.006), h / 2, (zf + zb) / 2), BRACKET, tag);
+  const n = Math.max(2, Math.round(h / 0.45));
+  for (let k = 0; k < n; k++) push(v, 'galv', boltGeo, mat(x, (h * (k + 0.5)) / n, zf - 0.016), 0x6d7378, tag);
+}
 
 /** Squashed, slightly boxy pillow (one sandbag), unit size. */
 const pillow = (() => {
@@ -65,18 +102,26 @@ const pillow = (() => {
 
 function sandbags(): Visual {
   const v: Visual = {};
-  const { h, d } = PIECES.sandbags;
+  const { w, h, d } = PIECES.sandbags;
   const rng = makeRng(7);
   const rows = 6, bh = h / rows;
   for (let r = 0; r < rows; r++) {
     const odd = r % 2 === 1;
     const xs = odd ? [-0.875, -0.5, 0, 0.5, 0.875] : [-0.75, -0.25, 0.25, 0.75];
-    for (const zc of [-d / 4, d / 4]) for (const x of xs) {
-      const half = odd && Math.abs(x) > 0.8;
-      const L = (half ? 0.125 : 0.25) * rng.rr(0.94, 1.0);
-      const tone = rng.rr(0.82, 1.05);
-      push(v, 'burlap', pillow, mat(x + rng.rr(-0.015, 0.015), bh * (r + 0.5), zc + rng.rr(-0.015, 0.015), 0, rng.rr(-0.06, 0.06), rng.rr(-0.03, 0.03),
-        L, (bh / 2) * 1.12, (d / 4) * 0.98), new THREE.Color(tone, tone * 0.98, tone * 0.93));
+    for (const zc of [-d / 4, d / 4]) {
+      for (const x of xs) {
+        // running bond: odd courses end in half bags; when the run continues they give way to one full bag across the joint
+        const half = odd && Math.abs(x) > 0.8;
+        const L2 = (half ? 0.125 : 0.25) * rng.rr(0.94, 1.0);
+        const tone = rng.rr(0.82, 1.05);
+        push(v, 'burlap', pillow, mat(x + rng.rr(-0.015, 0.015), bh * (r + 0.5), zc + rng.rr(-0.015, 0.015), 0, rng.rr(-0.06, 0.06), rng.rr(-0.03, 0.03),
+          L2, (bh / 2) * 1.12, (d / 4) * 0.98), new THREE.Color(tone, tone * 0.98, tone * 0.93), half ? [E(x < 0 ? L : R, TRIM), 0] : NO_TAG);
+      }
+      if (odd) {
+        const tone = rng.rr(0.82, 1.05);
+        push(v, 'burlap', pillow, mat(w / 2, bh * (r + 0.5), zc + rng.rr(-0.015, 0.015), 0, rng.rr(-0.06, 0.06), 0, 0.25 * rng.rr(0.94, 1.0), (bh / 2) * 1.12, (d / 4) * 0.98),
+          new THREE.Color(tone, tone * 0.98, tone * 0.93), [E(R, JOIN), 0]);
+      }
     }
   }
   return v;
@@ -87,33 +132,37 @@ function woodBarricade(): Visual {
   const { w, h, d } = PIECES.wood;
   const rng = makeRng(11);
   const n = 8, ph = h / n;
-  for (let k = 0; k < n; k++) {
-    const g = boxUV(w - rng.rr(0, 0.04), ph - 0.008, 0.06, 2);
-    const uvA = g.getAttribute('uv');
-    for (let i = 0; i < uvA.count; i++) uvA.setY(i, uvA.getY(i) + ((k * 3) % 8) / 8);
-    push(v, 'wood', g, mat(rng.rr(-0.01, 0.01), ph * (k + 0.5), -d / 2 + 0.03, 0, 0, rng.rr(-0.006, 0.006)), new THREE.Color().setScalar(rng.rr(0.85, 1.05)));
-  }
+  // full-width boards (+1 cm) so a run butts board-to-board; the world-aligned uv carries the grain across
+  for (let k = 0; k < n; k++)
+    push(v, 'wood', boxUV(w + 0.01, ph - 0.008, 0.06, 2), mat(rng.rr(-0.004, 0.004), ph * (k + 0.5), -d / 2 + 0.03, 0, 0, rng.rr(-0.004, 0.004)), new THREE.Color().setScalar(rng.rr(0.85, 1.05)));
   for (const x of [-0.8, 0.8]) push(v, 'wood', boxUV(0.12, h, 0.09, 2), mat(x, h / 2, -d / 2 + 0.105), 0xc8b8a0);
   const diag = Math.hypot(1.5, h - 0.3);
   push(v, 'wood', boxUV(0.1, diag, 0.05, 2), mat(0, h / 2, d / 2 - 0.025, 0, 0, Math.atan2(1.5, h - 0.3)), 0xb8a890);
-  for (const y of [0.25, h - 0.25]) push(v, 'wood', boxUV(w - 0.1, 0.1, 0.05, 2), mat(0, y, d / 2 - 0.025), 0xc0b098);
+  for (const y of [0.25, h - 0.25]) push(v, 'wood', boxUV(w, 0.1, 0.05, 2), mat(0, y, d / 2 - 0.025), 0xc0b098);
+  // open ends: an end board over the plank ends
+  for (const end of [L, R]) push(v, 'wood', boxUV(0.07, h, d + 0.01, 2), mat((end === L ? -1 : 1) * (w / 2 - 0.035), h / 2, 0), 0xb8a68c, [E(end, CAP), 0]);
+  for (const end of [L, R]) bracket(v, end, w, h, -d / 2, d / 2);
   return v;
 }
+
+/** Corrugation pitch: a whole number of ribs per sheet so ribs run on across neighbouring sheets. */
+const CORR_PITCH = PIECES.metal.w / 14;
 
 function metalSheet(): Visual {
   const v: Visual = {};
   const { w, h, d } = PIECES.metal;
-  const g = new THREE.PlaneGeometry(w, h, 80, 16); // rows so damage can dent it
+  const g = new THREE.PlaneGeometry(w, h, 84, 16); // rows so damage can dent it
   const p = g.getAttribute('position');
-  const pitch = 0.15, amp = 0.028;
-  for (let i = 0; i < p.count; i++) p.setZ(i, -0.012 + amp * Math.sin((p.getX(i) / pitch) * Math.PI * 2));
+  const amp = 0.028;
+  for (let i = 0; i < p.count; i++) p.setZ(i, -0.012 + amp * Math.sin((p.getX(i) / CORR_PITCH) * Math.PI * 2));
   g.computeVertexNormals();
-  const uvA = g.getAttribute('uv');
-  for (let i = 0; i < uvA.count; i++) uvA.setXY(i, (uvA.getX(i) * w) / (28 * pitch), (uvA.getY(i) * h) / 2.5);
   push(v, 'corr', g, mat(0, h / 2, 0), 0xc4c8c8);
-  // timber posts + rails behind (+Z side), inside the 0.1 depth
+  // timber posts + rails behind (+Z side), inside the 0.1 depth; rails full width so a run reads as one fence
   for (const x of [-w / 2 + 0.12, w / 2 - 0.12]) push(v, 'wood', boxUV(0.09, h, 0.034, 2), mat(x, h / 2, d / 2 - 0.017), 0xa89880);
-  for (const y of [0.35, h - 0.35]) push(v, 'wood', boxUV(w - 0.1, 0.09, 0.03, 2), mat(0, y, d / 2 - 0.015), 0xa89880);
+  for (const y of [0.35, h - 0.35]) push(v, 'wood', boxUV(w, 0.09, 0.03, 2), mat(0, y, d / 2 - 0.015), 0xa89880);
+  // open ends: galvanised edge flashing over the cut sheet
+  for (const end of [L, R]) push(v, 'galv', boxUV(0.03, h, 0.085, 1.25), mat((end === L ? -1 : 1) * (w / 2 - 0.015), h / 2, -0.002), 0x9aa0a4, [E(end, CAP), 0]);
+  for (const end of [L, R]) bracket(v, end, w, h, -d / 2, d / 2);
   return v;
 }
 
@@ -121,17 +170,23 @@ function steelPlate(): Visual {
   const v: Visual = {};
   const { w, h, d } = PIECES.steel;
   push(v, 'steel', boxUVSeg(w, h, 0.1, 1.25, 12, 14, 1), mat(0, h / 2, 0));
-  // raised border frame + weld seam on the front (-Z)
-  for (const y of [0.04, h - 0.04]) push(v, 'steel', boxUV(w, 0.08, 0.014, 1.25), mat(0, y, -0.057), 0x8a9298);
-  for (const x of [-w / 2 + 0.04, w / 2 - 0.04]) push(v, 'steel', boxUV(0.08, h, 0.014, 1.25), mat(x, h / 2, -0.057), 0x8a9298);
-  push(v, 'steel', boxUV(w - 0.16, 0.018, 0.008, 1.25), mat(0, h * 0.55, -0.053), 0x5a5f63);
-  // bolts
-  const bolt = new THREE.CylinderGeometry(0.022, 0.022, 0.016, 6).rotateX(Math.PI / 2);
-  for (let k = 0; k <= 6; k++) for (const y of [0.04, h - 0.04]) push(v, 'galv', bolt, mat(-w / 2 + 0.1 + k * ((w - 0.2) / 6), y, -0.071), 0x6d7378);
-  for (let k = 1; k < 8; k++) for (const x of [-w / 2 + 0.04, w / 2 - 0.04]) push(v, 'galv', bolt, mat(x, k * (h / 8), -0.071), 0x6d7378);
+  // raised border frame on the front (-Z): bottom/top rails drop out where plates stack, side bars where they run on
+  const frame = 0x8a9298, bolt = new THREE.CylinderGeometry(0.022, 0.022, 0.016, 6).rotateX(Math.PI / 2);
+  for (const [y, end] of [[0.04, D], [h - 0.04, U]] as const) {
+    push(v, 'steel', boxUV(w, 0.08, 0.014, 1.25), mat(0, y, -0.057), frame, [E(end, TRIM), 0]);
+    for (let k = 0; k <= 6; k++) push(v, 'galv', bolt, mat(-w / 2 + 0.1 + k * ((w - 0.2) / 6), y, -0.071), 0x6d7378, [E(end, TRIM), 0]);
+  }
+  for (const [x, end] of [[-w / 2 + 0.04, L], [w / 2 - 0.04, R]] as const) {
+    push(v, 'steel', boxUV(0.08, h, 0.014, 1.25), mat(x, h / 2, -0.057), frame, [E(end, TRIM), 0]);
+    for (let k = 1; k < 8; k++) push(v, 'galv', bolt, mat(x, k * (h / 8), -0.071), 0x6d7378, [E(end, TRIM), 0]);
+  }
+  push(v, 'steel', boxUV(w, 0.018, 0.008, 1.25), mat(0, h * 0.55, -0.053), 0x5a5f63); // weld seam, continuous along a run
   // stiffeners on the back (+Z)
-  for (const y of [0.7, h - 0.7]) push(v, 'steel', boxUV(w - 0.1, 0.12, 0.024, 1.25), mat(0, y, 0.062), 0x80878c);
+  for (const y of [0.7, h - 0.7]) push(v, 'steel', boxUV(w, 0.12, 0.024, 1.25), mat(0, y, 0.062), 0x80878c);
   push(v, 'steel', boxUV(0.12, h - 0.2, 0.024, 1.25), mat(0, h / 2, 0.062), 0x80878c);
+  // stacked: fill the placement gap up to the plate above so a tower reads as one plate
+  push(v, 'steel', boxUV(w, 0.07, 0.1, 1.25), mat(0, h + 0.03, 0), 0xffffff, [E(U, JOIN), 0]);
+  for (const end of [L, R]) bracket(v, end, w, h, -d / 2 - 0.014, d / 2 + 0.012);
   return v;
 }
 
@@ -139,27 +194,28 @@ function scaffold(): Visual {
   const v: Visual = {};
   const { w, h, d } = PIECES.scaffold;
   const rng = makeRng(23);
-  // deck boards along Z
+  // deck boards along Z, full length so a bridge's deck runs on
   const nb = 6, bw = w / nb;
   for (let k = 0; k < nb; k++) {
-    const g = boxUV(d - 0.02, 0.045, bw - 0.012, 2).rotateY(Math.PI / 2);
-    push(v, 'wood', g, mat(-w / 2 + bw * (k + 0.5), h - 0.0225, rng.rr(-0.01, 0.01)), new THREE.Color().setScalar(rng.rr(0.9, 1.1)).multiply(new THREE.Color(0xe6cfa4)));
+    const g = boxUV(d, 0.045, bw - 0.012, 2).rotateY(Math.PI / 2);
+    push(v, 'wood', g, mat(-w / 2 + bw * (k + 0.5), h - 0.0225, rng.rr(-0.005, 0.005)), new THREE.Color().setScalar(rng.rr(0.9, 1.1)).multiply(new THREE.Color(0xe6cfa4)));
   }
-  // frame tubes
+  // Shared poles: where a scaffold continues off its +X side or +Z end, that row of poles/couplers/tubes is dropped —
+  // the neighbour's -X / -Z row stands right there, so a joint has one set of poles, not two.
+  const tx = (x: number) => (x > 0 ? E(R, TRIM) : 0), tz = (z: number) => (z > 0.1 ? E(U, TRIM) : 0);
   const r = 0.024;
-  for (const x of [-w / 2 + 0.03, w / 2 - 0.03]) push(v, 'galv', strut(V(x, h - 0.08, -d / 2), V(x, h - 0.08, d / 2), r));
-  for (const z of [-d / 2 + 0.03, 0, d / 2 - 0.03]) push(v, 'galv', strut(V(-w / 2, h - 0.08, z), V(w / 2, h - 0.08, z), r));
-  // support posts (down into the water/ground, up to the deck frame), toe boards, braces — no handrails
+  for (const x of [-w / 2 + 0.03, w / 2 - 0.03]) push(v, 'galv', strut(V(x, h - 0.08, -d / 2), V(x, h - 0.08, d / 2), r), null, 0xffffff, [tx(x), 0]);
+  for (const z of [-d / 2 + 0.03, 0, d / 2 - 0.03]) push(v, 'galv', strut(V(-w / 2, h - 0.08, z), V(w / 2, h - 0.08, z), r), null, 0xffffff, [tz(z), 0]);
   const down = -2.2;
   for (const x of [-w / 2 + 0.03, w / 2 - 0.03]) {
-    for (const z of [-d / 2 + 0.03, 0, d / 2 - 0.03]) push(v, 'galv', strut(V(x, down, z), V(x, h - 0.08, z), r));
-    push(v, 'paint', new THREE.BoxGeometry(0.025, 0.15, d - 0.04), mat(x - Math.sign(x) * 0.01, h + 0.075, 0), 0xe8b81c);
-    push(v, 'galv', strut(V(x, down + 0.3, -d / 2 + 0.03), V(x, h - 0.1, -0.02), 0.018));
-    push(v, 'galv', strut(V(x, down + 0.3, d / 2 - 0.03), V(x, h - 0.1, 0.02), 0.018));
+    for (const z of [-d / 2 + 0.03, 0, d / 2 - 0.03]) push(v, 'galv', strut(V(x, down, z), V(x, h - 0.08, z), r), null, 0xffffff, [tx(x), tz(z)]);
+    // toe boards mark the open sides only
+    push(v, 'paint', new THREE.BoxGeometry(0.025, 0.15, d - 0.04), mat(x - Math.sign(x) * 0.01, h + 0.075, 0), 0xe8b81c, [E(x > 0 ? R : L, TRIM), 0]);
+    push(v, 'galv', strut(V(x, down + 0.3, -d / 2 + 0.03), V(x, h - 0.1, -0.02), 0.018), null, 0xffffff, [tx(x), 0]);
+    push(v, 'galv', strut(V(x, down + 0.3, d / 2 - 0.03), V(x, h - 0.1, 0.02), 0.018), null, 0xffffff, [tx(x), 0]);
   }
-  // couplers at the deck frame
   const coupler = new THREE.BoxGeometry(0.07, 0.07, 0.07);
-  for (const x of [-w / 2 + 0.03, w / 2 - 0.03]) for (const z of [-d / 2 + 0.03, 0, d / 2 - 0.03]) push(v, 'paint', coupler, mat(x, h - 0.08, z), 0x3a3d40);
+  for (const x of [-w / 2 + 0.03, w / 2 - 0.03]) for (const z of [-d / 2 + 0.03, 0, d / 2 - 0.03]) push(v, 'paint', coupler, mat(x, h - 0.08, z), 0x3a3d40, [tx(x), tz(z)]);
   return v;
 }
 
@@ -168,43 +224,77 @@ function ramp(): Visual {
   const { w, h, d } = PIECES.ramp;
   const a = Math.atan2(h, d), len = Math.hypot(h, d), t = 0.05;
   const off = new THREE.Vector3(0, -Math.cos(a), Math.sin(a)).multiplyScalar(t / 2);
-  push(v, 'wood', boxUV(w - 0.04, t, len, 2), mat(off.x, h / 2 + off.y, off.z, -a, 0, 0), 0xd8c0a0);
+  push(v, 'wood', boxUV(w, t, len, 2), mat(off.x, h / 2 + off.y, off.z, -a, 0, 0), 0xd8c0a0);
   // anti-slip cleats
   const n = 8;
   for (let k = 1; k < n; k++) {
     const s = k / n;
     push(v, 'wood', boxUV(w - 0.12, 0.025, 0.05, 2), mat(0, s * h + 0.012, -d / 2 + s * d, -a, 0, 0), 0x9a8468);
   }
-  // steel side stringers (triangles) + back frame
+  // steel side stringers (triangles) + back frame; side-by-side ramps share one stringer, the back frame gives way
+  // where the top runs into a wall, deck or the next ramp
   const tri = new THREE.Shape([new THREE.Vector2(-d / 2, 0), new THREE.Vector2(d / 2, 0), new THREE.Vector2(d / 2, h)]);
   const side = new THREE.ExtrudeGeometry(tri, { depth: 0.03, bevelEnabled: false });
-  const su = side.getAttribute('uv');
-  for (let i = 0; i < su.count; i++) su.setXY(i, su.getX(i) / 1.25, su.getY(i) / 1.25);
   // shape x → local +Z, shape y → Y, extrusion → local -X (rotateY(-90°))
-  for (const x of [-w / 2 + 0.03, w / 2]) push(v, 'steel', side, mat(x, 0, 0, 0, -Math.PI / 2, 0), 0x7c8287);
-  push(v, 'steel', boxUV(w, h - 0.02, 0.04, 1.25), mat(0, (h - 0.02) / 2, d / 2 - 0.02), 0x7c8287);
+  for (const x of [-w / 2 + 0.03, w / 2]) push(v, 'steel', side, mat(x, 0, 0, 0, -Math.PI / 2, 0), 0x7c8287, [x > 0 ? E(R, TRIM) : 0, 0]);
+  push(v, 'steel', boxUV(w, h - 0.02, 0.04, 1.25), mat(0, (h - 0.02) / 2, d / 2 - 0.02), 0x7c8287, [E(U, TRIM), 0]);
+  // tread-plate lips laid over the joint: onto the surface at the top, off the deck it starts from at the bottom
+  push(v, 'steel', boxUV(w - 0.04, 0.016, 0.34, 1.25), mat(0, h + 0.008, d / 2 + 0.07), 0x8c9297, [E(U, JOIN), 0]);
+  push(v, 'steel', boxUV(w - 0.04, 0.016, 0.3, 1.25), mat(0, 0.008, -d / 2 - 0.08, 0.05, 0, 0), 0x8c9297, [E(D, JOIN), 0]);
   return v;
 }
 
 function containerPiece(): Visual {
   const v: Visual = {};
-  const { w: L, h: H, d: D } = PIECES.container;
-  push(v, 'corr', boxUVSeg(L - 0.1, H - 0.14, D - 0.08, 7.8, 30, 12, 12), mat(0, H / 2, 0));
-  for (const y of [0.07, H - 0.07]) for (const z of [-D / 2 + 0.05, D / 2 - 0.05]) push(v, 'paint', new THREE.BoxGeometry(L, 0.14, 0.1), mat(0, y, z), 0x8a8a8a);
-  for (const y of [0.07, H - 0.07]) for (const x of [-L / 2 + 0.05, L / 2 - 0.05]) push(v, 'paint', new THREE.BoxGeometry(0.1, 0.14, D), mat(x, y, 0), 0x8a8a8a);
-  for (const x of [-L / 2 + 0.07, L / 2 - 0.07]) for (const z of [-D / 2 + 0.07, D / 2 - 0.07]) push(v, 'paint', new THREE.BoxGeometry(0.14, H, 0.14), mat(x, H / 2, z), 0x8a8a8a);
+  const { w: L2, h: H, d: D2 } = PIECES.container;
+  push(v, 'corr', boxUVSeg(L2 - 0.1, H - 0.14, D2 - 0.08, 7.8, 30, 12, 12), mat(0, H / 2, 0));
+  for (const y of [0.07, H - 0.07]) for (const z of [-D2 / 2 + 0.05, D2 / 2 - 0.05]) push(v, 'paint', new THREE.BoxGeometry(L2, 0.14, 0.1), mat(0, y, z), 0x8a8a8a);
+  for (const y of [0.07, H - 0.07]) for (const x of [-L2 / 2 + 0.05, L2 / 2 - 0.05]) push(v, 'paint', new THREE.BoxGeometry(0.1, 0.14, D2), mat(x, y, 0), 0x8a8a8a);
+  for (const x of [-L2 / 2 + 0.07, L2 / 2 - 0.07]) for (const z of [-D2 / 2 + 0.07, D2 / 2 - 0.07]) push(v, 'paint', new THREE.BoxGeometry(0.14, H, 0.14), mat(x, H / 2, z), 0x8a8a8a);
   // corner castings
-  for (const x of [-L / 2 + 0.09, L / 2 - 0.09]) for (const z of [-D / 2 + 0.09, D / 2 - 0.09]) for (const y of [0.09, H - 0.09]) push(v, 'galv', new THREE.BoxGeometry(0.18, 0.12, 0.17), mat(x, y, z), 0x55585a);
+  for (const x of [-L2 / 2 + 0.09, L2 / 2 - 0.09]) for (const z of [-D2 / 2 + 0.09, D2 / 2 - 0.09]) for (const y of [0.09, H - 0.09]) push(v, 'galv', new THREE.BoxGeometry(0.18, 0.12, 0.17), mat(x, y, z), 0x55585a);
   // doors at +X: two leaves, locking bars, handles, hinges
-  const dx = L / 2 - 0.03;
-  for (const z of [-D / 4, D / 4]) push(v, 'corr', boxUV(0.03, H - 0.3, D / 2 - 0.08, 3), mat(dx, H / 2, z), 0xe4e4e4);
+  const dx = L2 / 2 - 0.03;
+  for (const z of [-D2 / 4, D2 / 4]) push(v, 'corr', boxUV(0.03, H - 0.3, D2 / 2 - 0.08, 3), mat(dx, H / 2, z), 0xe4e4e4);
   push(v, 'paint', new THREE.BoxGeometry(0.035, H - 0.3, 0.025), mat(dx + 0.005, H / 2, 0), 0x6a6a6a);
   for (const z of [-0.85, -0.3, 0.3, 0.85]) {
-    push(v, 'galv', new THREE.CylinderGeometry(0.022, 0.022, H - 0.32, 6), mat(L / 2 + 0.008, H / 2, z), 0xa9aeb2);
-    push(v, 'galv', new THREE.BoxGeometry(0.03, 0.04, 0.22), mat(L / 2 + 0.02, H * 0.42, z + 0.1), 0xa9aeb2);
+    push(v, 'galv', new THREE.CylinderGeometry(0.022, 0.022, H - 0.32, 6), mat(L2 / 2 + 0.008, H / 2, z), 0xa9aeb2);
+    push(v, 'galv', new THREE.BoxGeometry(0.03, 0.04, 0.22), mat(L2 / 2 + 0.02, H * 0.42, z + 0.1), 0xa9aeb2);
   }
-  for (const z of [-D / 2 + 0.12, D / 2 - 0.12]) for (const y of [0.5, 1.3, 2.1]) push(v, 'galv', new THREE.BoxGeometry(0.04, 0.12, 0.05), mat(dx + 0.01, y, z), 0x6a6e70);
+  for (const z of [-D2 / 2 + 0.12, D2 / 2 - 0.12]) for (const y of [0.5, 1.3, 2.1]) push(v, 'galv', new THREE.BoxGeometry(0.04, 0.12, 0.05), mat(dx + 0.01, y, z), 0x6a6e70);
   return v;
+}
+
+/** Per-vertex edge tags (pmeta.xy); pmeta.z is filled by bakeRunUV. */
+function withTag(g: THREE.BufferGeometry, tag: Tag): THREE.BufferGeometry {
+  const n = g.getAttribute('position').count, a = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { a[i * 3] = tag[0]; a[i * 3 + 1] = tag[1]; }
+  g.setAttribute('pmeta', new THREE.Float32BufferAttribute(a, 3));
+  return g;
+}
+
+const _ta = new THREE.Vector3(), _tb = new THREE.Vector3(), _tc = new THREE.Vector3();
+/**
+ * Replace uv with a per-triangle box projection of piece-local position in metres (z-facing → (x, y), x-facing → (z, y),
+ * up-facing → (z, x) so deck boards run along Z) and record the axis in pmeta.z. The shader adds the instance's run
+ * offset on the same axes, so textures and damage continue across neighbours; the uv derivatives (normal-map tangents)
+ * are unchanged by the offset.
+ */
+function bakeRunUV(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  if (g.index) throw new Error('[world/pieces] bakeRunUV expects non-indexed geometry');
+  const p = g.getAttribute('position'), uvA = g.getAttribute('uv'), meta = g.getAttribute('pmeta');
+  for (let t = 0; t < p.count; t += 3) {
+    _ta.fromBufferAttribute(p, t); _tb.fromBufferAttribute(p, t + 1); _tc.fromBufferAttribute(p, t + 2);
+    _tb.sub(_ta); _tc.sub(_ta); _tb.cross(_tc);
+    const ax = Math.abs(_tb.x), ay = Math.abs(_tb.y), az = Math.abs(_tb.z);
+    const axis = ay > Math.max(ax, az) ? 2 : ax > az ? 1 : 0;
+    for (let k = t; k < t + 3; k++) {
+      const x = p.getX(k), y = p.getY(k), z = p.getZ(k);
+      if (axis === 2) uvA.setXY(k, z, x); else if (axis === 1) uvA.setXY(k, z, y); else uvA.setXY(k, x, y);
+      meta.setZ(k, axis);
+    }
+  }
+  return g;
 }
 
 const BUILDERS: Record<PieceKind, () => Visual> = {
@@ -244,8 +334,8 @@ type DmgOpts = {
 function dmgOpts(kind: PieceKind, slot: Slot): DmgOpts {
   switch (kind) {
     case 'sandbags': return { style: 'burlap', slump: true };
-    case 'wood': return { style: 'wood', hole: [0.42, 0.85] };
-    case 'metal': return slot === 'corr' ? { style: 'sheet', hole: [0.5, 0.7], dent: 'z', dentDepth: 0.1 } : { style: 'wood' };
+    case 'wood': return slot === 'wood' ? { style: 'wood', hole: [0.42, 0.85] } : { style: 'trim' };
+    case 'metal': return slot === 'corr' ? { style: 'sheet', hole: [0.5, 0.7], dent: 'z', dentDepth: 0.1 } : slot === 'wood' ? { style: 'wood' } : { style: 'trim' };
     case 'steel': return slot === 'steel'
       ? { style: 'steel', hole: [0.68, 0.55], dent: 'z', dentDepth: 0.05, bow: true }
       : { style: 'trim', dent: 'z', dentDepth: 0.05, bow: true };
@@ -260,20 +350,43 @@ function dmgOpts(kind: PieceKind, slot: Slot): DmgOpts {
  * normal, ARM roughness — or a flat PBR colour. Damage nodes below layer on top of this.
  */
 type SlotBase = {
-  pbr?: PbrName; uvScale?: [number, number]; gain?: number; lum?: number; tint?: [number, number, number]; normalScale?: number;
+  pbr?: PbrName; gain?: number; lum?: number; tint?: [number, number, number]; normalScale?: number;
   rough: number; metal: number; side?: THREE.Side;
 };
 const SLOT_BASE: Record<Slot, SlotBase> = {
-  burlap: { pbr: 'linen', uvScale: [2.5, 2.5], lum: 0.4, tint: [0.62, 0.5, 0.33], normalScale: 1.6, rough: 0.97, metal: 0 },
-  wood: { pbr: 'planks', uvScale: [1, 1], gain: 1.05, normalScale: 1, rough: 0.82, metal: 0 },
-  corr: { pbr: 'corrugated', uvScale: [2, 1], lum: 0.44, normalScale: 1.2, rough: 0.5, metal: 0.45, side: THREE.DoubleSide },
-  steel: { pbr: 'steel_plate', uvScale: [1, 1], gain: 4, tint: [0.88, 0.9, 0.93], normalScale: 1, rough: 0.42, metal: 0.7 },
+  burlap: { pbr: 'linen', lum: 0.4, tint: [0.62, 0.5, 0.33], normalScale: 1.6, rough: 0.97, metal: 0 },
+  wood: { pbr: 'planks', gain: 1.05, normalScale: 1, rough: 0.82, metal: 0 },
+  corr: { pbr: 'corrugated', lum: 0.44, normalScale: 1.2, rough: 0.5, metal: 0.45, side: THREE.DoubleSide },
+  steel: { pbr: 'steel_plate', gain: 4, tint: [0.88, 0.9, 0.93], normalScale: 1, rough: 0.42, metal: 0.7 },
   galv: { rough: 0.38, metal: 0.85 },
   paint: { rough: 0.6, metal: 0.25 },
 };
 
+/**
+ * Metres per texture repeat (u, v) of the world-aligned projection. Corrugated sheet repeats a whole number of ribs
+ * (CORR_PITCH) so the texture stays in phase with the corrugated geometry across a run.
+ */
+function texMetres(kind: PieceKind, slot: Slot): [number, number] {
+  switch (slot) {
+    case 'burlap': return [0.4, 0.4];
+    case 'wood': return [2, 2];
+    case 'corr': return kind === 'container' ? [3.9, 7.8] : [CORR_PITCH * 14, 2.5];
+    default: return [1.25, 1.25];
+  }
+}
+
 type N = THREE.Node<'float'>;
 type V3 = THREE.Node<'vec3'>;
+const eq = (a: N, b: number) => float(1).sub(step(0.5, abs(a.sub(b))));
+/** 1 if a part with edge tag `code` (end * 4 + mode, 0 = untagged) is shown under edge `mask` (see connect.ts). */
+function edgeVisible(code: N, mask: N): N {
+  const end = floor(code.div(4)), mode = code.sub(end.mul(4));
+  const st = select(end.lessThan(1.5), mod(mask, 4), select(end.lessThan(2.5), mod(floor(mask.div(4)), 4),
+    select(end.lessThan(3.5), mod(floor(mask.div(16)), 2), mod(floor(mask.div(32)), 2))));
+  const merged = eq(st, 1);
+  const v = select(mode.lessThan(0.5), float(1).sub(merged), select(mode.lessThan(1.5), eq(st, 0), select(mode.lessThan(2.5), eq(st, 2), merged)));
+  return select(code.lessThan(0.5), float(1), v);
+}
 const below = (x: N, t: N, k: number) => float(1).sub(smoothstep(t.sub(k), t.add(k), x));
 
 /**
@@ -290,12 +403,14 @@ function slotMaterial(kind: PieceKind, slot: Slot): THREE.MeshStandardNodeMateri
   const dt = damageTex();
   const info = attribute('dmg', 'vec4');
   const d = info.x;
-  const projUV = (p: typeof positionGeometry, n: typeof normalGeometry) => {
-    const a = abs(n);
-    return select(a.y.greaterThan(max(a.x, a.z)), p.xz, select(a.x.greaterThan(a.z), p.zy, p.xy))
-      .div(DAMAGE_TILE_M).add(info.y.mul(vec2(0.37, 0.71)));
-  };
-  const puv = projUV(positionGeometry, normalGeometry);
+  // World-aligned uv in metres: the geometry's uv is a per-triangle box projection of piece-local position (baked,
+  // axis in pmeta.z), plus this instance's position along its own axes — so parallel neighbours share one texture.
+  const conn = attribute('conn', 'vec4');
+  const meta = attribute('pmeta', 'vec3');
+  const runOff = select(meta.z.greaterThan(1.5), conn.zx, select(meta.z.greaterThan(0.5), conn.zy, conn.xy));
+  const runUV = uv().add(runOff);
+  // cracks/holes follow the same continuous projection; only this instance's damage reveals them
+  const puv = runUV.div(DAMAGE_TILE_M);
   const s = texture(dt, puv);
   const on = smoothstep(0.02, 0.08, d); // pristine at full hp
   const reveal = below(s.g, d.mul(1.6), 0.04).mul(on);
@@ -309,7 +424,7 @@ function slotMaterial(kind: PieceKind, slot: Slot): THREE.MeshStandardNodeMateri
   const rim = below(s.g, holeT.add(0.022), 0.006).mul(hasHole);
 
   const P = b.pbr ? pbrTex(b.pbr) : null;
-  const uvP = uv().mul(vec2(...(b.uvScale ?? [1, 1])));
+  const uvP = runUV.div(vec2(...texMetres(kind, slot)));
   const arm = P ? texture(P.arm, uvP) : null;
   let col = vec3(1, 1, 1) as unknown as V3;
   if (P) {
@@ -390,7 +505,7 @@ function slotMaterial(kind: PieceKind, slot: Slot): THREE.MeshStandardNodeMateri
     const fwd = vec3(info.z, 0, info.w); // piece-local +Z in instanced space
     let pos = positionLocal as unknown as V3;
     if (o.dent) {
-      const vt = texture(dt, projUV(P, normalGeometry)).level(float(0));
+      const vt = texture(dt, puv).level(float(0));
       let amt = vt.a.mul(below(vt.g, info.x.mul(1.4), 0.2)).mul(smoothstep(0.15, 0.7, info.x)).mul(o.dentDepth ?? 0.05);
       if (o.dent === 'z') {
         // edges stay put (welded/nailed border); keeps faces of a plate together
@@ -420,6 +535,10 @@ function slotMaterial(kind: PieceKind, slot: Slot): THREE.MeshStandardNodeMateri
     }
     m.positionNode = pos;
   }
+  // neighbour-aware trim: parts whose edge tag says "hidden for this instance's mask" collapse to a point
+  const vis = edgeVisible(meta.x, conn.w).mul(edgeVisible(meta.y, conn.w));
+  const shown = (m.positionNode ?? positionLocal) as unknown as V3;
+  m.positionNode = select(vis.greaterThan(0.5), shown, vec3(0, 0, 0));
   return m;
 }
 
@@ -429,6 +548,8 @@ type KindLayer = {
   meshes: THREE.InstancedMesh[];
   proxy: THREE.InstancedMesh;
   dmg: THREE.InstancedBufferAttribute;
+  /** Per instance: (run x, y, run z, edge mask) — position along the piece's own axes for world-aligned uv + neighbour mask. */
+  conn: THREE.InstancedBufferAttribute;
   cap: number;
 };
 
@@ -456,6 +577,8 @@ export class PieceLayer {
   private proxyMat = new THREE.MeshBasicNodeMaterial();
   private byId = new Map<number, PieceInfo>();
   private shakes = new Map<number, { t0: number; amp: number }>();
+  /** Neighbour edge masks (visual only), updated incrementally on every sync. */
+  readonly graph = new ConnectGraph();
   /** Invisible hull meshes, stable for the life of the layer except when capacity grows. */
   readonly proxies: THREE.InstancedMesh[] = [];
   onProxiesChanged: (() => void) | null = null;
@@ -466,15 +589,19 @@ export class PieceLayer {
     for (const k of KINDS) {
       const v = BUILDERS[k]();
       const merged: Partial<Record<Slot, THREE.BufferGeometry>> = {};
-      for (const s of Object.keys(v) as Slot[]) merged[s] = merge(v[s]!);
-      this.visuals.set(k, merged);
       const pick: THREE.Mesh[] = [];
-      for (const [s, g] of Object.entries(merged) as [Slot, THREE.BufferGeometry][]) {
-        const pm = new THREE.Mesh(g, pickMat);
+      for (const s of Object.keys(v) as Slot[]) {
+        const parts = v[s]!;
+        // decals land on what's always there: conditional caps/brackets/lips are left out of the picking mesh
+        const always = parts.filter((q) => q.tag.every((c) => c === 0 || c % 4 === TRIM)).map((q) => q.g.clone());
+        merged[s] = bakeRunUV(merge(parts.map((q) => withTag(q.g, q.tag))));
+        if (always.length === 0) continue;
+        const pm = new THREE.Mesh(merge(always), pickMat);
         pm.userData.slot = s;
         pm.updateMatrixWorld(true);
         pick.push(pm);
       }
+      this.visuals.set(k, merged);
       this.pickers.set(k, pick);
       this.alloc(k, 64);
     }
@@ -496,10 +623,13 @@ export class PieceLayer {
     }
     const dmg = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
     dmg.setUsage(THREE.DynamicDrawUsage);
+    const conn = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
+    conn.setUsage(THREE.DynamicDrawUsage);
     const meshes: THREE.InstancedMesh[] = [];
     for (const [slot, g] of Object.entries(this.visuals.get(kind)!) as [Slot, THREE.BufferGeometry][]) {
       const geo = g.clone();
       geo.setAttribute('dmg', dmg);
+      geo.setAttribute('conn', conn);
       const im = new THREE.InstancedMesh(geo, this.matFor(kind, slot), cap);
       im.setColorAt(0, new THREE.Color(1, 1, 1)); // create instanceColor up front so the material compiles with it
       im.count = 0;
@@ -515,14 +645,39 @@ export class PieceLayer {
     proxy.name = `pieceHull:${kind}`;
     this.root.add(proxy);
     this.proxies.push(proxy);
-    this.kinds.set(kind, { meshes, proxy, dmg, cap });
+    this.kinds.set(kind, { meshes, proxy, dmg, conn, cap });
     if (old) {
       console.info(`[world/pieces] grew ${kind} capacity to ${cap}`);
       this.onProxiesChanged?.();
     }
   }
 
+  /** Char 0..1 per piece (fire): darkens its instance colour. Set by fireFx via setChar. */
+  private char = new Map<number, number>();
+
+  private tint(id: number, kind: PieceKind, out: THREE.Color) {
+    if (kind === 'container') out.setHex(CONTAINER_COLORS[id % CONTAINER_COLORS.length]);
+    else { const j = 0.92 + ((id * 37) % 17) / 100; out.setRGB(j, j, j); }
+    const k = this.char.get(id);
+    if (k) out.multiplyScalar(1 - 0.84 * k);
+  }
+
+  /** Blacken a piece as it burns (0 = clean, 1 = charcoal); applied right away and kept across syncs. */
+  setChar(id: number, k: number) {
+    if (k <= 0) this.char.delete(id); else this.char.set(id, Math.min(1, k));
+    const info = this.byId.get(id);
+    if (!info) return;
+    const L = this.kinds.get(info.kind)!;
+    this.tint(id, info.kind, _c);
+    for (const im of L.meshes) { im.setColorAt(info.index, _c); if (im.instanceColor) im.instanceColor.needsUpdate = true; }
+    info.color = _c.getHex();
+  }
+
+  charOf(id: number) { return this.char.get(id) ?? 0; }
+
   sync(pieces: PieceState[]) {
+    for (const id of this.char.keys()) if (!pieces.some((p) => p.id === id)) this.char.delete(id);
+    this.graph.update(pieces);
     const byKind = new Map<PieceKind, PieceState[]>();
     for (const p of pieces) {
       let a = byKind.get(p.kind);
@@ -544,8 +699,11 @@ export class PieceLayer {
         L.proxy.setMatrixAt(i, _m);
         const seed = ((p.id * 0.6180339) % 1) * 10;
         L.dmg.setXYZW(i, Math.min(1, Math.max(0, 1 - p.hp / maxHp)), seed, Math.sin(p.rotY), Math.cos(p.rotY));
-        if (kind === 'container') _c.setHex(CONTAINER_COLORS[p.id % CONTAINER_COLORS.length]);
-        else { const j = 0.92 + ((p.id * 37) % 17) / 100; _c.setRGB(j, j, j); }
+        const c = Math.cos(p.rotY), sn = Math.sin(p.rotY);
+        let runX = p.pos.x * c - p.pos.z * sn;
+        if (kind === 'metal') runX = Math.round(runX / CORR_PITCH) * CORR_PITCH; // keep texture ribs on the geometry ribs
+        L.conn.setXYZW(i, runX, p.pos.y, p.pos.x * sn + p.pos.z * c, this.graph.mask(p.id));
+        this.tint(p.id, kind, _c);
         for (const im of L.meshes) im.setColorAt(i, _c);
         this.byId.set(p.id, { kind, index: i, x: p.pos.x, y: p.pos.y, z: p.pos.z, rotY: p.rotY, color: _c.getHex() });
       }
@@ -559,6 +717,7 @@ export class PieceLayer {
       L.proxy.instanceMatrix.needsUpdate = true;
       L.proxy.boundingSphere = null;
       L.dmg.needsUpdate = true;
+      L.conn.needsUpdate = true;
     }
     for (const id of this.shakes.keys()) if (!this.byId.has(id)) this.shakes.delete(id);
   }

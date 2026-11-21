@@ -6,6 +6,8 @@ import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
+import { SMALL_CASTER_LAYER } from './lod';
+import { cascadeToRefresh, type CascadeCacheState, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen } from './post';
 
 export type Quality = 'low' | 'high' | 'ultra';
@@ -33,6 +35,9 @@ const PRESETS: Record<Quality, Preset> = {
   high: { pixelRatio: 1.5, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true } },
   ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true } },
 };
+
+/** Far-cascade caster mask: layer 0 only (+ unused bit 31, see cascadeLayers). */
+const FAR_CASCADE_MASK = 1 | (1 << 31);
 
 const SKY = { turbidity: 3, rayleigh: 1.5, mieCoefficient: 0.002, mieDirectionalG: 0.9 };
 
@@ -83,11 +88,14 @@ export class SkyLighting {
   /** Settings → Video resolution scale: multiplies the preset's pixel ratio (result clamped to 0.5–2). */
   private resScale = settings.get().video.resolutionScale;
   private pipeline: THREE.RenderPipeline | null = null;
+  /** Main lit-scene pass of the post chain (render target + MRT + context every world material compiles for). */
+  scenePass: THREE.PassNode | null = null;
   private csm: CSMShadowNode | null = null;
   private sunTmp = new THREE.Vector3();
 
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
+    camera.layers.enable(SMALL_CASTER_LAYER); // small props: drawn by the camera, cast into the near cascades only
     gpu.toneMapping = THREE.ACESFilmicToneMapping;
     gpu.toneMappingExposure = 0.5;
     gpu.shadowMap.enabled = true;
@@ -216,13 +224,15 @@ export class SkyLighting {
     // Cascaded shadows: crisp near the player, still casting long shadows out to `shadowFar`. CSMShadowNode
     // snaps each cascade to its texel grid, so edges don't shimmer as the camera moves.
     const sh = this.sun.shadow;
-    sh.mapSize.set(p.shadowMap, p.shadowMap);
+    const size = p.shadowMap * this.govShadow;
+    sh.mapSize.set(size, size);
     sh.radius = p.shadowMap >= 2048 ? 2.5 : 1.5;
     const prev = this.csm;
     const csm = new CSMShadowNode(this.sun, { cascades: p.cascades, maxFar: p.shadowFar, mode: 'practical', lightMargin: 120 });
     csm.fade = true;
     sh.shadowNode = csm;
     this.csm = csm;
+    this.shadowCache = null; // new cascades: render them all fresh
     if (prev) {
       prev.dispose();
       // the shadow node is baked into every lit material's shader → rebuild them
@@ -233,8 +243,40 @@ export class SkyLighting {
     }
 
     this.pipeline?.dispose();
-    this.pipeline = buildPipeline(this.gpu, this.scene, this.camera, p.post, this.interiorAO);
+    const built = buildPipeline(this.gpu, this.scene, this.camera, PRESETS[this.quality].post, this.interiorAO);
+    this.pipeline = built.pipe;
+    this.scenePass = built.scenePass;
+    this.aoPass = built.aoPass;
+    this.applyAoBudget();
   }
+  private aoPass: { resolutionScale: number } | null = null;
+  /** GTAO budget: the governor's cheap mode renders AO at 60 % of the preset's resolution (live, no recompile). */
+  private applyAoBudget() {
+    const ao = PRESETS[this.quality].post.ao;
+    if (this.aoPass && ao) this.aoPass.resolutionScale = ao.resolution * (this.govAo ? 1 : 0.6);
+  }
+
+  private govAo = true;
+  private govShadow = 1;
+
+  /**
+   * Frame-time governor knobs (governor.ts): GTAO full / cheap (resolution, live) and a shadow-map size multiplier
+   * (applied live to every cascade). Neither recompiles a shader.
+   */
+  setGovernor(k: { ao: boolean; shadowScale: number }) {
+    // never rebuild the post chain here (a mid-match shader compile is a 100+ ms hitch): AO only gets cheaper
+    if (k.ao !== this.govAo) { this.govAo = k.ao; this.applyAoBudget(); }
+    if (k.shadowScale !== this.govShadow) {
+      this.govShadow = k.shadowScale;
+      const size = PRESETS[this.quality].shadowMap * k.shadowScale;
+      this.sun.shadow.mapSize.set(size, size);
+      for (const l of this.csm?.lights ?? []) l.shadow!.mapSize.set(size, size);
+      this.shadowCache = null; // cached far maps are the old size: redraw them
+    }
+  }
+
+  /** Whether the current preset has screen-space AO at all (the governor skips the AO rung when not). */
+  get presetHasAo(): boolean { return !!PRESETS[this.quality].post.ao; }
 
   /** Draw the frame (cascades follow the camera on their own). */
   render() {
@@ -244,7 +286,50 @@ export class SkyLighting {
       sunScreen.front.value = v.z < 1 ? 1 : 0;
       sunScreen.aspect.value = this.camera.aspect;
     }
+    this.cascadeLayers();
     this.pipeline!.render();
+  }
+
+  /**
+   * Shadow-caster culling per cascade: the near cascades see every caster (camera's layers); the far ones skip the
+   * SMALL_CASTER_LAYER (an extra unused layer bit keeps ShadowNode from copying the camera's mask over it).
+   */
+  private cascadeLayers() {
+    const lights = this.csm?.lights;
+    if (!lights?.length) return;
+    const near = lights.length >= 3 ? 2 : 1;
+    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i < near ? this.camera.layers.mask : FAR_CASCADE_MASK;
+    this.cacheFarCascades(lights, near);
+  }
+
+  /** Far cascades re-render only when the camera moved/turned enough or they got old (shadowCache.ts). */
+  shadowCacheEnabled = true;
+  private shadowCache: CascadeCacheState | null = null;
+  private cacheAnchor = { pos: new THREE.Vector3(), dir: new THREE.Vector3(), tmp: new THREE.Vector3() };
+  /** far-cascade renders skipped / done (debug) */
+  readonly shadowCacheStats = { skipped: 0, rendered: 0 };
+  private cacheFarCascades(lights: { shadow?: THREE.LightShadow | null }[], near: number) {
+    if (!this.shadowCacheEnabled) { for (const l of lights) l.shadow!.autoUpdate = true; return; }
+    if (!this.shadowCache || this.shadowCache.age.length !== lights.length) {
+      // new / resized cascades: their maps hold nothing yet, so draw every one now (never sample an empty map)
+      this.shadowCache = newCacheState(lights.length);
+      for (const l of lights) { l.shadow!.autoUpdate = true; }
+      for (let i = near; i < lights.length; i++) this.shadowCache.age[i] = 0, this.shadowCache.dirty[i] = false;
+      this.cacheAnchor.pos.copy(this.camera.position);
+      this.camera.getWorldDirection(this.cacheAnchor.dir);
+      return;
+    }
+    const a = this.cacheAnchor, cam = this.camera;
+    cam.getWorldDirection(a.tmp);
+    const moved = cam.position.distanceTo(a.pos) > SHADOW_CACHE.moveM || a.tmp.angleTo(a.dir) > SHADOW_CACHE.turnRad;
+    if (moved) { a.pos.copy(cam.position); a.dir.copy(a.tmp); }
+    const pick = cascadeToRefresh(this.shadowCache, near, moved);
+    for (let i = 0; i < lights.length; i++) {
+      const sh = lights[i].shadow!;
+      if (i < near) { sh.autoUpdate = true; continue; }
+      sh.autoUpdate = false;
+      if (i === pick) { sh.needsUpdate = true; this.shadowCacheStats.rendered++; } else this.shadowCacheStats.skipped++;
+    }
   }
 
   dispose() { this.pipeline?.dispose(); this.csm?.dispose(); }

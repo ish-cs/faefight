@@ -88,6 +88,8 @@ export type PlayerState = {
   /** Set while trapped in a sealed bunker after respawning: eliminated at this time unless out. */
   breakoutUntil: number | null;
   invulnUntil: number;
+  /** How many of your own bunker's 3 doorways no one can walk out through (3 = sealed). Only sent to you. */
+  doorsBlocked?: number;
   /** Just respawned and hasn't left the bunker or attacked yet (anti spawn-camping). */
   spawnProtected?: boolean;
   /** Sim time of the last damage taken (regen waits after this). */
@@ -124,17 +126,22 @@ export type PlayerState = {
   /** Shots in the current burst (recoil climbs with it). */
   burst: number;
   busyUntil: number;
+  /** Stamina 0..100 (sprint "stress"; mirrors mv.stamina, which prediction replays). Sent only to its owner and their spectators. */
+  stamina: number;
   /** Movement state (grounding, coyote/jump-buffer timers, last applied command seq): see movement.ts. */
   mv?: MoveState;
 };
 
-export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number };
+/** `burning`: on fire right now (sim/fire.ts); omitted when not, so it costs nothing on the wire. */
+export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number; burning?: true };
+/** A ground fire (grass patch, or a burning crate/palm prop): small sim entity, see sim/fire.ts. */
+export type FirePatch = { id: number; kind: 'grass' | 'crate' | 'palm'; pos: Vec3 };
 /** `noPickup`: a dropped bag its dropper can't grab back until `until`. */
 export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: number; until: number } };
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -148,6 +155,8 @@ export type Snapshot = {
   loot: LootBag[];
   /** In flight now (the sim always sends it; optional so older/partial snapshots stay valid). */
   projectiles?: Projectile[];
+  /** Ground fires burning now (grass, props); omitted when there are none. */
+  fires?: FirePatch[];
   generators: { island: number; stored: number }[];
   /** Center island bonus stations: cash at the gold generator, free pieces at the supply generator. */
   center?: { gold: number; bags: number; steel: number };
@@ -158,9 +167,13 @@ export type Snapshot = {
   sealed: boolean[];
   waterY: number;
   suddenDeath: boolean;
+  /** Sudden-death storm (null/absent before it starts). Optional so hand-built snapshots can omit it. */
+  storm?: StormSnap | null;
   winner: number | null;
   /** Potion seller NPCs (anyone may buy there). Optional so hand-built snapshots (tests, tools) can omit it. */
   potionShops?: PotionShop[];
+  /** Host side only: every bot's current thinking. Remote spectators get just the followed bot's (net/interest.ts). */
+  brains?: BotBrainInfo[];
   events: MatchEvent[];
   /**
    * Remote clients only (net/interest.ts): players this client can't currently perceive. They stay
@@ -173,6 +186,11 @@ export type Snapshot = {
 
 export type PotionShop = { id: number; pos: Vec3 };
 
+/** A lightning strike due to land at (x, z) at sim time `at` (shown from `at - STORM.telegraphSec`). */
+export type StormStrike = { x: number; z: number; at: number };
+/** Sudden-death storm as clients see it: ring centre and radius, and the strikes being telegraphed. */
+/** `rf`: the final circle the ring closes to. */
+export type StormSnap = { x: number; z: number; r: number; rf: number; strikes: StormStrike[] };
 /** Per-player match totals for the end-screen summary (sent only once the match has a result). */
 export type PlayerStats = {
   id: number;
@@ -189,6 +207,19 @@ export type PlayerStats = {
   /** Longest time alive in one life (s). */
   longestLife: number;
   headshots: number;
+};
+
+/**
+ * What a bot is thinking (bots/bot.ts debug), for spectators: personality, goal + reason, its steps
+ * (`step` = index of the current one), fight odds (0..1, null when not fighting) and a one-line thought.
+ */
+export type BotBrainInfo = {
+  id: number; personality: string; difficulty: Difficulty; action: string;
+  goal: string | null; reason: string; steps: string[]; step: number; fightOdds: number | null; thought: string;
+  /** Rival it's going after (player id). */
+  target: number | null;
+  /** Top-scored options of its last decision, best first (why it chose this). */
+  options: { goal: string; score: number }[];
 };
 
 export const NO_INPUT: PlayerInput = {

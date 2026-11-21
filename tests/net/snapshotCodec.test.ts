@@ -120,6 +120,8 @@ describe('snapshot codec', () => {
     // A busy moment: rockets and grenades in the air.
     s.projectiles = Array.from({ length: 8 }, (_, i) => ({ id: 500 + i, kind: i % 2 ? 'rocket' : 'grenade', pos: v3(i * 3.33333, 9.87654, 1.11111), vel: v3(30.123, -1.5, 4.444) }));
     s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
+    // Sudden death: the storm ring and a burst of telegraphed lightning.
+    s.storm = { x: 0, z: 0, r: 63.27, rf: 18, strikes: Array.from({ length: 4 }, (_, i) => ({ x: 40.12 + i, z: -12.34 * i, at: 1023.433 + i * 0.7 })) };
     enc.push(s);
     enc.take(1);
     enc.push({ ...s, tick: 2 });
@@ -130,6 +132,7 @@ describe('snapshot codec', () => {
     const s = snap(1, Array.from({ length: 60 }, (_, i) => ({ ...steel(), id: i })));
     s.projectiles = Array.from({ length: 8 }, (_, i) => ({ id: 500 + i, kind: i % 2 ? 'rocket' : 'grenade', pos: v3(i * 3.33333, 9.87654, 1.11111), vel: v3(30.123, -1.5, 4.444) }));
     s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
+    s.storm = { x: 0, z: 0, r: 63.27, rf: 18, strikes: Array.from({ length: 4 }, (_, i) => ({ x: 40.12 + i, z: -12.34 * i, at: 1023.433 + i * 0.7 })) };
     enc.push(s);
     const full = wire.encode(1, enc.take(1, true));
     expect(full.byteLength).toBeLessThan(6 * 1024);
@@ -137,10 +140,48 @@ describe('snapshot codec', () => {
     wire.ack(dec.ack);
     for (const p of s.players) { p.pos = v3(p.pos.x + 0.17, p.pos.y, p.pos.z - 0.11); p.vel = v3(5.1, 0, -3.3); p.yaw += 0.05; p.pitch = 0.1; }
     for (const pr of s.projectiles) pr.pos = v3(pr.pos.x + 1, pr.pos.y - 0.05, pr.pos.z + 0.15);
+    s.storm = { ...s.storm!, r: 63.25, strikes: [...s.storm!.strikes.slice(1), { x: -55.5, z: 20.25, at: 1026.233 }] };
+    s.events = [{ t: 2 / 30, type: 'lightning', data: { pos: v3(40.12, 2, 0) } }];
     enc.push({ ...s, tick: 2, time: 2 / 30 });
     const delta = wire.encode(2, enc.take(1, true));
     expect(delta.byteLength).toBeLessThan((20 * 1024) / 30);
     expect(dec.decode(delta)).toBeTruthy();
+  });
+  test('a base on fire (20 burning pieces, 16 ground fires) still fits both budgets, and burning reaches clients', () => {
+    const burningBase = () => {
+      const s = snap(1, Array.from({ length: 60 }, (_, i): PieceState => ({ ...steel(), id: i, kind: i < 20 ? 'wood' : 'steel', hp: i < 20 ? 123.456 : 960, ...(i < 20 ? { burning: true as const } : {}) })));
+      s.players = Array.from({ length: 8 }, (_, i) => newPlayer(i + 1, 'p' + i, true, i, v3(i * 10.123456, 2, 3.333333)));
+      s.fires = Array.from({ length: 16 }, (_, i) => ({ id: 900 + i, kind: i % 3 ? 'grass' as const : 'palm' as const, pos: v3(i * 1.23456, 2, -7.654321) }));
+      return s;
+    };
+    const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();
+    const s = burningBase();
+    enc.push(s);
+    const first = dec.decode(enc.take(1));
+    expect(first.pieces.filter((p) => p.burning).length).toBe(20);
+    expect(first.fires?.[1]).toEqual({ id: 901, kind: 'grass', pos: v3(1.23, 2, -7.65) });
+    // Between burn steps (pieces unchanged) the burning flags and fires fit the JSON budget. (Live play uses the
+    // binary wire below, which also carries the 2 Hz burn steps as small per-piece deltas.)
+    enc.push({ ...s, tick: 2 });
+    expect(JSON.stringify(enc.take(1)).length).toBeLessThan((60 * 1024) / 15);
+    // Binary delta wire: a burn step (20 hp changes, a fire going out) stays far under 20 KB/s at 30 Hz.
+    const enc2 = new SnapshotEncoder(), wire = new WireEncoder(), wdec = new WireDecoder();
+    const w = burningBase();
+    enc2.push(w);
+    const full = wire.encode(1, enc2.take(1, true));
+    expect(full.byteLength).toBeLessThan(6 * 1024);
+    wdec.decode(full);
+    wire.ack(wdec.ack);
+    for (const p of w.pieces) if (p.burning) p.hp -= 6.5;
+    w.fires = w.fires!.slice(1);
+    delete w.pieces[0].burning;
+    enc2.push({ ...w, tick: 2, time: 2 / 30 });
+    const delta = wire.encode(2, enc2.take(1, true));
+    expect(delta.byteLength).toBeLessThan((20 * 1024) / 30);
+    const got = new SnapshotDecoder().decode(wdec.decode(delta)!);
+    expect(got.fires?.length).toBe(15);
+    expect(got.pieces?.[0].burning).toBeUndefined();
+    expect(got.pieces?.[1].burning).toBe(true);
   });
   test("every player's kills and deaths reach every client", () => {
     const enc = new SnapshotEncoder(), dec = new SnapshotDecoder();

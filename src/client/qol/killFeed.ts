@@ -10,7 +10,7 @@ export const FEED_MAX = 5;
 export const FEED_LIFE_MS = 6000;
 export const FEED_FADE_MS = 1000;
 
-export type FeedMarker = 'headshot' | 'explosion' | 'fall' | 'water' | 'storm';
+export type FeedMarker = 'headshot' | 'explosion' | 'fall' | 'water' | 'storm' | 'lightning';
 
 export type FeedEntry = {
   kind: 'kill' | 'sealed';
@@ -33,8 +33,6 @@ const BLASTS = new Set(['rocket', 'grenade', 'charge']);
 
 export type FeedCtx = {
   humanId: number;
-  /** Sudden death (tide rising): a drowning then counts as the storm. */
-  suddenDeath: boolean;
   /** Owner (player id) of an island, if any. */
   ownerOf(island: number): number | null;
 };
@@ -62,7 +60,9 @@ export function feedEntries(events: readonly MatchEvent[], ctx: FeedCtx): FeedEn
       if (hit?.part === 'head') markers.push('headshot');
       if (weapon && BLASTS.has(weapon)) markers.push('explosion');
       if (weapon === 'fall') { markers.push('fall'); weapon = null; }
-      if (d.inWater === true) { markers.push(ctx.suddenDeath ? 'storm' : 'water'); weapon = null; }
+      // The sim names world causes (the storm ring, a lightning strike); a plain drowning is water.
+      if (d.cause === 'storm' || d.cause === 'lightning') { markers.push(d.cause); weapon = null; }
+      else if (d.inWater === true) { markers.push('water'); weapon = null; }
       if (self && !weapon && !markers.length) markers.push('explosion');
       out.push({
         kind: 'kill', killer, victim, weapon, markers,
@@ -81,7 +81,7 @@ export function feedEntries(events: readonly MatchEvent[], ctx: FeedCtx): FeedEn
 }
 
 const CAUSE: Record<FeedMarker, string> = {
-  headshot: 'died', explosion: 'blew up', fall: 'fell', water: 'drowned', storm: 'was taken by the tide',
+  headshot: 'died', explosion: 'blew up', fall: 'fell', water: 'drowned', storm: 'was caught in the storm', lightning: 'was struck by lightning',
 };
 
 /** Plain text of an entry ("A ⟶ B", "B drowned", "A sealed B's bunker"); `name` gives "You" for you. */

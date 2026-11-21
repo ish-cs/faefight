@@ -16,7 +16,7 @@ function player(id: number, pos: Vec3, extra: Partial<PlayerState> = {}): Player
   return {
     id, name: `p${id}`, isBot: id !== ME, island: id - 1, pos, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, hp: 100, shield: 0,
     alive: true, eliminated: false, kills: 0, deaths: 0, respawnAt: null, breakoutUntil: null, invulnUntil: 0, lastDamagedAt: 0,
-    inv: { ...emptyInventory(), cash: 50 }, vault: emptyInventory(), locked: [], hotbar: Array(9).fill(null), selected: 0, equipped: 'fists', healAt: null, drinking: null, healLeft: 0, speedUntil: 0, reloadUntil: 0, reloadSec: 0, reloadMag: 0, nextFireAt: 0, busyUntil: 0, ads: false, bloom: 0, lastShotAt: -1e9, burst: 0,
+    inv: { ...emptyInventory(), cash: 50 }, vault: emptyInventory(), locked: [], hotbar: Array(9).fill(null), selected: 0, equipped: 'fists', healAt: null, drinking: null, healLeft: 0, speedUntil: 0, reloadUntil: 0, reloadSec: 0, reloadMag: 0, nextFireAt: 0, busyUntil: 0, ads: false, bloom: 0, lastShotAt: -1e9, burst: 0, stamina: 100,
     ...extra,
   };
 }
@@ -32,7 +32,7 @@ const ev = (t: number, type: MatchEventType, data: Record<string, unknown>): Mat
 // ---- kill feed ---------------------------------------------------------------------------------
 
 describe('kill feed entries', () => {
-  const ctx: FeedCtx = { humanId: ME, suddenDeath: false, ownerOf: (i) => i + 1 };
+  const ctx: FeedCtx = { humanId: ME, ownerOf: (i) => i + 1 };
   const name = (id: number) => (id === ME ? 'You' : `p${id}`);
 
   it('a gun kill takes the weapon from the killing hit (even listed after the kill), headshot marker', () => {
@@ -49,7 +49,7 @@ describe('kill feed entries', () => {
     expect(e.weapon).toBe('smg');
   });
 
-  it('explosions, falls, water and the storm (drowning in sudden death)', () => {
+  it('explosions, falls, water, and the storm / lightning by the kill cause', () => {
     expect(feedEntries([ev(1, 'kill', { victim: B, killer: A }), ev(1, 'hit', { target: B, by: A, weapon: 'grenade' })], ctx)[0].markers).toEqual(['explosion']);
     const fall = feedEntries([ev(1, 'kill', { victim: B, killer: null }), ev(1, 'hit', { target: B, by: null, weapon: 'fall' })], ctx)[0];
     expect(fall).toMatchObject({ weapon: null, markers: ['fall'], killer: null });
@@ -57,7 +57,10 @@ describe('kill feed entries', () => {
     const water = feedEntries([ev(1, 'kill', { victim: ME, killer: null, inWater: true })], ctx)[0];
     expect(water).toMatchObject({ markers: ['water'], me: true });
     expect(feedText(water, name)).toBe('You drowned');
-    expect(feedEntries([ev(1, 'kill', { victim: B, killer: null, inWater: true })], { ...ctx, suddenDeath: true })[0].markers).toEqual(['storm']);
+    const storm = feedEntries([ev(1, 'kill', { victim: B, killer: null, inWater: false, cause: 'storm' })], ctx)[0];
+    expect(storm.markers).toEqual(['storm']);
+    expect(feedText(storm, name)).toBe('p3 was caught in the storm');
+    expect(feedEntries([ev(1, 'kill', { victim: B, killer: null, cause: 'lightning' })], ctx)[0].markers).toEqual(['lightning']);
   });
 
   it('your kills are flagged mine, your deaths me; a suicide has no killer', () => {

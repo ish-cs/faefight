@@ -14,9 +14,9 @@ export type SoundId =
   | 'explosion' | 'placed' | 'destroyed'
   | 'coin' | 'loot' | 'purchase' | 'vault'
   | 'kill' | 'death' | 'eliminated' | 'win' | 'lose' | 'draw'
-  | 'alarm' | 'tick' | 'escaped' | 'horn' | 'footstep'
+  | 'alarm' | 'ping' | 'tick' | 'escaped' | 'horn' | 'footstep'
   | 'shieldHit' | 'shieldBreak' | 'drink' | 'potionDone'
-  | 'reload' | 'dry' | 'ads'
+  | 'reload' | 'dry' | 'ads' | 'thunder'
   | 'headshot' | 'shieldCrack' | 'land';
 
 export type Cue = {
@@ -32,7 +32,7 @@ export type Cue = {
 };
 
 /** Where the listener's player is, for ambience and the low-health muffle. */
-export type Env = { alive: boolean; hp: number; inBunker: boolean; shoreDist: number; inWater: boolean };
+export type Env = { alive: boolean; hp: number; inBunker: boolean; shoreDist: number; inWater: boolean; storm?: boolean };
 
 export const LOW_HP = 30;
 const STRIDE = 1.7; // metres between footsteps
@@ -199,6 +199,10 @@ export class SoundDirector {
         case 'suddenDeath':
           out.push({ sound: 'horn', pos: null, gain: 0.9 });
           break;
+        case 'lightning':
+          // The engine delays it by distance (sound travels ~343 m/s) and sets crack vs rumble.
+          if (d.pos) out.push({ sound: 'thunder', pos: d.pos as Vec3, gain: 1.2 });
+          break;
         case 'escaped':
           if (d.player === this.humanId) out.push({ sound: 'escaped', pos: null, gain: 0.8 });
           break;
@@ -220,6 +224,7 @@ export class SoundDirector {
         inBunker: me.alive && inAnyBunker(me.pos, this.map),
         shoreDist: shoreDistance(me.pos, this.map),
         inWater: me.pos.y < s.waterY + 0.2,
+        storm: s.suddenDeath,
       };
     }
     this.prev = s;

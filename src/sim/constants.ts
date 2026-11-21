@@ -55,6 +55,9 @@ export type WeaponSpec = {
 const NO_SPREAD: SpreadSpec = { base: 0, ads: 0, perShot: 0, max: 0, recover: 1, move: 0, sprint: 0, air: 0 };
 const NO_FALLOFF = { start: 1e9, end: 1e9 + 1, minMult: 1 };
 
+// Range falloff (2026-11-20): long-range plinking stops paying; close fights win. Bullets keep full
+// damage to `start`, fall linearly to `minMult` at `end`, and hold that floor beyond. Applies to players
+// and pieces alike (gunplay.shotDamage); fists, rockets and grenades have none.
 export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   fists: {
     price: 0, dmg: 10, pellets: 1, rps: 2, mag: Infinity, reloadSec: 0, reloadEmptySec: 0, chamber: false, range: 2,
@@ -62,7 +65,7 @@ export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   },
   pistol: {
     price: 50, dmg: 20, pellets: 1, rps: 4, mag: 12, reloadSec: 1.5, reloadEmptySec: 1.9, chamber: true, range: 60,
-    falloff: { start: 15, end: 45, minMult: 0.6 },
+    falloff: { start: 15, end: 40, minMult: 0.5 },
     spread: { base: 0.8, ads: 0.3, perShot: 0.9, max: 4, recover: 9, move: 1.4, sprint: 3, air: 5 },
     recoil: { up: 1.3, upGrow: 0, side: 0.35, sideBias: 0 }, adsZoom: 1.3, adsMove: 0.75,
   },
@@ -75,14 +78,14 @@ export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   shotgun: {
     // Tube-fed: loads shell by shell (reloadTime), so no chamber bonus.
     price: 200, dmg: 9, pellets: 10, rps: 1.1, mag: 6, reloadSec: 0.45, reloadEmptySec: 0.45, chamber: false, range: 30,
-    falloff: { start: 6, end: 22, minMult: 0.2 },
+    falloff: { start: 8, end: 25, minMult: 0.2 },
     spread: { base: 0.5, ads: 0.25, perShot: 1.0, max: 3, recover: 4, move: 0.8, sprint: 2, air: 3 },
     recoil: { up: 4.2, upGrow: 0, side: 1.0, sideBias: 0 }, adsZoom: 1.2, adsMove: 0.75,
   },
   rifle: {
     price: 300, dmg: 30, pellets: 1, rps: 6, mag: 25, reloadSec: 2.3, reloadEmptySec: 2.8, chamber: true, range: 150,
-    falloff: { start: 60, end: 150, minMult: 0.85 },
-    spread: { base: 2.2, ads: 0.12, perShot: 0.5, max: 5, recover: 7, move: 2.5, sprint: 5, air: 7 },
+    falloff: { start: 25, end: 60, minMult: 0.55 },
+    spread: { base: 2.2, ads: 0.12, perShot: 0.7, max: 5, recover: 7, move: 2.5, sprint: 5, air: 7 },
     recoil: { up: 0.75, upGrow: 0.05, side: 0.4, sideBias: 0.15 }, adsZoom: 2, adsMove: 0.6,
   },
   rocket: {
@@ -169,8 +172,8 @@ export const LIFECYCLE = {
   invulnSec: 3,
   /** Spawn protection: lasts while inside your bunker (max this long), then invulnSec after leaving. */
   spawnProtectMaxSec: 15,
+  /** Sudden death: generators stop, every bunker seals for good, and the storm closes in (STORM). */
   suddenDeathAt: 900,
-  tideRate: 0.05,
   lootPickupRadius: 1.5,
   /** Dropped items land this far in front of you (just past pickup reach)... */
   dropAhead: 1.8,
@@ -183,6 +186,36 @@ export const LIFECYCLE = {
   fallDmgPerSpeed: 8,
 };
 
+/**
+ * Sudden-death storm: a ring that starts `startPad` m beyond the farthest island edge, closes linearly on the
+ * map centre over `shrinkSec`, then holds `finalRadius`. Outside it you lose `dps0 + dpsRamp·t` hp each
+ * second (t = seconds since sudden death, capped at dpsMax), straight to hp like falls. Lightning: one strike
+ * every `strikeGap` s (shrinking to `strikeGapMin`), shown `telegraphSec` before it lands, hurting players
+ * within `boltRadius` (boltDmg at the centre, linear falloff), straight to hp like the ring. Most land in the storm (`playerStrikeFrac`
+ * of those near someone standing in it); `edgeStrikeFrac` land up to `edgeStrikeDepth` m inside the edge.
+ * Neither the storm nor lightning touches building pieces.
+ */
+export const STORM = {
+  startPad: 12,
+  shrinkSec: 180,
+  finalRadius: 12,
+  /** The final circle covers the centre island's land plus this margin. */
+  finalPad: 4,
+  dps0: 2,
+  dpsRamp: 0.08,
+  dpsMax: 20,
+  telegraphSec: 1,
+  strikeGap: 2.2,
+  strikeGapMin: 0.9,
+  boltRadius: 4,
+  boltDmg: 55,
+  edgeStrikeFrac: 0.25,
+  edgeStrikeDepth: 6,
+  playerStrikeFrac: 0.4,
+  /** How far into the storm the random strikes reach past the ring. */
+  zoneDepth: 35,
+};
+
 export const SEAL = { cell: 0.25, half: 8, blockHeight: 1.3, exitRadius: 4 };
 
 export const MAP = {
@@ -190,7 +223,6 @@ export const MAP = {
   groundY: 2,
   waterY: 0,
   gap: 36,
-  tideRate: LIFECYCLE.tideRate,
   bunker: {
     interior: 4, wall: 0.3, height: 2.6, doorWidth: 1.6, doorHeight: 2.2,
     /** Firing slits: horizontal gaps (width × y0..y1 above the floor) in each door wall segment and the back wall. */
@@ -214,4 +246,38 @@ export const CENTER = {
   wellRadius: 1.6,
   wellPerSec: 4,
   wellCap: 50,
+};
+
+/**
+ * Fire (sim/fire.ts). Explosions ignite flammable things inside their blast; burning pieces lose `dps` HP/s
+ * (resolved every `stepSec`) until they burn out after `burnSec` (uniform in [min, max], seeded) or break.
+ * Metal, steel and containers never burn: they are the counter to a rocket on a wooden base.
+ * After `spreadAfterSec` a burning piece rolls `spreadChance` per step for every touching flammable piece.
+ * Players touching flames take `playerDps` (shield first). Ground patches (grass, crates, palms) burn the same way.
+ */
+export const FIRE = {
+  stepSec: 0.5,
+  pieces: {
+    wood: { dps: 13, burnSec: [14, 20] },
+    scaffold: { dps: 10, burnSec: [12, 18] },
+    ramp: { dps: 10, burnSec: [12, 18] },
+    sandbags: { dps: 4, burnSec: [4, 6] },
+  } as Partial<Record<PieceKind, { dps: number; burnSec: [number, number] }>>,
+  spreadAfterSec: 3,
+  spreadChance: 0.15,
+  /** Pieces this close (m, box to box) count as touching for spread. */
+  touchEps: 0.25,
+  playerDps: 6,
+  /** How close (m) to burning surfaces a player body has to be to catch the heat. */
+  playerReach: 0.3,
+  /** Radius (m) of each source's ignition: the whole blast. */
+  igniteRadius: { rocket: ROCKET.radius, grenade: GRENADE.radius, charge: CHARGE.radius + 0.5 } as Record<'rocket' | 'grenade' | 'charge', number>,
+  patch: {
+    r: 1.4, grassSec: [8, 12] as [number, number], spreadAfterSec: 2, spreadChance: 0.12, spreadStep: 1.8, max: 40,
+    /** A patch sets touching wooden pieces alight with this chance per step (after spreadAfterSec). */
+    pieceChance: 0.12,
+  },
+  /** Storm rain (sudden death): burn timers run this many times faster, so fires go out sooner. */
+  rainMult: 2.5,
+  props: { crate: { dps: 6, sec: 10, r: 0.8 }, palm: { dps: 6, sec: 16, r: 0.7 } } as Record<'crate' | 'palm', { dps: number; sec: number; r: number }>,
 };
