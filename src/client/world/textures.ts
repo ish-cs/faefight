@@ -152,6 +152,16 @@ export function islandSurface(R: number, d: IslandDecor) {
       g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
       g.globalCompositeOperation = 'lighter';
       for (const e of d.gravel) ell(g, MP, ms, e, 'rgb(255,0,0)', 2.5, 0.22);
+      // paths: soft-edged strokes along the polylines, wobbling a little
+      g.lineCap = 'round'; g.lineJoin = 'round';
+      for (const path of d.gravelPaths) {
+        g.filter = 'blur(2px)';
+        g.strokeStyle = 'rgb(255,0,0)'; g.lineWidth = path.w * ms;
+        g.beginPath();
+        path.pts.forEach(([x, z], i) => { const px = MP(x) + rr(-1, 1), pz = MP(z) + rr(-1, 1); if (i === 0) g.moveTo(px, pz); else g.lineTo(px, pz); });
+        g.stroke();
+        g.filter = 'none';
+      }
       g.globalCompositeOperation = 'source-over';
       gravelData = g.getImageData(0, 0, w, h);
     }, false);
@@ -238,6 +248,22 @@ export function islandSurface(R: number, d: IslandDecor) {
           if (t < 0.5) g.fillRect(-1.8, -0.6, 3.6, 1.2); else if (t < 0.9) { g.beginPath(); g.arc(0, 0, 1.2, 0, 7); g.fill(); } else g.fillRect(-3, -2, 6, 4);
           g.restore();
         }
+      }
+      // moss + damp grime creeping out from the bunker wall base (footprint 4.6 m square at local (0, R - 7))
+      {
+        const half = 2.3, cz = R - 7;
+        g.save();
+        g.filter = 'blur(6px)';
+        g.strokeStyle = 'rgba(52,70,30,0.55)'; g.lineWidth = 0.35 * s;
+        g.strokeRect(P(-half), P(cz - half), 2 * half * s, 2 * half * s);
+        g.filter = 'none'; // per-draw blur on a 2048² canvas is very slow (260 blurred dots cost seconds at upload)
+        for (let k = 0; k < 260; k++) {
+          const side = Math.floor(rnd() * 4), t = rr(-half, half), o = half + rr(0, 0.28);
+          const [x, z] = side === 0 ? [t, cz - o] : side === 1 ? [t, cz + o] : side === 2 ? [-o, cz + t] : [o, cz + t];
+          g.fillStyle = `rgba(${rr(40, 70) | 0},${rr(70, 95) | 0},${rr(24, 40) | 0},${rr(0.15, 0.4)})`;
+          g.beginPath(); g.arc(P(x), P(z), rr(1, 4), 0, 7); g.fill();
+        }
+        g.restore();
       }
       // hatched no-build zone in front of the bunker door (+Z side), worn paint
       g.save(); g.translate(P(0), P(R - 7 - 2.3 - 1.4)); g.beginPath(); g.rect(-1.1 * s, -1 * s, 2.2 * s, 2 * s); g.clip();

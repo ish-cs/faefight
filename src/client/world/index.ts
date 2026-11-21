@@ -2,7 +2,9 @@ import * as THREE from 'three/webgpu';
 import type { IslandLayout } from '../../sim/map';
 import type { MatchEvent, PieceState, PlayerState } from '../../sim/types';
 import { Boats, gullPerches, Gulls } from './dressing';
+import { defineDetailKinds } from './detail';
 import { Grass } from './grass';
+import { Scatter } from './scatter';
 import { backdropFrame, buildIslands, islandMask } from './islands';
 import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
@@ -24,6 +26,8 @@ export class World {
   private water: Ocean | null = null;
   /** instanced grass beds (high/ultra) */
   readonly grass = new Grass();
+  /** instanced small detail (litter, rubble, shells, seaweed…) */
+  readonly scatter = new Scatter();
   private boats: Boats | null = null;
   private gulls: Gulls | null = null;
 
@@ -41,7 +45,10 @@ export class World {
 
   setMap(map: IslandLayout[], teamColors: number[]) {
     const t0 = performance.now();
-    const { root, collidables } = buildIslands(map, teamColors);
+    if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
+    const { root, collidables } = buildIslands(map, teamColors, this.scatter);
+    this.scatter.build();
+    this.scene.add(this.scatter.root);
     this.scene.add(root);
     this.collidables.push(...collidables);
     this.water = buildWater(map);
@@ -72,6 +79,7 @@ export class World {
     this.boats?.update(t, waterY);
     this.gulls?.update(t);
     this.grass.setQuality(this.sky.quality);
+    this.scatter.setQuality(this.sky.quality);
     if (focus) this.grass.update(focus, feet);
     this.pieceFx.update(performance.now());
     this.sky.render(); // cascaded shadows follow the camera themselves

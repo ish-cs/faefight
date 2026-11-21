@@ -6,7 +6,9 @@ import { boxUV, mat, StaticBatch } from './geo';
 import { mats } from './materials';
 import { bollard, container, containerStack, crane, drums, generatorProp, lightMast, pallet, palm, shopProp, vaultProp, warehouse } from './props';
 import { ISLAND_DECOR } from './decor';
+import { buildBeach, dressHarbor, dressIslandDetail, scatterHarbor, scatterIsland } from './detail';
 import { dressBackdrop, dressIsland } from './dressing';
+import type { Scatter } from './scatter';
 import { pbrAlbedo, pbrSample, worldNoise } from './pbr';
 import { islandSurface, makeRng } from './textures';
 
@@ -84,7 +86,7 @@ export function islandMask(isl: IslandLayout) {
   return { data: s.maskData, size: s.maskSize, R: isl.radius };
 }
 
-export function buildIslands(map: IslandLayout[], teamColors: number[]): IslandsOut {
+export function buildIslands(map: IslandLayout[], teamColors: number[], scatter?: Scatter): IslandsOut {
   const root = new THREE.Group();
   root.name = 'islands';
   const collidables: THREE.Object3D[] = [];
@@ -175,7 +177,9 @@ export function buildIslands(map: IslandLayout[], teamColors: number[]): Islands
       root.add(s);
     }
 
-    buildBackdrop(dress, L, rng, isl, n, R, groundY);
+    buildBackdrop(dress, L, rng, isl, n, R, groundY, scatter);
+    if (scatter) scatterIsland(scatter, isl);
+    dressIslandDetail(dress, L, isl);
     dressIsland(dress, L, isl);
   }
 
@@ -198,7 +202,7 @@ export function backdropFrame(isl: IslandLayout, n: number) {
   return { z0, hw, top: isl.groundY + 0.2 };
 }
 
-function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof makeRng>, isl: IslandLayout, n: number, _R: number, _groundY: number) {
+function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof makeRng>, isl: IslandLayout, n: number, _R: number, _groundY: number, scatter?: Scatter) {
   const M = mats();
   const { z0, hw, top } = backdropFrame(isl, n);
   const depth = 80, z1 = z0 + depth;
@@ -242,6 +246,11 @@ function buildBackdrop(b: StaticBatch, L: THREE.Matrix4, rng: ReturnType<typeof 
   drums(b, at(-hw * 0.3, top, z0 + 5), 3, rng);
   for (const [x, z] of [[-hw * 0.45, 4], [-hw * 0.42, 5.4], [hw * 0.02, 13]]) pallet(b, at(x, top, z0 + z));
   dressBackdrop(b, at, hw, z0, top, rng);
+  dressHarbor(b, at, { hw, z0, top }, rng);
+  if (scatter) {
+    scatterHarbor(scatter, (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(L), isl.bunker.facingYaw, { hw, z0, top }, rng);
+    buildBeach(b, scatter, at, { hw, z0, top }, rng);
+  }
 
   // jungle hill behind the yard
   const W = 2 * hw + 90, D = 110, SX = 60, SZ = 32;
