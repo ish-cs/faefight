@@ -1,9 +1,9 @@
 import { AMMO_BOX, CHARGE, GENERATOR_MAX_LEVEL, GRENADE, MAP, MEDKIT, PIECES, POTIONS, SEAL, WEAPONS } from '../constants';
 import { buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
-import { canAdd, countOf } from '../hotbar';
+import { HOTBAR_ITEMS, canAdd, countOf, takeOut } from '../hotbar';
 import { uselessReason } from '../potions';
 import type { Doorway } from '../map';
-import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, PotionKind, ShopItem, Vec3, WeaponKind } from '../types';
+import type { Difficulty, HotbarItem, Inventory, PieceKind, PieceState, PlayerState, PotionKind, ShopItem, Vec3, WeaponKind } from '../types';
 import { add, dist2D, forward, scale, v3 } from '../vec';
 
 export const GUNS: Exclude<WeaponKind, 'fists'>[] = ['rifle', 'smg', 'pistol', 'shotgun'];
@@ -87,8 +87,50 @@ export type ShopStyle = {
 };
 export const PLAIN_STYLE: ShopStyle = { upgradeFirst: false, longGun: false, closeGun: false, metal: false, steel: false, coverWood: 0 };
 
-/** Next thing worth buying right now (null = nothing, or saving up for the top priority). */
+/** The hotbar item a purchase lands in (null for ammo, generator upgrades, locks). */
+const slotItem = (item: ShopItem): HotbarItem | null => ((HOTBAR_ITEMS as readonly string[]).includes(item) ? (item as HotbarItem) : null);
+
+/** Is there room on the hotbar for this purchase (a free slot, or a stack it joins)? */
+export function fits(p: PlayerState, item: ShopItem): boolean {
+  const k = slotItem(item);
+  return !k || canAdd(p.hotbar, k);
+}
+
+/**
+ * The hotbar slot I can best afford to give up to make room for `want` (dropped like a human clears a slot):
+ * a pistol once I have a better gun, a shotgun, ramps/containers, speed/heal potions, grenades, medkits.
+ * -1 when everything held matters more.
+ */
+export function junkSlot(p: PlayerState, want: ShopItem): number {
+  const inv = p.inv;
+  const better = !!(inv.weapons.smg || inv.weapons.rifle);
+  const order: HotbarItem[] = [
+    ...(better ? ['pistol' as const] : []), ...(better || inv.weapons.pistol ? ['shotgun' as const] : []),
+    'ramp', 'container', 'speedPotion', 'healPotion', 'grenade', 'medkit',
+  ];
+  for (const k of order) {
+    if (k === want) continue;
+    const slot = p.hotbar.indexOf(k);
+    if (slot >= 0) return slot;
+  }
+  return -1;
+}
+
+/**
+ * Next thing worth buying right now (null = nothing, or saving up for the top priority). Optional stock
+ * (medkits, grenades, a shotgun, spare cover) is only bought when there's room on the hotbar for it.
+ */
 export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficulty, style: ShopStyle = PLAIN_STYLE): ShopItem | null {
+  const n = { ...needs };
+  if (!fits(p, 'medkit')) n.medkits = 0;
+  if (!fits(p, 'grenade')) n.grenades = 0;
+  const st = { ...style };
+  if (!fits(p, 'shotgun')) st.closeGun = false;
+  if (!fits(p, 'wood')) st.coverWood = 0;
+  return choosePurchase(p, n, difficulty, st);
+}
+
+function choosePurchase(p: PlayerState, needs: Needs, difficulty: Difficulty, style: ShopStyle): ShopItem | null {
   const inv = p.inv, cash = inv.cash;
   if (!ownsGun(inv)) {
     // Guns with no ammo left still count as owned: restock instead of re-buying.
@@ -143,7 +185,15 @@ export function shoppingPlan(
     const r = buy(sim, { buy: item }, levels);
     n.genLevel = levels[p.island];
     if (!r.ok) {
-      console.warn(`shoppingPlan: chose ${item} but buy failed: ${r.reason}`);
+      // Essentials with a full hotbar: plan on dropping junk first (the bot does that at the shop), else stop.
+      const j = fits(sim, item) ? -1 : junkSlot(sim, item);
+      if (j >= 0) {
+        takeOut(sim.inv, sim.hotbar[j]!, 'stack');
+        sim.hotbar[j] = null;
+        i--;
+        continue;
+      }
+      if (fits(sim, item)) console.warn(`shoppingPlan: chose ${item} but buy failed: ${r.reason}`);
       break;
     }
     items.push(item);

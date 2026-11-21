@@ -31,7 +31,7 @@ const players = Number(get('players', '2'));
 const nSeeds = Number(get('seeds', '10'));
 const first = Number(get('first-seed', '1'));
 const maxSec = Number(get('max-sec', String(25 * 60)));
-const pool = new Pool(Number(get('workers', String(Math.max(1, os.cpus().length - 2)))));
+const pool = new Pool(Number(get('workers', String(Math.min(4, Math.max(1, os.cpus().length - 2))))));
 const t0 = Date.now();
 try {
   const seeds = Array.from({ length: nSeeds }, (_, i) => first + i);
@@ -43,7 +43,7 @@ try {
   });
   const decisive = h.results.filter((r) => r.decisive).length;
   const ms = h.results.reduce((n, r) => n + r.msPerTick, 0) / h.results.length;
-  console.log(`${a} vs ${b} (${players} players, ${h.results.length} games): ${a} win share ${(100 * h.share).toFixed(0)}% · fitness ${h.fitA.toFixed(3)} vs ${h.fitB.toFixed(3)} · decisive before sudden death ${decisive}/${h.results.length} · ${ms.toFixed(2)} ms/tick · ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  console.log(`${a} vs ${b} (${players} players, ${h.results.length} games): ${a} win share ${(100 * h.share).toFixed(0)}% ± ${(100 * h.ci95).toFixed(0)} (95% CI) · fitness ${h.fitA.toFixed(3)} vs ${h.fitB.toFixed(3)} · decisive before sudden death ${decisive}/${h.results.length} · ${ms.toFixed(2)} ms/tick · ${((Date.now() - t0) / 1000).toFixed(0)} s`);
 } finally {
   await pool.close();
 }

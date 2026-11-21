@@ -36,8 +36,21 @@ export type SeatResult = {
   /** Scaffolds laid (bridging toward a goal) and plugs placed at rivals' bunkers (sealing work). */
   scaffolds: number;
   plugs: number;
-  /** Seconds alive within IDLE_M of my own bunker with nobody near it (hiding, no defensive reason). */
+  /** Seconds alive within IDLE_M of my own bunker with nobody near it (hiding, no defensive reason), while geared. */
   idleHome: number;
+  /** Earliness-weighted seals and eliminations: each counts 1 + (time left before sudden death) / sudden death. */
+  sealScore: number;
+  elimScore: number;
+  /** Seconds on a rival's island carrying wall pieces (a seal in progress). */
+  raidSec: number;
+  /** Seconds carrying (cash + banked) > HOARD after the first 2 minutes. */
+  hoardSec: number;
+  /** Pieces destroyed within WASTE_SEC of being placed (wasted builds). */
+  wasted: number;
+  /** Distances of my hits on players (engagement range). */
+  hitDists: number[];
+  /** Longest stretch (s) in or right behind my own bunker with a gun and cash, nobody near: sitting at home. */
+  longestHomeIdle: number;
 };
 export type MatchResult = {
   seed: number;
@@ -62,7 +75,7 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
     { players: spec.seats.map((s) => ({ name: '', isBot: true, difficulty: s.difficulty })), seed: spec.seed },
     { makeBot: (id, _d, rng) => makeBrain(spec.seats[id - 1], id, rng) },
   );
-  const seats: SeatResult[] = spec.seats.map(() => ({ place: 0, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 0, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0 }));
+  const seats: SeatResult[] = spec.seats.map(() => ({ place: 0, kills: 0, deaths: 0, seals: 0, elims: 0, survived: 0, closeDmg: 0, longShots: 0, longHits: 0, scaffolds: 0, plugs: 0, idleHome: 0, sealScore: 0, elimScore: 0, raidSec: 0, hoardSec: 0, wasted: 0, hitDists: [] as number[], longestHomeIdle: 0 }));
   const outOrder: number[] = [];
   /** Who sealed each island's bunker last (player i+1 lives on island i). */
   const sealedBy = new Map<number, number>();
@@ -71,6 +84,10 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
   const t0 = performance.now();
   let ticks = 0;
   const bunkers = m.map.map((isl) => isl.bunker.center);
+  const placedAt = new Map<number, { t: number; by: number }>();
+  const homeStreak = new Map<number, number>();
+  const early = (t: number) => 1 + Math.max(0, LIFECYCLE.suddenDeathAt - t) / LIFECYCLE.suddenDeathAt;
+  const islandOf = (p: { x: number; z: number }) => m.map.findIndex((isl) => Math.hypot(p.x - isl.center.x, p.z - isl.center.z) <= isl.radius);
   for (; ticks < maxTicks && snap.winner === null; ticks++) {
     snap = m.tick(new Map());
     const pos = (id: number) => snap.players[id - 1]?.pos;
@@ -78,10 +95,26 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
     if (ticks % SAMPLE_TICKS === 0)
       for (const p of snap.players) {
         if (!p.alive || p.breakoutUntil !== null) continue;
+        const dtS = SAMPLE_TICKS / TICK_HZ;
+        const walls = (p.inv.pieces.wood ?? 0) + (p.inv.pieces.metal ?? 0) + (p.inv.pieces.steel ?? 0);
+        const on = islandOf(p.pos);
+        if (walls > 0 && on >= 0 && on !== p.island) seats[p.id - 1].raidSec += dtS;
+        if (snap.time > 120 && p.inv.cash + p.vault.cash > HOARD) seats[p.id - 1].hoardSec += dtS;
+        {
+          const b = bunkers[p.island];
+          const armed = Object.keys(p.inv.weapons).length > 0 && p.inv.cash + p.vault.cash > 0;
+          const nearby = snap.players.some((o) => o.id !== p.id && o.alive && Math.hypot(o.pos.x - b.x, o.pos.z - b.z) < THREAT_M);
+          const sitting = armed && !nearby && !snap.sealed[p.island] && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) <= 6;
+          const st = sitting ? (homeStreak.get(p.id) ?? 0) + dtS : 0;
+          homeStreak.set(p.id, st);
+          seats[p.id - 1].longestHomeIdle = Math.max(seats[p.id - 1].longestHomeIdle, st);
+        }
+        const geared = !!(p.inv.weapons.smg || p.inv.weapons.rifle || p.inv.weapons.shotgun) || p.inv.cash + p.vault.cash >= 150;
+        if (!geared) continue;
         const b = bunkers[p.island];
         if (Math.hypot(p.pos.x - b.x, p.pos.z - b.z) > IDLE_M) continue;
         const threat = snap.players.some((o) => o.id !== p.id && o.alive && Math.hypot(o.pos.x - b.x, o.pos.z - b.z) < THREAT_M);
-        if (!threat && !snap.sealed[p.island]) seats[p.id - 1].idleHome += SAMPLE_TICKS / TICK_HZ;
+        if (!threat && !snap.sealed[p.island]) seats[p.id - 1].idleHome += dtS;
       }
     for (const e of snap.events) {
       if (e.type === 'shot') {
@@ -93,17 +126,24 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
         const by = e.data.by as number | null, target = e.data.target as number;
         if (by == null || by === target || !pos(by) || !pos(target)) continue;
         const d = dist(pos(by)!, pos(target)!);
+        seats[by - 1].hitDists.push(Math.round(d));
         if (d <= CLOSE_M) seats[by - 1].closeDmg += Number(e.data.amount) || 0;
         else if (d > LONG_M) seats[by - 1].longHits++;
         continue;
       }
       if (e.type === 'placed') {
         const by = e.data.by as number, kind = e.data.kind as string;
+        placedAt.set(e.data.piece as number, { t: e.t, by });
         if (kind === 'scaffold') seats[by - 1].scaffolds++;
         else {
           const pc = snap.pieces.find((x) => x.id === e.data.piece);
           if (pc && bunkers.some((b, i) => i !== snap.players[by - 1].island && Math.hypot(pc.pos.x - b.x, pc.pos.z - b.z) <= 4)) seats[by - 1].plugs++;
         }
+        continue;
+      }
+      if (e.type === 'destroyed') {
+        const pl = placedAt.get(e.data.piece as number);
+        if (pl && e.t - pl.t < WASTE_SEC) seats[pl.by - 1].wasted++;
         continue;
       }
       if (e.type === 'kill') {
@@ -112,14 +152,14 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
         if (k != null && k !== v) seats[k - 1].kills++;
       } else if (e.type === 'sealed' && e.t < LIFECYCLE.suddenDeathAt) {
         const by = e.data.by as number | null | undefined;
-        if (by != null && by !== e.data.owner) { seats[by - 1].seals++; sealedBy.set(e.data.island as number, by); }
+        if (by != null && by !== e.data.owner) { seats[by - 1].seals++; seats[by - 1].sealScore += early(e.t); sealedBy.set(e.data.island as number, by); }
       } else if (e.type === 'eliminated') {
         const id = e.data.player as number;
         if (!outOrder.includes(id)) {
           outOrder.push(id);
           seats[id - 1].survived = e.t;
           const by = sealedBy.get(id - 1);
-          if (by !== undefined && by !== id) seats[by - 1].elims++;
+          if (by !== undefined && by !== id) { seats[by - 1].elims++; seats[by - 1].elimScore += early(e.t); }
         }
       }
     }
@@ -142,7 +182,8 @@ export async function runMatch(spec: MatchSpec): Promise<MatchResult> {
   return { seed: spec.seed, winner, time, decisive: winner !== null && time < LIFECYCLE.suddenDeathAt, seats, msPerTick: ms };
 }
 
-const CLOSE_M = 25, LONG_M = 40, IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15;
+const HOARD = 600, WASTE_SEC = 5;
+const CLOSE_M = 20, LONG_M = 40, IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15;
 const dist = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
 
 /** Rapier worlds live in WASM memory and are never garbage collected: free it after a headless match. */
@@ -152,20 +193,34 @@ function freePhysics(m: Match) {
 }
 
 /**
- * Fitness of one seat. Outcome first: placement, then eliminations I set up with a seal ≫ seals ≫ kills, and a
- * winner gets more the sooner they win. Then shaping toward playing like a person with a mission: real fights
- * (damage dealt within 25 m), bridging and plugging work; penalties for plinking across the map (shots with nobody
- * within 40 m that miss) and for hanging around my own bunker with no reason.
+ * Fitness of one seat (run 3: play like a good human working toward winning).
+ *  1. Outcome: placement; a win by sealing everyone out before sudden death outweighs everything; eliminations and
+ *     seals are big and worth more the earlier they happen; kills are small; reaching sudden death costs everyone.
+ *  2. Progress toward a seal: plugs placed at rival bunkers, time on rival islands carrying wall pieces, bridging.
+ *  3. Buying well: no hoarding cash past 2 minutes.
+ *  4. Building well: pieces that are destroyed right after placing are wasted.
+ *  5. Fighting up close: damage within 20 m; penalties for plinking from beyond 40 m and for idling at home geared.
  */
 export function seatFitness(r: MatchResult, seat: number, maxSec = 18 * 60): number {
   const s = r.seats[seat];
   const n = r.seats.length;
   const placement = (n - s.place) / (n - 1);
   const won = r.winner === seat + 1;
-  const outcome = placement + 0.5 * s.elims + 0.15 * s.seals + 0.01 * s.kills + 0.05 * (s.survived / Math.max(1, r.time)) +
-    (won ? 0.4 * Math.max(0, 1 - r.time / maxSec) : 0);
+  const outcome = placement + 1.0 * (s.elimScore ?? s.elims) + 0.25 * (s.sealScore ?? s.seals) + 0.01 * s.kills +
+    0.05 * (s.survived / Math.max(1, r.time)) + (won ? 0.4 * Math.max(0, 1 - r.time / maxSec) : 0) + (won && r.decisive ? 2 : 0) -
+    (r.time >= LIFECYCLE.suddenDeathAt ? 0.2 : 0);
   const alive = Math.max(30, s.survived);
-  const shaping = Math.min(0.25, 0.0015 * (s.closeDmg ?? 0)) + Math.min(0.1, 0.008 * (s.scaffolds ?? 0)) + Math.min(0.15, 0.03 * (s.plugs ?? 0)) -
-    Math.min(0.2, 0.002 * Math.max(0, (s.longShots ?? 0) - 2 * (s.longHits ?? 0))) - 0.3 * Math.min(1, (s.idleHome ?? 0) / alive);
-  return outcome + shaping;
+  const progress = Math.min(0.3, 0.05 * (s.plugs ?? 0)) + Math.min(0.2, 0.002 * (s.raidSec ?? 0)) + Math.min(0.1, 0.008 * (s.scaffolds ?? 0));
+  const economy = -0.15 * Math.min(1, (s.hoardSec ?? 0) / alive);
+  const building = -Math.min(0.15, 0.02 * (s.wasted ?? 0));
+  const fighting = Math.min(0.3, 0.002 * (s.closeDmg ?? 0)) - Math.min(0.2, 0.002 * Math.max(0, (s.longShots ?? 0) - 2 * (s.longHits ?? 0))) -
+    0.3 * Math.min(1, (s.idleHome ?? 0) / alive);
+  return outcome + progress + economy + building + fighting;
+}
+
+/** Median of a list (NaN when empty). */
+export function median(xs: number[]): number {
+  if (!xs.length) return NaN;
+  const a = [...xs].sort((x, y) => x - y);
+  return a.length % 2 ? a[(a.length - 1) / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2;
 }

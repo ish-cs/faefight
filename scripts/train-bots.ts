@@ -33,9 +33,11 @@ const flag = (name: string) => args.includes(`--${name}`);
 const str = (name: string, def: string) => { const i = args.indexOf(`--${name}`); return i < 0 ? def : args[i + 1]; };
 
 const minutes = opt('minutes', 60);
-const workers = opt('workers', Math.max(1, os.cpus().length - 2));
+// Default 4 workers: the machine is shared; pass --workers to use more.
+const workers = opt('workers', Math.min(4, Math.max(1, os.cpus().length - 2)));
 const evalEvery = opt('eval-every', 5);
-const evalGames = opt('eval-games', 28);
+// Enough games for a useful confidence interval (±~0.1 at 100 games).
+const evalGames = opt('eval-games', 100);
 const dir = str('dir', '.train');
 const cfg: TrainConfig = {
   es: { ...DEFAULT_ES, lambda: opt('lambda', DEFAULT_ES.lambda) },
@@ -53,7 +55,7 @@ fs.mkdirSync(dir, { recursive: true });
 const statePath = path.join(dir, 'state.json');
 const logPath = path.join(dir, 'log.jsonl');
 
-type Saved = { es: EsState; hall: number[][]; games: number; evals: { gen: number; share: number; fitA: number; fitB: number }[] };
+type Saved = { es: EsState; hall: number[][]; games: number; evals: { gen: number; share: number; ci95?: number; decisive?: number; games?: number; fitA: number; fitB: number }[] };
 let saved: Saved;
 if (flag('resume') && fs.existsSync(statePath)) {
   saved = JSON.parse(fs.readFileSync(statePath, 'utf8')) as Saved;
@@ -105,10 +107,10 @@ try {
       const seeds = Array.from({ length: Math.ceil(evalGames / 2) }, (_, i) => 900_000 + i);
       const h = await headToHead({ kind: 'new', params: champ, difficulty: 'pro' }, { kind: 'new', params: HAND_PARAMS, difficulty: 'pro' }, seeds, cfg.players, cfg.maxSec, pool.run);
       saved.games += h.results.length;
-      const ev = { gen: saved.es.gen, share: h.share, fitA: h.fitA, fitB: h.fitB };
+      const ev = { gen: saved.es.gen, share: h.share, ci95: h.ci95, decisive: h.decisive, games: h.results.length, fitA: h.fitA, fitB: h.fitB };
       saved.evals.push(ev);
       fs.appendFileSync(logPath, JSON.stringify({ type: 'eval', ...ev, wallMin: (Date.now() - t0) / 60_000 }) + '\n');
-      console.log(`  eval gen ${ev.gen}: champion vs hand-tuned 4v4 → champion wins ${(100 * h.share).toFixed(0)}% · fitness ${h.fitA.toFixed(3)} vs ${h.fitB.toFixed(3)}`);
+      console.log(`  eval gen ${ev.gen}: champion vs hand-tuned 4v4, ${h.results.length} games → champion win share ${(100 * h.share).toFixed(0)}% ± ${(100 * h.ci95).toFixed(0)} (95% CI) · decisive before sudden death ${h.decisive}/${h.results.length} · fitness ${h.fitA.toFixed(3)} vs ${h.fitB.toFixed(3)}`);
       writeChampion(champ, 'ES mean after self-play (scripts/train-bots.ts)');
       if (recorder) {
         // An 8-PRO match with the champion just written as the default params, saved as a replay.

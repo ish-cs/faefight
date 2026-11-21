@@ -132,17 +132,26 @@ export async function headToHead(a: SeatSpec, b: SeatSpec, seeds: number[], play
     seed, maxSec, seats: Array.from({ length: players }, (_, i) => ((i + flip) % 2 === 0 ? a : b)),
   })));
   const results = await run(specs);
-  let winsA = 0, fitA = 0, fitB = 0, nA = 0, nB = 0;
+  let fitA = 0, fitB = 0, nA = 0, nB = 0;
+  const scores: number[] = [];
   results.forEach((r, k) => {
     const isA = (seat: number) => (seat + (k % 2)) % 2 === 0;
-    if (r.winner === null) winsA += 0.5;
-    else if (isA(r.winner - 1)) winsA++;
+    scores.push(r.winner === null ? 0.5 : isA(r.winner - 1) ? 1 : 0);
     r.seats.forEach((_, seat) => {
       const f = seatFitness(r, seat);
       if (isA(seat)) { fitA += f; nA++; } else { fitB += f; nB++; }
     });
   });
-  return { share: winsA / results.length, fitA: fitA / nA, fitB: fitB / nB, results };
+  const share = scores.reduce((x, y) => x + y, 0) / scores.length;
+  return { share, ci95: ci95(scores), fitA: fitA / nA, fitB: fitB / nB, results, decisive: results.filter((r) => r.decisive).length };
+}
+
+/** Half-width of the 95% confidence interval of a mean of per-game scores (normal approximation). */
+export function ci95(xs: number[]): number {
+  if (xs.length < 2) return 1;
+  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const v = xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1);
+  return 1.96 * Math.sqrt(v / xs.length);
 }
 
 export { encode };

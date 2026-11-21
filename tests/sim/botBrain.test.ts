@@ -4,6 +4,7 @@ import { describe, expect, test } from 'vitest';
 import { AIM, Aim } from '../../src/sim/bots/aim';
 import { Bot } from '../../src/sim/bots/bot';
 import { HAND_PARAMS, PARAM_KEYS, PARAM_SPEC, decode, encode, withTraits } from '../../src/sim/bots/params';
+import { fits, junkSlot, nextPurchase, plugSpot, shoppingPlan } from '../../src/sim/bots/plans';
 import { PRESETS } from '../../src/sim/bots/personality';
 import { Brain, fightOdds, type BrainInput } from '../../src/sim/bots/brain';
 import type { BotView, OtherStatus } from '../../src/sim/bots/view';
@@ -308,6 +309,52 @@ describe('human aim (perception, all skills)', () => {
   }
   test('PRO is still the better shot', () => {
     expect(hitRate('pro', 40, true)).toBeGreaterThan(hitRate('hard', 40, true));
+  });
+});
+
+describe('full hotbar', () => {
+  function packed() {
+    const p = newPlayer(0, 'me', true, 0, v3(map[0].shop.x, map[0].groundY, map[0].shop.z));
+    p.inv.cash = 2000;
+    p.inv.weapons = { pistol: { mag: 12, spare: 36 }, smg: { mag: 30, spare: 90 }, rifle: { mag: 25, spare: 75 } };
+    p.inv.pieces = { wood: 3, metal: 2, steel: 1, ramp: 1 };
+    p.inv.potions = { shieldSmall: 1, speedPotion: 1 };
+    p.hotbar = ['pistol', 'smg', 'rifle', 'wood', 'metal', 'steel', 'ramp', 'shieldSmall', 'speedPotion'];
+    p.equipped = 'rifle';
+    return p;
+  }
+
+  test('optional stock (medkits, grenades) is not chosen when there is no room, and planning never loops on a failing buy', () => {
+    const p = packed();
+    const warn = console.warn;
+    let warned = 0;
+    console.warn = () => { warned++; };
+    try {
+      const needs = { scaffolds: 0, kit: 0, charge: false, grenades: 2, medkits: 2 };
+      expect(nextPurchase(p, needs, 'pro')).not.toBe('medkit');
+      expect(nextPurchase(p, needs, 'pro')).not.toBe('grenade');
+      shoppingPlan(p, { ...needs, charge: true, scaffolds: 6 }, 'pro');
+    } finally { console.warn = warn; }
+    expect(warned).toBe(0);
+  });
+
+  test('an essential buy with a full hotbar drops junk first (a pistol once a better gun is owned)', () => {
+    const p = packed();
+    expect(fits(p, 'charge')).toBe(false);
+    expect(p.hotbar[junkSlot(p, 'charge')]).toBe('pistol');
+    const bot = new Bot(0, 'pro', mulberry32(9));
+    const v = view(p, { pieces: [], sealed: [false, false, false, false] });
+    // A steel plug in my own doorway: only a charge clears it.
+    const door = map[0].bunker.doorways[0];
+    v.pieces = [{ id: 900, kind: 'steel', owner: 1, pos: plugSpot(door, 'steel', 0), rotY: door.yaw, hp: 3000 }];
+    let dropped: string | null = null;
+    for (let i = 0; i < 4 * TICK_HZ && !dropped; i++) {
+      const inp = bot.think(v);
+      if (inp.select !== null && inp.select !== undefined) p.selected = inp.select;
+      if (inp.drop) dropped = p.hotbar[p.selected];
+      v.now += DT;
+    }
+    expect(dropped).toBe('pistol');
   });
 });
 

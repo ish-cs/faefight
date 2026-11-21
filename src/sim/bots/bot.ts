@@ -13,7 +13,7 @@ import { Nav, insideBunker, islandAt, lane, laneAt, laneS, type Lane } from './n
 import { DEFAULT_PARAMS, withTraits, type BotParams, type ParamKey } from './params';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
-  TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
+  TALL, bestGun, doorBlocked, doorPieces, fits, hasAmmo, isHard, junkSlot, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
   shoppingPlan,
   type Needs, type ShopStyle,
 } from './plans';
@@ -116,6 +116,8 @@ type Act = {
   hold?: boolean;
   /** Hold this weapon for `shootAt` (e.g. a rocket at a steel plug). */
   weapon?: WeaponKind;
+  /** Drop what's in this hotbar slot (select it first) to make room. */
+  dropSlot?: number;
 };
 const IDLE: Act = { dir: null };
 
@@ -355,6 +357,12 @@ export class Bot {
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
+    if (act.dropSlot !== undefined && !enemy) {
+      // Select the slot, then drop the stack on the next tick.
+      if (me.selected === act.dropSlot) Object.assign(out, { drop: 'stack', fire: false });
+      else Object.assign(out, { select: act.dropSlot, slot: null, fire: false });
+      return out;
+    }
     // Shields: stock up at a potion seller, drink out of combat (see potionAction).
     if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge) {
       const atSeller = (view.potionShops ?? []).some((s) => dist2D(me.pos, s) <= USE_RANGE);
@@ -935,6 +943,12 @@ export class Bot {
     if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt) return walk;
     let item = nextPurchase(me, this.needs(c), this.difficulty, this.style);
     if (!item || this.buyBlocked(item)) { this.nextScoreAt = now; return walk; }
+    if (!fits(me, item)) {
+      // Hotbar full: clear a slot of junk first (drop it), like a player making room.
+      const slot = junkSlot(me, item);
+      if (slot < 0) { this.buyBlockedUntil.set(item, now + BUY_BACKOFF_SEC); this.nextScoreAt = now; return walk; }
+      return { ...walk, dropSlot: slot };
+    }
     if (this.difficulty === 'easy' && item in PIECES && item !== 'scaffold' && this.rng() < EASY_MISBUY && me.inv.cash >= PIECES.sandbags.price) item = 'sandbags';
     this.nextBuyAt = now + BUY_GAP[this.difficulty];
     return { ...walk, shop: item };
