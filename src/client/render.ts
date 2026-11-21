@@ -16,6 +16,10 @@ import { loadQuality } from './world/sky';
 import { DayNight } from './world/dayNight';
 import { StormFx } from './world/storm';
 import { TrapLayer } from './world/traps';
+import type { WorldSurface } from './world/surfaces';
+import { wetness } from './world/wetness';
+import { playSfx } from './audio/api';
+import type { Surface } from './audio/events';
 import { LootView, lootWarmObjects } from './lootView';
 export { lods } from './world/lod';
 export { pbrStats } from './world/pbr';
@@ -28,6 +32,12 @@ export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
  *  overlay-ish things (labels, ghost, tracers) get their colour pre-boosted to read at full brightness. */
 const UNLIT_BOOST = 2.6;
 const boosted = (hex: number) => new THREE.Color(hex).multiplyScalar(UNLIT_BOOST);
+
+/** Thud sound per ground surface (audio/events.ts Surface). */
+const THUD_SURFACE: Record<WorldSurface, Surface> = {
+  concrete: 'concrete', quay: 'concrete', asphalt: 'concrete', metal: 'metal', container: 'metal', wood: 'wood', bark: 'wood',
+  sand: 'sand', gravel: 'gravel', grass: 'grass', water: 'water',
+};
 
 const GPU_TIMING = typeof location !== 'undefined' && new URLSearchParams(location.search).get('gputime') === '1';
 
@@ -127,6 +137,14 @@ export class Renderer {
     r.scene.add(r.traps.root);
     r.dayNight = new DayNight(r.world.sky, r.gpu, r.scene);
     r.storm = new StormFx(r.world.sky, r.gpu, r.scene, r.dayNight.base);
+    // a body killed in the air ragdolls down onto the island under it, or the sea
+    r.characters.floorAt = (x, z) => r.world.impacts.surf?.groundAt(x, z)?.y ?? r.waterY;
+    r.characters.onThud = (pos, speed) => {
+      const g = r.world.impacts.surf?.groundAt(pos.x, pos.z);
+      const ground = !g || pos.y < r.waterY + 0.2 ? 'water' : THUD_SURFACE[g.surface];
+      const kind = ground !== 'water' && ground !== 'sand' && ground !== 'grass' && (wetness.value as number) > 0.35 ? 'wet' : ground;
+      playSfx('ragdollThud', pos, { kind, gain: Math.min(1, 0.4 + (speed - 1.2) * 0.35) });
+    };
     r.resize();
     return r;
   }
@@ -281,7 +299,7 @@ export class Renderer {
   }
 
   private onEvent(e: MatchEvent) {
-    if (e.type === 'shot' || e.type === 'hit') this.characters.onEvent(e);
+    if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
     if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
     if ((e.type === 'shot' || e.type === 'explosion') && this.curr)
@@ -506,7 +524,7 @@ export class Renderer {
     if (snap) for (const p of snap.players) {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
       const m = motion(p.id, this.motion);
-      if (m) { this.feet[nf].copy(m.pos); nf++; }
+      if (m) { this.feet[nf].copy(m.pos); nf++; if (!this.replay) this.world.footprints.step(p.id, m.pos); }
     }
     if (this.debugView) { this.camera.position.copy(this.debugView.pos); this.camera.lookAt(this.debugView.look); this.camera.updateMatrixWorld(); }
     this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
