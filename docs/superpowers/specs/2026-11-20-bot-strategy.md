@@ -198,13 +198,12 @@ score layer (`Bot.drive`) on top of the goal scores makes them seek the win, sam
   three walls (3 metal Hard/PRO, 3 wood Medium): bridge/attack/seal +0.35, shopping for push gear (pistol, ammo,
   scaffolds, wood/metal/steel, charge) ≥ 0.75, the generator only while still short of the push gear (or ≥ $200),
   fortifying/cutting/looting/idle banking scaled down; with nothing better the default goal is attack.
-- **No plinking**: a fight across water past 30 m isn't a goal, and past 40 m they hold fire at someone on another
-  island unless it's the target they can walk to or someone crossing toward them (save ammo and position); on the
+- **No plinking**: a fight across water past 30 m isn't a goal (shots still go out while doing something else); on the
   same island the preferred range is capped at 20 m and a gap over 8 m is closed at a sprint with a little weave.
   Shot at from far across the water, they keep moving instead of running home.
-- **Push healthy, seal when it sticks**: the push bonus needs HP + shield ≥ 60; sealing gets it only while the owner
-  is down or away (owner home → kill first, then seal in the respawn window); a seal already started (some of the
-  target's doors plugged, me within 14 m) gets +0.8 so it gets finished.
+- **Finish a seal**: a seal already started (some of the target's doors plugged, me within 14 m) gets +0.8 so it gets
+  finished. (Tried and dropped, both made 1v1s longer: holding fire past 40 m, and pushing only at ≥ 60 HP + shield /
+  sealing only with the owner down or away.)
 - **Home only for a threat**: guard needs an intruder seen on my island in the last 4 s (defend = plugs in my doors,
   as before).
 - **Retreat only when losing**: no disengage while ahead in HP + shield of the enemy in front of me; a retreat

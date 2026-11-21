@@ -95,12 +95,8 @@ export const DRIVE = {
   push: 0.35,
   /** Some doors of the target bunker already plugged and I'm within this: finishing the seal gets this bonus. */
   finishSealNear: 14, finishSeal: 0.8,
-  /** Health + shield needed to get the push bonus (below it, heal/shield up first). */
-  pushHp: 60,
   shopForPush: 0.75,
   plinkRange: 30,
-  /** Hold fire past this at someone on another island who isn't my reachable target or crossing toward me. */
-  holdFireRange: 40,
   maxRange: 20,
   sprintGap: 8,
   reengageSec: 20,
@@ -287,7 +283,7 @@ export class Bot {
     } else if (enemy) {
       const r = this.aim.track(now, dt, eye, add(enemy.pos, v3(0, CHEST, 0)), enemy.id, cur);
       look = r;
-      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist) && !this.plinking(ctx, enemy);
+      fire = r.ready && r.onTarget && gunReady(ctx.enemyDist);
     } else if (nade) {
       look = turnToward(cur, nade, TURN_RATE, dt);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
@@ -836,16 +832,6 @@ export class Bot {
     return best;
   }
 
-  /**
-   * A long shot across the water at someone who can't reach me and isn't coming: skilled players save the ammo (and
-   * their position) for the fight they're heading to. Easy players blaze away.
-   */
-  private plinking(c: Ctx, e: PlayerState): boolean {
-    if (this.difficulty === 'easy' || c.enemyDist <= DRIVE.holdFireRange) return false;
-    const theirs = islandAt(c.view.map, e.pos);
-    return theirs !== c.on && !(theirs < 0 && this.crossing(c)) && !(c.rival && e.id === c.rival.id && c.reach);
-  }
-
   /** On an offensive plan: gun in hand and either the money for a few walls or enough time gone by. */
   private offensive(c: Ctx): boolean {
     const me = c.me;
@@ -890,9 +876,6 @@ export class Bot {
         // Halfway through sealing a bunker I'm standing at: finish the job before anything but staying alive.
         if (g === 'seal' && c.rivalIsl && c.openDoors.length < c.rivalIsl.bunker.doorways.length &&
           dist2D(me.pos, c.rivalIsl.bunker.center) < DRIVE.finishSealNear) return s + DRIVE.finishSeal;
-        // Push in healthy (patch up first), and seal when it sticks: owner down or away; with them home, kill first.
-        if (me.hp + me.shield < DRIVE.pushHp) return s;
-        if (g === 'seal' && c.rival?.alive && this.mem.recent(c.rival.id, now, 10)?.island === c.rival.island) return s;
         return s + DRIVE.push;
       }
       case 'shop': {
