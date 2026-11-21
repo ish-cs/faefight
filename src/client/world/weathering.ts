@@ -69,7 +69,8 @@ const RAW = new WeakMap<THREE.Material, Raw>();
 
 export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) {
   const raw: Raw = RAW.get(m) ?? {
-    base: (m.colorNode as V3 | null) ?? (vec3(m.color.r, m.color.g, m.color.b) as V3),
+    // a colorNode replaces material.color AND .map, so a textured material's map is folded into the base here
+    base: (m.colorNode as V3 | null) ?? (m.map ? texture(m.map).rgb.mul(vec3(m.color.r, m.color.g, m.color.b)) : vec3(m.color.r, m.color.g, m.color.b)) as V3,
     rough: (m.roughnessNode as F | null) ?? float(m.roughness),
     metal: (m.metalnessNode as F | null) ?? float(m.metalness),
     opts: o,
@@ -123,6 +124,8 @@ export function weather(m: THREE.MeshStandardNodeMaterial, o: WeatherOpts = {}) 
     else rough = mix(rough, float(0.8), chips);
   }
   m.colorNode = col;
+  // keep the map's alpha (alpha-tested labels, stencils) once colorNode has taken over from .map
+  if (m.map && !m.opacityNode && (m.alphaTest > 0 || m.transparent)) m.opacityNode = texture(m.map).a;
   m.roughnessNode = rough.clamp(0.04, 1);
   m.metalnessNode = metal.clamp(0, 1);
   return m;

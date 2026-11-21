@@ -62,7 +62,7 @@ function make() {
     frond: frondMaterial(),
     bark: std('bark', { map: barkTex(), roughness: 0.95 }),
     /** painted steel (crane, drums, trims): repainted rusty-paint set, triplanar (the plain boxes have 0..1 UVs) */
-    paint: weather(pbrMaterial('paint', 'painted_metal', { lum: 0.069, lumPow: 0.3, triplanar: 0.35, normalScale: 0.1, roughMul: 0.9, metalness: 0.2 }), { rust: 0.4, edge: 0.55, grime: 0.5, streaks: 0.5 }),
+    paint: weather(pbrMaterial('paint', 'painted_metal', { lum: 0.069, lumPow: 0.3, triplanar: 0.35, normalScale: 0.1, roughMul: 0.9, metalness: 0.2 }), { rust: 0.6, edge: 0.75, grime: 0.6, streaks: 0.55 }),
     /** tarps, plates, generic painted parts: fine canvas weave + grime */
     matte: weather(pbrMaterial('matte', 'linen', { lum: 0.4, lumPow: 0.35, uvScale: 3, normalScale: 0.45, roughAdd: 0.15, metalness: 0, untile: false }), { grime: 0.45, streaks: 0.3, edge: 0.25, chip: 'light' }),
     corr: weather(pbrMaterial('corr', 'corrugated', { lum: 0.44, uvScale: [2, 1], normalScale: 1.2, metalness: 0.35, roughMul: 0.95, macro: 0.12, untile: 'shift' }), { rust: 0.35, edge: 0.4, streaks: 0.75, grime: 0.45 }),
