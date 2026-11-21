@@ -93,6 +93,10 @@ export const DRIVE = {
   offenseAt: { easy: Infinity, medium: 300, hard: 240, pro: 240 } as Record<Difficulty, number>,
   offenseCash: { easy: Infinity, medium: 3 * PIECES.wood.price, hard: 3 * PIECES.metal.price, pro: 3 * PIECES.metal.price } as Record<Difficulty, number>,
   push: 0.35,
+  /** Some doors of the target bunker already plugged and I'm within this: finishing the seal gets this bonus. */
+  finishSealNear: 14, finishSeal: 0.8,
+  /** Health + shield needed to get the push bonus (below it, heal/shield up first). */
+  pushHp: 60,
   shopForPush: 0.75,
   plinkRange: 30,
   /** Hold fire past this at someone on another island who isn't my reachable target or crossing toward me. */
@@ -881,7 +885,16 @@ export class Bot {
     }
     if (!this.offensive(c)) return s;
     switch (g) {
-      case 'bridge': case 'attack': case 'seal': return s > 0 ? s + DRIVE.push : s;
+      case 'bridge': case 'attack': case 'seal': {
+        if (s <= 0) return s;
+        // Halfway through sealing a bunker I'm standing at: finish the job before anything but staying alive.
+        if (g === 'seal' && c.rivalIsl && c.openDoors.length < c.rivalIsl.bunker.doorways.length &&
+          dist2D(me.pos, c.rivalIsl.bunker.center) < DRIVE.finishSealNear) return s + DRIVE.finishSeal;
+        // Push in healthy (patch up first), and seal when it sticks: owner down or away; with them home, kill first.
+        if (me.hp + me.shield < DRIVE.pushHp) return s;
+        if (g === 'seal' && c.rival?.alive && this.mem.recent(c.rival.id, now, 10)?.island === c.rival.island) return s;
+        return s + DRIVE.push;
+      }
       case 'shop': {
         if (!c.homeReach) return s;
         const plan = this.plan(c);
