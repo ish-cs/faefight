@@ -355,14 +355,17 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       note(k, out, t + 0.45, 392, 1.0, 0.2);
       return 0.45 + note(k, out, t + 0.45, 587, 1.0, 0.2);
     case 'alarm': {
+      // Bunker threat escalates: kind '1' = one whoop, '2' = two, higher; no kind (sealed) = the full three.
+      const n = cue.kind === '1' ? 1 : cue.kind === '2' ? 2 : 3;
+      const f0 = cue.kind === '1' ? 420 : 470;
       let len = 0;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < n; i++) {
         const at = t + i * 0.6;
         for (const det of [1, 1.007]) {
           const o = k.ctx.createOscillator();
           o.type = 'sawtooth';
-          o.frequency.setValueAtTime(470 * det, at);
-          o.frequency.linearRampToValueAtTime(400 * det, at + 0.45);
+          o.frequency.setValueAtTime(f0 * det, at);
+          o.frequency.linearRampToValueAtTime((f0 - 70) * det, at + 0.45);
           const f = k.ctx.createBiquadFilter();
           f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 1;
           const g = k.ctx.createGain();
@@ -377,6 +380,9 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       }
       return len;
     }
+    case 'ping': // soft two-note chime (generator ready)
+      partials(k, out, t, 880, 0.35, [[1, 1, 0.18], [2, 0.25, 0.12]]);
+      return 0.12 + partials(k, out, t + 0.12, 1320, 0.5, [[1, 1, 0.16], [2, 0.2, 0.1]]);
     case 'tick':
       if (cue.kind === 'urgent') {
         tone(k, out, t, { f0: 1500, dur: 0.06, peak: 0.45, attack: 0.002 });
@@ -388,6 +394,14 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       [784, 988, 1175, 1568].forEach((f, i) => { len = i * 0.09 + partials(k, out, t + i * 0.09, f, 0.22, [[1, 1, 0.6], [2, 0.2, 0.3]]); });
       return len;
     }
+    case 'thunder':
+      if (cue.kind === 'near') {
+        // Close strike: a ripping crack, then the boom.
+        noise(k, out, t, { type: 'highpass', freq: 1800, dur: 0.12, peak: 1.0, attack: 0.001 });
+        noise(k, out, t + 0.02, { type: 'bandpass', freq: 700 * p, q: 0.6, dur: 0.5, peak: 0.9 });
+      }
+      noise(k, out, t, { type: 'lowpass', freq: 380 * p, freqEnd: 60, dur: 2.8 + k.rnd() * 1.5, peak: 1.2, attack: cue.kind === 'near' ? 0.01 : 0.25, rate: 0.5 });
+      return 0.3 + noise(k, out, t + 0.3 + k.rnd() * 0.4, { type: 'lowpass', freq: 160, freqEnd: 45, dur: 3, peak: 0.8, attack: 0.3, rate: 0.4 });
     case 'horn':
       note(k, out, t, 233, 2.2, 0.22, 'sawtooth', 1400);
       note(k, out, t, 235.5, 2.2, 0.22, 'sawtooth', 1400);

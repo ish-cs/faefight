@@ -22,9 +22,15 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
   | { type: 'debug'; cmd: 'hp'; hp: number }
+  | { type: 'debug'; cmd: 'time'; t: number }
+  | { type: 'debug'; cmd: 'strike'; x: number; z: number }
   | { type: 'debug'; cmd: 'eliminate' | 'kill'; playerId: number }
   | { type: 'debug'; cmd: 'shield'; shield: number; id?: number }
   | { type: 'debug'; cmd: 'potionShop'; x: number; z: number }
+  /** Alert testing: a steel plate on doorway `door` of the human's bunker (placed by `owner`), removing one, generator cash. */
+  | { type: 'debug'; cmd: 'plugDoor'; door: number; owner: number }
+  | { type: 'debug'; cmd: 'removePiece'; id: number }
+  | { type: 'debug'; cmd: 'genStored'; stored: number }
   /** Perf testing: n pieces on rings around (x, z), placement rules skipped. */
   | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number }
   | { type: 'debug'; cmd: 'place'; kind: PieceKind; x: number; z: number; rotY: number; up: number; owner: number }

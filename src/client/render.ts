@@ -1,15 +1,17 @@
 import { CASING_CAP } from './world/casings';
 import * as THREE from 'three/webgpu';
-import { GENERATOR_MAX_LEVEL, PLAYER } from '../sim/constants';
+import { GENERATOR_MAX_LEVEL, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
-import type { MatchEvent, PieceKind, Snapshot, Vec3 } from '../sim/types';
+import type { MatchEvent, PieceKind, Snapshot, Vec3, WeaponKind } from '../sim/types';
+import { buildMuzzleFlash, buildWeapon } from './characters/weapons';
 import { CharacterSystem, type Motion } from './characters/avatar';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
-import { PotionSellers } from './world/potionSeller';
-import { LootView } from './lootView';
+import { PotionSellers, stall } from './world/potionSeller';
+import { StormFx } from './world/storm';
+import { LootView, lootWarmObjects } from './lootView';
 
 export { pieceGeometry };
 import { ISLAND_COLORS } from './colors';
@@ -68,6 +70,8 @@ export class Renderer {
   private pipOn = new THREE.MeshBasicNodeMaterial({ color: boosted(0xffd23d) });
   private pipOff = new THREE.MeshBasicNodeMaterial({ color: 0x4a525c });
 
+  /** Sudden-death weather: storm wall, rain, telegraph markers, lightning (world/storm.ts). */
+  storm!: StormFx;
   /** Tracers, muzzle light/smoke, shell casings, hit sparks, projectiles, explosion flashes. */
   gunFx!: GunFx;
   private snapArrived = performance.now();
@@ -101,6 +105,7 @@ export class Renderer {
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
+    r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
     r.resize();
     return r;
   }
@@ -128,6 +133,7 @@ export class Renderer {
     this.humanId = humanId;
     this.world.setMap(def, ISLAND_COLORS);
     const map = def.islands;
+    this.storm.setMap(map, def.center);
     this.gunFx.warmUp([this.boomMat]);
     for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);
     const h = PROP_HALF.generator;
@@ -192,6 +198,7 @@ export class Renderer {
       pips.forEach((m, i) => { m.material = i < level ? this.pipOn : this.pipOff; });
     });
     this.potionSellers.sync(snap.potionShops);
+    this.storm.sync(snap.storm, snap.suddenDeath);
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
   }
@@ -213,6 +220,9 @@ export class Renderer {
     } else if (e.type === 'explosion') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.addBoom(pos, e.data.kind === 'charge' ? 2 : e.data.kind === 'rocket' ? 3.6 : 4);
+    } else if (e.type === 'lightning') {
+      const pos = e.data.pos as Vec3 | undefined;
+      if (pos) this.storm.strike(pos, this.camera);
     }
   }
 
@@ -226,6 +236,29 @@ export class Renderer {
     m.scale.setScalar(0.2);
     this.scene.add(m);
     this.fx.push({ mesh: m, mat, born: performance.now(), life: 450, grow: radius });
+  }
+
+  /**
+   * Loading warm-up (warmup.ts): one of each thing that only appears mid-match — every gun model and the muzzle
+   * flash (third person), an explosion fireball, a loot bag, the build ghost material, a potion stall — in a row.
+   */
+  warmProps(): THREE.Group {
+    const g = new THREE.Group();
+    g.name = 'warmProps';
+    const add = (o: THREE.Object3D) => { o.position.x = g.children.length * 0.8; g.add(o); };
+    for (const kind of Object.keys(WEAPONS) as WeaponKind[]) {
+      const w = buildWeapon(kind);
+      if (w) add(w);
+    }
+    const flash = buildMuzzleFlash();
+    flash.visible = true;
+    add(flash);
+    add(new THREE.Mesh(this.boomGeo, this.boomMat));
+    for (const o of lootWarmObjects()) add(o);
+    add(new THREE.Mesh(this.ghostLinkGeo, this.ghostMat));
+    add(stall());
+    g.traverse((o) => { o.frustumCulled = false; });
+    return g;
   }
 
   geometryFor(kind: PieceKind) {
@@ -355,6 +388,7 @@ export class Renderer {
       if (this.playerPos(p.id, this.feet[nf])) nf++;
     }
     this.gunFx.casings.limit = CASING_CAP[this.world.sky.quality];
+    this.storm.frame(dt, this.camera, this.world.sky.quality, this.playT ?? snap?.time ?? 0);
     this.world.render(this.waterY, this.camera.position, this.feet.slice(0, nf)); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }

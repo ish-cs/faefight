@@ -7,9 +7,9 @@ import type { Snapshot, Vec3 } from '../../sim/types';
  */
 
 export const RECAP_WINDOW_SEC = 10;
-export type DamageSource = 'bullets' | 'melee' | 'explosion' | 'fire' | 'fall' | 'water' | 'other';
+export type DamageSource = 'bullets' | 'melee' | 'explosion' | 'fire' | 'fall' | 'water' | 'storm' | 'lightning' | 'other';
 export const SOURCE_LABEL: Record<DamageSource, string> = {
-  bullets: 'Bullets', melee: 'Melee', explosion: 'Explosions', fire: 'Fire', fall: 'Fall', water: 'Water', other: 'Other',
+  bullets: 'Bullets', melee: 'Melee', explosion: 'Explosions', fire: 'Fire', fall: 'Fall', water: 'Water', storm: 'Storm', lightning: 'Lightning', other: 'Other',
 };
 
 export type Recap = {
@@ -37,6 +37,7 @@ export function sourceOf(weapon: unknown, by: unknown): DamageSource {
   if (typeof weapon === 'string' && BLASTS.has(weapon)) return 'explosion';
   if (weapon === 'fall') return 'fall';
   if (weapon === 'fire') return 'fire';
+  if (weapon === 'storm' || weapon === 'lightning') return weapon;
   return typeof by === 'number' ? 'explosion' : 'other';
 }
 
@@ -55,7 +56,7 @@ export class RecapTracker {
         const amount = Number(d.amount) || 0;
         if (amount > 0) this.hits.push({ t: e.t, by: typeof d.by === 'number' ? d.by : null, amount, source: sourceOf(d.weapon, d.by), weapon: typeof d.weapon === 'string' ? d.weapon : null, part: d.part });
       } else if (e.type === 'kill' && d.victim === humanId) {
-        recap = this.build(s, humanId, typeof d.killer === 'number' ? d.killer : null, d.inWater === true, e.t);
+        recap = this.build(s, humanId, typeof d.killer === 'number' ? d.killer : null, d.inWater === true, e.t, d.cause === 'storm' || d.cause === 'lightning' ? d.cause : null);
       }
     }
     const me = s.players.find((p) => p.id === humanId);
@@ -65,7 +66,7 @@ export class RecapTracker {
     return recap;
   }
 
-  private build(s: Snapshot, humanId: number, killerId: number | null, inWater: boolean, t: number): Recap {
+  private build(s: Snapshot, humanId: number, killerId: number | null, inWater: boolean, t: number, cause: 'storm' | 'lightning' | null = null): Recap {
     const recent = this.hits.filter((h) => h.t >= t - RECAP_WINDOW_SEC);
     const sums = new Map<DamageSource, number>();
     for (const h of recent) sums.set(h.source, (sums.get(h.source) ?? 0) + h.amount);
@@ -80,12 +81,15 @@ export class RecapTracker {
     const hidden = k ? !!s.hidden?.includes(k.id) : true;
     let weapon: string | null = inWater ? 'water' : kLast?.weapon ?? (k && !hidden && k.equipped !== 'fists' ? k.equipped : null) ?? lastHit?.weapon ?? null;
     if (!k && !inWater && (lastHit?.source === 'fall' || lastHit?.source === 'fire')) weapon = lastHit.source;
+    if (!k && !inWater && cause) weapon = cause;
     const distance = k && !hidden && k.alive && this.lastPos ? Math.round(Math.hypot(k.pos.x - this.lastPos.x, k.pos.y - this.lastPos.y, k.pos.z - this.lastPos.z)) : null;
     const title = k ? `Killed by ${k.name}`
       : inWater ? 'You drowned'
       : self ? 'You blew yourself up'
       : weapon === 'fall' ? 'You fell to your death'
       : weapon === 'fire' ? 'You burned to death'
+      : weapon === 'storm' ? 'The storm got you'
+      : weapon === 'lightning' ? 'Struck by lightning'
       : 'You died';
     this.hits = [];
     return {

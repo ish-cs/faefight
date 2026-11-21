@@ -88,6 +88,8 @@ export type PlayerState = {
   /** Set while trapped in a sealed bunker after respawning: eliminated at this time unless out. */
   breakoutUntil: number | null;
   invulnUntil: number;
+  /** How many of your own bunker's 3 doorways no one can walk out through (3 = sealed). Only sent to you. */
+  doorsBlocked?: number;
   /** Just respawned and hasn't left the bunker or attacked yet (anti spawn-camping). */
   spawnProtected?: boolean;
   /** Sim time of the last damage taken (regen waits after this). */
@@ -139,7 +141,7 @@ export type LootBag = { id: number; pos: Vec3; inv: Inventory; noPickup?: { id: 
 
 export type MatchEventType =
   | 'kill' | 'sealed' | 'unsealed' | 'eliminated' | 'win' | 'suddenDeath' | 'trapped' | 'escaped'
-  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect';
+  | 'hit' | 'shot' | 'explosion' | 'placed' | 'destroyed' | 'pieceHit' | 'dry' | 'cosmeticBroken' | 'centerCollect' | 'lightning';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -165,6 +167,8 @@ export type Snapshot = {
   sealed: boolean[];
   waterY: number;
   suddenDeath: boolean;
+  /** Sudden-death storm (null/absent before it starts). Optional so hand-built snapshots can omit it. */
+  storm?: StormSnap | null;
   winner: number | null;
   /** Potion seller NPCs (anyone may buy there). Optional so hand-built snapshots (tests, tools) can omit it. */
   potionShops?: PotionShop[];
@@ -182,6 +186,11 @@ export type Snapshot = {
 
 export type PotionShop = { id: number; pos: Vec3 };
 
+/** A lightning strike due to land at (x, z) at sim time `at` (shown from `at - STORM.telegraphSec`). */
+export type StormStrike = { x: number; z: number; at: number };
+/** Sudden-death storm as clients see it: ring centre and radius, and the strikes being telegraphed. */
+/** `rf`: the final circle the ring closes to. */
+export type StormSnap = { x: number; z: number; r: number; rf: number; strikes: StormStrike[] };
 /** Per-player match totals for the end-screen summary (sent only once the match has a result). */
 export type PlayerStats = {
   id: number;

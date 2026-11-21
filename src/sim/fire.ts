@@ -205,7 +205,7 @@ export class Fire {
   }
 
   /** Advance fire (call every tick; work happens on the FIRE.stepSec beat). Returns events (destroyed pieces, hits, broken props). */
-  tick(now: number, waterY: number, ctx: FireCtx): MatchEvent[] {
+  tick(now: number, waterY: number, ctx: FireCtx, raining = false): MatchEvent[] {
     const out: MatchEvent[] = [];
     // Pieces gone some other way (shot out, collapsed) stop burning.
     for (const id of this.burns.keys()) if (!ctx.pieces.has(id)) this.burns.delete(id);
@@ -213,6 +213,12 @@ export class Fire {
     if (now + 1e-9 < this.nextStep) return out;
     this.nextStep = now + FIRE.stepSec;
     const step = FIRE.stepSec;
+    if (raining) {
+      // Rain: every fire's remaining burn shrinks faster.
+      const wet = step * (FIRE.rainMult - 1);
+      for (const b of this.burns.values()) b.until -= wet;
+      for (const f of this.patches) f.until -= wet;
+    }
 
     // Burn damage, burn-out, and the sea putting fires out (sudden-death tide).
     for (const [id, b] of [...this.burns]) {

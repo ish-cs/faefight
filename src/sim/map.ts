@@ -64,9 +64,8 @@ export type MapDef = {
   template: MapTemplate;
   name: string;
   seed: number;
-  /** Kill plane (sea) and its sudden-death rise rate (m/s). */
+  /** Kill plane (sea); constant all match (sudden death brings the storm, not a tide). */
   waterY: number;
-  tideRate: number;
   islands: IslandLayout[];
   center: CenterIsland;
   statics: StaticBox[];
@@ -206,7 +205,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
 
   return {
     template, name: MAP_NAMES[template], seed,
-    waterY: MAP.waterY, tideRate: MAP.tideRate,
+    waterY: MAP.waterY,
     islands, center, statics, cosmetics,
   };
 }

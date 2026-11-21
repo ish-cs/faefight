@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { FIRE, PIECES } from '../../src/sim/constants';
+import { FIRE, LIFECYCLE, PIECES } from '../../src/sim/constants';
 import { burnDownSec, piecesTouch, steerFromFire } from '../../src/sim/fire';
 import { Match } from '../../src/sim/match';
 import type { IslandLayout } from '../../src/sim/map';
@@ -103,6 +103,19 @@ describe('fire', () => {
     expect(m.debugFire().burning).toEqual([]);
     // A burnt-out piece is charred: a neighbour can't relight it, an explosion can.
     expect(m.debugIgnite(bags)).toBe(true);
+  });
+
+  test('storm rain puts a fire out 2.5x sooner: a full wood wall survives charred', async () => {
+    const { m, yaw, at } = await setup();
+    m.debugSetTime(LIFECYCLE.suddenDeathAt);
+    m.tick(idle()); // sudden death: the storm (and its rain) starts
+    const id = m.debugPlacePiece('wood', at(4, 0), yaw);
+    m.debugIgnite(id);
+    run(m, FIRE.pieces.wood!.burnSec[1] / FIRE.rainMult + 1);
+    expect(m.debugFire().burning).toEqual([]);
+    const p = piece(m, id)!;
+    expect(p.hp).toBeGreaterThan(0);
+    expect(p.hp).toBeLessThan(PIECES.wood.hp);
   });
 
   test('a player against a burning wall takes 6 HP/s, shield first, and the hit says fire', async () => {

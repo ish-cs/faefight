@@ -10,50 +10,94 @@
       .ld {
         position: fixed; inset: 0; z-index: 90; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center;
         font-family: "Helvetica Neue", Helvetica, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; color: #f3f5f7;
-        background: radial-gradient(1200px 700px at 50% 120%, #0b6fa8 0%, #0a2a45 45%, #07131f 100%);
-        transition: opacity 0.45s ease; user-select: none;
+        /* dusk sky over the sea; radial gradients only (no blur filters: the GPU is busy compiling shaders behind this) */
+        background:
+          radial-gradient(60vmax 40vmax at 50% 64%, rgba(255, 176, 92, 0.30) 0%, rgba(255, 140, 70, 0.10) 35%, transparent 70%),
+          radial-gradient(90vmax 60vmax at 12% -10%, rgba(47, 208, 200, 0.22) 0%, transparent 60%),
+          radial-gradient(80vmax 60vmax at 95% 110%, rgba(29, 111, 214, 0.28) 0%, transparent 60%),
+          linear-gradient(180deg, #06101b 0%, #0a2238 46%, #123a5a 64%, #0a2a45 66%, #07131f 100%);
+        transition: opacity 0.5s ease; user-select: none;
         pointer-events: none; /* never eats clicks meant for the game underneath */
       }
       .ld.hidden { opacity: 0; pointer-events: none; }
+      .ld.hidden .ld-center { transform: translateY(-4vh) scale(1.04); }
       .ld.gone { display: none; }
-      .ld-glow { position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%; filter: blur(60px); opacity: 0.32; animation: ld-drift 18s ease-in-out infinite alternate; }
-      .ld-glow.a { background: #2fd0c8; left: -20vmax; top: -30vmax; }
-      .ld-glow.b { background: #1d6fd6; right: -25vmax; bottom: -35vmax; animation-duration: 23s; animation-direction: alternate-reverse; opacity: 0.26; }
-      @keyframes ld-drift { to { transform: translate(12vmax, 8vmax) scale(1.1); } }
-      .ld-waves { position: absolute; left: 0; right: 0; bottom: 0; height: 26vh; opacity: 0.5; }
-      .ld-waves svg { position: absolute; bottom: 0; width: 200%; height: 100%; animation: ld-wave 14s linear infinite; }
-      .ld-waves svg.back { animation-duration: 22s; opacity: 0.55; bottom: 2vh; }
+      /* horizon: sun, an island with palms, two swell layers */
+      .ld-sun { position: absolute; left: 50%; top: 64%; width: 16vmin; height: 16vmin; margin: -8vmin 0 0 -8vmin; border-radius: 50%;
+        background: radial-gradient(circle, #ffd59a 0%, #ffb35c 45%, rgba(255, 150, 70, 0) 72%); opacity: 0.55; animation: ld-sun 6s ease-in-out infinite alternate; }
+      @keyframes ld-sun { to { transform: scale(1.08); opacity: 0.7; } }
+      .ld-isle { position: absolute; left: 62%; top: calc(64% - 7.2vmin); width: 30vmin; height: 8vmin; opacity: 0.85; }
+      .ld-waves { position: absolute; left: 0; right: 0; top: 65.5%; bottom: 0; }
+      .ld-waves svg { position: absolute; top: 0; width: 200%; height: 100%; animation: ld-wave 16s linear infinite; }
+      .ld-waves svg.back { animation-duration: 26s; opacity: 0.7; }
+      .ld-waves svg.front { top: 22%; animation-duration: 12s; }
       @keyframes ld-wave { to { transform: translateX(-50%); } }
-      .ld-center { position: relative; display: flex; flex-direction: column; align-items: center; transform: translateY(-4vh); }
-      .ld-mark { font-size: clamp(44px, 9vw, 84px); font-weight: 800; letter-spacing: -2px; line-height: 1; text-shadow: 0 6px 40px rgba(47, 208, 200, 0.35); }
+      .ld-glint { position: absolute; left: 50%; top: 64%; width: 26vmin; height: 14vh; margin-left: -13vmin;
+        background: repeating-linear-gradient(180deg, rgba(255, 200, 130, 0.22) 0 2px, transparent 2px 9px);
+        -webkit-mask: radial-gradient(50% 100% at 50% 0%, #000 0%, transparent 100%); mask: radial-gradient(50% 100% at 50% 0%, #000 0%, transparent 100%);
+        animation: ld-glint 3s ease-in-out infinite alternate; }
+      @keyframes ld-glint { to { opacity: 0.45; transform: scaleX(0.85); } }
+      .ld-center { position: relative; display: flex; flex-direction: column; align-items: center; transform: translateY(-9vh); transition: transform 0.5s ease; }
+      .ld-mark { font-size: clamp(44px, 9vw, 88px); font-weight: 800; letter-spacing: -2px; line-height: 1; text-shadow: 0 6px 40px rgba(47, 208, 200, 0.35); }
       /* Wordmark as generated content: keeps the menu's "FAEFight" heading the only text match on the page. */
       .ld-mark::before { content: "FAE"; }
       .ld-mark::after { content: "Fight"; color: #3ddc84; }
-      .ld-tag { margin-top: 10px; font-size: 13px; letter-spacing: 3px; text-transform: uppercase; color: rgba(243, 245, 247, 0.55); }
-      .ld-bar { margin-top: 44px; width: min(360px, calc(100vw - 64px)); height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
-      .ld-fill { height: 100%; width: 0; border-radius: 2px; background: linear-gradient(90deg, #2fd0c8, #3ddc84); box-shadow: 0 0 14px rgba(61, 220, 132, 0.7); }
-      .ld-meta { margin-top: 12px; width: min(360px, calc(100vw - 64px)); display: flex; justify-content: space-between; font-size: 12px; color: rgba(243, 245, 247, 0.6); font-variant-numeric: tabular-nums; }
-      .ld-tip { position: absolute; bottom: 7vh; left: 16px; right: 16px; text-align: center; font-size: 14px; color: rgba(243, 245, 247, 0.78); transition: opacity 0.4s; }
+      .ld-tag { margin-top: 10px; font-size: 12.5px; letter-spacing: 3px; text-transform: uppercase; color: rgba(243, 245, 247, 0.55); text-align: center; }
+      .ld-panel { margin-top: 40px; width: min(420px, calc(100vw - 48px)); }
+      .ld-bar { position: relative; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.10); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05); overflow: hidden; }
+      .ld-fill { position: relative; height: 100%; width: 0; border-radius: 3px; background: linear-gradient(90deg, #2fd0c8, #3ddc84); box-shadow: 0 0 14px rgba(61, 220, 132, 0.65); overflow: hidden; }
+      /* moving sheen: shows the load is alive even while one long step runs */
+      .ld-fill::after { content: ""; position: absolute; inset: 0; width: 60px; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent); animation: ld-sheen 1.4s ease-in-out infinite; }
+      @keyframes ld-sheen { from { transform: translateX(-60px); } to { transform: translateX(420px); } }
+      .ld-meta { margin-top: 12px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 13px; color: rgba(243, 245, 247, 0.78); font-variant-numeric: tabular-nums; }
+      .ld-pct { font-weight: 700; color: #f3f5f7; }
+      .ld-steps { margin-top: 16px; display: flex; justify-content: space-between; gap: 6px; }
+      .ld-steps:empty { display: none; }
+      .ld-step { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: rgba(243, 245, 247, 0.38); transition: color 0.3s; }
+      .ld-step i { width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, 0.16); transition: background 0.3s, box-shadow 0.3s; }
+      .ld-step.on { color: rgba(243, 245, 247, 0.85); }
+      .ld-step.on i { background: #2fd0c8; animation: ld-pulse 1s ease-in-out infinite alternate; }
+      .ld-step.done { color: rgba(61, 220, 132, 0.85); }
+      .ld-step.done i { background: #3ddc84; box-shadow: 0 0 8px rgba(61, 220, 132, 0.8); }
+      @keyframes ld-pulse { from { box-shadow: 0 0 0 0 rgba(47, 208, 200, 0.7); } to { box-shadow: 0 0 0 5px rgba(47, 208, 200, 0); } }
+      .ld-tip { position: absolute; bottom: 6vh; left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); box-sizing: border-box; padding: 14px 18px;
+        text-align: center; font-size: 14px; line-height: 1.45; color: rgba(243, 245, 247, 0.88); border-radius: 14px;
+        background: rgba(7, 19, 31, 0.55); border: 1px solid rgba(255, 255, 255, 0.08); transition: opacity 0.4s; }
       .ld-tip b { display: block; margin-bottom: 6px; font-size: 10.5px; letter-spacing: 2px; color: #3ddc84; }
-      .ld.boot .ld-tip { opacity: 0; }
+      .ld.boot .ld-tip, .ld.boot .ld-steps { display: none; }
       /* All loading-screen text is generated content (screen readers get aria-valuetext), so it never
          shadows real UI text for text queries while the screen is still fading out. */
       .ld [data-text]::before { content: attr(data-text); }
-      @media (prefers-reduced-motion: reduce) { .ld-glow, .ld-waves svg { animation: none; } }
+      @media (max-height: 560px) { .ld-tip { display: none; } }
+      @media (prefers-reduced-motion: reduce) { .ld-sun, .ld-glint, .ld-waves svg, .ld-fill::after, .ld-step.on i { animation: none; } }
     </style>
   </head>
   <body>
     <div id="loading" class="ld boot" data-testid="loading" role="progressbar" aria-label="Loading FAEFight" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-      <div class="ld-glow a"></div><div class="ld-glow b"></div>
+      <div class="ld-sun"></div>
+      <svg class="ld-isle" viewBox="0 0 300 80" preserveAspectRatio="xMidYMax meet" aria-hidden="true">
+        <g fill="#061827">
+          <path d="M20 80 Q70 52 130 50 Q190 48 232 62 Q262 70 288 80Z"/>
+          <rect x="150" y="40" width="34" height="14" rx="2"/>
+          <path d="M96 54 Q100 30 92 8" stroke="#061827" stroke-width="4" fill="none"/>
+          <path d="M92 9 Q78 2 64 12 Q80 8 92 11 Q86 -2 104 0 Q96 4 93 10 Q110 6 118 18 Q104 10 93 12Z"/>
+          <path d="M206 58 Q212 40 204 24" stroke="#061827" stroke-width="3.5" fill="none"/>
+          <path d="M204 25 Q192 18 182 26 Q194 23 204 26 Q200 14 214 15 Q207 19 205 25 Q219 22 226 32 Q214 26 205 27Z"/>
+        </g>
+      </svg>
+      <div class="ld-glint"></div>
       <div class="ld-waves">
-        <svg class="back" viewBox="0 0 1600 200" preserveAspectRatio="none"><path fill="#0d4f7a" d="M0 120 Q100 80 200 120 T400 120 T600 120 T800 120 T1000 120 T1200 120 T1400 120 T1600 120 V200 H0Z"/></svg>
-        <svg viewBox="0 0 1600 200" preserveAspectRatio="none"><path fill="#0a3556" d="M0 140 Q100 110 200 140 T400 140 T600 140 T800 140 T1000 140 T1200 140 T1400 140 T1600 140 V200 H0Z"/></svg>
+        <svg class="back" viewBox="0 0 1600 200" preserveAspectRatio="none"><path fill="#0b3554" d="M0 20 Q100 0 200 20 T400 20 T600 20 T800 20 T1000 20 T1200 20 T1400 20 T1600 20 V200 H0Z"/></svg>
+        <svg class="front" viewBox="0 0 1600 200" preserveAspectRatio="none"><path fill="#08263f" d="M0 30 Q100 6 200 30 T400 30 T600 30 T800 30 T1000 30 T1200 30 T1400 30 T1600 30 V200 H0Z"/></svg>
       </div>
       <div class="ld-center">
         <div class="ld-mark" aria-hidden="true"></div>
         <div class="ld-tag" data-text="Islands · Bunkers · Seal them in"></div>
-        <div class="ld-bar"><div class="ld-fill"></div></div>
-        <div class="ld-meta"><span class="ld-label" data-text="Loading"></span><span class="ld-pct" data-text="0%"></span></div>
+        <div class="ld-panel">
+          <div class="ld-bar"><div class="ld-fill"></div></div>
+          <div class="ld-meta"><span class="ld-label" data-text="Loading"></span><span class="ld-pct" data-text="0%"></span></div>
+          <div class="ld-steps"></div>
+        </div>
       </div>
       <div class="ld-tip"><b data-text="TIP"></b><span class="ld-tip-text" data-text=""></span></div>
     </div>

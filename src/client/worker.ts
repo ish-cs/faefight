@@ -15,6 +15,7 @@ const TAKEOVER_DIFFICULTY: Difficulty = 'medium';
 
 let match: Match | null = null;
 let humanId = 0;
+let humanIsland = -1;
 /** Vs-bot pause: the loop keeps running but takes no steps. */
 let paused = false;
 let groundYFor: (x: number, z: number) => number = () => 0;
@@ -73,7 +74,8 @@ async function start(setup: MatchSetup, localId: number) {
   const me = snap0.players.find((p) => p.id === humanId);
   if (humanId !== 0 && !me) throw new Error(`worker: human ${humanId} missing from snapshot`);
   const islands = setup.players.map((_, i) => snap0.players.find((p) => p.id === i + 1)?.island ?? i);
-  post({ type: 'map', map: m.def, humanId, humanIsland: me?.island ?? -1, islands });
+  humanIsland = me?.island ?? -1;
+  post({ type: 'map', map: m.def, humanId, humanIsland, islands });
   startLoop();
 }
 
@@ -114,6 +116,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         if (!match) throw new Error('debug before start');
         if (msg.cmd === 'teleport') match.debugTeleport(humanId, { x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z });
         else if (msg.cmd === 'hp') match.debugSetHp(humanId, msg.hp);
+        else if (msg.cmd === 'time') match.debugSetTime(msg.t);
+        else if (msg.cmd === 'strike') match.debugStrike(msg.x, msg.z);
         else if (msg.cmd === 'shield') match.debugSetShield(msg.id ?? humanId, msg.shield);
         else if (msg.cmd === 'potionShop') match.debugSetPotionShops([{ x: msg.x, y: groundYFor(msg.x, msg.z), z: msg.z }]);
         else if (msg.cmd === 'pieces') {
@@ -126,6 +130,9 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         }
         else if (msg.cmd === 'place') match.debugPlacePiece(msg.kind, { x: msg.x, y: groundYFor(msg.x, msg.z) + msg.up, z: msg.z }, msg.rotY, msg.owner);
         else if (msg.cmd === 'explode') match.debugExplode(msg.kind, { x: msg.x, y: groundYFor(msg.x, msg.z) + msg.up, z: msg.z }, humanId);
+        else if (msg.cmd === 'plugDoor') match.debugPlugDoor(humanIsland, msg.door, msg.owner);
+        else if (msg.cmd === 'removePiece') match.debugRemovePiece(msg.id);
+        else if (msg.cmd === 'genStored') match.debugSetGenerator(humanIsland, msg.stored);
         else if (msg.cmd === 'eliminate') match.debugEliminate(msg.playerId);
         else if (msg.cmd === 'kill') match.debugKill(msg.playerId);
         else if (msg.cmd === 'give') match.debugGive(msg.id ?? humanId, msg.inv);
