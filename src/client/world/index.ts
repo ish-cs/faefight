@@ -142,6 +142,7 @@ export class World {
     this.pieces.sync(pieces);
     this.pieceFx.sync(pieces);
     this.fire.sync(pieces, fires);
+    this.water?.syncPieces(pieces, this.sky.camera.position);
     if (this.impacts.active) { const ids = new Set(pieces.map((p) => p.id)); this.impacts.retainPieces((id) => ids.has(id)); }
   }
 
@@ -158,7 +159,7 @@ export class World {
   render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
     const now = performance.now(), dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
-    if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY);
+    if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY, dt);
     if (this.critters) {
       this.critters.setQuality(this.sky.quality);
       this.critters.update(dt, this.sky.camera as THREE.PerspectiveCamera, feet as V3[], waterY);

@@ -130,6 +130,12 @@ export function buildHabitats(def: MapDef, perches: PerchIn[] = []): Habitats {
     const cc = def.center;
     rim(cc.center.x, cc.center.z, cc.radius, cc.groundY);
     H.quay.push(A(cc.center.x, cc.groundY, cc.center.z, cc.radius * 0.5));
+    // the open deck around the stalls: pigeons and gulls pick at scraps, so the neutral island isn't just rim rats
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2 + 0.4, r = cc.radius * 0.55;
+      H.quay.push(A(cc.center.x + Math.cos(a) * r, cc.groundY, cc.center.z + Math.sin(a) * r, 2));
+      if (k % 2 === 0) H.trash.push(A(cc.center.x + Math.cos(a) * r, cc.groundY + 0.3, cc.center.z + Math.sin(a) * r, 0.5));
+    }
   }
 
   // container cover: rats skirt the bases, lizards bask on the sunny sides, iguanas on top
