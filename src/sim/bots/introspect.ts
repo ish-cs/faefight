@@ -605,7 +605,7 @@ export const digestBytes = (d: BrainDigest) => JSON.stringify(d).length;
 /** Trim the least useful parts until the digest fits BRAIN_DIGEST_BUDGET. */
 export function fitDigest(d: BrainDigest): BrainDigest {
   const cuts: (() => boolean)[] = [
-    () => { const n = d.log.length; d.log = d.log.map((l) => [l[0], l[1], l[2], l[3].slice(0, 60)]); return n > 0; },
+    () => { const n = d.log.length; d.log = d.log.map((l) => [l[0], l[1], l[2], l[3].length > 72 ? `${l[3].slice(0, 71)}…` : l[3]]); return n > 0; },
     () => d.log.length > 5 && (d.log = d.log.slice(0, 5), true),
     () => { const z = d.scores.filter((s) => s[2] <= 0 && s[4]); for (const s of z) s.length = 4; return z.length > 0; },
     () => d.rivals.length > 3 && (d.rivals = d.rivals.slice(0, 3), true),

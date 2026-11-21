@@ -142,7 +142,7 @@ export class BrainInspector {
     if (!live.length) box.append(el('div', 'bx-dim', 'No decision yet: it re-scores its goals every ~0.3–1.6 s.'));
     if (dead.length) {
       const z = el('div', 'bx-zero');
-      z.append(el('span', 'bx-dim', 'At 0: '), ...dead.map(([g, , , , gate]) => el('span', 'bx-z', gate ? `${g} (${gate})` : g)));
+      z.append(el('span', 'bx-dim', 'At 0: '), ...dead.map(([g, , , , gate]) => el('span', 'bx-z', gate ? `${g} (${this.text(gate)})` : g)));
       box.append(z);
     }
     return this.section('Scores', 'scores', box);

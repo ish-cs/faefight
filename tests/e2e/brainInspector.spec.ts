@@ -53,9 +53,15 @@ test('spectate a bot: brain inspector populated, overlay on, and the HUD shows i
   await page.keyboard.type('/spectate');
   await page.keyboard.press('Enter');
   await expect.poll(() => dbg<number>(page, 'humanId'), { timeout: 15_000 }).toBe(0);
-  const order = (await players(page)).filter((p) => p.alive).map((p) => p.id).sort((a, b) => a - b);
-  await page.keyboard.press(`Digit${order.indexOf(bot.id) + 1}`);
-  await expect.poll(async () => (await dbg<{ followId: number | null }>(page, 'spectator')).followId, { timeout: 10_000 }).toBe(bot.id);
+  // Follow the bot (1-9 pick by id order among the living); retried in case the key lands before the camera is ready.
+  await expect.poll(async () => {
+    const f = (await dbg<{ followId: number | null }>(page, 'spectator')).followId;
+    if (f === bot.id) return f;
+    const order = (await players(page)).filter((p) => p.alive).map((p) => p.id).sort((a, b) => a - b);
+    await page.locator('canvas.game').focus();
+    await page.keyboard.press(`Digit${order.indexOf(bot.id) + 1}`);
+    return f;
+  }, { timeout: 15_000 }).toBe(bot.id);
 
   // B: the inspector, filled from the bot's brain digest (~4 Hz).
   await page.keyboard.press('KeyB');
@@ -84,6 +90,7 @@ test('spectate a bot: brain inspector populated, overlay on, and the HUD shows i
   await expect.poll(crossHits, { timeout: 45_000 }).toBeGreaterThan(0);
   await expect.poll(async () => (await fx()).number, { timeout: 10_000 }).toBeGreaterThan(0);
   await expect.poll(async () => (await fx()).arrow, { timeout: 45_000 }).toBeGreaterThan(0);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/brain-hurt.png` });
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/brain-fight.png` });
 
   // Hotbar selection mirrors the bot's own.

@@ -1,7 +1,7 @@
 /* Bot brain inspector (brainPanel.ts). Uses the HUD design tokens when present (ui/theme.css), else the base ones. */
 .brain-x-open .hud .brain-panel { display: none !important; }
 .brain-x {
-  position: fixed; right: 14px; top: 64px; z-index: 30; width: 384px; max-height: calc(100vh - 190px); overflow-y: auto;
+  position: fixed; right: 14px; top: 96px; z-index: 30; width: 384px; max-height: calc(100vh - 190px); overflow-y: auto;
   padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 8px;
   font-family: var(--ff-body, inherit); font-size: 12px; line-height: 1.35; color: var(--c-text, var(--text));
   background: var(--plate-strong, rgba(12, 16, 24, 0.84)); border: 0; border-top: 3px solid var(--c-violet, #c9a7ff);
