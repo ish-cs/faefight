@@ -121,6 +121,8 @@ type Act = {
   shootAt?: Vec3;
   /** Shoot `shootAt` even with an enemy in sight (e.g. the deck under someone crossing a bridge). */
   shootFirst?: boolean;
+  /** Looking at `face` is the job (lining up a charge on a plug): a far-off enemy doesn't pull the view away. */
+  lookFirst?: boolean;
   build?: BuildRequest;
   shop?: ShopItem;
   vault?: VaultAction;
@@ -361,7 +363,7 @@ export class Bot {
     } else if (act.shootAt && act.shootFirst) {
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
-    } else if (foe && !(act.shootAt && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
+    } else if (foe && !((act.shootAt || act.lookFirst) && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
       // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
       const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, CHEST, 0)), foe.id, cur);
       look = r;
@@ -1437,9 +1439,9 @@ export class Bot {
     const facing = Math.abs(wrapAngle(c.me.yaw - lookAt(eyePos(c.me), center).yaw)) < 0.1;
     if (facing && c.me.busyUntil <= c.view.now) {
       this.retreat = { from: center, until: c.view.now + 3.5 };
-      return { dir: null, face: center, placeCharge: true };
+      return { dir: null, face: center, placeCharge: true, lookFirst: true };
     }
-    return { dir: null, face: center };
+    return { dir: null, face: center, lookFirst: true };
   }
 
   /** Occupancy grid of my bunker, rebuilt when the pieces around it change. */
@@ -1492,9 +1494,9 @@ export class Bot {
     if (spot && dist2D(spot, me.pos) > 0.3 && !(inReach && dist2D(spot, me.pos) < 0.8)) return { dir: norm(flat(sub(spot, me.pos))), face: center };
     if (useCharge) {
       const facing = Math.abs(wrapAngle(me.yaw - lookAt(eyePos(me), center).yaw)) < 0.1;
-      if (!facing || me.busyUntil > now) return { dir: null, face: center };
+      if (!facing || me.busyUntil > now) return { dir: null, face: center, lookFirst: true };
       this.hideFrom = { pos: target.pos, until: now + CHARGE.fuseSec + 0.3 };
-      return { dir: null, face: center, placeCharge: true };
+      return { dir: null, face: center, placeCharge: true, lookFirst: true };
     }
     return { dir: null, shootAt: center, shootFirst: true };
   }
