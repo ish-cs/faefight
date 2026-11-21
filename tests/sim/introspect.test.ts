@@ -7,7 +7,7 @@ import type { Difficulty, Snapshot } from '../../src/sim/types';
 
 const ALL_GOALS: Goal[] = [
   'storm', 'defend', 'disengage', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'shop', 'heal', 'contest', 'collect',
+  'shop', 'heal', 'contest', 'collect', 'cover', 'fortify',
 ];
 
 /** Everything that matters about where a match got to. */
@@ -53,11 +53,11 @@ describe('bot brain introspection', () => {
 
   test('a reason for every goal type, factors that add up to the score, and a populated digest', async () => {
     const r = await run(['medium', 'hard', 'pro', 'easy'], 5, 120, true);
-    // Every decision explains all 16 goals (why it's worth doing, or why it scores nothing).
+    // Every decision explains every goal (why it's worth doing, or why it scores nothing).
     const explainedGoals = new Set<Goal>();
     for (const b of r.bots.values()) {
       const probe = (b as unknown as { probe: BrainProbe }).probe;
-      expect(probe.rows?.length ?? 16).toBe(16);
+      expect(probe.rows?.length ?? ALL_GOALS.length).toBe(ALL_GOALS.length);
       for (const [g, e] of probe.explained) {
         expect(e.why, `${g} has no reason`).toMatch(/\S{3,}/);
         explainedGoals.add(g);

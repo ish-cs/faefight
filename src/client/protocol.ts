@@ -2,7 +2,8 @@ import type { Placement } from '../sim/building';
 import type { MapDef } from '../sim/map';
 import type { MoveCmd } from '../sim/movement';
 import type { MatchSetup } from '../sim/matchApi';
-import type { BuildRequest, Inventory, PlayerInput, Snapshot } from '../sim/types';
+import type { PracticeCmd } from '../sim/practice';
+import type { BuildRequest, Inventory, PieceKind, PlayerInput, Snapshot } from '../sim/types';
 import type { BrainDigest } from '../sim/bots/introspect';
 import type { ReplayKind, ReplayMeta } from '../sim/replay/format';
 
@@ -14,6 +15,13 @@ export type ToWorker =
   | { type: 'finishRecording' }
   /** Encode the recording so far WITHOUT stopping it (tab hidden mid-match: upload what there is); answered by 'replay' with partial. */
   | { type: 'peekRecording' }
+  /** Host migration: snapshot the whole match (answer: 'checkpoint'). */
+  | { type: 'checkpoint' }
+  /**
+   * Host migration, on the new host: run the gzipped checkpoint `match` instead of a fresh match. `botify`
+   * the old host's player, fast-forward to `toTick` (bots act, humans idle), then tick live (answer: 'restored').
+   */
+  | { type: 'restore'; match: Uint8Array; humanId: number; botify: number[]; toTick: number }
   /** Local player's input. */
   | { type: 'input'; input: PlayerInput; cmds?: MoveCmd[] }
   /** A remote player's (already sanitized) input, forwarded by the host session. */
@@ -26,6 +34,8 @@ export type ToWorker =
   | { type: 'pause'; paused: boolean }
   /** Bots someone is spectating (local camera or a guest): their brain digests come back at BRAIN_HZ. Never recorded. */
   | { type: 'brainWatch'; ids: number[] }
+  /** Practice range panel (reset, clear pieces, dummy toggles). */
+  | { type: 'practice'; cmd: PracticeCmd }
   | { type: 'preview'; playerId: number; req: BuildRequest; key: number }
   | { type: 'debug'; cmd: 'teleport'; x: number; z: number }
   | { type: 'debug'; cmd: 'give'; inv: Partial<Inventory>; id?: number }
@@ -40,7 +50,9 @@ export type ToWorker =
   | { type: 'debug'; cmd: 'removePiece'; id: number }
   | { type: 'debug'; cmd: 'genStored'; stored: number }
   /** Perf testing: n pieces on rings around (x, z), placement rules skipped. */
-  | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number };
+  | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number }
+  | { type: 'debug'; cmd: 'place'; kind: PieceKind; x: number; z: number; rotY: number; up: number; owner: number }
+  | { type: 'debug'; cmd: 'explode'; kind: 'rocket' | 'grenade' | 'charge'; x: number; z: number; up: number };
 
 /** worker → main thread */
 export type FromWorker =
@@ -53,4 +65,7 @@ export type FromWorker =
   | { type: 'error'; message: string }
   /** A finished recording (match over, or finishRecording). */
   | { type: 'replay'; bytes: Uint8Array; meta: ReplayMeta; partial?: boolean }
-  | { type: 'recordingDone' };
+  | { type: 'recordingDone' }
+  /** Gzipped match checkpoint (matchCheckpoint.ts) as of `tick`. */
+  | { type: 'checkpoint'; match: Uint8Array; tick: number }
+  | { type: 'restored'; tick: number };

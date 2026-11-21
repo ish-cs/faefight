@@ -11,6 +11,7 @@
  * pieces) are tolerated: hidden players and the piece-based checks are skipped for them.
  */
 import { LIFECYCLE, PIECES } from './constants';
+import { SETTING_RANGES } from './settings';
 import { countOf, equippedFor, heldKinds, isHotbarItem, HOTBAR_SIZE, validSlot } from './hotbar';
 import { buildMap, bunkerWallBoxes, type Box, type IslandLayout } from './map';
 import { PROP_HALF } from './physics';
@@ -64,7 +65,8 @@ const FLOAT_GRACE_TICKS = 3;
 const SEAL_GRACE_TICKS = 2;
 const WIN_GRACE_TICKS = 2;
 const COUNT_EPS = 1e-6;
-export const DEFAULT_MAX_MATCH_SEC = LIFECYCLE.suddenDeathAt + 600;
+// The latest sudden death a host can set (settings.ts), plus 600 s.
+export const DEFAULT_MAX_MATCH_SEC = SETTING_RANGES.suddenDeathSec.max + 600;
 const DEFAULT_MAX_PER_KIND = 20;
 
 type StuckWindow = { since: number; x: number; z: number };

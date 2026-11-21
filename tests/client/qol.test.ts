@@ -58,7 +58,7 @@ describe('rejoin record', () => {
 describe('prefs', () => {
   test('round trip and sanitize', () => {
     const kv = memStore();
-    expect(loadPrefs(kv)).toEqual({ difficulty: 'medium', bots: 1, map: null, seats: null, lastBuy: null });
+    expect(loadPrefs(kv)).toEqual({ difficulty: 'medium', bots: 1, map: null, seats: null, lastBuy: null, settings: { startCash: 50, suddenDeathSec: 900, genMult: 1 }, color: null });
     savePrefs({ difficulty: 'pro', bots: 4 }, kv);
     savePrefs({ seats: [{ kind: 'bot', difficulty: 'hard' }, { kind: 'open' }], lastBuy: 'steel' }, kv);
     expect(loadPrefs(kv)).toMatchObject({ difficulty: 'pro', bots: 4, seats: [{ kind: 'bot', difficulty: 'hard' }, { kind: 'open' }], lastBuy: 'steel' });

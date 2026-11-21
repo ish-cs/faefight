@@ -27,7 +27,7 @@ export const STORM_GAIN = 0.9;
 /** Peak crest pinch (Σ horizontal steepness) at full exposure in a full storm; < 1 so crests never loop. */
 const MAX_PINCH = 0.88;
 
-type Train = { dx: number; dz: number; k: number; w: number; A: number; h: number; ph: number; c: number };
+export type Train = { dx: number; dz: number; k: number; w: number; A: number; h: number; ph: number; c: number };
 /** Precomputed per-train constants (the same numbers are baked into the shader as literals). */
 export const TRAINS: readonly Train[] = WAVES.map(([deg, L, A, h, ph]) => {
   const a = (deg * Math.PI) / 180, k = (2 * Math.PI) / L;
@@ -72,13 +72,17 @@ export function exposureOf<T>(o: WaveOps<T>, x: T, z: T, f: { cx: T; cz: T; r0: 
  * The wave sum at rest position (x, z), time t. `e` = exposure (0..1), `sea` = sea state (0..1), `fade` = extra
  * amplitude factor (the shader fades far, coarse rings to 0; the CPU passes 1).
  */
-export function waveSum<T>(o: WaveOps<T>, x: T, z: T, t: T, e: T, sea: T, fade: T): WaveSample<T> {
+export function waveSum<T>(
+  o: WaveOps<T>, x: T, z: T, t: T, e: T, sea: T, fade: T, trains: readonly Train[] = TRAINS,
+  /** optional per-train extra fade by wavelength (the shader's distance LOD) */
+  fadeFor?: (wavelength: number) => T,
+): WaveSample<T> {
   let dx = o.c(0), dy = o.c(0), dz = o.c(0), nx = o.c(0), ny = o.c(0), nz = o.c(0), pinch = o.c(0);
   const storm = o.add(o.c(1), o.mul(sea, o.c(STORM_GAIN)));
-  const gain = o.mul(storm, fade);
-  for (const w of TRAINS) {
-    // effective amplitude: A · mix(h, 1, e) · storm · fade
-    const amp = o.mul(o.add(o.c(w.A * w.h), o.mul(e, o.c(w.A * (1 - w.h)))), gain);
+  for (const w of trains) {
+    // effective amplitude: A · mix(h, 1, e) · storm · fade (fade may depend on the wavelength: shader LOD)
+    const f0 = fadeFor ? o.mul(fade, fadeFor((2 * Math.PI) / w.k)) : fade;
+    const amp = o.mul(o.add(o.c(w.A * w.h), o.mul(e, o.c(w.A * (1 - w.h)))), o.mul(storm, f0));
     const f = o.add(o.sub(o.add(o.mul(x, o.c(w.k * w.dx)), o.mul(z, o.c(w.k * w.dz))), o.mul(t, o.c(w.w))), o.c(w.ph));
     const s = o.sin(f), c = o.cos(f);
     const ac = o.mul(amp, c), as = o.mul(amp, s);

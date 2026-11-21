@@ -165,10 +165,11 @@ function openPeer(id: string | undefined): Promise<Peer> {
 }
 
 export class PeerTransport implements Transport {
-  async host(): Promise<HostRoom> {
+  async host(want?: string): Promise<HostRoom> {
+    if (want !== undefined && normalizeCode(want) !== want) throw new Error(`Bad room code ${want}`);
     let lastErr: unknown;
-    for (let i = 0; i < HOST_TRIES; i++) {
-      const code = newInviteCode();
+    for (let i = 0; i < (want ? 1 : HOST_TRIES); i++) {
+      const code = want ?? newInviteCode();
       try {
         const peer = await openPeer(ID_PREFIX + code);
         return new PeerRoom(code, peer);

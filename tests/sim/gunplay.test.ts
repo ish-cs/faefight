@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { PLAYER, WEAPONS } from '../../src/sim/constants';
+import { HEAD, PLAYER, WEAPONS } from '../../src/sim/constants';
 import {
-  beatsBetween, bloomAfterShot, currentBloom, falloff, magCap, nextBurst, recoilKick, reloadBeats, reloadTime, shellsLoadedBy, spreadDeg,
+  beatsBetween, bloomAfterShot, currentBloom, falloff, magCap, nextBurst, recoilKick, reloadBeats, reloadTime, shellsLoadedBy, shotDamage, spreadDeg,
 } from '../../src/sim/gunplay';
 import type { WeaponKind } from '../../src/sim/types';
 
@@ -57,12 +57,39 @@ describe('recoil', () => {
 });
 
 describe('falloff', () => {
-  test('full damage close, reduced far; the rifle keeps most of it at range', () => {
-    expect(falloff('smg', 5)).toBe(1);
-    expect(falloff('smg', 100)).toBe(WEAPONS.smg.falloff.minMult);
-    expect(falloff('shotgun', 20)).toBeLessThan(0.4);
-    expect(falloff('rifle', 80)).toBeGreaterThan(0.9);
-    expect(falloff('rifle', 200)).toBe(0.85);
+  const near = (k: WeaponKind, d: number, want: number) => expect(falloff(k, d)).toBeCloseTo(want, 6);
+  test('pistol: full to 15 m, linear to 50% at 40 m', () => {
+    near('pistol', 0, 1); near('pistol', 10, 1); near('pistol', 15, 1);
+    near('pistol', 27.5, 0.75); near('pistol', 35, 0.6); near('pistol', 40, 0.5);
+  });
+  test('rifle: full to 25 m, linear to 55% at 60 m', () => {
+    near('rifle', 10, 1); near('rifle', 25, 1); near('rifle', 42.5, 0.775); near('rifle', 50, 1 - 0.45 * (25 / 35)); near('rifle', 60, 0.55);
+  });
+  test('shotgun: full to 8 m, steep to 20% at 25 m', () => {
+    near('shotgun', 5, 1); near('shotgun', 8, 1); near('shotgun', 16.5, 0.6); near('shotgun', 25, 0.2);
+  });
+  test('the floor holds beyond far range', () => {
+    for (const k of ['pistol', 'smg', 'shotgun', 'rifle'] as const) {
+      const f = WEAPONS[k].falloff;
+      for (const d of [f.end, f.end + 1, f.end * 2, 500]) expect(falloff(k, d)).toBe(f.minMult);
+    }
+  });
+  test('monotonic: never more damage further away', () => {
+    for (const k of ['pistol', 'smg', 'shotgun', 'rifle'] as const)
+      for (let d = 0; d < 100; d += 0.5) expect(falloff(k, d + 0.5)).toBeLessThanOrEqual(falloff(k, d));
+  });
+  test('rocket and fists have no falloff', () => {
+    expect(falloff('rocket', 140)).toBe(1);
+    expect(falloff('fists', 2)).toBe(1);
+  });
+  test('headshots multiply on top of falloff', () => {
+    for (const k of ['pistol', 'shotgun', 'rifle'] as const)
+      for (const d of [5, 30, 80]) {
+        const body = shotDamage(k, d).amount, head = shotDamage(k, d, true).amount;
+        expect(body).toBeCloseTo(WEAPONS[k].dmg * falloff(k, d), 9);
+        expect(head).toBeCloseTo(body * HEAD.mult, 9);
+        expect(shotDamage(k, d, true).mult).toBe(falloff(k, d));
+      }
   });
 });
 

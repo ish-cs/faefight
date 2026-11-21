@@ -17,11 +17,15 @@ import type { Bot, Goal } from './bot';
 import { rivalScore, type Memory, type RivalFacts, type Sighting } from './mind';
 import { islandAt } from './nav';
 import type { Traits } from './personality';
+import { BUILD_TUNING as BT } from './build';
 import { ownsGun, plugFor, plugSpot, sealKit, type Needs, type ShopStyle } from './plans';
 import type { BotView, OtherStatus } from './view';
 
-/** One goal's line in the utility table: `base` from Bot.score, plus decision noise and the stickiness bonus. */
-export type ScoreRow = { goal: Goal; base: number; noise: number; sticky: number; score: number };
+/**
+ * One goal's line in the utility table: `raw` from Bot.score, `base` after Bot.drive (the win-seeking push of
+ * medium+ bots), plus decision noise and the stickiness bonus.
+ */
+export type ScoreRow = { goal: Goal; raw?: number; base: number; noise: number; sticky: number; score: number };
 export type GoalSwitch = { t: number; from: Goal; to: Goal; why: string };
 
 /** Compact, JSON-friendly digest (also what goes over the wire to a spectating guest). */
@@ -63,8 +67,11 @@ export type BrainDigest = {
 };
 
 export const TRAIT_KEYS: (keyof Traits)[] = ['aggression', 'caution', 'greed', 'patience', 'vengeance', 'opportunism', 'builder', 'range'];
-/** Digest size budget (JSON bytes): at 4 Hz that's at most 8 KB/s, a quarter of a guest's 32 KB/s stream budget. */
-export const BRAIN_DIGEST_BUDGET = 2048;
+/**
+ * Digest size budget (JSON bytes): at 4 Hz that's at most 10 KB/s, sent only to a dead guest following a bot (a
+ * spectator's own snapshot stream is light). 18 goals with their breakdowns and why-zero reasons need ~2.1 KB.
+ */
+export const BRAIN_DIGEST_BUDGET = 2560;
 /** How often digests go out (Hz). */
 export const BRAIN_HZ = 4;
 const LOG_LEN = 10;
@@ -258,6 +265,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const have = me.inv.pieces.scaffold ?? 0;
       if (c.bridgeTo === null) return zero('nothing to bridge to');
       if (have === 0) return zero('no scaffolds');
+      if (now < ((I as unknown as { bridgeHoldUntil?: number }).bridgeHoldUntil ?? -Infinity)) return zero('holding off the bridge');
       const need = I.scaffoldsNeeded(c);
       const toRival = c.bridgeTo !== I.nav.centerNode;
       if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return zero('need a seal kit before landing');
@@ -346,6 +354,24 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (!gun) f.push(['unarmed', 0.2]);
       f.push(['distance', -dist2D(bag, me.pos) / 70]);
       return { f, why: `A loot bag ${m(dist2D(bag, me.pos))} away${gun ? '' : ', maybe a gun'}: picking it up` };
+    }
+    case 'cover': {
+      const cv = (I as unknown as { cover: unknown }).cover;
+      if (!cv) return zero('no cover planned');
+      if (c.enemy && c.enemyDist < 5) return zero('enemy too close to build');
+      if (c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield - BT.pushLead) return zero('winning the trade: pushing');
+      return { f: [['base', BT.coverScore], ['builder', 0.1 * t.builder]], why: c.enemy ? `Under fire from @${c.enemy.id}: throwing up cover` : 'Throwing up cover' };
+    }
+    case 'fortify': {
+      if (view.suddenDeath) return zero('sudden death');
+      if (c.on !== home.index) return zero('not home');
+      if (c.danger) return zero('danger nearby');
+      if (!gun) return zero('no gun');
+      if (I.intruder(c)) return zero('intruder on my island');
+      const J = I as unknown as { fortWorthIt(c: Ctx): boolean; nextSlot(c: Ctx): unknown };
+      if (!J.fortWorthIt(c)) return zero('not worth fortifying');
+      if (!J.nextSlot(c)) return zero('fort finished');
+      return { f: [['base', BT.fortifyScore], ['builder', 0.3 * t.builder]], why: 'Quiet at home: building up my bunker defences' };
     }
     case 'raid': {
       if (view.suddenDeath) return zero('sudden death');
@@ -496,6 +522,8 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
     case 'cut': return two('Walk to the shore', 'Shoot the incoming deck');
     case 'contest': return two('Walk to the centre stations', 'Grab gold / pieces');
     case 'storm': return { steps: ['Get inside the ring', 'Hold position'], at: moving ? 0 : 1 };
+    case 'cover': return { steps: ['Get to the cover spot', 'Place a wall', 'Fight from behind it'], at: a?.build ? 1 : moving ? 0 : 2 };
+    case 'fortify': return { steps: ['Walk to the next fort slot', 'Build it', 'Next slot'], at: a?.build ? 1 : moving ? 0 : 1 };
     case 'fight': return { steps: ['Hold my preferred range', 'Strafe and shoot', 'Take cover if hurt'], at: p.fire ? 1 : 0 };
     case 'disengage': return { steps: ['Break away from the shooter', 'Get behind my bunker'], at: moving ? 0 : 1 };
     case 'defend': return { steps: ['Get to the plugged doorway', 'Clear the plug', 'Walk out'], at: a?.placeCharge || a?.shootAt ? 1 : moving ? 0 : 1 };
@@ -535,8 +563,10 @@ export function debugBrain(bot: Bot): BrainDigest {
   const scores: BrainDigest['scores'] = (p.rows ?? []).map((r) => {
     const e = p.explained.get(r.goal);
     const f = (e?.f ?? []).map(([k, v]) => [k, r2(v)] as [string, number]);
-    const other = r.base - (e?.f ?? []).reduce((a, [, v]) => a + v, 0);
+    const raw = r.raw ?? r.base;
+    const other = raw - (e?.f ?? []).reduce((a, [, v]) => a + v, 0);
     if (Math.abs(other) > 0.005) f.push(['other', r2(other)]);
+    if (Math.abs(r.base - raw) >= 0.005) f.push(['drive', r2(r.base - raw)]);
     if (Math.abs(r.noise) >= 0.005) f.push(['noise', r2(r.noise)]);
     if (r.sticky) f.push(['sticky', r2(r.sticky)]);
     const row: BrainDigest['scores'][number] = [r.goal, r2(r.score), r2(r.base), f];
@@ -607,11 +637,11 @@ export function fitDigest(d: BrainDigest): BrainDigest {
   const cuts: (() => boolean)[] = [
     () => { const n = d.log.length; d.log = d.log.map((l) => [l[0], l[1], l[2], l[3].length > 72 ? `${l[3].slice(0, 71)}…` : l[3]]); return n > 0; },
     () => d.log.length > 5 && (d.log = d.log.slice(0, 5), true),
-    () => { const z = d.scores.filter((s) => s[2] <= 0 && s[4]); for (const s of z) s.length = 4; return z.length > 0; },
     () => d.rivals.length > 3 && (d.rivals = d.rivals.slice(0, 3), true),
     () => d.path.length > 3 && (d.path = d.path.slice(0, 3), true),
-    () => { d.scores = d.scores.filter((s) => s[2] > 0 || s[1] > 0); return true; },
     () => d.seen.length > 4 && (d.seen = d.seen.slice(0, 4), true),
+    () => { const z = d.scores.filter((s) => s[2] <= 0 && s[4]); for (const s of z) s.length = 4; return z.length > 0; },
+    () => { d.scores = d.scores.filter((s) => s[2] > 0 || s[1] > 0); return true; },
     () => { for (const s of d.scores) s[3] = s[3].slice(0, 3); return true; },
     () => d.log.length > 2 && (d.log = d.log.slice(0, 2), true),
     () => { d.why = d.why.slice(0, 80); if (d.shop) d.shop.why = d.shop.why.slice(0, 40); return true; },

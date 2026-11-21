@@ -652,7 +652,31 @@ export class PieceLayer {
     }
   }
 
+  /** Char 0..1 per piece (fire): darkens its instance colour. Set by fireFx via setChar. */
+  private char = new Map<number, number>();
+
+  private tint(id: number, kind: PieceKind, out: THREE.Color) {
+    if (kind === 'container') out.setHex(CONTAINER_COLORS[id % CONTAINER_COLORS.length]);
+    else { const j = 0.92 + ((id * 37) % 17) / 100; out.setRGB(j, j, j); }
+    const k = this.char.get(id);
+    if (k) out.multiplyScalar(1 - 0.84 * k);
+  }
+
+  /** Blacken a piece as it burns (0 = clean, 1 = charcoal); applied right away and kept across syncs. */
+  setChar(id: number, k: number) {
+    if (k <= 0) this.char.delete(id); else this.char.set(id, Math.min(1, k));
+    const info = this.byId.get(id);
+    if (!info) return;
+    const L = this.kinds.get(info.kind)!;
+    this.tint(id, info.kind, _c);
+    for (const im of L.meshes) { im.setColorAt(info.index, _c); if (im.instanceColor) im.instanceColor.needsUpdate = true; }
+    info.color = _c.getHex();
+  }
+
+  charOf(id: number) { return this.char.get(id) ?? 0; }
+
   sync(pieces: PieceState[]) {
+    for (const id of this.char.keys()) if (!pieces.some((p) => p.id === id)) this.char.delete(id);
     this.graph.update(pieces);
     const byKind = new Map<PieceKind, PieceState[]>();
     for (const p of pieces) {
@@ -679,8 +703,7 @@ export class PieceLayer {
         let runX = p.pos.x * c - p.pos.z * sn;
         if (kind === 'metal') runX = Math.round(runX / CORR_PITCH) * CORR_PITCH; // keep texture ribs on the geometry ribs
         L.conn.setXYZW(i, runX, p.pos.y, p.pos.x * sn + p.pos.z * c, this.graph.mask(p.id));
-        if (kind === 'container') _c.setHex(CONTAINER_COLORS[p.id % CONTAINER_COLORS.length]);
-        else { const j = 0.92 + ((p.id * 37) % 17) / 100; _c.setRGB(j, j, j); }
+        this.tint(p.id, kind, _c);
         for (const im of L.meshes) im.setColorAt(i, _c);
         this.byId.set(p.id, { kind, index: i, x: p.pos.x, y: p.pos.y, z: p.pos.z, rotY: p.rotY, color: _c.getHex() });
       }

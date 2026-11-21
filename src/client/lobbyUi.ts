@@ -4,6 +4,10 @@ import type { Difficulty } from '../sim/types';
 import { MAP_NAMES, MAP_TEMPLATES, type MapChoice } from '../sim/map';
 import { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 import { seatSlider, slotToStop, stopToSlot } from './seatSlider';
+import { seatColors } from '../net/lobby';
+import { DEFAULT_SETTINGS, type GameSettings } from '../sim/settings';
+import { GameSettingsPanel } from './gameSettingsUi';
+import { isMuted, toggleMute } from './chatMute';
 
 export type LobbyActions = {
   setSeat(i: number, slot: Slot): void;
@@ -11,6 +15,9 @@ export type LobbyActions = {
   removeSeat(i: number): void;
   kick(i: number): void;
   setMap(choice: MapChoice): void;
+  /** The host's own colour (seat 0). */
+  setColor(color: number): void;
+  setSettings(s: GameSettings): void;
   start(): void;
   back(): void;
 };
@@ -21,6 +28,20 @@ const LOBBY_CHAT_LINES = 3;
 const diffTag = (d: Difficulty) => (d === 'pro' ? 'PRO' : d);
 
 const choiceName = (c: MapChoice) => (c === 'random' ? 'Random' : MAP_NAMES[c]);
+
+/** A joined guest's lobby controls. */
+export type GuestActions = { setReady(ready: boolean): void; setColor(color: number): void };
+
+/** Offline-rendered map thumbnail (public/maps, made by tests/visual/mapThumbs.mjs); Random has none. */
+export const mapThumbUrl = (c: MapChoice): string | null => (c === 'random' ? null : `${import.meta.env.BASE_URL}maps/${c}.jpg`);
+
+/** Start button text: everyone ready → "Start match"; else "Start anyway (2 not ready)". */
+export const startLabel = (notReady: number) => (notReady > 0 ? `Start anyway (${notReady} not ready)` : 'Start match');
+
+/** Colours another human seat picked (greyed out in your swatch row). */
+export function takenColors(slots: Slot[], you: number): Set<number> {
+  return new Set(slots.flatMap((s, i) => (i !== you && s.kind === 'human' && s.color !== undefined ? [s.color] : [])));
+}
 
 /**
  * Map picker: a segmented control [Harbor] [Container Yard] [Random], the chosen one highlighted (no dropdowns).
@@ -80,11 +101,17 @@ export class LobbyUi {
   private mapSel: MapPicker | null = null;
   private mapText = el('span', 'lobby-map-name');
   private feed = el('div', 'lobby-feed');
+  private thumb = el('div', 'map-thumb');
+  private swatches = el('div', 'swatches');
+  private readyBtn: HTMLButtonElement | null = null;
+  private ready = false;
+  private settingsPanel: GameSettingsPanel;
   /** Slider stop per seat at the last render, so a re-render slides the thumb from where it was. */
   private stops = new Map<number, number>();
 
   /** send: a line typed in the lobby's chat box (chat or a /command); omitted = no chat box. */
-  constructor(parent: HTMLElement, code: string, private actions: LobbyActions | null, back: () => void, send?: (text: string) => void) {
+  constructor(parent: HTMLElement, code: string, private actions: LobbyActions | null, back: () => void, send?: (text: string) => void,
+    private guest: GuestActions | null = null) {
     const title = el('div', 'label', 'Invite code');
     const codeRow = el('div', 'code-row');
     const codeEl = el('div', 'invite-code', code);
@@ -110,8 +137,17 @@ export class LobbyUi {
     } else {
       this.status.textContent = 'Waiting for host…';
       this.footer.append(backBtn);
+      if (guest) {
+        const r = this.readyBtn = el('button', 'btn primary toggle', 'Ready');
+        r.type = 'button';
+        r.dataset.testid = 'ready-toggle';
+        r.setAttribute('aria-pressed', 'false');
+        r.onclick = () => guest.setReady(!this.ready);
+        this.footer.append(r);
+      }
     }
-    this.mapRow.append(el('span', 'label', 'Map'));
+    this.thumb.dataset.testid = 'map-thumb';
+    this.mapRow.append(this.thumb, el('span', 'label', 'Map'));
     if (actions) {
       this.mapSel = new MapPicker('harbor', 'lobby-map', (c) => actions.setMap(c));
       this.mapRow.append(this.mapSel.root);
@@ -119,7 +155,16 @@ export class LobbyUi {
       this.mapText.dataset.testid = 'lobby-map-name';
       this.mapRow.append(this.mapText);
     }
-    this.card.append(el('h1', '', 'Lobby'), title, codeRow, hint, this.mapRow, this.list, this.status, this.footer);
+    this.settingsPanel = new GameSettingsPanel(DEFAULT_SETTINGS, actions ? (st) => actions.setSettings(st) : null, 'lobby-settings');
+    this.swatches.dataset.testid = 'color-swatches';
+    const colorRow = el('div', 'color-row');
+    colorRow.append(el('span', 'label', 'Your colour'), this.swatches);
+    // Wide screens: seats on the left, map / colour / game settings on the right (the card stays as tall as before).
+    const side = el('div', 'lobby-side');
+    side.append(this.mapRow, colorRow, this.settingsPanel.root);
+    const body = el('div', 'lobby-body');
+    body.append(this.list, side);
+    this.card.append(el('h1', '', 'Lobby'), title, codeRow, hint, body, this.status, this.footer);
     if (send) {
       // Below the buttons, fixed height: lines arriving never move anything.
       const box = el('div', 'lobby-chat');
@@ -141,28 +186,41 @@ export class LobbyUi {
     parent.append(this.root);
   }
 
-  render(slots: Slot[], you: number, map: MapChoice = 'harbor') {
+  render(slots: Slot[], you: number, map: MapChoice = 'harbor', settings: GameSettings = DEFAULT_SETTINGS) {
     const a = this.actions;
     if (this.mapSel) { this.mapSel.value = map; this.mapSel.disabled = false; }
     this.mapText.textContent = choiceName(map);
+    this.renderThumb(map);
+    this.settingsPanel.value = settings;
+    this.settingsPanel.disabled = false;
+    const colors = seatColors(slots);
+    this.renderSwatches(slots, you, colors[you] ?? null);
+    const me = slots[you];
+    this.ready = me?.kind === 'human' && !!me.ready;
+    if (this.readyBtn) {
+      this.readyBtn.textContent = this.ready ? 'Ready ✓' : 'Ready';
+      this.readyBtn.classList.toggle('selected', this.ready);
+      this.readyBtn.setAttribute('aria-pressed', String(this.ready));
+    }
     if (!this.startBtn) { this.status.textContent = 'Waiting for host…'; delete this.status.dataset.testid; }
     // Seats are rebuilt on every change: keep keyboard focus on the same control.
     const focused = this.list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.testid : undefined;
     const prevStops = this.stops;
     this.stops = new Map();
-    // A spectating host gets no island: the playing seats are numbered (and coloured) from 0 without it.
-    let island = 0;
+    // A spectating host has no colour; everyone else plays in seatColors' colour (picked, or the lowest free).
     this.list.replaceChildren(...slots.map((s, i) => {
       const row = el('div', 'seat');
       row.dataset.testid = `seat-${i}`;
       const spectator = s.kind === 'human' && !!s.spectator;
       const dot = el('span', spectator ? 'dot spectator' : 'dot');
-      if (spectator) dot.title = 'Spectating: no island';
+      const k = colors[i];
+      if (spectator || k === null) dot.title = 'Spectating: no island';
       else {
-        const k = island++;
-        dot.style.background = hex(ISLAND_COLORS[k % 8]);
-        dot.title = ISLAND_NAMES[k % 8];
+        dot.style.background = hex(ISLAND_COLORS[k]);
+        dot.title = ISLAND_NAMES[k];
+        dot.dataset.color = String(k);
       }
+      dot.dataset.testid = `seat-color-${i}`;
       row.classList.toggle('spectating', spectator);
       const name = el('span', 'seat-name');
       if (s.kind === 'human') {
@@ -170,6 +228,11 @@ export class LobbyUi {
         if (s.isHost) name.append(el('span', 'tagpill', 'host'));
         if (spectator) name.append(Object.assign(el('span', 'tagpill spectator', 'spectator'), { title: 'Hosts the match without playing' }));
         if (i === you) name.append(el('span', 'tagpill you', 'you'));
+        if (!s.isHost) {
+          const pill = el('span', s.ready ? 'tagpill ready' : 'tagpill not-ready', s.ready ? 'ready' : 'not ready');
+          pill.dataset.testid = `seat-ready-${i}`;
+          name.append(pill);
+        }
       } else if (s.kind === 'bot') {
         name.append(el('span', 'nick', s.name ?? 'Bot'));
         // The host's slider already shows the difficulty.
@@ -189,6 +252,22 @@ export class LobbyUi {
         rm.onclick = () => a.removeSeat(i);
         row.append(slider, rm);
       }
+      if (s.kind === 'human' && i !== you) {
+        // Local mute (this browser only): hides their chat lines here.
+        const muted = isMuted(s.name);
+        const mute = el('button', muted ? 'btn small toggle selected' : 'btn small toggle', muted ? 'Muted' : 'Mute');
+        mute.type = 'button';
+        mute.title = muted ? 'Show their chat again' : 'Hide their chat (only for you)';
+        mute.setAttribute('aria-pressed', String(muted));
+        mute.dataset.testid = `mute-${i}`;
+        mute.onclick = () => {
+          const on = toggleMute(s.name);
+          mute.textContent = on ? 'Muted' : 'Mute';
+          mute.classList.toggle('selected', on);
+          mute.setAttribute('aria-pressed', String(on));
+        };
+        row.append(mute);
+      }
       if (a && i > 0 && s.kind === 'human') {
         const kick = el('button', 'btn small', 'Kick');
         kick.dataset.testid = `kick-${i}`;
@@ -203,9 +282,12 @@ export class LobbyUi {
     if (this.startBtn) {
       const open = slots.filter((s) => s.kind === 'open').length;
       const players = slots.filter((s) => !(s.kind === 'human' && s.spectator)).length;
+      const notReady = slots.filter((s) => s.kind === 'human' && !s.isHost && !s.ready).length;
       this.startBtn.disabled = players < 2 || open > 0;
+      this.startBtn.textContent = startLabel(notReady);
       this.status.textContent = open > 0 ? `${open} open seat${open > 1 ? 's' : ''} — wait for friends or fill with bots`
         : players < 2 ? 'Add a seat: you are spectating, so at least 2 other players are needed'
+        : notReady > 0 ? `${notReady} not ready${players < slots.length ? ' · you are spectating' : ''}`
         : `${players} players ready${players < slots.length ? ' · you are spectating' : ''}`;
     }
   }
@@ -215,11 +297,49 @@ export class LobbyUi {
     this.status.textContent = `Loading ${mapName}…`;
     this.status.dataset.testid = 'lobby-loading';
     if (this.mapSel) this.mapSel.disabled = true;
+    this.settingsPanel.disabled = true;
     this.mapText.textContent = mapName;
+  }
+
+  private renderThumb(map: MapChoice) {
+    const url = mapThumbUrl(map);
+    this.thumb.dataset.map = map;
+    this.thumb.classList.toggle('random', !url);
+    if (!url) { this.thumb.replaceChildren(el('span', '', '?')); this.thumb.title = 'Random: a different map each match'; return; }
+    const prev = this.thumb.querySelector('img');
+    if (prev?.dataset.src === url) return;
+    const img = el('img');
+    img.alt = choiceName(map);
+    img.src = url;
+    img.dataset.src = url;
+    img.decoding = 'async';
+    img.onerror = () => { console.warn(`[lobby] map thumbnail missing: ${url}`); img.remove(); };
+    this.thumb.title = choiceName(map);
+    this.thumb.replaceChildren(img);
+  }
+
+  /** Your colour: 8 swatches; ones another human picked are greyed out. `mine` = the colour you play now. */
+  private renderSwatches(slots: Slot[], you: number, mine: number | null) {
+    const pick = this.actions ? this.actions.setColor : this.guest?.setColor;
+    const taken = takenColors(slots, you);
+    this.swatches.replaceChildren(...ISLAND_COLORS.map((c, k) => {
+      const b = el('button', 'swatch');
+      b.type = 'button';
+      b.style.background = hex(c);
+      b.title = taken.has(k) ? `${ISLAND_NAMES[k]} (taken)` : ISLAND_NAMES[k];
+      b.dataset.testid = `swatch-${k}`;
+      b.setAttribute('aria-pressed', String(k === mine));
+      b.classList.toggle('selected', k === mine);
+      b.classList.toggle('taken', taken.has(k));
+      b.disabled = !pick || taken.has(k);
+      if (pick) b.onclick = () => { if (k !== mine) pick(k); };
+      return b;
+    }));
   }
 
   /** A chat line in the lobby's chat box (from = '' → system line). Text only, never HTML. */
   addChat(from: string, text: string) {
+    if (isMuted(from)) return;
     const line = el('div', from ? 'lobby-line' : 'lobby-line system');
     if (from) line.append(el('span', 'chat-from', `${from}: `));
     line.append(el('span', '', text));

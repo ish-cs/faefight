@@ -8,7 +8,7 @@ test.skip(ON_CI, NEEDS_GPU);
 // and hit-direction arcs, its hotbar selection.
 const SHOTS = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.E2E_SHOTS;
 
-type P = { id: number; name: string; isBot: boolean; alive: boolean; selected: number; pos: { x: number; z: number } };
+type P = { id: number; name: string; isBot: boolean; alive: boolean; selected: number; island: number; pos: { x: number; z: number } };
 type Digest = { goal: string; scores: unknown[]; log: unknown[]; seen: unknown[]; target: unknown };
 
 const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
@@ -49,7 +49,9 @@ test('spectate a bot: brain inspector populated, overlay on, and the HUD shows i
   const me = await dbg<number>(page, 'humanId');
   await dbg(page, 'give', { cash: 300, weapons: { rifle: { mag: 25, spare: 100 } } });
   await dbg(page, 'give', { cash: 300, weapons: { rifle: { mag: 25, spare: 100 } } }, bot.id);
-  await dbg(page, 'teleport', bot.pos.x + 9, bot.pos.z + 9);
+  // Onto the bot's own island (by its generator, open ground): same-island enemies fight at once.
+  const gen = (await dbg<{ generator: { x: number; z: number } }[]>(page, 'map'))[bot.island].generator;
+  await dbg(page, 'teleport', gen.x + 2, gen.z + 2);
   await page.keyboard.press('Enter');
   await page.keyboard.type('/spectate');
   await page.keyboard.press('Enter');
