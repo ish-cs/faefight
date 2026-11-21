@@ -584,7 +584,15 @@ export function islandZones(def: MapDef, isl: IslandLayout): Zones {
     const e = L({ x: d.center.x + fx * 6, z: d.center.z + fz * 6 });
     caps.push({ ax: a.x, az: a.z, bx: e.x, bz: e.z, r: d.width / 2 + 0.9 });
   }
+  // main walking lanes: from each doorway straight out to the rim
+  for (const d of isl.bunker.doorways) {
+    const a = L(d.center), fx = -Math.sin(d.yaw), fz = -Math.cos(d.yaw);
+    const e = L({ x: d.center.x + fx * 40, z: d.center.z + fz * 40 });
+    const len = Math.hypot(e.x - a.x, e.z - a.z), t = Math.min(1, (isl.radius * 2) / len);
+    caps.push({ ax: a.x, az: a.z, bx: a.x + (e.x - a.x) * t, bz: a.z + (e.z - a.z) * t, r: 1.4 });
+  }
   for (const k of ['generator', 'vault', 'shop'] as const) { const p = L(isl[k]); caps.push({ ax: p.x, az: p.z, bx: p.x, bz: p.z, r: 2.6 }); }
+  { const sp = L(isl.spawn); caps.push({ ax: sp.x, az: sp.z, bx: sp.x, bz: sp.z, r: 1.5 }); }
   for (const s of def.statics) if (s.island === isl.index) {
     const p = L(s.center), q = Math.abs(Math.sin(s.rotY - yaw)) > 0.7;
     rects.push({ x: p.x, z: p.z, hx: (q ? s.half.z : s.half.x) + 0.7, hz: (q ? s.half.x : s.half.z) + 0.7 });
@@ -620,36 +628,69 @@ export function centerZones(def: MapDef): Zones {
   return { caps, rects };
 }
 
-/** Low island clutter: every item ≤ this tall, so it never reads (or works) as cover. */
-export const ISLAND_MAX_H = 0.35;
+/** Island dressing is visual only (no sim collider): light cover at most, never taller than this. */
+export const ISLAND_MAX_H = 1.2;
 
-/** Rim mini-clusters a player can step over (all ≤ ISLAND_MAX_H) + flat decals + manholes + edge gear. */
-const RIM_SETS: ((k: Kit) => void)[] = [
-  (k) => { k.put('coil', 0, 0, { tint: k.r.pick(ROPE), yaw: k.r.rr(0, 6) }); k.put('bucket', 0.6, 0.3, { tint: k.r.pick([0x2a2a2a, 0xe0e0d8]), tier: 1 }); },
-  (k) => { const f = k.put('fishCrate', 0, 0, { tint: k.r.pick(FISH), yaw: k.r.rr(-0.4, 0.4) }); void f; k.put('fishCrate', 0.75, 0.1, { tint: k.r.pick(FISH), yaw: k.r.rr(-0.4, 0.4), tier: 1 }); },
-  (k) => { k.put('toolbox', 0, 0, { tint: k.r.pick([0xc0302a, 0x2a5aa8]), yaw: k.r.rr(0, 6) }); k.put('coil', 0.8, 0.2, { tint: 0xd8b030, yaw: k.r.rr(0, 6), tier: 1 }); },
-  (k) => { const p = k.put('pallet', 0, 0, { tint: k.r.pick(WOOD), yaw: k.r.rr(0, 6) }); k.put('sack', 0.1, 0, { on: p, tint: 0xc4a874, yaw: k.r.rr(-0.3, 0.3), s: [1, 0.8, 1] }); },
-  (k) => { k.put('tyre', 0, 0, { s: [0.9, 0.9, 0.9], yaw: k.r.rr(0, 6) }); },
-  (k) => { k.put('sack', 0, 0, { tint: 0xd0c0a0, yaw: k.r.rr(0, 6) }); k.put('sack', 0.5, 0.2, { tint: 0xc4a874, yaw: k.r.rr(0, 6), tier: 1 }); },
-  (k) => { k.put('lobsterPot', 0, 0, { tint: k.r.pick(NET), yaw: k.r.rr(-0.3, 0.3), s: [1, 0.9, 1] }); k.put('buoy', 0.65, 0.1, { tint: 0xe8601c, s: [0.5, 0.5, 0.5], tier: 1 }); },
+/**
+ * Island sets (cluster frame: x along the rim / bunker wall, +z toward the rim or away from the bunker). Big pushable
+ * items (crates, drums, pallets-as-props, IBCs, reels, tyres) are sim tier-A props (src/sim/props.ts): not here.
+ */
+const ISLAND_SETS: ((k: Kit) => void)[] = [
+  (k) => { // tarped pile with rope and a bag
+    k.put('tarpPile', 0, 0.15, { tint: k.r.pick(TARP), s: [0.75, 0.9, 0.65], yaw: k.r.rr(-0.1, 0.1) });
+    k.put('coil', 1.45, -0.2, { tint: k.r.pick(ROPE), yaw: k.r.rr(0, 6) });
+    k.put('bag', -1.35, -0.35, { tint: k.r.pick([0x1a1a1c, 0x3a5a3a]), yaw: k.r.rr(0, 6), tier: 1 });
+  },
+  (k) => { // work corner: bench with a toolbox, a genset, hose and bucket
+    const wb = k.put('workbench', 0, 0.35, {});
+    k.put('toolbox', k.r.rr(-0.5, 0.5), 0.35, { on: wb, tint: k.r.pick([0xc0302a, 0x2a5aa8]), yaw: k.r.rr(-0.2, 0.2) });
+    k.put('genset', -1.95, 0.25, { tint: k.r.pick([0xd9a521, 0x3a7a3a, 0xe0e0d8]), s: [0.85, 0.95, 0.85] });
+    k.put('coil', 1.45, -0.35, { tint: 0xd8b030, yaw: k.r.rr(0, 6) });
+    k.put('bucket', 0.4, -0.55, { tint: k.r.pick([0x2a2a2a, 0xe0e0d8]), tier: 1 });
+    k.put('decal', -1.9, -0.3, { cell: DECAL.oil, s: [1.6, 1, 1.2], yaw: k.r.rr(0, 6) });
+  },
+  (k) => { // trash corner
+    k.put('bin', -0.55, 0.25, { tint: k.r.pick(PLASTIC_BIN), yaw: k.r.rr(-0.2, 0.2) });
+    k.put('bin', 0.12, 0.3, { tint: k.r.pick(PLASTIC_BIN), yaw: k.r.rr(-0.2, 0.2) });
+    for (let i = 0; i < 3; i++) k.put('bag', -0.9 + i * 0.6 + k.r.rr(-0.1, 0.1), -0.45 + k.r.rr(-0.1, 0.1), { tint: k.r.pick([0x1a1a1c, 0x22262a, 0x3a5a3a]), yaw: k.r.rr(0, 6), s: k.r.rr(0.8, 1.05), tier: i === 2 ? 1 : 0 });
+  },
+  (k) => { // fishing gear: pots, a net pile, buoys
+    for (const x of [-0.75, -0.1]) k.stack('lobsterPot', x, 0.25, 1 + Math.floor(k.r.rnd() * 3), { tint: () => k.r.pick(NET) });
+    k.put('netPile', 1.3, 0.1, { tint: k.r.pick(NET), yaw: k.r.rr(0, 6), s: 0.85 });
+    k.put('buoy', -0.6, -0.65, { tint: k.r.pick([0xe8601c, 0xe8e2d0, 0xe0b020]) });
+    k.put('buoy', 0.05, -0.75, { tint: k.r.pick([0xe8601c, 0xe8e2d0]), tier: 1 });
+  },
+  (k) => { // sacks on a pallet + a low pallet stack
+    const p = k.put('pallet', 0, 0, { tint: k.r.pick(WOOD) });
+    for (const [dx, dz] of [[-0.28, -0.22], [0.28, -0.22], [-0.28, 0.22], [0.28, 0.22]] as const) {
+      const sk = k.put('sack', dx, dz, { on: p, tint: k.r.pick([0xc4a874, 0xe0d8c8, 0xb8a080]), yaw: k.r.rr(-0.2, 0.2) });
+      if (dx > 0 && dz > 0) k.put('sack', dx - 0.05, dz - 0.05, { on: sk, tint: 0xd0c0a0, yaw: 0.4, tier: 1 });
+    }
+    k.stack('pallet', 1.45, 0.05, 2 + Math.floor(k.r.rnd() * 3), { tint: () => k.r.pick(WOOD), yaw: Math.PI / 2 });
+  },
+  (k) => { // rope + buoys
+    k.put('coil', -0.5, 0, { tint: k.r.pick(ROPE), yaw: k.r.rr(0, 6) });
+    k.put('coil', 0.35, 0.2, { tint: k.r.pick(ROPE), yaw: k.r.rr(0, 6), tier: 1 });
+    k.put('netPile', 1.1, 0.1, { tint: k.r.pick(NET), s: 0.7, yaw: k.r.rr(0, 6) });
+    k.put('buoy', -1.2, 0.1, { tint: 0xe8601c });
+  },
+  (k) => { k.put('toolbox', 0, 0, { tint: k.r.pick([0xc0302a, 0x2a5aa8]), yaw: k.r.rr(0, 6) }); k.put('coil', 0.8, 0.2, { tint: 0xd8b030, yaw: k.r.rr(0, 6) }); k.put('bucket', -0.55, 0.1, { tint: 0xe0e0d8, tier: 1 }); },
+  (k) => { k.put('fishCrate', 0, 0, { tint: k.r.pick(FISH), yaw: k.r.rr(-0.3, 0.3) }); k.put('fishCrate', 0.7, 0.05, { tint: k.r.pick(FISH), yaw: k.r.rr(-0.3, 0.3) }); k.put('sack', -0.7, 0, { tint: 0xc4a874, yaw: k.r.rr(0, 6), tier: 1 }); },
 ];
 
 /**
- * Island-local low clutter for one island (player or center): rim mini-sets in the band inside the yellow line,
- * a few decals and manholes in the open, cleats on the coping and edge gear (ladders, hung tyres) outside the disc.
+ * Island dressing for one island (player or center), island-local: purposeful sets along the rim band
+ * (R − 4 … R − 1) and beside the bunker (light visual cover, ≤ ISLAND_MAX_H), the open middle left free for
+ * building; decals and manholes in the open; cleats on the coping; ladders and hung tyres outside the disc.
+ * `bunker`: island-local bunker centre (player islands) for the bunker-side sets.
  */
-export function islandClutter(R: number, zones: Zones, seed: number, o: { riprap?: number[]; bollardSlots?: number } = {}): Placement[] {
+export function islandClutter(R: number, zones: Zones, seed: number, o: { riprap?: number[]; bollardSlots?: number; bunker?: { x: number; z: number } } = {}): Placement[] {
   const r = rng(seed);
   const out: Placement[] = [];
-  const nSets = Math.round(R * 0.55);
-  for (let i = 0; i < nSets; i++) {
-    const a = ((i + r.rr(0.15, 0.85)) / nSets) * Math.PI * 2;
-    const rad = R - r.rr(1.7, 2.3);
+  const taken: Rect[] = [];
+  const tryPlace = (ax: number, az: number, yaw: number) => {
     const k = new Kit(r);
-    r.pick(RIM_SETS)(k);
-    // tangential frame: local x along the rim
-    const ax = Math.sin(a) * rad, az = Math.cos(a) * rad;
-    const yaw = a + Math.PI / 2;
+    r.pick(ISLAND_SETS)(k);
     const base = out.length;
     const keep: Placement[] = [];
     for (const it of k.items) {
@@ -657,19 +698,36 @@ export function islandClutter(R: number, zones: Zones, seed: number, o: { riprap
       const placed = { ...it, x: p.x, z: p.z, yaw: it.yaw + yaw };
       const fp = footprint(placed);
       const m = Math.max(fp.hx, fp.hz);
-      if (Math.hypot(p.x, p.z) + m > R - 1.15 || !zonesClear(zones, p.x, p.z, m)) { keep.length = 0; break; } // all or nothing (stacks)
-      // clamp height (scale down) so nothing tops ISLAND_MAX_H
+      const clear = it.type === 'decal' || (Math.hypot(p.x, p.z) + m <= R - 1.0 && zonesClear(zones, p.x, p.z, m)
+        && (it.on !== undefined || !taken.some((t) => overlaps(fp, t, 0.25))));
+      if (!clear) return false; // all or nothing (stacks)
       keep.push(placed);
     }
-    keep.forEach((p, j) => out.push({ ...p, on: p.on === undefined ? undefined : p.on + base, tier: p.tier + (j > 0 ? 0 : 0) }));
-    void base;
+    for (const p of keep) {
+      out.push({ ...p, on: p.on === undefined ? undefined : p.on + base });
+      if (p.type !== 'decal') taken.push(footprint(p));
+    }
+    return true;
+  };
+  // beside the bunker: the four outer corners, sets running along the side walls, facing away from it
+  if (o.bunker) {
+    const b = o.bunker;
+    for (const [dx, dz, yaw] of [[-6.3, 2.6, -Math.PI / 2], [6.3, 2.6, Math.PI / 2], [-6.3, -3.0, -Math.PI / 2], [6.3, -3.0, Math.PI / 2]] as const) {
+      for (let t = 0; t < 4 && !tryPlace(b.x + dx, b.z + dz + r.rr(-0.4, 0.4), yaw); t++);
+    }
+  }
+  // rim band
+  const nSets = Math.round(R * 0.75);
+  for (let i = 0; i < nSets; i++) {
+    for (let t = 0; t < 4; t++) {
+      const a = ((i + r.rr(0.1, 0.9)) / nSets) * Math.PI * 2;
+      const rad = R - r.rr(2.0, 2.9);
+      if (tryPlace(Math.sin(a) * rad, Math.cos(a) * rad, a)) break;
+    }
   }
   for (const p of out) {
     const top = topOf(p);
-    if (top > ISLAND_MAX_H) {
-      const k = ISLAND_MAX_H / top;
-      p.s = [p.s[0], p.s[1] * k * 0.98, p.s[2]];
-    }
+    if (top > ISLAND_MAX_H) p.s = [p.s[0], p.s[1] * (ISLAND_MAX_H / top) * 0.98, p.s[2]];
   }
   // stacked items: re-seat on their (possibly squashed) support
   for (const p of out) if (p.on !== undefined) p.y = topOf(out[p.on]);
@@ -717,7 +775,8 @@ export function islandClutter(R: number, zones: Zones, seed: number, o: { riprap
 
 /** Where island-local clutter lives for this map (seeded by island index; center uses index -1). */
 export function islandPlacements(def: MapDef, isl: IslandLayout) {
-  return islandClutter(isl.radius, islandZones(def, isl), 7001 + isl.index * 131, { riprap: def.template === 'harbor' ? ISLAND_DECOR.riprap : [], bollardSlots: def.template === 'harbor' ? 14 : 10 });
+  const bunker = toLocal(isl.bunker.center, isl.center, isl.bunker.facingYaw);
+  return islandClutter(isl.radius, islandZones(def, isl), 7001 + isl.index * 131, { riprap: def.template === 'harbor' ? ISLAND_DECOR.riprap : [], bollardSlots: def.template === 'harbor' ? 14 : 10, bunker });
 }
 export function centerPlacements(def: MapDef) {
   return islandClutter(def.center.radius, centerZones(def), 6007, { bollardSlots: 0 });

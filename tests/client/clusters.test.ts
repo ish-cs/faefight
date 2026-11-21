@@ -118,6 +118,47 @@ describe('dock clusters: playable islands', () => {
     }
   });
 
+  it('keeps the open middle free (rim band or bunker sides only) and leaves sim tier-A props to the sim', () => {
+    for (const def of maps) {
+      for (const isl of def.islands) {
+        const b = toLocal(isl.bunker.center, isl.center, isl.bunker.facingYaw);
+        const ps = islandPlacements(def, isl);
+        // purposeful sets actually land on every island
+        expect(ps.filter((p) => ['tarpPile', 'workbench', 'bin', 'lobsterPot', 'netPile', 'coil', 'sack'].includes(p.type)).length).toBeGreaterThan(8);
+        for (const p of ps) {
+          expect(['crate', 'drum', 'ibc', 'reel', 'tyre']).not.toContain(p.type);
+          if (p.edge || p.type === 'decal' || p.type === 'manhole') continue;
+          const rim = Math.hypot(p.x, p.z) >= isl.radius - 4.6;
+          const bunkerSide = Math.hypot(p.x - b.x, p.z - b.z) < 9;
+          expect(rim || bunkerSide, `${p.type} at ${p.x.toFixed(1)},${p.z.toFixed(1)} in the open middle`).toBe(true);
+        }
+      }
+      if (def.center.radius >= 12) expect(centerPlacements(def).filter((p) => !p.edge && p.type !== 'decal' && p.type !== 'manhole').length).toBeGreaterThan(5);
+      for (const p of centerPlacements(def)) {
+        if (p.edge || p.type === 'decal' || p.type === 'manhole') continue;
+        expect(Math.hypot(p.x, p.z)).toBeGreaterThanOrEqual(def.center.radius - 4.6);
+      }
+    }
+  });
+
+  it('keeps ≥ 2.5 m clear in front of every bunker doorway and the spawn point', () => {
+    for (const def of maps) for (const isl of def.islands) {
+      const yaw = isl.bunker.facingYaw;
+      const ps = islandPlacements(def, isl).filter((p) => !p.edge && p.type !== 'decal');
+      for (const d of isl.bunker.doorways) {
+        for (let t = 0; t <= 2.5; t += 0.25) {
+          const q = toLocal({ x: d.center.x - Math.sin(d.yaw) * t, z: d.center.z - Math.cos(d.yaw) * t }, isl.center, yaw);
+          for (const p of ps) {
+            const f = footprint(p);
+            expect(Math.abs(q.x - p.x) < f.hx + 0.8 && Math.abs(q.z - p.z) < f.hz + 0.8, `${p.type} blocks a doorway approach`).toBe(false);
+          }
+        }
+      }
+      const sp = toLocal(isl.spawn, isl.center, yaw);
+      for (const p of ps) expect(Math.hypot(p.x - sp.x, p.z - sp.z)).toBeGreaterThan(1.5);
+    }
+  });
+
   it('decals lie flat in the open, away from doorways', () => {
     const def = maps[0];
     for (const isl of def.islands) {
