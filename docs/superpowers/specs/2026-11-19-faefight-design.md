@@ -49,6 +49,15 @@ Teams (2v2 etc.), public matchmaking with strangers, accounts, saved progress/un
 ## 6. Rules proposed by me (Ishaan can override)
 
 - **Weapons sold by NPCs:** pistol (cheap) → SMG → shotgun → rifle; explosives (grenades, breaching charge) are expensive and are the main way to crack steel. Every cash decision is "gun or walls?".
+  - **Range falloff (approved by Ishaan, 2026-11-20):** sniping across the map shouldn't pay off, and close fights should be rewarded, for players and bots alike. Each bullet does full damage up to a near range, drops linearly to a floor at a far range, and stays at the floor beyond that. Headshots (×2) multiply on top. Piece damage uses the same falloff, so chipping at walls from long range is weaker too. Rocket, grenade and charge are unchanged. One function, `gunplay.shotDamage`, is shared by the sim and the client's predicted hit. Hits reduced by range carry a `falloff` tag, and their damage number is drawn slightly dimmer.
+
+    | Gun | Full damage to | Floor reached at | Floor |
+    |---|---|---|---|
+    | pistol | 15 m | 40 m | 50% |
+    | smg | 10 m | 35 m | 50% |
+    | shotgun (per pellet) | 8 m | 25 m | 20% |
+    | rifle | 25 m | 60 m | 55% |
+  - **Spread:** the cone is hip or aimed base, plus bloom from sustained fire (the rifle adds 0.7° per shot), plus a movement penalty (walking, then more for sprinting, most in the air). Aiming cuts bloom to 60% and halves the movement penalty. Tap-firing lets the bloom recover fully, so an aimed, still, tapped shot stays accurate at mid range. Each shot's offset comes from a hash seeded by (tick, player), so the host, lag compensation and replays all agree.
 - **Building pieces:** sandbags (cheap, weak), wood barricade, sheet-metal wall, steel plate (expensive, strong), scaffold bridge segment (how you cross water), ramp/stairs, shipping container (big, tough, pricey). Material decides health and which damage hurts it (fists only dent sandbags/wood).
 - **Sudden death at 15:00 (approved by Ishaan):** generators stop, every bunker seals, and the **tide starts rising**. Water kills, so everyone is eventually forced out; last alive wins. Guarantees matches end.
 - **Seal check timing:** checked when the respawn would happen (~3 s respawn timer). Kill-then-seal before the timer ends = eliminated.

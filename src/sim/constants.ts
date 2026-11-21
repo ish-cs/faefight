@@ -55,6 +55,9 @@ export type WeaponSpec = {
 const NO_SPREAD: SpreadSpec = { base: 0, ads: 0, perShot: 0, max: 0, recover: 1, move: 0, sprint: 0, air: 0 };
 const NO_FALLOFF = { start: 1e9, end: 1e9 + 1, minMult: 1 };
 
+// Range falloff (2026-11-20): long-range plinking stops paying; close fights win. Bullets keep full
+// damage to `start`, fall linearly to `minMult` at `end`, and hold that floor beyond. Applies to players
+// and pieces alike (gunplay.shotDamage); fists, rockets and grenades have none.
 export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   fists: {
     price: 0, dmg: 10, pellets: 1, rps: 2, mag: Infinity, reloadSec: 0, reloadEmptySec: 0, chamber: false, range: 2,
@@ -62,7 +65,7 @@ export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   },
   pistol: {
     price: 50, dmg: 20, pellets: 1, rps: 4, mag: 12, reloadSec: 1.5, reloadEmptySec: 1.9, chamber: true, range: 60,
-    falloff: { start: 15, end: 45, minMult: 0.6 },
+    falloff: { start: 15, end: 40, minMult: 0.5 },
     spread: { base: 0.8, ads: 0.3, perShot: 0.9, max: 4, recover: 9, move: 1.4, sprint: 3, air: 5 },
     recoil: { up: 1.3, upGrow: 0, side: 0.35, sideBias: 0 }, adsZoom: 1.3, adsMove: 0.75,
   },
@@ -75,14 +78,14 @@ export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   shotgun: {
     // Tube-fed: loads shell by shell (reloadTime), so no chamber bonus.
     price: 200, dmg: 9, pellets: 10, rps: 1.1, mag: 6, reloadSec: 0.45, reloadEmptySec: 0.45, chamber: false, range: 30,
-    falloff: { start: 6, end: 22, minMult: 0.2 },
+    falloff: { start: 8, end: 25, minMult: 0.2 },
     spread: { base: 0.5, ads: 0.25, perShot: 1.0, max: 3, recover: 4, move: 0.8, sprint: 2, air: 3 },
     recoil: { up: 4.2, upGrow: 0, side: 1.0, sideBias: 0 }, adsZoom: 1.2, adsMove: 0.75,
   },
   rifle: {
     price: 300, dmg: 30, pellets: 1, rps: 6, mag: 25, reloadSec: 2.3, reloadEmptySec: 2.8, chamber: true, range: 150,
-    falloff: { start: 60, end: 150, minMult: 0.85 },
-    spread: { base: 2.2, ads: 0.12, perShot: 0.5, max: 5, recover: 7, move: 2.5, sprint: 5, air: 7 },
+    falloff: { start: 25, end: 60, minMult: 0.55 },
+    spread: { base: 2.2, ads: 0.12, perShot: 0.7, max: 5, recover: 7, move: 2.5, sprint: 5, air: 7 },
     recoil: { up: 0.75, upGrow: 0.05, side: 0.4, sideBias: 0.15 }, adsZoom: 2, adsMove: 0.6,
   },
   rocket: {
