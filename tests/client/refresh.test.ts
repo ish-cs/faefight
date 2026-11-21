@@ -1,5 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { RefreshProbe, frameBudgetMs, snapHz } from '../../src/client/refresh';
+import { FrameQueue, RefreshProbe, frameBudgetMs, snapHz } from '../../src/client/refresh';
+
+describe('GPU frame queue limit', () => {
+  it('holds new frames while 2 are in flight, releases as the GPU finishes', () => {
+    const q = new FrameQueue(2);
+    expect(q.busy(0)).toBe(false);
+    const a = q.submitted(0), b = q.submitted(1);
+    expect(q.busy(2)).toBe(true);
+    a();
+    expect(q.busy(3)).toBe(false);
+    b();
+    expect(q.inFlight).toBe(0);
+  });
+
+  it('never deadlocks: a frame the GPU never reports done is dropped after 250 ms', () => {
+    const q = new FrameQueue(1);
+    q.submitted(0);
+    expect(q.busy(100)).toBe(true);
+    expect(q.busy(300)).toBe(false);
+  });
+
+  it('a late completion after the reset does not go negative', () => {
+    const q = new FrameQueue(1);
+    const done = q.submitted(0);
+    q.busy(300);
+    done();
+    expect(q.inFlight).toBe(0);
+  });
+});
 
 describe('display refresh estimate', () => {
   it('snaps a measured rate to the nearest common refresh', () => {

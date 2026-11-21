@@ -37,6 +37,29 @@ export class RefreshProbe {
   }
 }
 
+/**
+ * Frames-in-flight limit. With vsync off, or when GPU-bound, the browser lets WebGPU work pile up: measured 0.5 s
+ * from mouse-look to GPU done on ultra at 2× DPR. The frame loop asks `busy()` before starting a frame and skips the
+ * rAF while `max` frames are still on the GPU, so input latency stays at ≤ max + 1 frames however heavy the GPU
+ * load. A frame whose completion never arrives (device lost) is forgotten after 250 ms, so the loop can't stall.
+ */
+export class FrameQueue {
+  private times: number[] = [];
+  private gen = 0;
+  constructor(private max = 2) {}
+  get inFlight() { return this.times.length; }
+  busy(now: number): boolean {
+    if (this.times.length && now - this.times[0] > 250) { this.times.length = 0; this.gen++; }
+    return this.times.length >= this.max;
+  }
+  /** Call after submitting a frame; call the returned function when the GPU has finished it. */
+  submitted(now: number): () => void {
+    this.times.push(now);
+    const g = this.gen;
+    return () => { if (g === this.gen && this.times.length) this.times.shift(); };
+  }
+}
+
 /** The page's display estimate: probed from page load (menu frames are light), then fed by the game loop. */
 export const displayRefresh = new RefreshProbe();
 if (typeof requestAnimationFrame !== 'undefined') {

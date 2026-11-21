@@ -1,4 +1,4 @@
-import { displayRefresh, frameBudgetMs } from './refresh';
+import { displayRefresh, FrameQueue, frameBudgetMs } from './refresh';
 import './style.css';
 import type { Object3D } from 'three/webgpu';
 import type { HostMsg, Slot, ViewExtras } from '../net/protocol';
@@ -1852,11 +1852,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   };
   let fpsFrames = 0, fpsSince = last;
   let lastDrawn = 0;
+  const gpuQueue = new FrameQueue(2);
   const frame = () => {
     const now = performance.now();
     // Settings → Video frame cap (rAF itself is vsync-locked; this only skips frames below it).
     const cap = settings.get().video.frameCap;
     if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
+    // GPU still busy with 2 frames: wait (input latency stays ≤ 3 frames however GPU-bound; refresh.ts FrameQueue)
+    if (gpuQueue.busy(now)) { requestAnimationFrame(frame); return; }
     lastDrawn = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
@@ -2082,6 +2085,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderer.render(input.yaw);
       fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
       renderer.captureInfo();
+      const gpuDone = gpuQueue.submitted(performance.now());
+      (renderer.gpu.backend as { device?: { queue: { onSubmittedWorkDone(): Promise<void> } } }).device?.queue.onSubmittedWorkDone().then(gpuDone, gpuDone);
       if (input.lookEventT !== null) { latency.drawn(input.lookEventT); input.lookEventT = null; }
       if (warmLoop.left > 0 && --warmLoop.left === 0) { warmLoop.before = null; warmLoop.done?.(); }
     }

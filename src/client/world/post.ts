@@ -18,6 +18,15 @@ export type PostOptions = {
   taau?: { scale: number; sharpen: number };
 };
 
+/**
+ * Opt a material out of TAAU motion vectors (writes zero velocity; the history clamp absorbs the error). Needed for
+ * instanced meshes that already use most vertex buffers: velocity adds the previous instance matrix (4 more), and
+ * WebGPU allows 8 (critters: 9 → pipeline creation fails and the mesh disappears). Free when TAAU is off.
+ */
+export function noVelocity(m: THREE.NodeMaterial) {
+  m.mrtNode = mrt({ velocity: vec4(0, 0, 0, 0) });
+}
+
 /** live TAAU sharpen strength (debug: tweak in ?debug=1 via World.sky.grade) */
 const sharpenAmount = uniform(0.25);
 
