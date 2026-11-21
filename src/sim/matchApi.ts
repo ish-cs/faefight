@@ -7,6 +7,11 @@ export type MatchSetup = {
   seed?: number;
   /** Map template (already resolved from the lobby's choice; 'random' never reaches the sim). Default harbor. */
   map?: MapTemplate;
+  /**
+   * Practice range (offline sandbox, see practice.ts): exactly one human player; the map is the practice layout,
+   * targets and dummies are added by the range; no timer, sudden death or elimination; cash and pieces never run out.
+   */
+  practice?: boolean;
 };
 
 /**

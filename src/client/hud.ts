@@ -287,6 +287,13 @@ export class Hud {
     return this.panelKind !== null;
   }
 
+  /** Practice range: no clock, cash shown as ∞, the shop opens anywhere and everything in it is free. */
+  private practice = false;
+  setPractice() {
+    this.practice = true;
+    this.root.classList.add('practice-mode');
+  }
+
   /** Prompt/near-station state is computed here from the snapshot so main stays thin. */
   nearStation(): 'shop' | 'potions' | 'vault' | 'generator' | 'gold' | 'supply' | null {
     const me = this.me;
@@ -300,7 +307,7 @@ export class Hud {
     const c = this.centerIsland;
     if (c && dist2D(c.goldGen, me.pos) <= r) return 'gold';
     if (c && dist2D(c.supplyGen, me.pos) <= r) return 'supply';
-    return null;
+    return this.practice ? 'shop' : null;
   }
 
   update(snap: Snapshot, ctx: HudContext) {
@@ -328,7 +335,7 @@ export class Hud {
     this.hpFill.classList.toggle('low', me.hp <= 30);
     setText(this.hpText, `${Math.ceil(me.hp)}`);
     this.updateShield(me, snap);
-    setText(this.cash, `$${inv.cash}`);
+    setText(this.cash, this.practice ? '$∞' : `$${inv.cash}`);
 
     // Generator stored: shown for whichever generator you're near (yours, or theirs to steal).
     const near = snap.generators
@@ -412,8 +419,8 @@ export class Hud {
 
   /** Timer, tide banner and the island chips (myIsland -1 = none of them is yours). */
   private updateMatchInfo(snap: Snapshot, myIsland: number) {
-    const left = LIFECYCLE.suddenDeathAt - snap.time;
-    setText(this.timer, snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
+    const left = this.practice ? Infinity : LIFECYCLE.suddenDeathAt - snap.time;
+    setText(this.timer, this.practice ? 'PRACTICE' : snap.suddenDeath ? 'SUDDEN DEATH' : fmtClock(left));
     this.timer.classList.toggle('sd', snap.suddenDeath);
     setText(this.banner, snap.suddenDeath ? `Tide rising · water ${snap.waterY.toFixed(1)} m` : left < 60 ? 'Sudden death soon' : '');
     this.banner.style.display = this.banner.textContent ? '' : 'none';
@@ -590,19 +597,18 @@ export class Hud {
       this.panel.onkeydown = (e) => this.shopArrows(e);
       this.panel.focus({ preventScroll: true });
     }
-    setText(this.panel.querySelector('.panel-cash') as HTMLElement, `Carrying $${me.inv.cash}`);
+    setText(this.panel.querySelector('.panel-cash') as HTMLElement, this.practice ? 'Practice: everything is free' : `Carrying $${me.inv.cash}`);
     const genLevel = this.snap?.genLevels?.[me.island] ?? 1;
     // Any island's shop NPC sells to you, but upgrades and locks only at your own.
-    const atHome = !!this.map[me.island] && dist2D(this.map[me.island].shop, me.pos) <= ECONOMY.interactRadius;
+    const atHome = this.practice || (!!this.map[me.island] && dist2D(this.map[me.island].shop, me.pos) <= ECONOMY.interactRadius);
     for (const b of Array.from(this.panel.querySelectorAll<HTMLButtonElement>('.shop-item'))) {
       const item = b.dataset.item as ShopItem;
       const price = priceOf(item, genLevel, me);
-      setText(b.querySelector('.iprice') as HTMLElement, `$${price}`);
       const poor = me.inv.cash < price;
       const lockGun = lockedGunOf(item);
       let status = '';
       let badge = '';
-      setText(b.querySelector('.iprice') as HTMLElement, `$${price}`);
+      setText(b.querySelector('.iprice') as HTMLElement, this.practice ? 'Free' : `$${price}`);
       b.classList.toggle('show-lock', !!lockGun || ((GUNS as readonly string[]).includes(item) && me.locked.includes(item as GunKind)));
       if (item === 'genUpgrade') {
         const next = Math.min(GENERATOR_MAX_LEVEL, genLevel + 1), spec = generatorSpec(next);

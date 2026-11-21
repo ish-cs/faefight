@@ -107,6 +107,10 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         paused = msg.paused;
         console.info(`[worker] ${paused ? 'paused' : 'resumed'}`);
         break;
+      case 'practice':
+        if (!match) throw new Error('practice before start');
+        match.practiceCommand(msg.cmd);
+        break;
       case 'preview':
         if (match) post({ type: 'preview', playerId: msg.playerId, result: match.previewBuild(msg.playerId, msg.req), key: msg.key });
         break;
