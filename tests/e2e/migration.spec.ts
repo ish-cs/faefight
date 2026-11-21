@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { NEEDS_GPU, ON_CI } from './gpu';
+
+test.skip(ON_CI, NEEDS_GPU); // plays a match
 
 // Host migration over the same-browser BroadcastChannel transport (?net=local): the host's tab closes
 // mid-match and the match goes on with a guest hosting it.
