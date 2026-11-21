@@ -3,6 +3,7 @@ import {
   abs, attribute, bumpMap, float, floor, mod, luminance, max, mix, mx_noise_float, normalGeometry, normalLocal, normalMap, positionGeometry, positionLocal,
   pow, select, sin, smoothstep, step, texture, uv, vec2, vec3, vec4,
 } from 'three/tsl';
+import { applyWet } from './wetness';
 import { PIECES } from '../../sim/constants';
 import type { PieceKind, PieceState } from '../../sim/types';
 import { DAMAGE_TILE_M, damageTex } from './damageTex';
@@ -483,6 +484,7 @@ function slotMaterial(kind: PieceKind, slot: Slot): THREE.MeshStandardNodeMateri
   m.roughnessNode = mix(baseRough, float(0.95), wear);
   if (o.style === 'sheet' || o.style === 'steel' || o.style === 'trim') m.metalnessNode = mix(float(b.metal), float(0.1), wear);
   if (arm) m.aoNode = arm.r;
+  applyWet(m, { porosity: o.style === 'sheet' || o.style === 'steel' || o.style === 'trim' ? 0.3 : 1, rgba: true });
   if (o.hole) {
     m.opacityNode = step(holeT, s.g);
     m.alphaTest = 0.5;

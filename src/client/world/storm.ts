@@ -7,6 +7,7 @@ import type { StormSnap, Vec3 } from '../../sim/types';
 import type { Weather } from './dayNight';
 import { lightU } from './lightUniforms';
 import type { Quality, SkyLighting } from './sky';
+import { stepWetness, WET, wetness, wetOverride } from './wetness';
 
 /** WebGPURenderer tone-maps unlit materials too: pre-boost so the bolt and wall read bright. */
 const BOOST = 2.6;
@@ -45,6 +46,9 @@ export class StormFx {
   private tmpC = new THREE.Color();
   private tmpH = new THREE.Color();
   private weatherDirty = false;
+  /** Ground wetness (wetness.ts): soaks in behind the rain, dries slowly after; ?wet= pins it. */
+  private soak = 0;
+  private readonly wetPin = wetOverride();
   /** Perf debugging (tests/visual/storm.mjs): hide one part. */
   debugHide: 'rain' | 'wall' | null = null;
 
@@ -146,6 +150,8 @@ export class StormFx {
     this.wet += (this.target - this.wet) * Math.min(1, dt / 2.5);
     if (this.target === 0 && this.wet < 0.003) this.wet = 0;
     const w = this.wet;
+    this.soak = stepWetness(this.soak, Math.max(w, WET.dew), dt);
+    wetness.value = this.wetPin ?? this.soak;
 
     // Flash: a bright pulse with a second flicker ~150 ms later.
     const ft = (now - this.flashAt) / 1000;
