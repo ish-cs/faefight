@@ -1,3 +1,4 @@
+import { displayRefresh, frameBudgetMs } from './refresh';
 import './style.css';
 import type { Object3D } from 'three/webgpu';
 import type { HostMsg, Slot, ViewExtras } from '../net/protocol';
@@ -1860,9 +1861,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
       // main-thread work of the previous frame tells the governor whether frames are GPU- or CPU-bound
-      if (governor.frame(now - last, 1000 / (cap || 60), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
+      // budget: the frame cap, else the display's refresh (120 Hz ProMotion → 8.3 ms, not 60 fps)
+      if (governor.frame(now - last, frameBudgetMs(cap, displayRefresh.hz), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
     }
     frameMs.push(now - last);
+    displayRefresh.frame(now - last);
     errors?.frame(now - last);
     if (frameMs.length > 600) frameMs.shift();
     last = now;
