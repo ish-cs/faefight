@@ -77,6 +77,8 @@ export type BrainInput = {
   bankable: number;
   /** The rival I'm currently focused on (commitment), if any. */
   focus: number | null;
+  /** My build planner (build.ts) has fortification work worth doing at home. */
+  fortifyWanted?: boolean;
   /** Within a few steps of my vault. */
   nearVault: boolean;
   /** I carry what it takes to clear every plug in my doorways (gun for soft, charge/rocket for hard). */
@@ -274,6 +276,7 @@ export class Brain {
       { label: 'gear up', act: 'shop', done: inp.upgraded },
       { label: 'bank', act: 'bank', done: inp.bankable < 40 && inp.insuranceDue === 0 },
       { label: 'cut the bridge into my island', act: 'cut', done: !inp.incomingBridge },
+      { label: 'build up my home (walls, plugs ready)', act: 'fortify', done: !inp.fortifyWanted },
     ];
     if (fortify.some((s) => !s.done))
       add('fortify', p.planTurtle * early * (inp.upgraded ? 0.4 : 1) * (inp.suddenDeath ? 0 : 1) * (inp.endgame ? 0.2 : 1) + 0.05,

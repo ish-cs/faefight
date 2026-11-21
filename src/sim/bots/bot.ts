@@ -639,6 +639,7 @@ export class Bot {
       armedNear: c.armedNear, underFire: !!c.fire,
       kit: sealKit(inv), carried: inv.cash, banked: me.vault.cash, insuranceDue: this.insuranceDue(me),
       focus: this.targetId, nearVault: dist2D(me.pos, home.vault) < 6, canClearHome: this.blockers(c).every((p) => this.canClear(c, p)),
+      fortifyWanted: this.score('fortify', c) > 0,
       bankable: Math.max(0, Math.floor(inv.cash - this.keepFor(c) - 25)),
       intruder: !!this.intruder(c), homeSealed: view.sealed[home.index], homePlugged: this.blockers(c).length > 0,
       incomingBridge: !!this.incomingDeck(c),
@@ -704,8 +705,15 @@ export class Bot {
     let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
     // Center-minded: bridge to the center island first when it isn't much further than the rival. Anyone else
     // (but easy players) goes via the center when it's the shorter bridge: it's the hub to everyone, and the fights.
+    // My bridge to them got shot out: skilled players go round on the mirror lane (noticed here too, not only
+    // while bridging, so a detour via the center doesn't hide it).
+    if (rivalIsl && !reach && BUILD_SKILL[this.difficulty].altRoute && !this.alt.has(rivalIsl.index)) {
+      const l = this.nav.lane(home.index, rivalIsl.index), key = `${l.from}>${l.to}`;
+      const best = this.laneBest.get(key), s = this.nav.frontier(l).s;
+      if (best !== undefined && s < best - 3) { this.laneBest.set(key, s); this.alt.add(rivalIsl.index); }
+    }
     const slack = this.centerMinded ? 2 : this.difficulty !== 'easy' ? 0 : -Infinity;
-    if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath &&
+    if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath && !(bridgeTo !== null && this.alt.has(bridgeTo)) &&
         (bridgeTo === null ? this.centerMinded : this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
     // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
     if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
@@ -1114,7 +1122,7 @@ export class Bot {
       if (base <= 0 && g !== best) continue;
       const bias = GOAL_BIAS[g];
       // The storm outranks any plan step: staying inside the ring is survival.
-      const s = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' ? STEP_BONUS + this.params.stepPush : 0) +
+      const s = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' || g === 'cover' || (g === 'fortify' && this.t.builder > 0.6 && c.view.now < this.params.turtleUntil) ? STEP_BONUS + this.params.stepPush : 0) +
         (this.rng() - 0.5) * NOISE[this.difficulty] + (g === this.goal ? STICKY : 0);
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
