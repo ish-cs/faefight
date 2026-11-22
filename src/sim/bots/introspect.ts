@@ -113,7 +113,8 @@ type Internals = {
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
   defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
   waitFor(c: Ctx): AllyStatus | null; ownFight(c: Ctx): boolean; teamFocus(view: BotView, id: number): number;
-  pushLead(view: BotView): { id: number; target: number | null } | null;
+  pushLead(view: BotView): { id: number; target: number | null } | null; allyIsland(view: BotView, i: number): boolean;
+  sieging(c: Ctx): boolean; nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null;
   hookNote: { t: number; text: string } | null;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
@@ -311,12 +312,13 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (have === 0) return zero('no scaffolds');
       if (now < ((I as unknown as { bridgeHoldUntil?: number }).bridgeHoldUntil ?? -Infinity)) return zero('holding off the bridge');
       const need = I.scaffoldsNeeded(c);
-      const toRival = c.bridgeTo !== I.nav.centerNode;
+      const toRival = c.bridgeTo !== I.nav.centerNode && !I.allyIsland(view, c.bridgeTo);
       if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return zero('need a seal kit before landing');
       const f: [string, number][] = [['base', 0.45], ['aggression', 0.15 * t.aggression]];
       if (have >= need) f.push(['enough decks', 0.1]);
       if (!toRival) { f.push(['greed', 0.05 * t.greed]); if (I.stormPrep(view)) f.push(['storm prep', 0.45]); }
-      const to = toRival ? `${c.rival && view.map[c.bridgeTo] && c.rival.island === c.bridgeTo ? rivalName(c) : 'a rival'}'s island` : 'the centre island';
+      const to = toRival ? `${c.rival && view.map[c.bridgeTo] && c.rival.island === c.bridgeTo ? rivalName(c) : 'a rival'}'s island`
+        : c.bridgeTo !== I.nav.centerNode ? `a teammate's island (on the way to ${rivalName(c)})` : 'the centre island';
       return { f, why: `Bridging to ${to}: ${have} decks carried, ${need} still needed` };
     }
     case 'contest': {
@@ -342,6 +344,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
         if (c.reach && view.suddenDeath) return { f: [['sudden death', 0.3]], why: `Sudden death: hunting ${rivalName(c)} down` };
         return zero(!c.rival ? 'no rival' : `no route to ${rivalName(c)}'s island`);
       }
+      if (I.sieging(c)) {
+        return { f: [['siege', I.P.drive.siegeScore], ['sealed hunt', I.P.drive.sealedHunt], ['opportunism', 0.2 * t.opportunism]], why: `${rivalName(c)}'s bunker is sealed: camping it to finish them` };
+      }
       if (rivalDown) {
         const wait = gun && sealKit(me.inv) === 0;
         const back = c.rival.respawnAt! - now;
@@ -356,6 +361,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const k = 0.5 + 0.5 * Math.max(hp, 1 - t.caution);
       const f: [string, number][] = [['base', 0.3 * k], ['aggression', 0.25 * t.aggression * k]];
       if (!up) f.push(['patience (no upgrade)', -0.12 * t.patience * k]);
+      if (c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive) f.push(['sealed hunt', I.P.drive.sealedHunt]);
       const where = recent ? `seen ${secs(now - recent.t)} ago${recent.island >= 0 && recent.island !== c.rival.island ? ' away from home' : ''}` : 'whereabouts unknown';
       return { f, why: `Going after ${rivalName(c)} (${where}) with my ${gunName(best(me.inv))}` };
     }
@@ -395,7 +401,13 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       return { f, why: `@${deck.owner} bridged into my island${crossing && c.enemy ? `, @${c.enemy.id} is on it` : ''}: shooting the deck out` };
     }
     case 'loot': {
-      const bag = I.nearestLoot(c);
+      const bag = I.nearestLoot(c), crate = I.nearestCrate(c);
+      if (!bag && !crate) return zero('no loot in reach');
+      const crateS = crate ? 0.2 + 0.3 * t.greed - dist2D(crate.pos, me.pos) / 30 : 0;
+      const bagS = bag ? 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70 : 0;
+      if (crate && (!bag || crateS > bagS)) {
+        return { f: [['crate', 0.2], ['greed', 0.3 * t.greed], ['distance', -dist2D(crate.pos, me.pos) / 30]], why: `A supply crate ${m(dist2D(crate.pos, me.pos))} away: breaking it open` };
+      }
       if (!bag) return zero('no loot in reach');
       const f: [string, number][] = [['base', 0.35], ['greed', 0.45 * t.greed]];
       if (!gun) f.push(['unarmed', 0.2]);
