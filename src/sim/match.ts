@@ -3,6 +3,7 @@ import { damagePiece, snapPlacement, validatePlacement, type Placement } from '.
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
+import { dropBarriers } from './barriers';
 import { islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
@@ -66,6 +67,8 @@ export class Match implements MatchApi {
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
   private sealDirty = true;
+  /** Sim time the sudden-death doorway barriers dropped (barriers.ts); null before. */
+  private barrierAt: number | null = null;
   private doors: DoorwayTracker;
   private supportDirty = false;
   private kills: { victim: number; killer: number | null }[] = [];
@@ -339,6 +342,7 @@ export class Match implements MatchApi {
     for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
     this.events.push(...this.cosmetics.onEvents(this.events, now));
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT, this.settings.suddenDeathSec));
+    if (this.s.forcedSeal && this.barrierAt === null) this.dropBarriers(now);
     this.practice?.after(now);
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
@@ -768,6 +772,12 @@ export class Match implements MatchApi {
     this.events.push({ t: now, type: 'placed', data: { piece: id, kind: req.kind, by: p.id } });
   }
 
+  /** Sudden death sealed every bunker: concrete slabs drop over every doorway (one 'allSealed' event for all of them). */
+  private dropBarriers(now: number) {
+    this.barrierAt = now;
+    this.events.push(...dropBarriers(this.physics, this.map, this.s.players.values(), this.s.pieces, (id) => this.ctx.onPieceDestroyed(id), now));
+  }
+
   private updateSeals(now: number) {
     if (!this.sealDirty && !this.s.forcedSeal) return;
     this.sealDirty = false;
@@ -780,7 +790,8 @@ export class Match implements MatchApi {
         if (sealed && !this.s.forcedSeal)
           for (const pc of sealPieces(this.s, i))
             if (pc.id > newest && dist2D(pc.pos, isl.bunker.center) <= SEAL.half) { newest = pc.id; by = pc.owner; }
-        this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i, owner, by } });
+        // Sudden death seals every bunker at once: that is the single 'allSealed' event (dropBarriers), not one per bunker.
+        if (!this.s.forcedSeal) this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i, owner, by } });
       }
       this.sealed[i] = sealed;
     });
@@ -917,6 +928,7 @@ export class Match implements MatchApi {
       sealed: this.sealed,
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
+      ...(this.barrierAt !== null ? { barrierAt: this.barrierAt } : {}),
       storm: this.s.storm ? stormSnap(this.s.storm, this.s.time) : null,
       winner: this.s.winner,
       potionShops: this.potionShops,

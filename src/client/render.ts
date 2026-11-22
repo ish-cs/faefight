@@ -16,6 +16,7 @@ import { loadQuality } from './world/sky';
 import { DayNight } from './world/dayNight';
 import { StormFx } from './world/storm';
 import { TrapLayer } from './world/traps';
+import { BarrierLayer } from './world/barriers';
 import type { WorldSurface } from './world/surfaces';
 import { wetness } from './world/wetness';
 import { playSfx } from './audio/api';
@@ -73,6 +74,8 @@ export class Renderer {
   private potionSellers = new PotionSellers(this.scene);
   /** Spike traps (world/traps.ts) and their placement ghost. */
   readonly traps = new TrapLayer();
+  /** Sudden-death doorway barriers (world/barriers.ts): built per map, hidden until they drop. */
+  barriers: BarrierLayer | null = null;
   /** Animated shop keepers (characters/npcs.ts). */
   readonly npcs = new NpcSystem(this.scene);
   /** Grappling hook ropes, one instanced draw (ropes.ts). */
@@ -185,6 +188,13 @@ export class Renderer {
     this.storm.setMap(map, def.center);
     this.dayNight.setCycle(def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt);
     this.gunFx.warmUp([this.boomMat]);
+    if (this.barriers) {
+      const gone = new Set<THREE.Object3D>(this.barriers.proxies);
+      for (let i = this.collidables.length - 1; i >= 0; i--) if (gone.has(this.collidables[i])) this.collidables.splice(i, 1);
+      this.barriers.dispose();
+    }
+    this.barriers = new BarrierLayer(def);
+    this.scene.add(this.barriers.root);
     if (this.genPips) { this.scene.remove(this.genPips); this.genPips.dispose(); }
     const h = PROP_HALF.generator;
     const pips = new THREE.InstancedMesh(this.pipGeo, this.pipMat, map.length * GENERATOR_MAX_LEVEL);
@@ -315,6 +325,11 @@ export class Renderer {
     }
     this.potionSellers.sync(snap.potionShops);
     this.storm.sync(snap.storm, snap.suddenDeath);
+    if (this.barriers?.sync(snap.barrierAt, snap.time)) {
+      // Down for good: camera / aim blockers, and bullet marks land on them as concrete.
+      this.collidables.push(...this.barriers.proxies);
+      this.world.impacts.surf?.addSolid(this.barriers.list, 'concrete');
+    }
     for (const e of snap.events) this.onEvent(e);
     return snap.events;
   }
@@ -562,6 +577,7 @@ export class Renderer {
     this.dayNight.frame(simT, !!snap?.suddenDeath);
     this.storm.frame(dt, this.camera, this.world.sky.quality, simT);
     this.traps.frame(simT);
+    this.barriers?.frame(simT, this.world.pieceFx.particles);
     const feet = this.feet.slice(0, nf);
     this.npcs.frame(dt, this.camera, feet);
     this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw

@@ -21,6 +21,7 @@
 //     shells     shellCasing (kind Surface: hard surfaces ring, soft ones barely tick)
 //     ragdolls   ragdollThud (kind Surface)
 //     docks      dockCreak (stressed planks), dockBreak (planks give way + splash)
+//     barriers   barrierSlam (a concrete doorway slab landing; sudden death)
 //     day/night  setDaylight(0..1): gulls by day, crickets and owls at night (ambience)
 //   Music is automatic (music.ts): calm → tense near a fight → intense in the storm.
 

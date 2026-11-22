@@ -202,7 +202,9 @@ export type MatchEventType =
   /** Spike trap: data { what: 'placed' | 'fired' | 'broken', id, pos, by / owner } (sim/traps.ts). */
   | 'trap'
   /** A wooden pier section broke (docks.ts): data { id, island, row, pos, rotY, by, kind }. */
-  | 'dockBroken';
+  | 'dockBroken'
+  /** Sudden death sealed every bunker at once and dropped the doorway barriers (barriers.ts): data { barriers }. */
+  | 'allSealed';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -238,6 +240,8 @@ export type Snapshot = {
   sealed: boolean[];
   waterY: number;
   suddenDeath: boolean;
+  /** Sim time the sudden-death doorway barriers dropped (barriers.ts); absent before. */
+  barrierAt?: number;
   /** Sudden-death storm (null/absent before it starts). Optional so hand-built snapshots can omit it. */
   storm?: StormSnap | null;
   winner: number | null;

@@ -532,6 +532,11 @@ export class Bot {
     if (!dodge) dir = this.hazardAvoid(ctx, dir);
     if (dir && !dodge) dir = this.stormFence(me, view, dir);
     if (dir) dir = this.nav.safeDir(dir);
+    // Sudden death: concrete barriers fill every doorway (barriers.ts). Inside a bunker no step leads out: whatever
+    // the goal wants, don't push into a slab (the stuck recovery would only thrash about the room).
+    if (dir && view.suddenDeath)
+      for (const isl of view.map)
+        if (insideBunker(isl.bunker, me.pos) && !insideBunker(isl.bunker, add(me.pos, scale(dir, 0.6)))) { dir = null; break; }
     // Never walk into (or stand in) fire: slide around burning pieces and ground fires (a lightning dodge wins).
     const zones = this.avoidZones(view, me);
     if (zones.length && !dodge) {
@@ -1569,6 +1574,9 @@ export class Bot {
 
   /** Inside my own sealed bunker (respawned into it, or sealed in alive): getting out is all that matters. */
   private trapped(c: Ctx): boolean {
+    // Sudden death: concrete barriers fill every doorway (barriers.ts), so from inside there is no getting out at all;
+    // fight from where I stand (through the slits) instead of pushing into a slab until the countdown ends.
+    if (c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos)) return false;
     return c.me.breakoutUntil !== null || (c.view.sealed[c.home.index] && !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos));
   }
 
@@ -1692,6 +1700,8 @@ export class Bot {
     if (dist2D(self.pos, dest) <= arrive) return IDLE;
     const home = this.view.map[self.island];
     if (insideBunker(home.bunker, self.pos) && !insideBunker(home.bunker, dest)) {
+      // Sudden death: concrete barriers fill every doorway (barriers.ts). No way out: don't push into a slab.
+      if (this.view.suddenDeath) return IDLE;
       // Out of my bunker first, around whatever stands in it or in its doorways.
       const path = this.homeGrid({ home, view: this.view } as Ctx).search(self.pos).path;
       if (path) return { dir: norm(flat(sub(path[Math.min(path.length - 1, 3)], self.pos))) };

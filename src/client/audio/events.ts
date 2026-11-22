@@ -28,7 +28,9 @@ export type SoundId =
   | 'grappleFire' | 'grappleAttach' | 'grappleReel' | 'grappleRelease'
   | 'spikeArm' | 'spikeTrigger'
   | 'shellCasing' | 'ragdollThud'
-  | 'dockCreak' | 'dockBreak';
+  | 'dockCreak' | 'dockBreak'
+  /** Sudden death: a concrete doorway barrier slamming down (world/barriers.ts plays it as each bunker's slabs land). */
+  | 'barrierSlam';
 
 export type Cue = {
   sound: SoundId;
