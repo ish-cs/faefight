@@ -463,8 +463,7 @@ export class Nav {
         const ld = this.nearestLane(dest);
         if (ld && !(ld.from === l.from && ld.to === l.to) && !(ld.from === l.to && ld.to === l.from)) {
           const shared = [l.from, l.to].find((n) => n === ld.from || n === ld.to);
-          if (shared === undefined) return null;
-          sTarget = this.landS(l, shared);
+          if (shared !== undefined) sTarget = this.landS(l, shared);
         }
       }
     } else {
