@@ -15,7 +15,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed'] as const;
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
@@ -30,12 +30,32 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
     case 'ffa8-pro': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
     case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 180 };
+    case 'ffa8-pro-arch': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
+    case 'ffa8-hard-arch': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
+    case '1v1-pro-arch': return { diffs: ['pro', 'pro'], maxSec: 25 * 60 };
   }
+}
+
+/**
+ * Archetype per seat for the *-arch scenarios (null = the bot rolls its own). FFA: seat i gets archetype (i + seed) % 5,
+ * so every archetype sits in every seat equally often. 1v1: seeds cycle through the 10 archetype pairs; the seat order
+ * flips every 10 seeds, so 20k seeds give each pair 2k games, k in each order.
+ */
+function archetypesFor(scenario: Scenario, seed: number, names: readonly string[]): (string | null)[] | null {
+  if (scenario === 'ffa8-pro-arch' || scenario === 'ffa8-hard-arch') return Array.from({ length: 8 }, (_, i) => names[(i + seed) % names.length]);
+  if (scenario === '1v1-pro-arch') {
+    const pairs: [string, string][] = [];
+    for (let a = 0; a < names.length; a++) for (let b = a + 1; b < names.length; b++) pairs.push([names[a], names[b]]);
+    const [x, y] = pairs[(seed - 1) % pairs.length];
+    return Math.floor((seed - 1) / pairs.length) % 2 ? [y, x] : [x, y];
+  }
+  return null;
 }
 
 type SeatOut = {
   difficulty: Difficulty; kills: number; deaths: number; aliveSec: number; attackSec: number;
   idleHome: number; longestHomeIdle: number; hitDists: number[]; eliminatedAt: number | null;
+  archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
 };
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
@@ -62,13 +82,27 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const { diffs } = seatsFor(scenario, seed);
   // MEASURE_MAX_SEC: cut games short (smoke tests of this script only; real measurements never set it).
   const maxSec = Number(process.env.MEASURE_MAX_SEC) || seatsFor(scenario, seed).maxSec;
-  const brains: { currentGoal?: string }[] = [];
-  const BotCtor = Bot as unknown as new (...a: unknown[]) => { currentGoal?: string };
+  type Brain = { currentGoal?: string; personality?: { archetype: string; traits: Record<string, number> } };
+  const brains: Brain[] = [];
+  const BotCtor = Bot as unknown as new (...a: unknown[]) => Brain;
+  const pers = await import('../../src/sim/bots/personality') as unknown as { ARCHETYPES: readonly string[]; PRESETS: Record<string, Record<string, number>> };
+  const arch = archetypesFor(scenario, seed, pers.ARCHETYPES);
+  // Same jitter as rollPersonality (±0.15 per trait, from the bot's seeded rng), but with the archetype fixed.
+  const personalityFor = (i: number, rng: () => number) => {
+    const a = arch?.[i];
+    if (!a) return undefined;
+    const traits: Record<string, number> = {};
+    for (const [k, v] of Object.entries(pers.PRESETS[a])) traits[k] = Math.min(1, Math.max(0, v + (rng() * 2 - 1) * 0.15));
+    return { archetype: a, traits };
+  };
   const m = await Match.create(
     { players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed },
-    { makeBot: (id, d, rng) => { const b = params ? new BotCtor(id, d, rng, undefined, params) : new BotCtor(id, d, rng); brains[id - 1] = b; return b as never; } },
+    { makeBot: (id, d, rng) => { const b = new BotCtor(id, d, rng, personalityFor(id - 1, rng), ...(params ? [params] : [])); brains[id - 1] = b; return b as never; } },
   );
-  const seats: SeatOut[] = diffs.map((d) => ({ difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null }));
+  const seats: SeatOut[] = diffs.map((d, i) => ({
+    difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
+    archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0,
+  }));
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, firstSeal: number | null = null;
@@ -103,6 +137,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         const by = e.data.by as number | null, target = e.data.target as number;
         const a = by != null ? snap.players[by - 1]?.pos : undefined, t = snap.players[target - 1]?.pos;
         if (by == null || by === target || !a || !t) continue;
+        seats[by - 1].damage! += Number(e.data.amount) || 0;
         seats[by - 1].hitDists.push(Math.round(Math.hypot(a.x - t.x, a.z - t.z)));
       } else if (e.type === 'kill') {
         const v = e.data.victim as number, k = e.data.killer as number | null;
@@ -110,6 +145,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (k != null && k !== v) seats[k - 1].kills++;
       } else if (e.type === 'sealed') {
         const by = e.data.by as number | null | undefined;
+        if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
         if (firstSeal === null && by != null && by !== e.data.owner && e.t < SD) firstSeal = e.t;
       } else if (e.type === 'eliminated') {
         const id = e.data.player as number;

@@ -24,7 +24,7 @@ on:
         required: true
         default: ffa8-pro
         type: choice
-        options: [1v1-hard, 1v1-pro-vs-hard, ffa8-pro, ffa8-hard, ffa8-mixed, all]
+        options: [1v1-hard, 1v1-pro-vs-hard, ffa8-pro, ffa8-hard, ffa8-mixed, all, ffa8-pro-arch, ffa8-hard-arch, 1v1-pro-arch]
       seeds:
         description: Seeds per scenario (seeds 1..N)
         required: true
@@ -71,7 +71,7 @@ jobs:
           set -euo pipefail
           all="1v1-hard 1v1-pro-vs-hard ffa8-pro ffa8-hard ffa8-mixed"
           if [ "$SCENARIO" = all ]; then scs=$all; else
-            case " $all " in *" $SCENARIO "*) scs=$SCENARIO ;; *) echo "::error::unknown scenario '$SCENARIO'"; exit 1 ;; esac
+            case " $all ffa8-pro-arch ffa8-hard-arch 1v1-pro-arch " in *" $SCENARIO "*) scs=$SCENARIO ;; *) echo "::error::unknown scenario '$SCENARIO'"; exit 1 ;; esac
           fi
           [[ "$SEEDS" =~ ^[0-9]+$ ]] && [ "$SEEDS" -ge 1 ] && [ "$SEEDS" -le 200 ] || { echo "::error::seeds must be 1..200, got '$SEEDS'"; exit 1; }
           tasks=()
