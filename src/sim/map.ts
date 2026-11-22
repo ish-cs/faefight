@@ -2,7 +2,7 @@ import * as dm from './dmath';
 import { CENTER, DOCK, MAP } from './constants';
 import type { Vec3 } from './types';
 import type { GameSettings } from './settings';
-import { placeProps, type PropSpawn } from './props';
+import { placeProps, type PropSpawn } from './propPlace';
 import { add, forward, right, rotateY, scale, v3, yawOf } from './vec';
 
 export type Doorway = { center: Vec3; yaw: number; width: number };
