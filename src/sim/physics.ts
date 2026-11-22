@@ -20,6 +20,10 @@ export type PhysicsSave = {
   slits: number[];
   /** Standing pier sections: dock id → collider handle. */
   docks?: [number, number][];
+  /** Piece base heights, crane anchors and no-build zones (clone() copies them too; a restore without them builds differently). */
+  pieceBaseY?: [number, number][];
+  anchors?: number[];
+  zones?: [string, NoBuildZone[]][];
   dirty: boolean;
 };
 
@@ -109,6 +113,9 @@ export class Physics {
       players: [...this.players].map(([id, c]) => [id, c.handle]),
       slits: [...this.slits],
       docks: [...this.docks].map(([id, c]) => [id, c.handle]),
+      pieceBaseY: [...this.pieceBaseY],
+      anchors: [...this.anchors],
+      zones: [...this.zones].map(([g, z]) => [g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } }))]),
       dirty: this.dirty,
     };
   }
@@ -130,6 +137,9 @@ export class Physics {
     for (const [id, h] of s.players) ph.players.set(id, col(h));
     for (const h of s.slits) ph.slits.add(h);
     for (const [id, h] of s.docks ?? []) ph.docks.set(id, col(h));
+    for (const [id, y] of s.pieceBaseY ?? []) ph.pieceBaseY.set(id, y);
+    for (const h of s.anchors ?? []) ph.anchors.add(h);
+    for (const [g, z] of s.zones ?? []) ph.zones.set(g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } })));
     ph.dirty = s.dirty;
     return ph;
   }

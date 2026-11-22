@@ -59,7 +59,9 @@ test('a vs-bot match is recorded; Replays lists it; it plays back, pauses, chang
   const held = (await dbg<RState>(page, 'replayState'))!.tick;
   await page.waitForTimeout(400);
   expect((await dbg<RState>(page, 'replayState'))!.tick).toBe(held);
-  await page.getByTestId('replay-speed').selectOption('4');
+  const speed4 = page.getByTestId('replay-speed').locator('button[data-value="4"]');
+  await speed4.click();
+  await expect(speed4).toHaveClass(/\bon\b/);
   await page.getByTestId('replay-play').click();
   await page.waitForTimeout(1000);
   const ran = (await dbg<RState>(page, 'replayState'))!.tick - held;
@@ -71,13 +73,20 @@ test('a vs-bot match is recorded; Replays lists it; it plays back, pauses, chang
     r.value = String(t);
     r.dispatchEvent(new Event('change'));
   }, tick);
+  // 4× runs this short match to its end, where playback stops: seeking then lands and holds still.
+  await expect.poll(async () => (await dbg<RState>(page, 'replayState'))!.playing, { timeout: 20_000 }).toBe(false);
   await seek(60);
-  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot'))?.tick).toBeGreaterThanOrEqual(60);
-  expect((await dbg<Snap>(page, 'snapshot')).tick).toBeLessThan(200);
-  await page.getByTestId('replay-follow').selectOption(String(me));
+  // The seek is async: poll for its result. The end tick (~190–205) is already ≥ 60, so a lower bound alone passes stale.
+  await expect.poll(async () => (await dbg<RState>(page, 'replayState'))!.tick).toBe(60);
+  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot'))?.tick).toBeLessThan(200);
+  expect((await dbg<Snap>(page, 'snapshot')).tick).toBeGreaterThanOrEqual(60);
+  const followMe = page.getByTestId('replay-follow').locator(`button[data-value="${me}"]`);
+  await followMe.click();
+  await expect(followMe).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId('replay-bar').locator('select')).toHaveCount(0); // no dropdowns (docs/ui-style.md)
   await page.waitForTimeout(700);
   await page.screenshot({ path: 'test-results/replays-viewer.png' });
-  await page.getByTestId('replay-play').click(); // toggle playback (4× already ran this short match to its end)
+  await page.getByTestId('replay-play').click(); // resume from tick 60
   await seek(100000);
   await expect.poll(async () => (await dbg<Snap>(page, 'snapshot'))?.winner ?? null, { timeout: 20_000 }).toBe(me);
   const end = (await dbg<RState>(page, 'replayState'))!;

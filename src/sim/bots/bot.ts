@@ -232,7 +232,7 @@ export class Bot {
   private respawnedAt = -Infinity;
   private lastDeaths = 0;
   /** Goal watchdog: where I was when the current goal last made progress (moved, built, bought, shot). */
-  private prog: { goal: Goal; at: number; pos: Vec3 } | null = null;
+  private prog: { goal: Goal; at: number; pos: Vec3; far: number } | null = null;
   private lastDidAt = -Infinity;
   /** Goals (and the rival they were aimed at) that went nowhere lately: left alone a while. */
   private goalBan = new Map<Goal, number>();
@@ -2565,10 +2565,14 @@ export class Bot {
     // Getting set for the storm (decks to the center, buying them) is never given up.
     if (limit === undefined || this.stormPrep(this.view)) { this.prog = null; return; }
     const p = this.prog;
-    if (!p || p.goal !== this.goal || dist2D(p.pos, me.pos) > this.P.drive.stallDist || this.lastDidAt > p.at) {
-      this.prog = { goal: this.goal, at: now, pos: clone(me.pos) };
+    if (!p || p.goal !== this.goal || this.lastDidAt > p.at) {
+      this.prog = { goal: this.goal, at: now, pos: clone(me.pos), far: 0 };
       return;
     }
+    // Progress = getting further from where this goal started than ever before (by stallDist): walking somewhere
+    // counts, pacing back and forth over the same few metres (a deck whose route flip-flops) doesn't.
+    const d = dist2D(p.pos, me.pos);
+    if (d > p.far + this.P.drive.stallDist) { p.far = d; p.at = now; return; }
     if (now - p.at < limit) return;
     this.goalBan.set(this.goal, now + this.P.drive.stallBanSec);
     if (this.targetId !== null && TARGETED.has(this.goal)) this.targetBan.set(this.targetId, now + this.P.drive.stallBanSec);
