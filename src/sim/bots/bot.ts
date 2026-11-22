@@ -281,6 +281,10 @@ export class Bot {
   probe: BrainProbe | null = null;
   /** Last goal switches (introspect.ts decision log): one small entry per switch. */
   readonly switches: GoalSwitch[] = [];
+  /** The walk this tick (world space, null = standing) and which layer decided it (moveStats.ts jitter diagnostics;
+   *  decisions never read them). */
+  moveDir: Vec3 | null = null;
+  moveSrc = '';
 
   /** `params`: tunable strategy (params.ts); the hand-tuned defaults unless a trainer passes its own. */
   constructor(
@@ -354,6 +358,7 @@ export class Bot {
     this.lastNow = now;
     this.mem.update(view);
     if (!me.alive) {
+      this.moveDir = null;
       this.aim.reset();
       this.aimId = null;
       this.aimLost = null;
@@ -398,17 +403,18 @@ export class Bot {
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
+    this.moveSrc = this.retreat ? 'retreat' : thinking ? 'hesitate' : this.goal;
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
     // Cut off from home: get a hook here and hook home (fighting comes first: enemies in sight keep the goal's act).
     const rescue = this.strandedAct(ctx);
-    if (rescue && !ctx.enemy) act = rescue;
+    if (rescue && !ctx.enemy) { act = rescue; this.moveSrc = 'stranded'; }
     // An enemy spike trap in my way with nobody in sight: shoot it out before walking on.
     if (!ctx.enemy && !act.shootAt && !act.build && !act.trap) {
       const spikes = this.trapInWay(ctx, act.dir);
       if (spikes) act = { ...act, shootAt: spikes };
     }
     // Never hang around inside my own bunker (one plug per door and I'm sealed in): step out.
-    if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) act = { ...act, ...this.escape(ctx) };
+    if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) { act = { ...act, ...this.escape(ctx) }; this.moveSrc = 'escape'; }
 
     // Aim: enemies first, then whatever the goal wants to look or shoot at, else along the walk.
     const eye = eyePos(me);
@@ -524,31 +530,44 @@ export class Bot {
     // Lining up a crossing: stand still for the shot (walking on would only take me off the edge).
     let dir = hook?.why === 'cross' ? null : act.dir;
     let jump = !!act.jump;
+    // (Diagnostics: a layer that turns the walk by more than ~30° takes the credit for it in moveSrc.)
+    const turned = (a: Vec3 | null, b: Vec3 | null, src: string) => {
+      if (a === b) return;
+      if (!a || !b || a.x * b.x + a.z * b.z < 0.87) this.moveSrc = src;
+    };
     const dodge = this.dodgeBolt(me, view);
-    if (dodge) { dir = dodge; act = { ...act, sprint: true }; }
+    if (dodge) { dir = dodge; act = { ...act, sprint: true }; this.moveSrc = 'dodgeBolt'; }
     if (now < this.unstickUntil) {
       // Step aside; stuck again at the same spot, back off further each time (around whatever is in the way).
       dir = this.unstickDir ?? scale(right(look.yaw), this.unstickSide);
       jump = true;
+      this.moveSrc = 'unstick';
     }
+    let was = dir;
     if (!dodge) dir = this.hazardAvoid(ctx, dir);
+    turned(was, dir, 'hazard'); was = dir;
     if (dir && !dodge) dir = this.stormFence(me, view, dir);
+    turned(was, dir, 'stormFence'); was = dir;
     if (dir) dir = this.nav.safeDir(dir);
+    turned(was, dir, 'safeDir'); was = dir;
     // Never walk into (or stand in) fire: slide around burning pieces and ground fires (a lightning dodge wins).
     const zones = this.avoidZones(view, me);
     if (zones.length && !dodge) {
       const away = steerFromFire(me.pos, dir, zones);
       if (away !== dir) dir = away && this.nav.safeDir(away);
     }
+    turned(was, dir, 'fire'); was = dir;
     // In the air, steer to come down on something solid; standing on the rim over water, step back onto it.
     const airborne = Math.abs(me.vel.y) > 0.05;
     if (airborne ? !this.nav.landsOnGround(dir, !!act.sprint) : view.groundAt(me.pos.x, me.pos.z) === null) {
       const back = this.nav.rescue(!!act.sprint);
       if (back) { dir = back; jump = false; }
     }
+    turned(was, dir, 'rimRescue');
     // Stranded with no way home at all: walk off into the water toward home (the respawn puts me back there).
     const ditch = this.strandedDitch(ctx);
-    if (ditch) { dir = ditch; jump = false; act = { ...act, sprint: true }; }
+    if (ditch) { dir = ditch; jump = false; act = { ...act, sprint: true }; this.moveSrc = 'ditch'; }
+    this.moveDir = dir;
     // Stuck means pushing and not moving; held back at an edge by safeDir isn't stuck (a hop there goes in the water).
     this.trackStuck(now, me, dir);
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
@@ -2266,6 +2285,7 @@ export class Bot {
     if (this.perch && (now > this.perch.until || !c.view.pieces.some((p) => p.kind === 'ramp' && dist2D(p.pos, this.perch!.ramp) < 0.3))) this.perch = null;
     if (this.perch) {
       const d = dist2D(me.pos, this.perch.pos);
+      this.moveSrc = 'fight:perch';
       return d > 0.35 ? { dir: norm(flat(sub(this.perch.pos, me.pos))) } : { dir: null };
     }
     const ramp = this.highGround(c, e, to, gun, sameIsland);
@@ -2273,6 +2293,7 @@ export class Bot {
     // Careful players fight from behind something solid.
     if (gun !== 'fists' && c.enemyDist > 6 && sameIsland && (t.caution > 0.5 || me.hp < 60)) {
       const cover = this.coverFrom(c, e);
+      if (cover) this.moveSrc = 'fight:coverSpot';
       if (cover && dist2D(cover, me.pos) > 0.8) return this.goTo(cover, 0.6);
       if (cover) return { dir: scale(side, 0.4) };
     }
@@ -2283,6 +2304,7 @@ export class Bot {
     const dir = add(scale(to, radial), side);
     const rush = this.difficulty !== 'easy' && gapM > this.P.drive.sprintGap;
     // Chasing across water needs a route; otherwise just strafe in place.
+    this.moveSrc = radial > 0 && !sameIsland ? 'fight:route' : rush ? 'fight:rush' : 'fight:strafe';
     if (radial > 0 && !sameIsland) {
       const wp = this.nav.routeTo(e.pos);
       if (wp) return { dir: norm(add(norm(flat(sub(wp, me.pos))), scale(side, 0.5))), sprint: rush, approach: rush };
@@ -2419,6 +2441,7 @@ export class Bot {
     const away = norm(flat(sub(wall.pos, cv.threat)));
     const peek = add(hide, scale(right(yawOf(away)), cv.side * (PIECES[wall.kind].w / 2 + 0.7)));
     const spot = cv.phase === 'hide' ? hide : peek;
+    this.moveSrc = `cover:${cv.phase}`;
     const there = dist2D(me.pos, spot) < 0.35;
     if (there && cv.phaseUntil === 0) cv.phaseUntil = now + (cv.phase === 'hide' ? sk.peekHide : sk.peekOut) * (0.75 + 0.5 * this.rng());
     if (cv.phaseUntil > 0 && now >= cv.phaseUntil) {

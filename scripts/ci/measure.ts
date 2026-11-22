@@ -65,6 +65,16 @@ type SeatOut = {
   difficulty: Difficulty; kills: number; deaths: number; aliveSec: number; attackSec: number;
   idleHome: number; longestHomeIdle: number; hitDists: number[]; eliminatedAt: number | null;
   archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
+  /** Movement jitter (src/sim/bots/moveStats.ts; refs without it leave this out). */
+  jitter?: SeatJitter;
+};
+/** Flips: walk direction turning > 120° within 0.3 s; episodes: 3+ flips in a row while staying within 1 m. */
+type SeatJitter = {
+  aliveSec: number; wishFlips: number; velFlips: number; oscSec: number; episodes: number;
+  /** Wish flips / velocity flips by the movement layer driving at that tick (Bot.moveSrc). */
+  bySrc: Record<string, number>; velBySrc: Record<string, number>;
+  /** The worst few episodes: start time, place, goal, flips and the layers at each flip. */
+  worst: { t: number; x: number; z: number; goal: string; flips: number; srcs: string }[];
 };
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
@@ -91,7 +101,12 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const { diffs } = seatsFor(scenario, seed);
   // MEASURE_MAX_SEC: cut games short (smoke tests of this script only; real measurements never set it).
   const maxSec = Number(process.env.MEASURE_MAX_SEC) || seatsFor(scenario, seed).maxSec;
-  type Brain = { currentGoal?: string; personality?: { archetype: string; traits: Record<string, number> } };
+  type Brain = { currentGoal?: string; personality?: { archetype: string; traits: Record<string, number> }; moveDir?: { x: number; z: number } | null; moveSrc?: string };
+  type MoveSample = { alive: boolean; wx: number; wz: number; vx: number; vz: number; x: number; z: number };
+  type MS = { moveStats: (t: MoveSample[], dt: number) => { aliveSec: number; wishFlips: number[]; velFlips: number[]; oscSec: number; episodes: { i0: number; i1: number; flips: number[] }[] } };
+  // Variable specifier: moveStats.ts exists only on refs with the jitter diagnostics.
+  const moveStatsModule = '../../src/sim/bots/moveStats';
+  const ms = await import(/* @vite-ignore */ moveStatsModule).catch(() => null) as MS | null;
   const brains: Brain[] = [];
   const BotCtor = Bot as unknown as new (...a: unknown[]) => Brain;
   const pers = await import('../../src/sim/bots/personality') as unknown as { ARCHETYPES: readonly string[]; PRESETS: Record<string, Record<string, number>> };
@@ -119,8 +134,16 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const w0 = performance.now();
   let snap = m.tick(new Map());
   let ticks = 0;
+  const moves = diffs.map(() => [] as MoveSample[]), srcs = diffs.map(() => [] as string[]), goals = diffs.map(() => [] as string[]);
+  const trackMoves = !!ms && brains.some((b) => b && 'moveDir' in b);
   for (; ticks < maxTicks && snap.winner === null; ticks++) {
     snap = m.tick(new Map());
+    if (trackMoves) for (const p of snap.players) {
+      const b = brains[p.id - 1], d = p.alive && p.breakoutUntil === null ? b?.moveDir : null;
+      moves[p.id - 1].push({ alive: p.alive && p.breakoutUntil === null, wx: d?.x ?? 0, wz: d?.z ?? 0, vx: p.vel.x, vz: p.vel.z, x: p.pos.x, z: p.pos.z });
+      srcs[p.id - 1].push(b?.moveSrc ?? '?');
+      goals[p.id - 1].push(b?.currentGoal ?? '?');
+    }
     if (ticks % SAMPLE_TICKS === 0) {
       const dt = SAMPLE_TICKS / TICK_HZ;
       for (const p of snap.players) {
@@ -166,6 +189,18 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
     }
   }
   const msPerTick = (performance.now() - w0) / Math.max(1, ticks);
+  if (trackMoves) seats.forEach((s, k) => {
+    const st = ms!.moveStats(moves[k], 1 / TICK_HZ);
+    const count = (ix: number[]) => { const o: Record<string, number> = {}; for (const i of ix) o[srcs[k][i]] = (o[srcs[k][i]] ?? 0) + 1; return o; };
+    s.jitter = {
+      aliveSec: st.aliveSec, wishFlips: st.wishFlips.length, velFlips: st.velFlips.length, oscSec: st.oscSec, episodes: st.episodes.length,
+      bySrc: count(st.wishFlips), velBySrc: count(st.velFlips),
+      worst: [...st.episodes].sort((a, b) => b.flips.length - a.flips.length).slice(0, 3).map((e) => ({
+        t: Math.round(e.i0 / TICK_HZ * 10) / 10, x: Math.round(moves[k][e.i0].x * 10) / 10, z: Math.round(moves[k][e.i0].z * 10) / 10,
+        goal: goals[k][e.i0], flips: e.flips.length, srcs: [...new Set(e.flips.map((i) => srcs[k][i]))].join(' '),
+      })),
+    };
+  });
   // Rapier worlds live in WASM memory and are never garbage collected.
   (m as unknown as { physics?: { world?: { free?: () => void } } }).physics?.world?.free?.();
   const winner = snap.winner !== null && snap.winner > 0 ? snap.winner : null;
@@ -226,7 +261,40 @@ export type ScenarioSummary = {
   /** FFAs with more than one tier: mean final placement per tier (1 = won), its 95% CI and number of seats. */
   placementByTier: Partial<Record<Difficulty, { mean: number; ci95: number; n: number }>> | null;
   shipCheck: { pass: boolean | null; checks: Check[] };
+  /** Movement jitter per tier (per minute alive), the layers behind the flips, and the worst episodes. */
+  jitter?: {
+    byTier: Partial<Record<Difficulty, { flipsPerMin: number; velFlipsPerMin: number; oscSecPer10Min: number; episodesPer10Min: number; worstSeatFlipsPerMin: number; seats: number }>>;
+    bySrc: { src: string; flips: number; velFlips: number }[];
+    worst: { seed: number; seat: number; difficulty: Difficulty; t: number; x: number; z: number; goal: string; flips: number; srcs: string }[];
+  };
 };
+
+function jitterSummary(games: GameOut[]): ScenarioSummary['jitter'] {
+  const rows = games.flatMap((g) => g.seats.map((s, i) => ({ g, s, i }))).filter((r) => r.s.jitter);
+  if (!rows.length) return undefined;
+  const byTier: NonNullable<ScenarioSummary['jitter']>['byTier'] = {};
+  for (const d of TIERS) {
+    const xs = rows.filter((r) => r.s.difficulty === d).map((r) => r.s.jitter!);
+    if (!xs.length) continue;
+    const min = xs.reduce((a, j) => a + j.aliveSec, 0) / 60 || 1;
+    byTier[d] = {
+      flipsPerMin: xs.reduce((a, j) => a + j.wishFlips, 0) / min, velFlipsPerMin: xs.reduce((a, j) => a + j.velFlips, 0) / min,
+      oscSecPer10Min: (10 * xs.reduce((a, j) => a + j.oscSec, 0)) / min, episodesPer10Min: (10 * xs.reduce((a, j) => a + j.episodes, 0)) / min,
+      worstSeatFlipsPerMin: Math.max(...xs.map((j) => j.wishFlips / Math.max(1, j.aliveSec / 60))), seats: xs.length,
+    };
+  }
+  const src = new Map<string, { flips: number; velFlips: number }>();
+  for (const r of rows) {
+    for (const [k, n] of Object.entries(r.s.jitter!.bySrc)) { const e = src.get(k) ?? { flips: 0, velFlips: 0 }; e.flips += n; src.set(k, e); }
+    for (const [k, n] of Object.entries(r.s.jitter!.velBySrc)) { const e = src.get(k) ?? { flips: 0, velFlips: 0 }; e.velFlips += n; src.set(k, e); }
+  }
+  return {
+    byTier,
+    bySrc: [...src].map(([k, v]) => ({ src: k, ...v })).sort((a, b) => b.flips - a.flips),
+    worst: rows.flatMap((r) => r.s.jitter!.worst.map((w) => ({ seed: r.g.seed, seat: r.i + 1, difficulty: r.s.difficulty, ...w })))
+      .sort((a, b) => b.flips - a.flips).slice(0, 12),
+  };
+}
 
 export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary {
   const seats = games.flatMap((g) => g.seats);
@@ -265,6 +333,7 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     maxWallSec: Math.max(0, ...games.map((g) => g.wallSec)),
     proVsHard, ladder, placementByTier,
     shipCheck: { pass: null, checks: [] },
+    jitter: jitterSummary(games),
   };
   // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%; the ladder bar here is 80% per step, the steward hand-off rule).
   // The shipChecks comparisons against the hand-tuned params need a second series and are not run here.
@@ -304,6 +373,15 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     ...sums.filter((s) => s.placementByTier).flatMap((s) => [`### ${s.scenario}: average placement by tier (1 = won)`, '',
       '| tier | mean placement | 95% CI | seats |', '|---|---|---|---|',
       ...Object.entries(s.placementByTier!).map(([d, p]) => `| ${d} | ${p!.mean.toFixed(2)} | ± ${p!.ci95.toFixed(2)} | ${p!.n} |`), '']),
+    ...sums.filter((s) => s.jitter).flatMap((s) => {
+      const j = s.jitter!;
+      const totalFlips = j.bySrc.reduce((a, x) => a + x.flips, 0) || 1;
+      return [`### ${s.scenario}: movement jitter (flip = walk turns > 120° within 0.3 s; episode = 3+ flips within 1 m)`, '',
+        '| tier | flips/min | velocity flips/min | jitter s / 10 min | episodes / 10 min | worst seat flips/min | seats |', '|---|---|---|---|---|---|---|',
+        ...Object.entries(j.byTier).map(([d, t]) => `| ${d} | ${t!.flipsPerMin.toFixed(1)} | ${t!.velFlipsPerMin.toFixed(1)} | ${t!.oscSecPer10Min.toFixed(1)} | ${t!.episodesPer10Min.toFixed(2)} | ${t!.worstSeatFlipsPerMin.toFixed(1)} | ${t!.seats} |`), '',
+        `Flips by movement layer: ${j.bySrc.slice(0, 14).map((x) => `${x.src} ${(100 * x.flips / totalFlips).toFixed(0)}% (${x.flips}, vel ${x.velFlips})`).join(' · ')}`, '',
+        'Worst episodes: ' + (j.worst.length ? '' : 'none'), ...j.worst.map((w) => `- seed ${w.seed} seat ${w.seat} (${w.difficulty}) t=${w.t}s at (${w.x}, ${w.z}) goal ${w.goal}: ${w.flips} flips · ${w.srcs}`), ''];
+    }),
     '### Wins by skill',
     ...sums.map((s) => `- ${s.scenario}: ${Object.entries(s.winsByDifficulty).map(([d, n]) => `${d} ${n}`).join(', ') || 'none'}; no winner ${s.noWinner} · ${s.msPerTick.toFixed(2)} ms/tick · slowest game ${s.maxWallSec.toFixed(0)} s wall`),
   ];
