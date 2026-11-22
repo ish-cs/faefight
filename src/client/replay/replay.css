@@ -30,7 +30,13 @@
 .replay-track input[type='range'] { width: 100%; margin: 0; accent-color: var(--accent); position: relative; z-index: 1; }
 .replay-marks { position: absolute; inset: 0; pointer-events: none; }
 .replay-mark { position: absolute; top: -6px; width: 4px; height: 8px; margin-left: -2px; padding: 0; border: 0; border-radius: 2px; background: #ff5f5f; cursor: pointer; pointer-events: auto; }
-.replay-select { background: rgba(0, 0, 0, 0.35); color: inherit; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 8px; padding: 5px 6px; font: inherit; font-size: 13px; }
+.replay-opts { margin-top: 8px; flex-wrap: wrap; gap: 8px 16px; }
+.replay-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.replay-label { font-family: var(--ff-display); font-weight: 800; font-size: var(--fs-xs); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--c-text-dim); }
+.replay-seg { flex-wrap: wrap; }
+.replay-seg > button { font-size: var(--fs-sm); padding: 6px 9px; }
+/* theme.css's :hover outranks .on; keep the chosen button orange under the cursor. */
+.replay-bar .replay-seg > button.on:hover { color: var(--c-on-orange); background: var(--c-orange); }
 .replay-warn { margin-top: 6px; font-size: 12px; color: #ffd166; }
 @media (max-width: 700px) {
   .replay-row { flex-wrap: wrap; }
