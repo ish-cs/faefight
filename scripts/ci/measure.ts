@@ -6,7 +6,8 @@
  *   npx tsx scripts/ci/measure.ts run --tasks ffa8-pro:1,ffa8-pro:2 --out shard.json [--params path.json] [--workers N]
  *   npx tsx scripts/ci/measure.ts aggregate --in <dir of shard jsons> --json measure-summary.json --md summary.md
  *
- * Scenarios: 1v1-hard, 1v1-pro-vs-hard (PRO seat alternates by seed), ffa8-pro, ffa8-hard, ffa8-mixed.
+ * Scenarios: 1v1-hard, 1v1-pro-vs-hard, 1v1-hard-vs-medium, 1v1-medium-vs-easy (the higher tier's seat alternates by
+ * seed: the full skill ladder), ffa8-pro, ffa8-hard, ffa8-mixed (average finishing place by skill).
  * Metrics follow scripts/train/runMatch.ts and tests/sim/shipChecks.test.ts.
  */
 import fs from 'node:fs';
@@ -15,7 +16,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed'] as const;
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
@@ -27,6 +28,8 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
     case '1v1-hard': return { diffs: ['hard', 'hard'], maxSec: 25 * 60 };
     // Same seat rule as tests/sim/botSeries.test.ts: PRO is seat 1 on odd seeds.
     case '1v1-pro-vs-hard': return { diffs: seed % 2 ? ['pro', 'hard'] : ['hard', 'pro'], maxSec: 25 * 60 };
+    case '1v1-hard-vs-medium': return { diffs: seed % 2 ? ['hard', 'medium'] : ['medium', 'hard'], maxSec: 25 * 60 };
+    case '1v1-medium-vs-easy': return { diffs: seed % 2 ? ['medium', 'easy'] : ['easy', 'medium'], maxSec: 25 * 60 };
     case 'ffa8-pro': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
     case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 180 };
@@ -151,7 +154,10 @@ export type ScenarioSummary = {
   winsByDifficulty: Record<string, number>; medianPreSdElims: number | null; medianEngagementM: number | null;
   attackPct: number; homePct: number; medianFirstSealSec: number | null; gamesWithSeal: number;
   longestHomeSitSec: number; avgMinutes: number; msPerTick: number; maxWallSec: number;
+  /** 1v1 tier match-ups: the higher tier's share (a draw counts half). */
   proVsHard: { share: number; ci95: number; games: number } | null;
+  /** 8-bot FFAs: average finishing place by skill (1 = won; out later = better place). */
+  placeByDifficulty: Record<string, number> | null;
   shipCheck: { pass: boolean | null; checks: Check[] };
 };
 
@@ -162,8 +168,9 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
   for (const g of games) if (g.winnerDifficulty) wins[g.winnerDifficulty] = (wins[g.winnerDifficulty] ?? 0) + 1;
   const seals = games.filter((g) => g.firstSeal !== null).map((g) => g.firstSeal!);
   let proVsHard: ScenarioSummary['proVsHard'] = null;
-  if (scenario === '1v1-pro-vs-hard') {
-    const scores: number[] = games.map((g) => (g.winner === null ? 0.5 : g.winnerDifficulty === 'pro' ? 1 : 0));
+  const tiers = /^1v1-(\w+)-vs-(\w+)$/.exec(scenario);
+  if (tiers) {
+    const scores: number[] = games.map((g) => (g.winner === null ? 0.5 : g.winnerDifficulty === tiers[1] ? 1 : 0));
     proVsHard = { share: scores.reduce((a, b) => a + b, 0) / Math.max(1, scores.length), ci95: ci95(scores), games: scores.length };
   }
   const s: ScenarioSummary = {
@@ -179,7 +186,7 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     avgMinutes: games.reduce((a, g) => a + g.time, 0) / Math.max(1, games.length) / 60,
     msPerTick: games.reduce((a, g) => a + g.msPerTick, 0) / Math.max(1, games.length),
     maxWallSec: Math.max(0, ...games.map((g) => g.wallSec)),
-    proVsHard,
+    proVsHard, placeByDifficulty: scenario.startsWith('ffa8') ? placeBy(games) : null,
     shipCheck: { pass: null, checks: [] },
   };
   // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%).
@@ -189,11 +196,26 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     checks.push({ name: 'decisive before sudden death ≥ 60%', pass: s.decisive >= 0.6 * s.games, value: `${s.decisive}/${s.games}` });
     checks.push({ name: 'median engagement < 25 m', pass: s.medianEngagementM !== null && s.medianEngagementM < 25, value: `${s.medianEngagementM ?? '-'} m` });
     checks.push({ name: 'nobody sits at home geared > 60 s', pass: s.longestHomeSitSec <= 60, value: `${s.longestHomeSitSec.toFixed(0)} s` });
-  } else if (scenario === '1v1-pro-vs-hard' && proVsHard) {
-    checks.push({ name: 'PRO beats hard ≥ 70%', pass: proVsHard.share >= 0.7, value: `${(100 * proVsHard.share).toFixed(0)}%` });
+  } else if (tiers && proVsHard) {
+    checks.push({ name: `${tiers[1]} beats ${tiers[2]} ≥ 70%`, pass: proVsHard.share >= 0.7, value: `${(100 * proVsHard.share).toFixed(0)}%` });
   }
   s.shipCheck = { pass: checks.length ? checks.every((c) => c.pass) : null, checks };
   return s;
+}
+
+/** Average finishing place by skill: the winner 1st, then by elimination time (later = better; ties share the place). */
+function placeBy(games: GameOut[]): Record<string, number> {
+  const sum: Record<string, [number, number]> = {};
+  for (const g of games) {
+    const key = (x: SeatOut, i: number) => (i + 1 === g.winner ? Infinity : x.eliminatedAt ?? g.time);
+    const keys = g.seats.map(key);
+    g.seats.forEach((x, i) => {
+      const place = 1 + keys.filter((k) => k > keys[i]).length;
+      const a = (sum[x.difficulty] ??= [0, 0]);
+      a[0] += place; a[1]++;
+    });
+  }
+  return Object.fromEntries(Object.entries(sum).map(([d, [t, n]]) => [d, Math.round((100 * t) / n) / 100]));
 }
 
 const pct = (x: number) => `${x.toFixed(0)}%`;
@@ -206,7 +228,7 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '',
     Object.entries(meta).map(([k, v]) => `**${k}** ${v}`).join(' · '),
     '',
-    '| scenario | games | decisive < 15:00 | median elims < 15:00 | median engagement | attack | home | median first seal | PRO vs hard (95% CI) | avg length | ship check |',
+    '| scenario | games | decisive < 15:00 | median elims < 15:00 | median engagement | attack | home | median first seal | higher tier wins (95% CI) | avg length | ship check |',
     '|---|---|---|---|---|---|---|---|---|---|---|',
     ...sums.map((s) => `| ${s.scenario} | ${s.games} | ${s.decisive}/${s.games} | ${s.medianPreSdElims ?? '-'} | ${s.medianEngagementM ?? '-'} m | ${pct(s.attackPct)} | ${pct(s.homePct)} | ${secs(s.medianFirstSealSec)} (${s.gamesWithSeal}/${s.games} games) | ${s.proVsHard ? `${(100 * s.proVsHard.share).toFixed(0)}% ± ${(100 * s.proVsHard.ci95).toFixed(0)}` : '-'} | ${s.avgMinutes.toFixed(1)} min | ${s.shipCheck.pass === null ? 'n/a' : s.shipCheck.pass ? '✅ pass' : '❌ fail'} |`),
     '',
@@ -214,6 +236,7 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     ...sums.flatMap((s) => s.shipCheck.checks.map((c) => `- ${s.scenario}: ${c.pass ? '✅' : '❌'} ${c.name} (${c.value})`)),
     '',
     '### Wins by skill',
+    ...sums.filter((s) => s.placeByDifficulty).map((s) => `- ${s.scenario} average place: ${Object.entries(s.placeByDifficulty!).sort((a, b) => a[1] - b[1]).map(([d, p]) => `${d} ${p}`).join(' · ')}`),
     ...sums.map((s) => `- ${s.scenario}: ${Object.entries(s.winsByDifficulty).map(([d, n]) => `${d} ${n}`).join(', ') || 'none'}; no winner ${s.noWinner} · ${s.msPerTick.toFixed(2)} ms/tick · slowest game ${s.maxWallSec.toFixed(0)} s wall`),
   ];
   return lines.join('\n') + '\n';
