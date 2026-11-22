@@ -82,6 +82,8 @@ class Npc {
     this.current = next;
   }
 
+  relod() { this.lod = -1; }
+
   /** `target` = nearest player's head position in range (null = none); `near` = someone within WAVE_RANGE. */
   update(dt: number, t: number, camDist: number, onScreen: boolean, target: THREE.Vector3 | null, near: boolean) {
     const lod = bodyLod(camDist, this.lod);
@@ -153,6 +155,9 @@ export class NpcSystem {
   sync() {
     if (this.assets && this.builtVersion !== npcSpotsVersion()) this.rebuild(this.assets);
   }
+
+  /** Forget the cached LOD so the next frame re-applies body-mesh visibility (after the warm-up forced it). */
+  relod() { for (const n of this.npcs) n.relod(); }
 
   /** Call each frame: builds keepers when the map's spots change, animates the ones in view. `players` = feet. */
   frame(dt: number, camera: THREE.Camera, players: readonly THREE.Vector3[]) {
