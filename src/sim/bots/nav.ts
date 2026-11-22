@@ -6,6 +6,7 @@ import { doorBlocked } from './plans';
 import type { Vec3 } from '../types';
 import { add, dist2D, forward, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import type { BotView } from './view';
+import { airWish, type LeapHint } from './parkour';
 
 /** Bridges run parallel to the node-to-node line, offset to the builder's right, clear of vault/shop/generator. */
 export const LANE_OFFSET = 3;
@@ -39,7 +40,10 @@ const PATH_TTL = 1.0;
 export type NavNode = { index: number; center: Vec3; radius: number; groundY: number; bunker: Bunker | null };
 
 export type Lane = { from: number; to: number; origin: Vec3; dir: Vec3; length: number };
-export type Frontier = { s: number; complete: boolean };
+/** `jumps`: gaps the scan jumped over ([last solid s, first solid s again]) when jumping is allowed (Nav.setLeap). */
+export type Frontier = { s: number; complete: boolean; jumps?: [number, number][] };
+/** A gap's landing must stay solid this far (m) past where the ground comes back. */
+const LAND_RUN = 1.0;
 
 /** Player islands plus, when the map has one, the center island as the last node. */
 export function navNodes(map: IslandLayout[], center?: CenterIsland | null): NavNode[] {
@@ -290,12 +294,19 @@ export class Nav {
   private planned: { node: number; goal: Vec3; at: number; pts: Vec3[] } | null = null;
   /** Finished bridges between node pairs, memoised for the current tick. */
   private bridges = new Map<number, Lane | null>();
+  /** Widest gap (m) a bridge scan may jump (0: none, the strict scan), highest step up onto the far side. */
+  private leapMax = 0;
+  private leapUp = 0;
+  private leapBanned: (key: string) => boolean = () => false;
+  /** This tick's route goes over a gap or up a ledge right ahead (parkour.ts Leaper carries it out). */
+  leapHint: LeapHint | null = null;
 
   constructor(private readonly ttl = 0.5) {}
 
   begin(view: BotView) {
     this.view = view;
     this.bridges.clear();
+    this.leapHint = null;
     if (this.nodesFor !== view.map) {
       this.nodesFor = view.map;
       this.nodeList = navNodes(view.map, view.center?.island);
@@ -308,6 +319,17 @@ export class Nav {
   }
   invalidate() { this.cache.clear(); }
 
+  /**
+   * Let bridge scans (frontier, bridge, route, scaffoldsTo) jump gaps up to `max` m (0: no jumps) landing at most
+   * `up` m higher; `banned(key)`: gaps I balked at lately (decked over instead). Bots set this per tick from skill
+   * and risk.
+   */
+  setLeap(max: number, up: number, banned: (key: string) => boolean) {
+    if (max !== this.leapMax || up !== this.leapUp) { this.leapMax = max; this.leapUp = up; this.bridges.clear(); }
+    this.leapBanned = banned;
+  }
+  get leapLimit(): number { return this.leapMax; }
+
   /** Player islands, then the center island (if any). */
   get nodes(): NavNode[] { return this.nodeList; }
   /** Node index of the center island, or -1. */
@@ -317,20 +339,57 @@ export class Nav {
 
   /** Scans a lane outward from its home node: last solid s, and whether it reaches the far node. */
   frontier(l: Lane): Frontier {
-    const key = `${l.from}>${l.to}`;
+    const key = `${l.from}>${l.to}@${this.leapMax}`;
     const hit = this.cache.get(key);
     if (hit && this.view.now - hit.at < this.ttl) return hit.f;
     const nodes = this.nodeList;
     let f: Frontier | null = null;
+    const jumps: [number, number][] = [];
+    let lastY = nodes[l.from].groundY;
     for (let s = landEdge(nodes[l.from]) - 2; s <= l.length; s += SCAN_STEP) {
       const p = laneAt(l, s);
+      const y = this.view.groundAt(p.x, p.z);
       // A sliver between two decks (a few cm) is walkable: only a real gap ends the bridge.
-      if (this.view.groundAt(p.x, p.z) === null && !this.solidAhead(l, s)) { f = { s: s - SCAN_STEP, complete: false }; break; }
-      if (nodeAt(nodes, p) === l.to) { f = { s, complete: true }; break; }
+      if (y === null && !this.solidAhead(l, s)) {
+        const land = this.leapMax > 0 ? this.landing(l, s - SCAN_STEP, lastY) : null;
+        if (land === null) { f = { s: s - SCAN_STEP, complete: false, ...(jumps.length ? { jumps } : {}) }; break; }
+        jumps.push([s - SCAN_STEP, land]);
+        s = land - SCAN_STEP;
+        continue;
+      }
+      if (y !== null) lastY = y;
+      if (nodeAt(nodes, p) === l.to) { f = { s, complete: true, ...(jumps.length ? { jumps } : {}) }; break; }
     }
     if (!f) throw new Error(`Nav.frontier: lane ${key} never reached node ${l.to}; map geometry is inconsistent`);
     this.cache.set(key, { at: this.view.now, f });
     return f;
+  }
+
+  /** Gap key for Leaper bans: lane and where the gap starts. */
+  static gapKey(l: Lane, s0: number): string { return `${l.from}>${l.to}:${Math.round(s0 * 4)}`; }
+
+  /**
+   * A gap in lane l starts after s0 (ground at height y0 up to there): the first s where the ground is back within
+   * leapMax, solid (and level, across the body's width) for LAND_RUN m, and no higher than leapUp; null if none.
+   */
+  private landing(l: Lane, s0: number, y0: number): number | null {
+    if (this.leapBanned(Nav.gapKey(l, s0))) return null;
+    const side = v3(-l.dir.z * PLAYER.radius, 0, l.dir.x * PLAYER.radius);
+    for (let s = s0 + 2 * SCAN_STEP; s <= s0 + this.leapMax; s += SCAN_STEP) {
+      const p = laneAt(l, s);
+      const y = this.view.groundAt(p.x, p.z);
+      if (y === null) continue;
+      if (y - y0 > this.leapUp || y0 - y > MAX_DROP) return null;
+      for (let k = 0; k <= LAND_RUN; k += SCAN_STEP) {
+        const q = laneAt(l, s + k);
+        for (const o of [-1, 0, 1]) {
+          const g = this.view.groundAt(q.x + side.x * o, q.z + side.z * o);
+          if (g === null || Math.abs(g - y) > 0.35) return null;
+        }
+      }
+      return s;
+    }
+    return null;
   }
 
   private solidAhead(l: Lane, s: number): boolean {
@@ -481,9 +540,30 @@ export class Nav {
     }
     const sMe = laneS(l, me);
     const gap = sTarget - sMe;
+    this.leapHint = this.gapHint(l, sMe, sTarget);
     if (Math.abs(gap) < 0.5) return b >= 0 && a !== b ? laneAt(l, sTarget) : dest;
     const carrot = laneAt(l, sMe + Math.sign(gap) * Math.min(CARROT, Math.abs(gap)));
     return a >= 0 ? this.within(a, me, carrot) : this.alongDeck(me, carrot);
+  }
+
+  /** The next gap jump on lane l between sMe and sTarget, if it's close ahead (null: none, or jumps are off). */
+  private gapHint(l: Lane, sMe: number, sTarget: number): LeapHint | null {
+    if (this.leapMax <= 0) return null;
+    const js = this.frontier(l).jumps;
+    if (!js) return null;
+    const fwd = sTarget > sMe;
+    for (const [a, b] of fwd ? js : [...js].reverse()) {
+      const [edge, land] = fwd ? [a, b] : [b, a];
+      const ahead = fwd ? edge - sMe : sMe - edge;
+      const beyond = fwd ? land <= sTarget + 1 : land >= sTarget - 1;
+      if (ahead < -0.3 || !beyond) continue;
+      if (ahead > 5) return null;
+      const e = laneAt(l, edge), t = laneAt(l, land);
+      const ye = this.view.groundAt(e.x, e.z) ?? this.view.self.pos.y, yt = this.view.groundAt(t.x, t.z) ?? ye;
+      const dir = fwd ? l.dir : v3(-l.dir.x, 0, -l.dir.z);
+      return { kind: 'gap', edge: v3(e.x, ye, e.z), land: v3(t.x, yt, t.z), dir, gap: Math.abs(land - edge), landY: yt, key: Nav.gapKey(l, a) };
+    }
+    return null;
   }
 
   /**
@@ -527,12 +607,14 @@ export class Nav {
    * Airborne (or about to jump with vertical speed vy0): does steering toward `dir` bring me down on something
    * solid rather than in the water?
    */
-  landsOnGround(dir: Vec3 | null, sprint: boolean, vy0 = this.view.self.vel.y, strict = false): boolean {
+  landsOnGround(dir: Vec3 | null, sprint: boolean, vy0 = this.view.self.vel.y, strict = false, aim: Vec3 | null = null): boolean {
     const me = this.view.self;
     let x = me.pos.x, z = me.pos.z, y = me.pos.y, vx = me.vel.x, vz = me.vel.z, vy = vy0;
     const speed = sprint ? PLAYER.sprint : PLAYER.walk;
-    const wx = dir ? dir.x * speed : vx, wz = dir ? dir.z * speed : vz;
+    let wx = dir ? dir.x * speed : vx, wz = dir ? dir.z * speed : vz;
     for (let t = 0; t < 2; t += JUMP_STEP) {
+      // Steering for a spot (a jump's landing): the way a player pulls back so as not to sail past it.
+      if (aim) { const w = airWish(x, z, y, vy, aim, speed); wx = w.x; wz = w.z; }
       const dx = wx - vx, dz = wz - vz, d = Math.hypot(dx, dz), step = MOVE.airAccel * JUMP_STEP;
       if (d <= step) { vx = wx; vz = wz; } else { vx += dx / d * step; vz += dz / d * step; }
       vy -= PLAYER.gravity * JUMP_STEP;

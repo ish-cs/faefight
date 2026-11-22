@@ -15,6 +15,7 @@ import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
 import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { DEFAULT_BOT_PARAMS, type BotParams } from './params';
+import { Leaper, canSprint, jumpReach, ledgeOnWay, perchesNear, LAND_PAD, type LeapHint, type LeapMove, type ParkourStats } from './parkour';
 import { crossTo, escapeFrom, hookReady, yankReason, type HookIntent } from './hook';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
@@ -190,6 +191,19 @@ export class Bot {
   private lastNow = NaN;
   private readonly aim: Aim;
   private readonly nav = new Nav();
+  /** Parkour (parkour.ts): jumps in progress, balked edges, counts for measurement. */
+  private readonly leaper: Leaper;
+  /** Trusting jumps this time round (ParkourSkill.use, re-rolled every moodSec) and when it's next rolled. */
+  private leapMood = false;
+  private leapMoodAt = -Infinity;
+  /** Hopping up onto a high spot in a fight: where, until when it's held. */
+  private climb: { spot: Vec3; until: number; on: boolean } | null = null;
+  private nextPerchLookAt = 0;
+  /** Ramp-rush: ramps laid toward an enemy island (forward and up), the last one's base, how many, until when. */
+  private rush: { dir: Vec3; last: Vec3 | null; n: number; deck: boolean; until: number } | null = null;
+  private rushRollAt = -Infinity;
+  /** What movement is doing right now (spectators: jump / climb / ramp-rush), and when it was said. */
+  moveNote: { t: number; text: string } | null = null;
   private readonly mem = new Memory();
   private stuckRef: { pos: Vec3; t: number } | null = null;
   private unstickUntil = -Infinity;
@@ -303,6 +317,7 @@ export class Bot {
     const aimSeed = (base ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
     this.aim = new Aim({ ...AIM[difficulty], recoilComp: P.gunSkill[difficulty].recoilComp }, mulberry32(aimSeed), P.aim.feel[difficulty]);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
+    this.leaper = new Leaper(rng);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
 
@@ -317,6 +332,8 @@ export class Bot {
   get dockTarget(): number | null { return this.dockPlan?.id ?? null; }
   /** The top goal scores of the last decision (why it chose what it's doing), for spectators. */
   get planScores(): { goal: string; score: number }[] { return this.lastScores; }
+  /** Parkour counts so far (jumps, fails, balks, decks saved, ramp-rushes): measurement and tests. */
+  get parkourStats(): ParkourStats { return this.leaper.stats; }
   /**
    * Burst discipline against recoil and bloom: with an automatic gun past my spray range, stop after
    * `burstShots` shots for `burstPause` s (the climb and bloom settle, then the next burst lands). Up close: full auto.
@@ -365,10 +382,14 @@ export class Bot {
       this.hookIntent = null;
       this.strandedSince = null;
       this.nextScoreAt = -Infinity;
+      this.leaper.died(now);
+      this.climb = null;
+      this.rush = null;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
     this.view = view;
     this.nav.begin(view);
+    this.setLeap(me, now);
     this.checkPurchase(me, now);
     // Came back from a death (bots aren't ticked while dead): note it for respawnCautionSec.
     if (me.deaths !== this.lastDeaths) { this.lastDeaths = me.deaths; this.respawnedAt = now; this.window = null; }
@@ -394,6 +415,7 @@ export class Bot {
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
+    this.nav.leapHint = null; // only the route this goal walks may ask for a jump (scoring routes don't)
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
     // Cut off from home: get a hook here and hook home (fighting comes first: enemies in sight keep the goal's act).
     const rescue = this.strandedAct(ctx);
@@ -522,18 +544,22 @@ export class Bot {
       dir = this.unstickDir ?? scale(right(look.yaw), this.unstickSide);
       jump = true;
     }
-    if (!dodge) dir = this.hazardAvoid(ctx, dir);
-    if (dir && !dodge) dir = this.stormFence(me, view, dir);
-    if (dir) dir = this.nav.safeDir(dir);
+    // Parkour: a jump the route goes over (a gap in a bridge or pier, a ledge up): run-up, takeoff, flight.
+    const leap = this.leapStep(ctx, dir, !!dodge || now < this.unstickUntil || !!rope || grapple || hook?.why === 'cross');
+    if (leap) { dir = leap.dir; jump = leap.jump; act = { ...act, sprint: leap.sprint }; this.moveNote = { t: now, text: leap.note }; }
+    if (!dodge && !leap) dir = this.hazardAvoid(ctx, dir);
+    if (dir && !dodge && !leap) dir = this.stormFence(me, view, dir);
+    if (dir && !leap) dir = this.nav.safeDir(dir);
     // Never walk into (or stand in) fire: slide around burning pieces and ground fires (a lightning dodge wins).
     const zones = this.avoidZones(view, me);
-    if (zones.length && !dodge) {
+    if (zones.length && !dodge && !leap) {
       const away = steerFromFire(me.pos, dir, zones);
       if (away !== dir) dir = away && this.nav.safeDir(away);
     }
     // In the air, steer to come down on something solid; standing on the rim over water, step back onto it.
     const airborne = Math.abs(me.vel.y) > 0.05;
-    if (airborne ? !this.nav.landsOnGround(dir, !!act.sprint) : view.groundAt(me.pos.x, me.pos.z) === null) {
+    const aim = leap ? this.leaper.aim : null;
+    if (airborne ? !this.nav.landsOnGround(aim ? null : dir, !!act.sprint, me.vel.y, false, aim) : view.groundAt(me.pos.x, me.pos.z) === null) {
       const back = this.nav.rescue(!!act.sprint);
       if (back) { dir = back; jump = false; }
     }
@@ -543,7 +569,7 @@ export class Bot {
     // Stuck means pushing and not moving; held back at an edge by safeDir isn't stuck (a hop there goes in the water).
     this.trackStuck(now, me, dir);
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
-    if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
+    if (jump && !leap?.jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     if (rope || grapple) jump = false; // a jump lets go of the rope
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
@@ -576,12 +602,13 @@ export class Bot {
     this.probe?.acted(act, look, fire);
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
-      sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
+      sprint: leap ? leap.sprint : !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
       ...(grapple ? { grapple: true, build: null, shop: null } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
-      ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
+      // (Not mid-jump: sights up means no sprint, and a run-up needs it.)
+      ads: !leap && !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
     // Shields: stock up at a potion seller, drink out of combat (see potionAction).
     if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge && !grapple) {
@@ -591,6 +618,157 @@ export class Bot {
       else if (pot) Object.assign(out, { select: pot.drink, slot: null, drink: true });
     }
     return out;
+  }
+
+  // ---------------------------------------------------------------- parkour
+
+  /**
+   * How wide a gap I'd jump right now (Nav.setLeap): my skill's gapMax when I trust jumping this time round (easy
+   * players rarely do), cut while I'm being shot at (ParkourSkill.underFire), and capped by what a jump at the speed
+   * I can run now actually carries (winded: no sprint). 0 = deck over every gap, as before.
+   */
+  private setLeap(me: PlayerState, now: number) {
+    const pk = this.P.parkour[this.difficulty], tune = this.P.parkourTuning;
+    if (now >= this.leapMoodAt) { this.leapMood = this.rng() < pk.use; this.leapMoodAt = now + tune.moodSec; }
+    let max = this.leapMood ? pk.gapMax : 0;
+    if (now - this.mem.lastHurtAt < 3) max *= pk.underFire;
+    const speed = canSprint(me) ? PLAYER.sprint : PLAYER.walk;
+    max = Math.min(max, jumpReach(speed, 0) / tune.margin - pk.slop - LAND_PAD - 0.12);
+    // Steps of 0.5 m: stamina ticking up and down mustn't re-plan the route every tick.
+    max = max < 1 ? 0 : Math.floor(max * 2) / 2;
+    this.nav.setLeap(max, Math.min(pk.climbUp, 0.6), (k) => this.leaper.isBanned(k, now));
+  }
+
+  /** The jump in progress (or the route's next one) as this tick's movement; null: walk as usual. */
+  private leapStep(c: Ctx, dir: Vec3 | null, busy: boolean): LeapMove | null {
+    const me = c.me, now = c.view.now;
+    if (busy && this.leaper.plan?.phase !== 'air') { this.leaper.reset(); return null; }
+    let hint: LeapHint | null = this.nav.leapHint ?? this.climbHint(c);
+    // Only a jump the walk is heading for (a route ahead that turned off it isn't one).
+    if (hint && !this.leaper.plan && (!dir || dir.x * hint.dir.x + dir.z * hint.dir.z < 0.3)) hint = null;
+    return this.leaper.step(me, now, hint, this.P.parkour[this.difficulty], this.P.parkourTuning,
+      (d, sprint, aim) => this.nav.landsOnGround(d, sprint, PLAYER.jumpVelocity, false, aim));
+  }
+
+  private climbKey(spot: Vec3): string { return `climb:${Math.round(spot.x * 2)},${Math.round(spot.z * 2)}`; }
+
+  /** Hopping onto my perch: the ledge between me and it, as a climb hint. */
+  private climbHint(c: Ctx): LeapHint | null {
+    const cl = this.climb;
+    if (!cl || cl.on) return null;
+    const me = c.me.pos;
+    if (dist2D(me, cl.spot) > 4.5) return null;
+    const l = ledgeOnWay(c.view.groundAt, me, cl.spot, this.P.parkour[this.difficulty].climbUp);
+    if (!l) return null;
+    const dir = norm(flat(sub(cl.spot, me)));
+    return { kind: 'climb', edge: l.face, land: v3(cl.spot.x, l.top, cl.spot.z), dir, gap: 0, landY: l.top, key: this.climbKey(cl.spot) };
+  }
+
+  /**
+   * Fighting on an island: hop up onto something a jump reaches (a barrier, sandbags, a container piece's lid off a
+   * ramp) near me and fight from up there a while (high ground sees over cover). Medium+ with the climb for it.
+   */
+  private perchMove(c: Ctx, e: PlayerState): Act | null {
+    const { me, view } = c;
+    const now = view.now, pk = this.P.parkour[this.difficulty], tune = this.P.parkourTuning;
+    const cl = this.climb;
+    if (cl) {
+      const ground = c.on >= 0 ? view.map[c.on].groundY : me.pos.y;
+      if (now > cl.until || (!cl.on && (dist2D(me.pos, cl.spot) > tune.climbRange + 2 || this.leaper.isBanned(this.climbKey(cl.spot), now)))) {
+        if (cl.on) this.nextPerchLookAt = now + 2 * tune.perchSec; // came down: fight on the ground a while
+        this.climb = null;
+        return null;
+      }
+      if (!cl.on && dist2D(me.pos, cl.spot) < 0.8 && me.pos.y > ground + 0.4) { cl.on = true; cl.until = now + tune.perchSec; }
+      if (cl.on) {
+        if (me.pos.y < ground + 0.3) { this.climb = null; return null; } // knocked off
+        this.moveNote = { t: now, text: 'On high ground' };
+        return { dir: null };
+      }
+      this.moveNote = { t: now, text: 'Climbing up for high ground' };
+      return { dir: norm(flat(sub(cl.spot, me.pos))), sprint: true, approach: true };
+    }
+    const [lo, hi] = this.P.buildTuning.highGroundRange;
+    if (pk.climbUp < 0.6 || c.on < 0 || now < this.nextPerchLookAt || c.enemyDist < lo || c.enemyDist > hi ||
+      this.fightSince === null || now - this.fightSince < this.P.buildTuning.highGroundAfter || e.pos.y - me.pos.y > 0.5 ||
+      me.pos.y - view.map[c.on].groundY > 0.3) return null;
+    this.nextPerchLookAt = now + 1;
+    const spot = perchesNear(view.groundAt, me.pos, pk.climbUp, tune.climbRange)
+      .find((p) => dist2D(p, e.pos) <= c.enemyDist + 2 && islandAt(view.map, p) === c.on && !this.leaper.isBanned(this.climbKey(p), now));
+    if (!spot) return null;
+    this.climb = { spot, until: now + 6, on: false };
+    this.moveNote = { t: now, text: 'Climbing up for high ground' };
+    return { dir: norm(flat(sub(spot, me.pos))), sprint: true, approach: true };
+  }
+
+  /**
+   * Ramp-rush: pushing onto an enemy's island under their fire, lay ramps forward and up toward them (the slope is
+   * cover, the top is high ground over their walls), and a deck off the top when something tall still stands in the
+   * way (scaffold climbing). ParkourSkill.rush odds per push (Hard, PRO).
+   */
+  private rushMove(c: Ctx, e: PlayerState | null): Act | null {
+    const { me, view } = c;
+    const now = view.now, pk = this.P.parkour[this.difficulty];
+    const ramps = me.inv.pieces.ramp ?? 0;
+    let r = this.rush;
+    if (r) {
+      const last = r.last;
+      const gone = !!last && !view.pieces.some((p) => p.kind === 'ramp' && dist2D(p.pos, last) < 0.6 && Math.abs(p.pos.y - last.y) < 0.6);
+      if (now > r.until || gone) { this.rush = null; return null; }
+    } else {
+      if (!e || pk.rush <= 0 || pk.rushRamps < 1 || ramps < 1 || !c.rivalIsl || now < this.rushRollAt) return null;
+      const [lo, hi] = this.P.parkourTuning.rushRange;
+      const theirs = islandAt(view.map, e.pos) === c.rivalIsl.index;
+      // On their island already and level with them: no point (a ramp is for getting up onto them / over walls).
+      if (!theirs || (c.on === c.rivalIsl.index && e.pos.y <= me.pos.y + 0.5) || c.enemyDist < lo || c.enemyDist > hi || this.building(c)) return null;
+      this.rushRollAt = now + 10;
+      if (this.rng() >= pk.rush) return null;
+      r = this.rush = { dir: norm(flat(sub(e.pos, me.pos))), last: null, n: 0, deck: false, until: now + 15 };
+      this.leaper.stats.rushes++;
+    }
+    const face = e ? add(e.pos, v3(0, CHEST, 0)) : add(me.pos, add(scale(r.dir, 10), v3(0, CHEST, 0)));
+    const rotY = yawOf(r.dir) + Math.PI; // a ramp rises along its local +Z (= -forward(rotY)): toward them
+    if (!r.last) {
+      if (this.building(c, 'ramp')) return { dir: null, face };
+      const pos = add(me.pos, scale(r.dir, 2.1));
+      const act = this.place(c, 'ramp', pos, rotY, face);
+      if (!act) { this.rush = null; return null; }
+      r.last = v3(pos.x, me.pos.y, pos.z); r.n = 1;
+      this.leaper.stats.rushRamps++;
+      this.moveNote = { t: now, text: 'Ramp-rushing: first ramp' };
+      return act;
+    }
+    const top = add(r.last, scale(r.dir, PIECES.ramp.d / 2 - 0.35));
+    const up = me.pos.y > r.last.y + PIECES.ramp.h - 0.4;
+    if (!up || dist2D(me.pos, top) > 0.6) {
+      this.moveNote = { t: now, text: `Ramp-rushing: up ramp ${r.n}` };
+      return { dir: norm(flat(sub(top, me.pos))), face, sprint: true, approach: true };
+    }
+    if (this.building(c)) return { dir: null, face };
+    if (r.n < pk.rushRamps && ramps > 0) {
+      const next = add(r.last, scale(r.dir, PIECES.ramp.d - 0.25));
+      const pos = v3(next.x, r.last.y + PIECES.ramp.h, next.z);
+      const act = this.place(c, 'ramp', pos, rotY, face);
+      if (act) {
+        r.last = pos; r.n++;
+        this.leaper.stats.rushRamps++;
+        this.moveNote = { t: now, text: `Ramp-rushing: ramp ${r.n}` };
+        return act;
+      }
+    }
+    // At the top: something tall still ahead (a wall, the bunker) or nothing to step onto: a deck off the top.
+    const ahead = add(me.pos, scale(r.dir, 1.6));
+    const g = view.groundAt(ahead.x, ahead.z);
+    if (!r.deck && (me.inv.pieces.scaffold ?? 0) > 0 && (g === null || g > me.pos.y + 0.4)) {
+      r.deck = true;
+      const deck = add(r.last, scale(r.dir, PIECES.ramp.d / 2 + PIECES.scaffold.d / 2 - 0.1));
+      const act = this.place(c, 'scaffold', v3(deck.x, r.last.y + PIECES.ramp.h - 0.15, deck.z), yawOf(r.dir), face);
+      if (act) { this.moveNote = { t: now, text: 'Ramp-rushing: deck off the top' }; return act; }
+    }
+    // Done building: hold the top and fight from it (the perch timer ends the rush).
+    if (r.until > now + this.P.parkourTuning.perchSec) r.until = now + this.P.parkourTuning.perchSec;
+    this.moveNote = { t: now, text: 'Ramp-rush: holding the top' };
+    return { dir: null, face };
   }
 
   /**
@@ -1187,7 +1365,10 @@ export class Bot {
     const scaffolds = this.scaffoldsNeeded(c);
     if (sk.bridgeCover && this.wallsOnBridge && scaffolds >= 2 * this.P.buildTuning.scaffoldsPerBridgeWall)
       add1(wall, Math.floor(scaffolds / this.P.buildTuning.scaffoldsPerBridgeWall));
-    if (sk.highGround && total >= this.P.buildTuning.rampAt && t.builder >= 0.3) add1('ramp');
+    const pk = this.P.parkour[this.difficulty];
+    // A ramp for high ground; ramp-rushers carry a chain's worth.
+    const ramps = Math.max(sk.highGround && t.builder >= 0.3 ? 1 : 0, pk.rush > 0 ? Math.round(pk.rushRamps) : 0);
+    if (total >= this.P.buildTuning.rampAt) add1('ramp', ramps);
     return b;
   }
 
@@ -1611,6 +1792,11 @@ export class Bot {
   }
 
   private act(g: Goal, c: Ctx): Act {
+    // A ramp-rush under way carries on through a goal change on the push (losing sight of them over my own ramp).
+    if (this.rush && (g === 'fight' || g === 'attack' || g === 'seal' || g === 'bridge')) {
+      const r = this.rushMove(c, c.enemy);
+      if (r) return r;
+    }
     switch (g) {
       case 'collect': return this.goTo(c.home.generator, 2.0);
       case 'shop': return this.doShop(c);
@@ -2212,6 +2398,10 @@ export class Bot {
       const d = dist2D(me.pos, this.perch.pos);
       return d > 0.35 ? { dir: norm(flat(sub(this.perch.pos, me.pos))) } : { dir: null };
     }
+    const rushing = this.rushMove(c, e);
+    if (rushing) return rushing;
+    const perch = sameIsland && gun !== 'fists' ? this.perchMove(c, e) : null;
+    if (perch) return perch;
     const ramp = this.highGround(c, e, to, gun, sameIsland);
     if (ramp) return ramp;
     // Careful players fight from behind something solid.

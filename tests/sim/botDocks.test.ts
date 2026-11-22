@@ -88,8 +88,8 @@ describe('bots use the piers', () => {
     expect(step).toMatch(/Blowing out my pier under @2/);
   }, 60_000);
 
-  test('pushing over its pier with a section blown out: it decks over the gap and crosses', async () => {
-    const { m } = await duel('hard', 'Turtle', 9);
+  test('pushing over its pier with a section blown out: it decks over the gap (or jumps it) and crosses', async () => {
+    const { m, bot } = await duel('hard', 'Turtle', 9);
     m.debugGive(1, { weapons: { pistol: { mag: WEAPONS.pistol.mag, spare: 36 } }, pieces: { scaffold: 14, wood: 5 } });
     const hole = m.def.docks!.find((d) => d.island === 0 && d.row === 1)!;
     m.debugExplode('charge', v3(hole.center.x, hole.center.y - 1, hole.center.z));
@@ -103,8 +103,10 @@ describe('bots use the piers', () => {
       crossed = islandAt(m.map, me) === 1 || Math.hypot(me.x, me.z) < 12;
     }
     const decks = snap.pieces.filter((p) => p.owner === 1 && p.kind === 'scaffold').length;
-    console.log(`pier gap: patched ${patched}, ${decks} decks, crossed ${crossed}`);
-    expect(patched).toBe(true);
+    const jumped = bot().parkourStats.jumps > 0;
+    console.log(`pier gap: patched ${patched}, jumped ${jumped}, ${decks} decks, crossed ${crossed}`);
+    // A 2 m hole: hard players may jump it instead (botParkour.test.ts); either way they get across.
+    expect(patched || jumped).toBe(true);
     expect(crossed).toBe(true);
   }, 150_000);
 });

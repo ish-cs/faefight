@@ -60,6 +60,8 @@ export type BrainDigest = {
   build: { kind: PieceKind; x: number; y: number; z: number; rotY: number; why: string } | null;
   /** Grappling hook: on a rope now, or its last use (a few seconds), or what it carries it for; absent when none. */
   hook?: string;
+  /** Movement intent (parkour.ts): jumping a gap, climbing up, ramp-rushing; or its last jump (a few seconds). Absent when just walking. */
+  move?: string;
   /** Route ahead: [x, y, z] points from its feet. */
   path: [number, number, number][];
   /** Where it's aiming / shooting at, and whether it fired this tick. */
@@ -116,6 +118,8 @@ type Internals = {
   pushLead(view: BotView): { id: number; target: number | null } | null; allyIsland(view: BotView, i: number): boolean;
   sieging(c: Ctx): boolean; nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null;
   hookNote: { t: number; text: string } | null;
+  moveNote: { t: number; text: string } | null;
+  leaper: { note: { t: number; text: string } | null };
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
@@ -702,6 +706,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     ...hookLine(I, me, now),
+    ...moveLine(I, me, now),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
     st: {
@@ -721,6 +726,14 @@ export function debugBrain(bot: Bot): BrainDigest {
 function leadOf(I: Internals, view: BotView): { lead?: number } {
   const l = sandbox(I, () => I.pushLead(view));
   return l && l.id !== I.id ? { lead: l.id } : {};
+}
+
+/** The brain panel's movement line: the parkour move under way (said this tick) or the last jump's outcome. */
+function moveLine(I: Internals, me: PlayerState | undefined, now: number): { move?: string } {
+  if (!me?.alive) return {};
+  const a = I.moveNote, b = I.leaper.note;
+  const pick = a && now - a.t < 0.5 ? a : b && now - b.t < 3 ? b : null;
+  return pick ? { move: pick.text } : {};
 }
 
 /** The brain panel's grappling hook line. */
