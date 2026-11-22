@@ -62,6 +62,8 @@ export type BrainDigest = {
   hook?: string;
   /** Movement intent (parkour.ts): jumping a gap, climbing up, ramp-rushing; or its last jump (a few seconds). Absent when just walking. */
   move?: string;
+  /** Weapon it wants in hand and why ("rocket: reload it between fights"); absent when dead or not yet decided. */
+  weapon?: string;
   /** Route ahead: [x, y, z] points from its feet. */
   path: [number, number, number][];
   /** Where it's aiming / shooting at, and whether it fired this tick. */
@@ -120,6 +122,7 @@ type Internals = {
   hookNote: { t: number; text: string } | null;
   moveNote: { t: number; text: string } | null;
   leaper: { note: { t: number; text: string } | null };
+  weaponIntent: { want: string; why: string } | null;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
@@ -707,6 +710,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     shop: p.shop, build: p.build(now),
     ...hookLine(I, me, now),
     ...moveLine(I, me, now),
+    ...(me?.alive && I.weaponIntent ? { weapon: I.weaponIntent.why } : {}),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
     st: {

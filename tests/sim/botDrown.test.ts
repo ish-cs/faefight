@@ -41,5 +41,7 @@ describe('bots stay out of the water', () => {
       }
     }
     expect(unexplained, unexplained.join(', ')).toEqual([]);
-  }, 300_000);
+    // A full 900 s, 8-bot match: ~190 s on a normal CI runner, and slow runners are ~1.5x slower, which hit 300 s
+    // once gameplay props landed (props cost was cut since: src/sim/rapierStep.ts, PropSim.inZone).
+  }, 480_000);
 });

@@ -230,6 +230,16 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
 export type GunSkill = { recoilComp: number; burstShots: number; burstPause: number; sprayRange: number };
 
 /**
+ * Weapon in hand (like a strong human: commit to a weapon, finish a reload, never thrash; a switch cancels a reload).
+ * - holdSec: after a switch, keep the new weapon at least this long (unless it's out of ammo, or empty in a close fight);
+ *   rocketHoldSec for the rocket launcher (drawn for a shot, it gets fired) unless an enemy is a threat.
+ * - threatM: an enemy in sight this close (or hitting me within hurtSec) is a real threat: the only reason to drop a
+ *   rocket reload for a loaded gun, and no time to pick up an empty launcher.
+ * - shotgunHyst: holding the shotgun, keep it until the target is this far past the shotgun range (no flip-flop at 8 m).
+ */
+export type WeaponParams = { holdSec: number; rocketHoldSec: number; threatM: number; hurtSec: number; shotgunHyst: number };
+
+/**
  * Movement like a player's (parkour.ts): jumping bridge and pier gaps instead of decking over them, hopping up onto
  * ledges for high ground, ramp-rushing onto an enemy island. All within what a human can do (movement.ts: a sprint
  * jump carries ~7 m, a jump clears ~1.2 m up); skill decides how close to that a player dares go.
@@ -247,7 +257,7 @@ export type GunSkill = { recoilComp: number; burstShots: number; burstPause: num
 export type ParkourSkill = { gapMax: number; use: number; slop: number; climbUp: number; underFire: number; rush: number; rushRamps: number };
 export type ParkourTuning = { moodSec: number; margin: number; rushRange: readonly [number, number]; climbRange: number; perchSec: number };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; parkour: Record<Difficulty, ParkourSkill>; parkourTuning: ParkourTuning };
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; parkour: Record<Difficulty, ParkourSkill>; parkourTuning: ParkourTuning };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -355,6 +365,8 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
   pro: { recoilComp: 0.95, burstShots: 4, burstPause: 0.22, sprayRange: 15 },
 };
 
+export const WEAPON: WeaponParams = { holdSec: 0.6, rocketHoldSec: 2.5, threatM: 12, hurtSec: 1, shotgunHyst: 2 };
+
 /** Sprint-jump reach is ~7.3 m and a walking one ~4.8 m (measured in the sim): PRO's 4.2 m leaves a wide margin. */
 export const PARKOUR: Record<Difficulty, ParkourSkill> = {
   easy: { gapMax: 1.5, use: 0.25, slop: 0.5, climbUp: 0.5, underFire: 0, rush: 0, rushRamps: 0 },
@@ -364,7 +376,7 @@ export const PARKOUR: Record<Difficulty, ParkourSkill> = {
 };
 export const PARKOUR_TUNING: ParkourTuning = { moodSec: 20, margin: 1.2, rushRange: [7, 24] as const, climbRange: 8, perchSec: 8 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, parkour: PARKOUR, parkourTuning: PARKOUR_TUNING });
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, parkour: PARKOUR, parkourTuning: PARKOUR_TUNING });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -436,6 +448,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['parkour.*.underFire', [0, 1]], ['parkour.*.rush', [0, 1]], ['parkour.*.rushRamps', [0, 3]],
   ['parkourTuning.moodSec', [5, 60]], ['parkourTuning.margin', [1.05, 1.6]], ['parkourTuning.rushRange.0', [4, 12]],
   ['parkourTuning.rushRange.1', [14, 35]], ['parkourTuning.climbRange', [3, 14]], ['parkourTuning.perchSec', [2, 20]],
+  ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
   ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {

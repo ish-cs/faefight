@@ -1,5 +1,9 @@
 import * as THREE from 'three/webgpu';
-import { PROP_KIND_LIST, type PropKind, type PropPose, type PropSpawn } from '../../sim/props';
+import { PROP_KIND_LIST, PROP_KINDS, type PropKind, type PropPose, type PropSpawn } from '../../sim/props';
+import type { Vec3 } from '../../sim/types';
+import { v3 } from '../../sim/vec';
+import type { SolidHit } from './impacts';
+import { ownProp, type WorldSurface } from './surfaces';
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrelModel } from './mapProps';
 import { faceLabel, labelMaterial } from './labels';
@@ -71,7 +75,30 @@ const SHADOW_MAT = new THREE.MeshBasicNodeMaterial();
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(1, 1, 1), _m = new THREE.Matrix4();
 
 type Slot = { mesh: THREE.BatchedMesh; id: number };
+/** Bullet-mark surface per prop kind (tyres: dark rubber, marked like asphalt). */
+const PROP_SURFACE: Record<PropKind, WorldSurface> = { crate: 'wood', drum: 'metal', pallet: 'wood', ibc: 'metal', reel: 'wood', tire: 'asphalt' };
+const _l = new THREE.Vector3(), _iq = new THREE.Quaternion();
 type Item = { slots: Slot[]; spawn: PropSpawn; pos: THREE.Vector3; rot: THREE.Quaternion; tPos: THREE.Vector3; tRot: THREE.Quaternion; moving: boolean };
+
+/** Whether `p` sits on a prop of `kind` posed at (pos, rot) (within `slack`): the hit with its face normal, or null. */
+export function propSolidHit(kind: PropKind, id: number, pos: THREE.Vector3, rot: THREE.Quaternion, p: Vec3, slack: number): SolidHit | null {
+  const shape = PROP_KINDS[kind].shape;
+  const reach = 'box' in shape ? Math.hypot(shape.box.x, shape.box.y, shape.box.z) : Math.hypot(shape.cyl.r, shape.cyl.h);
+  if (pos.distanceToSquared(_l.set(p.x, p.y, p.z)) > (reach + slack) ** 2) return null;
+  _l.sub(pos).applyQuaternion(_iq.copy(rot).invert());
+  let nx = 0, ny = 0, nz = 0;
+  if ('box' in shape) {
+    const ex = Math.abs(_l.x) - shape.box.x, ey = Math.abs(_l.y) - shape.box.y, ez = Math.abs(_l.z) - shape.box.z;
+    if (ex > slack || ey > slack || ez > slack) return null;
+    if (ex >= ey && ex >= ez) nx = Math.sign(_l.x); else if (ey >= ez) ny = Math.sign(_l.y); else nz = Math.sign(_l.z);
+  } else {
+    const rad = Math.hypot(_l.x, _l.z), er = rad - shape.cyl.r, ey = Math.abs(_l.y) - shape.cyl.h;
+    if (er > slack || ey > slack) return null;
+    if (ey >= er || rad < 1e-6) ny = Math.sign(_l.y) || 1; else { nx = _l.x / rad; nz = _l.z / rad; }
+  }
+  const n = _l.set(nx, ny, nz).applyQuaternion(rot);
+  return { surface: PROP_SURFACE[kind], point: v3(p.x, p.y, p.z), normal: v3(n.x, n.y, n.z), owner: ownProp(id) };
+}
 
 export class GameProps {
   readonly root = new THREE.Group();
@@ -163,6 +190,18 @@ export class GameProps {
       it.tRot.set(...it.spawn.rot);
       it.moving = true;
     }
+  }
+
+  /**
+   * The prop a shot's end point `p` sits on (its latest snapshot pose, a little slack), with the face normal and the
+   * prop's shown pose for marks to follow; null if none. Called per shot, not per frame.
+   */
+  hitAt(p: Vec3, slack = 0.12): SolidHit | null {
+    for (const it of this.items.values()) {
+      const h = propSolidHit(it.spawn.kind, it.spawn.id, it.tPos, it.tRot, p, slack);
+      if (h) { h.frame = { pos: it.pos, rot: it.rot }; return h; }
+    }
+    return null;
   }
 
   /** Per frame: ease each moving prop toward its latest pose (snapshots arrive at 15–30 Hz). */

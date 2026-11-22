@@ -7,7 +7,7 @@ import { rotateY, v3 } from '../../sim/vec';
 import { canvasTex, makeRng } from './textures';
 import type { Particles } from './particles';
 import type { Quality } from './sky';
-import { MARK, SURFACE_BURST, SURFACE_MARK, SurfaceMap, type MarkKind, type SurfaceHit, type WorldSurface } from './surfaces';
+import { isPropOwner, MARK, OWNER_WORLD, ownCosmetic, ownDock, ownHazard, ownProp, SURFACE_BURST, SURFACE_MARK, SurfaceMap, type MarkKind, type SurfaceHit, type WorldSurface } from './surfaces';
 
 /** Most marks alive at once per quality preset; the oldest fade out as they near eviction. */
 export const DECAL_CAP: Record<Quality, number> = { low: 120, high: 300, ultra: 480 };
@@ -17,12 +17,14 @@ const FADE_N = 24;
 
 /**
  * Ring buffer of decal slots (no rendering): reuses free slots, then grows to the cap, then evicts the oldest.
- * `owner` ties a mark to a building piece so it goes away with the piece (-1 = the world itself).
+ * `owner` ties a mark to what it sits on (a building piece, pier section, prop: see surfaces.ts owners) so it goes
+ * away with it; -1 = the static world. Owned slots are indexed by owner: dropping one owner touches only its marks.
  */
 export class DecalRing {
   private seq: Float64Array;
   private own: Int32Array;
   private free: number[] = [];
+  private byOwner = new Map<number, Set<number>>();
   private high = 0;
   private counter = 0;
   private n = 0;
@@ -58,9 +60,19 @@ export class DecalRing {
 
   private release(s: number) {
     if (this.seq[s] > 0) this.n--;
+    this.unindex(s);
     this.seq[s] = 0;
     this.own[s] = -1;
     this.free.push(s);
+  }
+
+  private unindex(s: number) {
+    const o = this.own[s];
+    if (o === OWNER_WORLD) return;
+    const set = this.byOwner.get(o);
+    if (!set) return;
+    set.delete(s);
+    if (!set.size) this.byOwner.delete(o);
   }
 
   /** A slot for a new mark (evicting the oldest when full). `evicted` = whether a live mark was replaced. */
@@ -78,8 +90,13 @@ export class DecalRing {
       evicted = this.seq[slot] > 0;
     }
     if (!(this.seq[slot] > 0)) this.n++;
+    else this.unindex(slot);
     this.seq[slot] = ++this.counter;
     this.own[slot] = owner;
+    if (owner !== OWNER_WORLD) {
+      const set = this.byOwner.get(owner);
+      if (set) set.add(slot); else this.byOwner.set(owner, new Set([slot]));
+    }
     return { slot, evicted };
   }
 
@@ -95,18 +112,27 @@ export class DecalRing {
     return Math.min(1, 1 - fullness + fullness * Math.min(1, rank / FADE_N));
   }
 
-  /** Drop every mark owned by `owner`; returns the freed slots. */
+  /** Drop every mark owned by `owner` (not the world's: see clear); returns the freed slots. */
   removeOwner(owner: number): number[] {
-    const out: number[] = [];
-    for (let i = 0; i < this.high; i++) if (this.own[i] === owner && this.seq[i] > 0) { this.release(i); out.push(i); }
+    const set = this.byOwner.get(owner);
+    if (!set) return [];
+    const out = [...set];
+    for (const i of out) this.release(i);
     return out;
   }
 
-  owners(): Set<number> {
-    const s = new Set<number>();
-    for (let i = 0; i < this.high; i++) if (this.seq[i] > 0 && this.own[i] >= 0) s.add(this.own[i]);
-    return s;
+  /** Drop every mark; returns the freed slots. */
+  clear(): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < this.high; i++) if (this.seq[i] > 0) { this.release(i); out.push(i); }
+    return out;
   }
+
+  /** Owners with live marks (the world excluded). */
+  owners(): IterableIterator<number> { return this.byOwner.keys(); }
+
+  /** Live slots of `owner`, if any. */
+  slotsOf(owner: number): ReadonlySet<number> | undefined { return this.byOwner.get(owner); }
 }
 
 /** Mark size (m) by atlas cell. */
@@ -213,6 +239,10 @@ const rr = (a: number, b: number) => a + (b - a) * R();
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _n = new THREE.Vector3();
 const _z = new THREE.Vector3(0, 0, 1), _zero = new THREE.Matrix4().makeScale(0, 0, 0);
 const _t1 = new THREE.Vector3(), _t2 = new THREE.Vector3(), _v = new THREE.Vector3();
+const _f = new THREE.Matrix4(), _one = new THREE.Vector3(1, 1, 1);
+
+/** A dynamic thing a shot can end on (gameplay prop, hazard); `frame` = a moving prop's current pose. */
+export type SolidHit = SurfaceHit & { frame?: { pos: THREE.Vector3; rot: THREE.Quaternion } };
 
 const TINT: Record<WorldSurface, [number, number, number]> = {
   concrete: [0.62, 0.6, 0.57], quay: [0.58, 0.56, 0.52], asphalt: [0.36, 0.36, 0.37], metal: [0.4, 0.4, 0.4], container: [0.4, 0.4, 0.4],
@@ -227,7 +257,9 @@ const CHIP_COLOR: Partial<Record<WorldSurface, number>> = {
  * the surface, with material-appropriate impact particles: one instanced decal mesh (1 draw call, capped per
  * quality, oldest fade out first). Driven by the existing `shot` / `explosion` events, so online guests get the
  * same marks with no extra state. Built pieces keep their own marks (pieceFx/decals.ts); blast scorch on a piece
- * here is owned by it and vanishes with it.
+ * here is owned by it and vanishes with it. Every mark is owned by what it sits on (surfaces.ts owners): a broken
+ * pier section, broken cosmetic, gone hazard or removed piece takes its marks with it (state-driven from snapshots,
+ * so replays, spectating and host migration agree); a gameplay prop's marks ride along as it moves.
  */
 export class ImpactMarks {
   readonly mesh: THREE.InstancedMesh;
@@ -237,6 +269,13 @@ export class ImpactMarks {
   /** The map's solid boxes + ground surfaces (also read by footprints and ragdolls). */
   surf: SurfaceMap | null = null;
   private dirtyFade = false;
+  /** Prop-relative matrix (16 floats per slot) of marks on gameplay props, so they follow the prop. */
+  private local = new Float32Array(MAX_CAP * 16);
+  /** Pieces the latest sync removed: a shot in the same snapshot may have ended on one (the shot that broke it). */
+  private gone: PieceState[] = [];
+  private lastPieces: readonly PieceState[] = [];
+  /** Gameplay props / hazards at a point (set by the world; null = none). */
+  solid: ((p: Vec3) => SolidHit | null) | null = null;
 
   constructor(private particles: Particles) {
     const geo = new THREE.PlaneGeometry(1, 1);
@@ -263,7 +302,9 @@ export class ImpactMarks {
   setMap(def: MapDef) {
     this.surf = new SurfaceMap(def);
     for (let i = 0; i < this.ring.used; i++) this.mesh.setMatrixAt(i, _zero);
-    for (const id of [...this.ring.owners(), -1]) this.ring.removeOwner(id);
+    this.ring.clear();
+    this.gone = [];
+    this.lastPieces = [];
     this.mesh.instanceMatrix.needsUpdate = true;
   }
 
@@ -276,8 +317,8 @@ export class ImpactMarks {
 
   get active() { return this.ring.live; }
 
-  /** Place a mark of `kind` at `point` facing `normal` (unit), owned by a piece id or -1. */
-  mark(kind: MarkKind, point: Vec3, normal: Vec3, size = MARK_SIZE[kind], owner = -1) {
+  /** Place a mark of `kind` at `point` facing `normal` (unit), owned by what it sits on (surfaces.ts owners). */
+  mark(kind: MarkKind, point: Vec3, normal: Vec3, size = MARK_SIZE[kind], owner = OWNER_WORLD, frame?: SolidHit['frame']) {
     const { slot } = this.ring.add(owner);
     _n.set(normal.x, normal.y, normal.z);
     _q.setFromUnitVectors(_z, _n);
@@ -287,6 +328,7 @@ export class ImpactMarks {
     // Big blast marks sit a touch higher so they stay above uneven ground.
     _m.compose(_p.set(point.x, point.y, point.z).addScaledVector(_n, size > 1 ? 0.02 : 0.006), _q, _s.set(s, s, 1));
     this.mesh.setMatrixAt(slot, _m);
+    if (frame && isPropOwner(owner)) _f.compose(frame.pos, frame.rot, _one).invert().multiply(_m).toArray(this.local, slot * 16);
     this.cell.setX(slot, MARK[kind]);
     this.mesh.count = this.ring.used;
     this.mesh.instanceMatrix.needsUpdate = true;
@@ -294,37 +336,64 @@ export class ImpactMarks {
     this.dirtyFade = true;
   }
 
-  /** Drop scorch marks of pieces that are gone. */
-  retainPieces(alive: (id: number) => boolean) {
-    let changed = false;
-    for (const id of this.ring.owners()) if (!alive(id)) { for (const s of this.ring.removeOwner(id)) { this.mesh.setMatrixAt(s, _zero); changed = true; } }
-    if (changed) { this.mesh.instanceMatrix.needsUpdate = true; this.dirtyFade = true; }
+  /** Drop every mark of `owner` (cost: its own marks only). */
+  drop(owner: number) {
+    if (!this.ring.slotsOf(owner)) return;
+    for (const s of this.ring.removeOwner(owner)) this.mesh.setMatrixAt(s, _zero);
+    this.mesh.instanceMatrix.needsUpdate = true;
+    this.dirtyFade = true;
   }
 
-  onEvent(e: MatchEvent, view: { pieces: readonly PieceState[]; players: readonly PlayerState[]; waterY: number; broken: readonly number[] }) {
+  /** Snapshot pieces (`ids` = their ids): drop marks of pieces no longer there, remember the ones just removed. */
+  syncPieces(pieces: readonly PieceState[], ids: ReadonlySet<number>) {
+    this.gone.length = 0;
+    for (const p of this.lastPieces) if (!ids.has(p.id)) this.gone.push(p);
+    this.lastPieces = pieces;
+    for (const o of this.ring.owners()) if (o >= 0 && !ids.has(o)) this.drop(o);
+  }
+
+  /** Snapshot state of breakables: broken cosmetics, broken pier sections, gone hazards (`hz` st 2) lose their marks. */
+  syncBroken(cosmetics: readonly number[], docks: readonly number[], hz: readonly { id: number; st: number }[] | undefined) {
+    for (const id of cosmetics) this.drop(ownCosmetic(id));
+    for (const id of docks) this.drop(ownDock(id));
+    if (this.surf && this.surf.brokenDocks.size !== docks.length) this.surf.brokenDocks = new Set(docks);
+    if (hz) for (const h of hz) if (h.st === 2) this.drop(ownHazard(h.id));
+  }
+
+  /** A gameplay prop moved: its marks follow (only that prop's marks are touched). */
+  followProp(id: number, pos: THREE.Vector3, rot: THREE.Quaternion) {
+    const slots = this.ring.slotsOf(ownProp(id));
+    if (!slots) return;
+    _f.compose(pos, rot, _one);
+    for (const s of slots) this.mesh.setMatrixAt(s, _m.fromArray(this.local, s * 16).premultiply(_f));
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  onEvent(e: MatchEvent, view: ImpactView) {
     if (!this.surf || e.data.echo) return;
     if (e.type === 'shot') this.onShot(e.data, view);
     else if (e.type === 'explosion') this.onExplosion(e.data, view);
   }
 
-  private onShot(d: Record<string, unknown>, view: { pieces: readonly PieceState[]; players: readonly PlayerState[]; waterY: number; broken: readonly number[] }) {
+  private onShot(d: Record<string, unknown>, view: ImpactView) {
     const weapon = d.weapon as WeaponKind;
     if (weapon === 'fists' || weapon === 'rocket' || !WEAPONS[weapon]) return;
     const from = d.from as Vec3, ends = [d.to as Vec3, ...((d.tos as Vec3[] | undefined) ?? [])];
     const range = WEAPONS[weapon].range;
     const broken = new Set(view.broken);
+    const ctx = { pieces: view.pieces, players: view.players, waterY: view.waterY, gone: this.gone, solid: this.solid };
     ends.forEach((to, i) => {
       if (!from || !to) return;
       const k = i === 0 ? 1 : 0.5; // shotgun pellets: lighter bursts
       for (const h of this.surf!.propHits(from, to, broken)) this.hit(h, k);
-      const h = this.surf!.classify(from, to, range, view);
+      const h = this.surf!.classify(from, to, range, ctx);
       if (h) this.hit(h, k);
     });
   }
 
-  private hit(h: SurfaceHit, k: number) {
+  private hit(h: SolidHit, k: number) {
     const m = SURFACE_MARK[h.surface];
-    if (m) this.mark(m, h.point, h.normal);
+    if (m) this.mark(m, h.point, h.normal, MARK_SIZE[m], h.owner ?? OWNER_WORLD, h.frame);
     this.burst(h.surface, h.point, h.normal, k);
   }
 
@@ -391,6 +460,7 @@ export class ImpactMarks {
     }
     // Walls: scorch on any solid face within reach of the blast (map cover, bunkers, cranes)...
     for (const b of this.surf.boxes) {
+      if (b.dock !== undefined && this.surf.brokenDocks.has(b.dock)) continue;
       const l = rotateY(v3(pos.x - b.center.x, pos.y - b.center.y, pos.z - b.center.z), -b.rotY);
       const c = v3(Math.max(-b.half.x, Math.min(b.half.x, l.x)), Math.max(-b.half.y, Math.min(b.half.y, l.y)), Math.max(-b.half.z, Math.min(b.half.z, l.z)));
       const dd = Math.hypot(l.x - c.x, l.y - c.y, l.z - c.z);
@@ -398,7 +468,7 @@ export class ImpactMarks {
       const nl = v3((l.x - c.x) / dd, (l.y - c.y) / dd, (l.z - c.z) / dd);
       if (Math.abs(nl.y) > 0.7) continue; // roofs: the ground scorch reads fine
       const w = rotateY(c, b.rotY), nw = rotateY(axisOf(nl), b.rotY);
-      this.mark('scorch', v3(b.center.x + w.x, b.center.y + w.y, b.center.z + w.z), nw, MARK_SIZE.scorch * 0.7 * big * (1 - dd / 1.6));
+      this.mark('scorch', v3(b.center.x + w.x, b.center.y + w.y, b.center.z + w.z), nw, MARK_SIZE.scorch * 0.7 * big * (1 - dd / 1.6), b.owner);
     }
     // ...and on surviving built pieces (owned: gone with the piece).
     for (const pc of view.pieces) {
@@ -437,6 +507,8 @@ export class ImpactMarks {
     this.fade.clearUpdateRanges(); this.fade.addUpdateRange(0, n); this.fade.needsUpdate = true;
   }
 }
+
+export type ImpactView = { pieces: readonly PieceState[]; players: readonly PlayerState[]; waterY: number; broken: readonly number[] };
 
 /** Snap a unit vector to its dominant axis (box face normal). */
 function axisOf(n: Vec3): Vec3 {

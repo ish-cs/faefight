@@ -285,6 +285,10 @@ export class Bot {
   private burstN = 0;
   private burstRestUntil = -Infinity;
   private seenShotAt = -Infinity;
+  /** Weapon in hand (params.ts weapon): what I want and why (spectators), and when the hand last changed (hold). */
+  weaponIntent: { want: WeaponKind; why: string } | null = null;
+  private lastEquipped: WeaponKind | null = null;
+  private swappedAt = -Infinity;
   private view!: BotView;
   /** Greedy/opportunist bots bridge to the center island first and contest its bonus stations. */
   private readonly centerMinded: boolean;
@@ -444,7 +448,10 @@ export class Bot {
     // Medium+ tactic: a rocket into a rival's wooden base sets it burning (fire.ts).
     const torch = enemy || this.goal === 'disengage' ? null : this.torchTarget(ctx);
     const dock = enemy ? this.dockShot(ctx) : null;
-    const best = torch || dock?.weapon === 'rocket' ? 'rocket' : bestGun(me.inv, enemy ? ctx.enemyDist : 30);
+    const W = this.P.weapon;
+    // Shotgun range with hysteresis: holding it, keep it a bit past 8 m (no flip-flop as they step in and out).
+    const best = torch || dock?.weapon === 'rocket' ? 'rocket'
+      : bestGun(me.inv, enemy ? ctx.enemyDist : 30, me.equipped === 'shotgun' ? 8 + W.shotgunHyst : 8);
     const gunReady = (range: number) => {
       const w = me.equipped;
       const ammo = w === 'fists' ? null : me.inv.weapons[w];
@@ -531,7 +538,7 @@ export class Bot {
 
     // Weapons: hold the best gun, reload when nobody is in sight.
     const ammo = me.equipped === 'fists' ? null : me.inv.weapons[me.equipped];
-    const slot = !grapple && best !== me.equipped && (me.reloadUntil === 0 || !ammo || ammo.mag === 0) ? best : null;
+    const slot = this.weaponSlot(ctx, act, best, !!torch, dock?.weapon === 'rocket', grapple);
     if (slot) fire = false;
     // An empty mag gets reloaded whoever is in sight (a full one only tops up when nobody is).
     const reload = !slot && !!ammo && me.reloadUntil === 0 && ammo.spare > 0 &&
@@ -619,7 +626,8 @@ export class Bot {
       const atSeller = (view.potionShops ?? []).some((s) => dist2D(me.pos, s) <= USE_RANGE);
       const pot = potionAction(me, now, !!enemy, atSeller);
       if (pot && 'buy' in pot) out.shop = { buy: pot.buy };
-      else if (pot) Object.assign(out, { select: pot.drink, slot: null, drink: true });
+      // (Not mid-reload: drinking takes the gun out of my hands and the reload with it; it can wait a moment.)
+      else if (pot && me.reloadUntil === 0) Object.assign(out, { select: pot.drink, slot: null, drink: true });
     }
     return out;
   }
@@ -773,6 +781,45 @@ export class Bot {
     if (r.until > now + this.P.parkourTuning.perchSec) r.until = now + this.P.parkourTuning.perchSec;
     this.moveNote = { t: now, text: 'Ramp-rush: holding the top' };
     return { dir: null, face };
+  }
+
+  /**
+   * Which weapon to switch to this tick (null = keep what's in hand), like a strong human: commit to a weapon for
+   * weapon.holdSec after a switch, finish a reload (a switch cancels it) unless a real threat needs a loaded gun now,
+   * don't pick up an empty rocket launcher with an enemy in sight, and reload an empty launcher in a quiet moment (switch to it,
+   * reload, switch back) so it's loaded when a pier or a wooden base calls for it.
+   */
+  private weaponSlot(c: Ctx, act: Act, best: WeaponKind, torch: boolean, dock: boolean, grapple: boolean): WeaponKind | null {
+    const { me, enemy } = c, now = c.view.now, W = this.P.weapon;
+    if (me.equipped !== this.lastEquipped) { this.lastEquipped = me.equipped; this.swappedAt = now; }
+    const ammo = me.equipped === 'fists' ? null : me.inv.weapons[me.equipped];
+    const rocket = me.inv.weapons.rocket;
+    const threat = !!enemy && (c.enemyDist < W.threatM || now - this.mem.lastHurtAt < W.hurtSec);
+    let want = best;
+    let why = torch ? 'rocket: torch a wooden base' : dock ? 'rocket: blow the pier out under them' : `${best}: best at this range`;
+    if (want === 'rocket' && rocket && rocket.mag === 0 && enemy) {
+      want = bestGun(me.inv, c.enemyDist);
+      why = `${want}: no time to reload the rocket`;
+    } else if (want !== 'rocket' && this.difficulty !== 'easy' && !enemy && rocket && rocket.mag === 0 && rocket.spare > 0 &&
+        now - this.mem.lastHurtAt > 2 && this.goal !== 'disengage' && this.goal !== 'storm' &&
+        !act.shootAt && !act.build && !act.trap && !act.placeCharge && !act.shop && !act.vault) {
+      want = 'rocket';
+      why = 'rocket: reload it between fights';
+    }
+    const loaded = (w: WeaponKind) => w === 'fists' || (me.inv.weapons[w]?.mag ?? 0) > 0;
+    let slot: WeaponKind | null = null;
+    if (!grapple && want !== me.equipped) {
+      const out = !!ammo && ammo.mag + ammo.spare <= 0;
+      // Empty in a fight: draw a loaded gun (dropping a rocket reload only for a real threat).
+      const draw = !loaded(me.equipped) && loaded(want) && (me.equipped === 'rocket' ? threat : !!enemy);
+      if (out || draw) slot = want;
+      else if (me.reloadUntil > 0) why = `${me.equipped}: finishing the reload`;
+      // A loaded rocket I drew for a shot stays drawn a while (it gets fired, at the pier or at them), unless they're on me.
+      else if (now - this.swappedAt < (me.equipped === 'rocket' && !threat ? W.rocketHoldSec : W.holdSec)) why = `${me.equipped}: just drew it`;
+      else slot = want;
+    }
+    this.weaponIntent = { want, why };
+    return slot;
   }
 
   /**
@@ -2286,7 +2333,8 @@ export class Bot {
     const e = c.enemy, docks = view.docks;
     const D = this.P.drive;
     if (!e || !docks?.length || D.dockShot[this.difficulty] <= 0) { this.dockPlan = null; return null; }
-    const rocket = me.inv.weapons.rocket, rockets = !!rocket && rocket.mag + rocket.spare > 0;
+    // A loaded launcher only: with them in sight there's no time for a 3 s reload (weaponSlot reloads it in a lull).
+    const rocket = me.inv.weapons.rocket, rockets = !!rocket && rocket.mag > 0;
     const nades = me.inv.grenades > 0 && view.now - this.lastNadeAt >= NADE_GAP;
     if (!rockets && !nades) { this.dockPlan = null; return null; }
     const top = (d: DockDef) => d.center.y + d.half.y;

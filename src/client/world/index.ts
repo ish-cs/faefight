@@ -147,18 +147,22 @@ export class World {
     this.scene.add(this.debris.root);
     const gameProps = this.gameProps = new GameProps(noGameProps ? [] : def.props ?? []);
     this.scene.add(gameProps.root);
-    // debris collides with the gameplay props (kinematic, following their snapshot poses)
+    // bullet marks on a prop ride along with it; debris collides with the props (kinematic, following their snapshot poses)
+    let debrisPose: ((id: number, p: THREE.Vector3, q: THREE.Quaternion) => void) | null = null;
+    gameProps.onPose = (id, p, q) => { this.impacts.followProp(id, p, q); debrisPose?.(id, p, q); };
     if (!noDebris) void this.debris.build(def, this.sky.quality).then(() => {
       const sim = this.debris.sim;
       if (!sim || this.gameProps !== gameProps) return;
       for (const s of def.props ?? []) sim.addObstacle(s.id, PROP_KINDS[s.kind].shape, s.pos, s.rot);
       const cam = this.sky.camera.position;
-      gameProps.onPose = (id, p, q) => sim.moveObstacle(id, p, [q.x, q.y, q.z, q.w], cam);
+      debrisPose = (id, p, q) => sim.moveObstacle(id, p, [q.x, q.y, q.z, q.w], cam);
     });
     this.lampPools = new LampPools(lampSpots, cos);
     this.scene.add(this.lampPools.mesh);
-    this.hazards = new HazardLayer(def.hazards ?? []);
+    const hazards = this.hazards = new HazardLayer(def.hazards ?? []);
     this.scene.add(this.hazards.root);
+    // shots ending on a gameplay prop or hazard mark it (owned: the mark follows / goes with it)
+    this.impacts.solid = (p) => gameProps.hitAt(p) ?? hazards.hitAt(p);
     this.docks = new DockLayer(def.docks ?? [], def.waterY);
     this.scene.add(this.docks.root);
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
@@ -203,12 +207,16 @@ export class World {
     this.lampPools = null;
     this.hazards?.dispose();
     this.hazards = null;
+    this.impacts.solid = null;
     this.docks?.dispose();
     this.docks = null;
   }
 
   /** Pier sections: snapshot state (broken, scorched). */
   syncDocks(broken: number[] | undefined, hurt: number[] | undefined) { this.docks?.sync(broken ?? [], hurt ?? []); }
+
+  /** Snapshot breakables (cosmetics, pier sections, hazards): marks on whatever is gone go with it. */
+  syncBroken(cosmetics: readonly number[], docks: readonly number[], hz: HazardNet[] | undefined) { this.impacts.syncBroken(cosmetics, docks, hz); }
 
   /** A pier section just broke: stubs, flying planks, spray. */
   dockEvent(e: MatchEvent, waterY: number) { if (e.type === 'dockBroken') this.docks?.onBroken(e.data, this.pieceFx.particles, waterY); }
@@ -237,7 +245,9 @@ export class World {
     this.debris.syncPieces(pieces);
     this.fire.sync(pieces, fires);
     this.water?.syncPieces(pieces, this.sky.camera.position);
-    if (this.impacts.active) { const ids = new Set(pieces.map((p) => p.id)); this.impacts.retainPieces((id) => ids.has(id)); }
+    const ids = new Set<number>();
+    for (const p of pieces) ids.add(p.id);
+    this.impacts.syncPieces(pieces, ids);
   }
 
   /** `shot` / `explosion` events → world surface marks and impact bursts. */

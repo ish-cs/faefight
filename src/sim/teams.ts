@@ -26,6 +26,15 @@ export const isTeamMode = (mode: number | undefined): boolean => !!mode && !!TEA
 /** Seats a team mode plays with (8, 6, 8); null for free-for-all. */
 export const modeSeats = (mode: number | undefined): number | null => (isTeamMode(mode) ? TEAM_MODES[mode!].size * TEAM_MODES[mode!].teams : null);
 
+/**
+ * Bots in a solo match (1..7): a debug `?bots=N` override wins, a team mode fills its seats, otherwise the menu's
+ * bot count. (Free-for-all once computed `(null ?? 0) - 1` = -1 here, which is truthy, so every solo match had 1 bot.)
+ */
+export const soloBotCount = (menuBots: number, mode: number | undefined, urlBots = 0): number => {
+  const seats = modeSeats(mode);
+  return Math.min(7, Math.max(1, urlBots || (seats !== null ? seats - 1 : menuBots)));
+};
+
 /** Palette index (client ISLAND_COLORS) per team: Red, Blue, Green, Gold. */
 export const TEAM_COLORS: readonly number[] = [0, 1, 2, 3];
 
