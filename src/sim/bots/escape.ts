@@ -1,4 +1,4 @@
-import { PIECES, PIECE_DMG_MULT, PLAYER, SEAL } from '../constants';
+import { MAP, PIECES, PIECE_DMG_MULT, PLAYER, SEAL } from '../constants';
 import { bunkerWallBoxes, type Bunker } from '../map';
 import type { PieceState, Vec3, WeaponKind } from '../types';
 import { dist2D, rotateY, v3 } from '../vec';
@@ -15,7 +15,9 @@ const N = Math.round((2 * SEAL.half) / CELL);
 const BODY_TOP = 1.8;
 /** Out means beyond the escape-countdown radius, with a little margin. */
 const OUT = SEAL.exitRadius + 0.4;
-const STEPS: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+/** A piece this close to a doorway's center stands in or right against it. */
+const DOOR_ZONE = 1.8;
+const STEPS: [number, number][] =[[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
 type Box = { center: Vec3; hx: number; hz: number; rotY: number; piece: PieceState | null };
 
@@ -33,7 +35,11 @@ export function blockingPieces(bunker: Bunker, pieces: PieceState[]): PieceState
     const reach = SEAL.half + Math.hypot(s.w, s.d) / 2 + PLAYER.radius;
     if (Math.abs(p.pos.x - bunker.center.x) > reach || Math.abs(p.pos.z - bunker.center.z) > reach) return false;
     const bottom = p.pos.y - g, top = bottom + s.h;
-    return top >= SEAL.blockHeight && bottom < BODY_TOP;
+    if (bottom >= BODY_TOP) return false;
+    if (top >= SEAL.blockHeight) return true;
+    // Low pieces can be stepped over in the open, but not in a doorway: standing on one there puts my head above
+    // the lintel (a lone sandbag plugs a doorway for good, though it isn't a seal).
+    return top > MAP.bunker.doorHeight - PLAYER.height && bunker.doorways.some((d) => dist2D(p.pos, d.center) < DOOR_ZONE);
   });
 }
 
