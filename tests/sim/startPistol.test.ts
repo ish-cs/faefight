@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { Match } from '../../src/sim/match';
 import { WEAPONS } from '../../src/sim/constants';
+import { DEFAULT_SETTINGS } from '../../src/sim/settings';
 import { NO_INPUT, type PlayerState, type Snapshot } from '../../src/sim/types';
 
 const idle = { makeBot: () => ({ think: () => NO_INPUT }) };
@@ -24,7 +25,7 @@ describe('everyone starts the match with a pistol in hand', () => {
 
   test('teams', async () => {
     const players = [{ name: 'A', isBot: false, team: 0 }, { name: 'B', isBot: true, team: 0 }, { name: 'C', isBot: true, team: 1 }, { name: 'D', isBot: true, team: 1 }];
-    const s = tick1(await Match.create({ players, seed: 4, settings: { teamMode: 2 } }, idle));
+    const s = tick1(await Match.create({ players, seed: 4, settings: { ...DEFAULT_SETTINGS, teamMode: 2 } }, idle));
     for (const p of s.players) { armed(p); inHand(p); }
   });
 

@@ -186,8 +186,6 @@ export class PracticeRange {
       const id = Math.max(...s.players.keys()) + 1; // player ids (not entity ids): 2, 3, …
       const p = newPlayer(id, spec.name, true, 1, spec.post);
       p.inv = emptyInventory();
-      p.hotbar = emptyHotbar();
-      p.equipped = 'fists';
       p.yaw = spec.yaw;
       s.players.set(id, p);
       physics.addPlayer(id, p.pos);
