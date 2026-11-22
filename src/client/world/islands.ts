@@ -16,6 +16,7 @@ import type { Scatter } from './scatter';
 import { pbrAlbedo, pbrSample, worldNoise } from './pbr';
 import { applyWet } from './wetness';
 import { type Footprint, islandSurface, makeRng, yardTopTex } from './textures';
+import { raycastProxies } from './raycastProxy';
 
 const UNLIT_BOOST = 2.6;
 const QUAY_DEPTH = 14; // how far the quay walls go below y=0 (never visible past the water)
@@ -247,7 +248,8 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   distantIslands(dress, map);
 
   const bunkers = solid.build(root, 'bunkers', { chunked: true });
-  collidables.push(...bunkers);
+  // camera/aim rays test raycast-only per-cell splits, not the one map-wide draw (raycastProxy.ts)
+  for (const m of bunkers) for (const p of raycastProxies(m, 24)) { if (p !== m) root.add(p); collidables.push(p); }
   dress.build(root, 'dressing', { chunked: true });
   return { collidables, root };
 }
