@@ -530,3 +530,42 @@ describe('difficulty = human skill, not special rules', () => {
     expect(Math.hypot(first.moveX, first.moveZ)).toBe(0);
   });
 });
+
+describe('Bot cross-water fire discipline (drive.crossFire)', () => {
+  // A neutral center island between the two player islands (x = ±40, radius 22).
+  const center = { center: v3(0, 2, 0), radius: 14, groundY: 2, goldGen: v3(0, 2, 5), supplyGen: v3(0, 2, -5), potionShop: v3(5, 2, 0), shieldWell: v3(-5, 2, 0) };
+  /** Trigger pulls of a PRO with a pistol over 2 s, standing at `meAt`, at an enemy at `foeAt`. */
+  const pulls = (meAt: Vec3, foeAt: Vec3) => {
+    const self = newPlayer(0, 'bot', true, 0, meAt);
+    self.inv.weapons.pistol = { mag: 999, spare: 0 };
+    self.equipped = 'pistol';
+    const enemy = newPlayer(1, 'foe', false, 1, foeAt);
+    const exact = lookAt(eyePos(self), v3(enemy.pos.x, enemy.pos.y + 1.2, enemy.pos.z));
+    self.yaw = exact.yaw; self.pitch = exact.pitch;
+    // Two rivals left: the last-rival exception doesn't apply.
+    const view = makeView(self, {
+      enemies: [enemy], others: [enemyStatus(), enemyStatus({ id: 2 })],
+      center: { island: center, gold: 0, bags: 0, steel: 0 },
+    });
+    view.groundAt = (x, z) => (Math.hypot(x, z) <= center.radius ? center.groundY : groundAt(view.pieces, x, z));
+    const bot = new Bot(0, 'pro', mulberry32(5));
+    let n = 0;
+    const t0 = view.now;
+    for (let k = 0; k < 2 * TICK_HZ; k++) {
+      view.now = t0 + k * DT;
+      self.pos = { ...meAt }; // stands still: this is about the trigger, not footwork
+      const inp = bot.think(view);
+      self.yaw = inp.yaw; self.pitch = inp.pitch;
+      if (inp.fire) n++;
+    }
+    return n;
+  };
+
+  test('two PROs both on the center island more than 25 m apart still shoot each other', () => {
+    expect(pulls(v3(0, 2, -13), v3(0, 2, 13))).toBeGreaterThan(0);
+  });
+
+  test('across the water past 25 m (center to a player island, nobody hitting me) a PRO holds fire', () => {
+    expect(pulls(v3(0, 2, -13), onIsland(1, 8, 0))).toBe(0);
+  });
+});

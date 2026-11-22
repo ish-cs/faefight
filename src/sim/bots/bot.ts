@@ -465,9 +465,16 @@ export class Bot {
       // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
       // unless they're the one shooting at me.
       const w = WEAPONS[me.equipped];
-      const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult &&
-        !(this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3);
-      fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !this.burstRest(now, me, foeDist);
+      const hittingMe = this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3;
+      const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult && !hittingMe;
+      // Not on my island and far: no drive-by shots across the water (close in and fight instead), unless they're on me
+      // or they're the last rival standing (nobody else to give my position away to: a duel is won on first damage).
+      // Islands by nav node, so the center island counts as one (islandAt says -1 there, like water).
+      const myNode = this.nav.nodeAt(me.pos);
+      const across = foeDist > this.P.drive.crossFire[this.difficulty] && !hittingMe &&
+        view.others.some((o) => !o.eliminated && o.id !== foe.id) &&
+        (myNode < 0 || this.nav.nodeAt(foe.pos) !== myNode);
+      fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !across && !this.burstRest(now, me, foeDist);
       if (hook?.why === 'yank' && hook.target === foe.id && r.ready && r.onTarget) { grapple = true; fire = false; }
     } else if (nade) {
       look = hand(nade, TURN_RATE);
@@ -1519,7 +1526,10 @@ export class Bot {
   }
 
   private pick(c: Ctx): Goal {
-    if (this.trapped(c)) { this.probe?.decided(c, null, 'defend'); return 'defend'; }
+    // Inside my own bunker with a doorway plugged: clearing it (or slipping out round it) comes first. Any other goal
+    // walks into the plug (measured: a PRO stood 260 s inside, its collect route running through its plugged door).
+    const walledIn = !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos) && this.blockers(c).some((p) => this.canClear(c, p));
+    if (this.trapped(c) || walledIn) { this.probe?.decided(c, null, 'defend'); return 'defend'; }
     const rows: ScoreRow[] | null = this.probe ? [] : null;
     let best: Goal = (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
@@ -1913,7 +1923,14 @@ export class Bot {
     this.hideFrom = null;
     if (here.path) {
       const wp = here.path[Math.min(here.path.length - 1, 3)];
-      return { dir: norm(flat(sub(wp, me.pos))) };
+      const dir = norm(flat(sub(wp, me.pos)));
+      // The way out goes over a piece too low to block (a lone sandbag in a doorway): hop it, don't walk into it.
+      const hop = view.pieces.some((p) => {
+        if (p.kind === 'ramp' || p.kind === 'scaffold') return false;
+        const top = p.pos.y + PIECES[p.kind].h - me.pos.y, to = flat(sub(p.pos, me.pos));
+        return top > 0.4 && top < SEAL.blockHeight && dist2D(p.pos, me.pos) < 1.6 && to.x * dir.x + to.z * dir.z > 0;
+      });
+      return { dir, jump: hop };
     }
     const weapon = bestGun(me.inv, 1.5);
     const w = WEAPONS[weapon];
