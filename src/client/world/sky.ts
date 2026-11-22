@@ -49,7 +49,7 @@ const PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, shadow: { cascades: 2, mapSize: 1024, far: 90 }, post: { samples: 4, bloom: false, ao: false } },
   high: { pixelRatio: 1.25, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true } },
   // ultra: native Retina output, scene rendered at 0.7× (MSAA ×4) and upscaled bilinear + contrast-adaptive sharpen in the grade pass
-  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 16 }, flare: true, upscale: UPSCALE_ULTRA } },
+  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, upscale: UPSCALE_ULTRA } },
 };
 
 /** Far-cascade caster mask: layer 0 only (+ unused bit 31, see cascadeLayers). */
