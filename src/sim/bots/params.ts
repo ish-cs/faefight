@@ -44,7 +44,8 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  *   Pushing over a pier with a broken section needs nothing extra: the bridge lane runs along the pier, so the gap
  *   is where the bridge's next scaffold goes.
  * - stallSec / stallDist / stallBanSec: goal watchdog (a goal with no progress for stallSec is dropped for
- *   stallBanSec; moving stallDist counts as progress).
+ *   stallBanSec; progress = something built/bought/shot, or getting stallDist m further from where the goal started
+ *   than ever before, so pacing back and forth over the same ground doesn't count).
  */
 export type DriveParams = {
   offenseAt: Record<Difficulty, number>;
