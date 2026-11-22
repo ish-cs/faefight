@@ -1,13 +1,16 @@
 import * as THREE from 'three/webgpu';
 import { type ImpostorAtlas, impostorQuad, impostors } from './impostor';
-import { lods, type LodTarget, shrinkMaterial, simplifyGeometry, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
+import { lods, type LodTarget, lodScale, simplifyGeometry, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
+import { batchIndirectIndex, cameraPosition, float, int, ivec2, positionLocal, smoothstep, texture, textureLoad } from 'three/tsl';
 import { chunkCoord, chunkKey, distToSphere, LOD_HYSTERESIS, selectLod } from './lodMath';
 
 /**
- * Chunked instancing with LOD: the instances of one prop type are split into a spatial grid (default 16 m); each
- * chunk × level × part is its own InstancedMesh with a tight bounding sphere, so three's frustum culling (camera
- * and every shadow cascade) skips whole chunks, and each chunk picks its LOD level from its distance to the camera.
- * Replaces "one InstancedMesh for the whole map" (which can never be culled). See docs/perf.md.
+ * Chunked instancing with LOD: the instances of one prop type are split into a spatial grid (default 16 m) and each
+ * chunk picks its LOD level from its distance to the camera. Drawing is batched: one BatchedMesh per level × part
+ * holds every chunk's instances (a chunk's level switch toggles its instances' visibility), and BatchedMesh culls
+ * per instance against the camera and every shadow cascade. One impostor mesh holds every chunk's quads. So a prop
+ * type costs one draw per part (+1 impostor) per pass however many chunks are in view (was one per chunk × part).
+ * See docs/perf.md.
  */
 
 export type LodPart = { geometry: THREE.BufferGeometry; material: THREE.Material; cast?: boolean; receive?: boolean };
@@ -34,16 +37,18 @@ export type ChunkedSpec = {
 
 type Chunk = {
   idx: number[]; // instance ids, sorted by tier
-  levels: THREE.Group[]; // one group per level (meshes per part)
-  meshes: THREE.InstancedMesh[][]; // [level][part]
-  imp: THREE.Mesh | null; // impostor quads (one per instance), if the spec has an impostor level
+  /** per level: is it shown for this chunk */
+  on: boolean[];
+  /** [level][part][slot] → instance id in that level × part's batch */
+  ids: number[][][];
+  /** first impostor instance of this chunk (its slots are contiguous), -1 = none */
+  impFirst: number;
   center: THREE.Vector3;
   radius: number;
   current: number;
   tierCount: number[]; // instances with tier <= t, per t
 };
 
-const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler();
 const HIDDEN_MAT = new THREE.MeshBasicNodeMaterial({ visible: false });
 
@@ -55,6 +60,10 @@ export class ChunkedInstances implements LodTarget {
   private tiers: number[] = [];
   private hidden = new Set<number>();
   private chunks: Chunk[] = [];
+  /** [level][part] batch (null for parts-less / impostor levels) */
+  private batches: (THREE.BatchedMesh | null)[][] = [];
+  private imp: THREE.Mesh | null = null;
+  private impLevel = -1;
   private where: { chunk: Chunk; slot: number }[] = [];
   private levelParts: (LodPart[] | null)[] = [];
   private thresholds: number[] = [];
@@ -118,7 +127,25 @@ export class ChunkedInstances implements LodTarget {
       if (!a) groups.set(k, (a = []));
       a.push(i);
     });
-    this.where = new Array(this.mats.length);
+    const n = this.mats.length;
+    // one batch per level × part, every chunk's instances in it
+    this.batches = this.levelParts.map((parts, li) => (parts ?? []).map((p) => {
+      const g = p.geometry;
+      const m = new THREE.BatchedMesh(n, g.getAttribute('position').count, g.index ? g.index.count : 0, p.material);
+      m.addGeometry(g);
+      if (this.fade && li === 0) m.material = batchedShrink(p.material, this.fade, m, 0.85); // per-instance shrink-out
+      m.castShadow = !!p.cast;
+      m.receiveShadow = p.receive ?? true;
+      m.frustumCulled = false; // spans the map: perObjectFrustumCulled culls each instance per pass
+      m.sortObjects = false;
+      if (spec.tiny) m.layers.set(TINY_CASTER_LAYER);
+      else if (spec.small) m.layers.set(SMALL_CASTER_LAYER);
+      m.name = `${this.root.name}:${p.material.name || 'mat'}:L${li}`;
+      this.root.add(m);
+      return m;
+    }));
+    this.where = new Array(n);
+    const impOrder: number[] = [];
     for (const idx of groups.values()) {
       idx.sort((a, b) => this.tiers[a] - this.tiers[b]);
       const box = new THREE.Box3();
@@ -126,78 +153,56 @@ export class ChunkedInstances implements LodTarget {
       const sphere = box.getBoundingSphere(new THREE.Sphere());
       let maxScale = 1;
       for (const i of idx) maxScale = Math.max(maxScale, this.mats[i].getMaxScaleOnAxis());
-      const chunk: Chunk = { idx, levels: [], meshes: [], imp: null, center: sphere.center, radius: sphere.radius + modelR * maxScale, current: -1, tierCount: [] };
+      const chunk: Chunk = { idx, on: this.levelParts.map(() => false), ids: [], impFirst: -1, center: sphere.center, radius: sphere.radius + modelR * maxScale, current: -1, tierCount: [] };
       idx.forEach((id, slot) => { this.where[id] = { chunk, slot }; });
       const maxTier = this.tiers[idx[idx.length - 1]];
       for (let t = 0; t <= maxTier; t++) chunk.tierCount[t] = idx.filter((i) => this.tiers[i] <= t).length;
-      this.levelParts.forEach((parts, li) => {
-        const g = new THREE.Group();
-        g.name = `${this.root.name}:L${li}`;
-        g.visible = false;
-        const meshes = (parts ?? []).map((p) => {
-          let geo = p.geometry, mat = p.material;
-          if (this.fade && li === 0) {
-            // per-instance centre for the shrink-out (instances, not the chunk, cross-fade)
-            geo = p.geometry.clone();
-            const cs = new Float32Array(idx.length * 3);
-            idx.forEach((id, slot) => { _p.setFromMatrixPosition(this.mats[id]); cs.set([_p.x, _p.y, _p.z], slot * 3); });
-            geo.setAttribute('lodC', new THREE.InstancedBufferAttribute(cs, 3));
-            mat = shrinkMaterial(p.material, this.fade, { attr: 'lodC', from: 0.85 });
-          }
-          const m = new THREE.InstancedMesh(geo, mat, idx.length);
-          idx.forEach((id, slot) => {
-            m.setMatrixAt(slot, this.hidden.has(id) ? ZERO : this.mats[id]);
-            const c = this.cols[id];
-            if (c) m.setColorAt(slot, c);
-          });
-          m.instanceMatrix.needsUpdate = true;
-          if (m.instanceColor) m.instanceColor.needsUpdate = true;
-          m.computeBoundingSphere();
-          m.castShadow = !!p.cast;
-          m.receiveShadow = p.receive ?? true;
-          if (spec.tiny) m.layers.set(TINY_CASTER_LAYER);
-          else if (spec.small) m.layers.set(SMALL_CASTER_LAYER);
-          m.name = `${this.root.name}:${p.material.name || 'mat'}:L${li}`;
-          g.add(m);
-          return m;
-        });
-        if (spec.levels[li].impostor) g.add((chunk.imp = this.impostorMesh(chunk)));
-        chunk.levels.push(g);
-        chunk.meshes.push(meshes);
-        this.root.add(g);
-      });
+      chunk.ids = this.batches.map((parts) => parts.map((m) => idx.map((id) => {
+        const bid = m!.addInstance(0);
+        m!.setMatrixAt(bid, this.mats[id]);
+        const c = this.cols[id];
+        if (c) m!.setColorAt(bid, c);
+        m!.setVisibleAt(bid, false);
+        return bid;
+      })));
+      if (spec.levels.some((l) => l.impostor)) { chunk.impFirst = impOrder.length; impOrder.push(...idx); }
       this.chunks.push(chunk);
     }
+    const impLevel = spec.levels.findIndex((l) => l.impostor);
+    if (impLevel >= 0) { this.impLevel = impLevel; this.imp = this.impostorMesh(impOrder); this.root.add(this.imp); }
     this.applyTier();
     lods.register(this);
     for (const { li, pi, ratio } of pending) {
       void simplifyGeometry(base![pi].geometry, ratio).then((g) => {
         this.levelParts[li]![pi].geometry = g;
-        for (const c of this.chunks) { const m = c.meshes[li][pi]; m.geometry = g; m.computeBoundingSphere(); }
+        this.batches[li][pi]?.setGeometryAt(0, g);
       });
     }
     return this.root;
   }
 
-  /** One impostor quad per instance of the chunk: per-instance centre + yaw, tint + scale (0 = hidden). */
-  private impostorMesh(chunk: Chunk): THREE.Mesh {
-    const n = chunk.idx.length, quad = impostorQuad();
+  /** One impostor quad per instance (all chunks, in chunk order): per-instance centre + yaw, tint + scale (0 = hidden). */
+  private impostorMesh(order: number[]): THREE.Mesh {
+    const n = order.length, quad = impostorQuad();
     const geo = new THREE.InstancedBufferGeometry();
     geo.setIndex(quad.index);
     geo.setAttribute('position', quad.getAttribute('position'));
     geo.setAttribute('uv', quad.getAttribute('uv'));
     const C = new Float32Array(n * 4), T = new Float32Array(n * 4);
-    chunk.idx.forEach((id, slot) => {
+    order.forEach((id, slot) => {
       this.mats[id].decompose(_p, _q, _s);
       _e.setFromQuaternion(_q, 'YXZ');
       const c = this.cols[id];
       C.set([_p.x, _p.y, _p.z, _e.y], slot * 4);
-      T.set([c?.r ?? 1, c?.g ?? 1, c?.b ?? 1, this.hidden.has(id) ? 0 : Math.max(_s.x, _s.y, _s.z)], slot * 4);
+      T.set([c?.r ?? 1, c?.g ?? 1, c?.b ?? 1, 0], slot * 4); // shown per chunk by the LOD (w = scale)
     });
     geo.setAttribute('impCenter', new THREE.InstancedBufferAttribute(C, 4));
     geo.setAttribute('impTint', new THREE.InstancedBufferAttribute(T, 4));
     geo.instanceCount = n;
-    geo.boundingSphere = new THREE.Sphere(chunk.center.clone(), chunk.radius);
+    const box = new THREE.Box3();
+    for (const id of order) box.expandByPoint(_p.setFromMatrixPosition(this.mats[id]));
+    geo.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+    geo.boundingSphere.radius += 30;
     const atlas = this.atlas!;
     const mesh = new THREE.Mesh(geo, atlas.ready ? atlas.material : HIDDEN_MAT);
     mesh.name = `${this.root.name}:impostor`;
@@ -205,6 +210,29 @@ export class ChunkedInstances implements LodTarget {
     mesh.visible = atlas.ready;
     if (!atlas.ready) atlas.onReady.push(() => { mesh.material = atlas.material; mesh.visible = true; });
     return mesh;
+  }
+
+  /** Instance `slot` of chunk `c` is drawn at level `li` (level on, not hidden, inside the tier limit). */
+  private shown(c: Chunk, li: number, slot: number) {
+    const t = Math.min(this.tierLimit, c.tierCount.length - 1);
+    return c.on[li] && slot < (t < 0 ? 0 : c.tierCount[t]) && !this.hidden.has(c.idx[slot]);
+  }
+
+  /** Push a chunk's visibility (one level, or all) to the batches and the impostor quads. */
+  private sync(c: Chunk, level = -1) {
+    for (let li = 0; li < this.batches.length; li++) {
+      if (level >= 0 && li !== level) continue;
+      const parts = this.batches[li];
+      for (let pi = 0; pi < parts.length; pi++) {
+        const m = parts[pi]!, ids = c.ids[li][pi];
+        for (let slot = 0; slot < ids.length; slot++) m.setVisibleAt(ids[slot], this.shown(c, li, slot));
+      }
+      if (li === this.impLevel && this.imp && c.impFirst >= 0) {
+        const a = this.imp.geometry.getAttribute('impTint') as THREE.InstancedBufferAttribute;
+        for (let slot = 0; slot < c.idx.length; slot++) a.setW(c.impFirst + slot, this.shown(c, li, slot) ? this.mats[c.idx[slot]].getMaxScaleOnAxis() : 0);
+        a.needsUpdate = true;
+      }
+    }
   }
 
   /** Draw only instances with tier <= t (quality thinning, per chunk). */
@@ -215,28 +243,14 @@ export class ChunkedInstances implements LodTarget {
   }
 
   private applyTier() {
-    for (const c of this.chunks) {
-      const t = Math.min(this.tierLimit, c.tierCount.length - 1);
-      const n = t < 0 ? 0 : c.tierCount[t];
-      for (const ms of c.meshes) for (const m of ms) m.count = n;
-      if (c.imp) (c.imp.geometry as THREE.InstancedBufferGeometry).instanceCount = n;
-    }
+    for (const c of this.chunks) this.sync(c);
   }
 
   /** Hide / show one instance (e.g. a broken prop). */
   setVisible(id: number, visible: boolean) {
     if (visible) this.hidden.delete(id); else this.hidden.add(id);
     const w = this.where[id];
-    if (!w) return;
-    for (const ms of w.chunk.meshes) for (const m of ms) {
-      m.setMatrixAt(w.slot, visible ? this.mats[id] : ZERO);
-      m.instanceMatrix.needsUpdate = true;
-    }
-    if (w.chunk.imp) {
-      const a = w.chunk.imp.geometry.getAttribute('impTint') as THREE.InstancedBufferAttribute;
-      a.setW(w.slot, visible ? this.mats[id].getMaxScaleOnAxis() : 0);
-      a.needsUpdate = true;
-    }
+    if (w) this.sync(w.chunk);
   }
 
   updateLod(cam: THREE.Vector3, scale: number) {
@@ -246,7 +260,8 @@ export class ChunkedInstances implements LodTarget {
       const l = lods.force >= 0 ? Math.min(lods.force, this.thresholds.length - 1) : selectLod(d, this.thresholds, c.current, scale);
       if (l === c.current) continue;
       c.current = l; // l === thresholds.length → beyond the last maxDist: culled
-      c.levels.forEach((g, i) => { g.visible = i === l; });
+      c.on = c.on.map((_, i) => i === l);
+      this.sync(c);
     }
   }
 
@@ -264,7 +279,8 @@ export class ChunkedInstances implements LodTarget {
       const key = (showFull ? 1 : 0) | (showImp ? 2 : 0);
       if (key === c.current) continue;
       c.current = key;
-      c.levels.forEach((g, i) => { g.visible = i === 0 ? showFull : i === 1 ? showImp : false; });
+      c.on = c.on.map((_, i) => (i === 0 ? showFull : i === 1 ? showImp : false));
+      this.sync(c);
     }
   }
 
@@ -278,7 +294,28 @@ export class ChunkedInstances implements LodTarget {
 
   dispose() {
     lods.unregister(this);
-    for (const c of this.chunks) { for (const ms of c.meshes) for (const m of ms) m.dispose(); c.imp?.geometry.dispose(); }
+    for (const parts of this.batches) for (const m of parts) m?.dispose();
+    this.imp?.geometry.dispose();
     this.root.removeFromParent();
   }
+}
+
+/**
+ * Batched twin of lod.ts shrinkMaterial (per-instance shrink-out toward the instance's own origin across the
+ * cross-fade band): a BatchedMesh has no per-instance attributes, so the instance origin comes from the batch's own
+ * matrices texture (column 3 of the instance matrix, the same texel layout three's BatchNode reads).
+ */
+function batchedShrink(base: THREE.Material, far: number, mesh: THREE.BatchedMesh, from: number): THREE.Material {
+  const n = base.clone() as THREE.NodeMaterial;
+  n.name = `${base.name}~far`;
+  const tex = (mesh as unknown as { _matricesTexture: THREE.DataTexture })._matricesTexture;
+  const size = int(tex.image.width); // fixed when the batch is created (max instance count)
+  const j = int(batchIndirectIndex).mul(4);
+  const c = textureLoad(texture(tex), ivec2(j.mod(size).add(3), j.div(size))).xyz;
+  const d = c.xz.sub(cameraPosition.xz).length();
+  const f = lodScale.mul(far);
+  const keep = float(1).sub(smoothstep(f.mul(from), f, d));
+  const p = ((base as THREE.NodeMaterial).positionNode ?? positionLocal) as THREE.Node<'vec3'>;
+  n.positionNode = c.add(p.sub(c).mul(keep));
+  return n;
 }
