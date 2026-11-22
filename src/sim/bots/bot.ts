@@ -224,7 +224,7 @@ export class Bot {
   private respawnedAt = -Infinity;
   private lastDeaths = 0;
   /** Goal watchdog: where I was when the current goal last made progress (moved, built, bought, shot). */
-  private prog: { goal: Goal; at: number; pos: Vec3 } | null = null;
+  private prog: { goal: Goal; at: number; pos: Vec3; far: number } | null = null;
   private lastDidAt = -Infinity;
   /** Goals (and the rival they were aimed at) that went nowhere lately: left alone a while. */
   private goalBan = new Map<Goal, number>();
@@ -606,11 +606,16 @@ export class Bot {
   private aimTarget(view: BotView, nearest: PlayerState | null, now: number): PlayerState | null {
     const me = view.self, A = this.P.aim;
     let cur = this.aimId === null ? null : view.enemies.find((e) => e.id === this.aimId && e.alive) ?? null;
-    if (!cur && this.aimId !== null) {
+    if (!cur && this.aimId !== null && !this.aimLost) {
+      // Just lost sight: keep them as my target for the hold (a blink behind a crate or a post brings them back
+      // into my sights, not onto someone else and back).
       const alive = view.others.find((o) => o.id === this.aimId)?.alive ?? false;
       this.aimLost = alive && this.aimAt ? { at: this.aimAt, until: now + A.feel[this.difficulty].holdSec } : null;
-      this.aimId = null;
+      if (!this.aimLost) this.aimId = null;
     }
+    if (!cur && this.aimLost && now >= this.aimLost.until) { this.aimLost = null; this.aimId = null; }
+    // While holding on someone I just lost, only a clearly closer enemy takes my eyes off where they were.
+    if (!cur && this.aimLost && nearest && dist2D(nearest.pos, me.pos) >= A.switchRatio * dist2D(this.aimLost.at, me.pos)) nearest = null;
     if (cur && nearest && nearest.id !== cur.id && now - this.aimSince >= A.commitSec &&
         dist2D(nearest.pos, me.pos) < A.switchRatio * dist2D(cur.pos, me.pos)) cur = null;
     if (!cur && nearest) { cur = nearest; this.aimId = nearest.id; this.aimSince = now; }
@@ -2451,10 +2456,14 @@ export class Bot {
     // Getting set for the storm (decks to the center, buying them) is never given up.
     if (limit === undefined || this.stormPrep(this.view)) { this.prog = null; return; }
     const p = this.prog;
-    if (!p || p.goal !== this.goal || dist2D(p.pos, me.pos) > this.P.drive.stallDist || this.lastDidAt > p.at) {
-      this.prog = { goal: this.goal, at: now, pos: clone(me.pos) };
+    if (!p || p.goal !== this.goal || this.lastDidAt > p.at) {
+      this.prog = { goal: this.goal, at: now, pos: clone(me.pos), far: 0 };
       return;
     }
+    // Progress = getting further from where this goal started than ever before (by stallDist): walking somewhere
+    // counts, pacing back and forth over the same few metres (a deck whose route flip-flops) doesn't.
+    const d = dist2D(p.pos, me.pos);
+    if (d > p.far + this.P.drive.stallDist) { p.far = d; p.at = now; return; }
     if (now - p.at < limit) return;
     this.goalBan.set(this.goal, now + this.P.drive.stallBanSec);
     if (this.targetId !== null && TARGETED.has(this.goal)) this.targetBan.set(this.targetId, now + this.P.drive.stallBanSec);

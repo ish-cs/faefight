@@ -24,6 +24,8 @@ const MAX_DROP = 3;
 /** Jump arc check: time step. */
 const JUMP_STEP = 0.1;
 const BUNKER_HALF = MAP.bunker.interior / 2 + MAP.bunker.wall;
+/** Within this (m) of a bunker corner waypoint counts as having rounded it (withinIsland). */
+const CORNER_REACHED = 0.6;
 /** Walk grid: cell size, and how far to keep the body from cover (player radius + margin). */
 const GRID_CELL = 0.5;
 const COVER_CLEARANCE = PLAYER.radius + 0.3;
@@ -112,9 +114,15 @@ export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open
       const out = Math.abs(a.x) > Math.abs(a.z) ? v3(Math.sign(a.x) * k, 0, a.z) : v3(a.x, 0, Math.sign(a.z) * k);
       return toWorld(b, out);
     }
+    const corners = [v3(k, 0, k), v3(-k, 0, k), v3(k, 0, -k), v3(-k, 0, -k)];
+    // Already round a corner: the corner was only a waypoint, so go on as soon as the wall itself is out of the way
+    // (a destination close to the wall always clips the wider margin, and re-picking the corner I stand on makes
+    // bots dither on it, their view flipping with each step).
+    const at = corners.find((q) => dist2D(a, q) < CORNER_REACHED);
+    if (at && !segHitsSquare(a, c, BUNKER_HALF + 0.05)) return dest;
     let best: Vec3 | null = null, bestCost = Infinity;
-    for (const corner of [v3(k, 0, k), v3(-k, 0, k), v3(k, 0, -k), v3(-k, 0, -k)]) {
-      if (segHitsSquare(a, corner, BUNKER_HALF + 0.05)) continue;
+    for (const corner of corners) {
+      if (corner === at || segHitsSquare(a, corner, BUNKER_HALF + 0.05)) continue;
       const cost = dist2D(a, corner) + dist2D(corner, c);
       if (cost < bestCost) { bestCost = cost; best = corner; }
     }
@@ -456,6 +464,16 @@ export class Nav {
       l = this.nearestLane(me);
       if (!l) return null;
       sTarget = b >= 0 ? this.landS(l, b) : laneS(l, dest);
+      // Out on one bridge, heading for a spot on another (e.g. the tip of a pier on a new lane): back to the island
+      // both lanes hang off first, not straight at it across the water (that flip-flops on the deck forever).
+      // (Not in the storm: heading home first there is walking out into it.)
+      if (b < 0 && !this.view.storm) {
+        const ld = this.nearestLane(dest);
+        if (ld && !(ld.from === l.from && ld.to === l.to) && !(ld.from === l.to && ld.to === l.from)) {
+          const shared = [l.from, l.to].find((n) => n === ld.from || n === ld.to);
+          if (shared !== undefined) sTarget = this.landS(l, shared);
+        }
+      }
     } else {
       l = this.nearestLane(dest);
       if (!l || (l.from !== a && l.to !== a)) return null;
