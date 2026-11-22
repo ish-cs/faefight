@@ -76,3 +76,23 @@ starved the GPU, because Chrome reports `onSubmittedWorkDone` 15–25 ms late. `
 
 When "Dynamic resolution" is on, the governor now budgets for the display's refresh rate (probed from rAF at load,
 `refresh.ts`) instead of a fixed 60 fps, so a 120 Hz panel holds 120 fps. A frame cap still wins when set.
+
+## Draw-count techniques in use
+
+- Static dressing: `StaticBatch` bins per material, heavy bins emitted **indexed** (from the parts' indexed twins).
+- Moving props: one `BatchedMesh` per material across kinds, `sortObjects = false`, plus **one shadow-only batch**
+  (`SHADOW_ONLY_FIRST_LAYER`, first cascade only) instead of a shadow draw per material (gameProps.ts, debris.ts).
+- Self-lit inserts (`lit`, `lamp`, `glow`) never cast (`NO_SHADOW`, lod.ts).
+- Small static parts cast into the first cascade only; the second near cascade renders every other frame.
+- Tried and removed: per-cell shadow stand-ins for map-wide meshes (each cascade's long light frustum touched
+  several cells: +20 shadow draws for −200k shadow tris; under load draws cost more than triangles).
+
+## Known follow-ups (realism3, Nov 22)
+
+Realism3 runs at ~0.90–0.95 of main's fps under load (120+ in quiet runs). What's left:
+- **Dock clusters far LOD.** Clusters are the largest remaining cost (+16 % with them off, quiet run). They share the
+  map-wide dressing meshes, so a per-island far version (one cheap vertex-coloured material per far island) saves GPU
+  but adds ~6–20 draws: worth it only when GPU-bound. Distant islands must still read as busy docks (150–300 m).
+- **Storm wet layer.** The storm view is the widest gap (0.85–0.96): the rain/wet shading on realism3's extra
+  weathered materials is pure per-pixel cost. A distance fade of the wet + weathering layers (skip the noise fetches
+  past ~60 m) is the candidate; check same-view shots.
