@@ -639,6 +639,9 @@ export class Bot {
       if (why && this.rng() < H.yankRate * HOOK_CHECK_SEC) it = { why: 'yank', target: e.id, note: why };
     }
     if (it?.why === 'escape' && !this.canReturn(c, it.node)) it = null;
+    // Never escape out into the storm.
+    const st = c.view.storm;
+    if (it?.why === 'escape' && st && Math.hypot(it.to.x - st.x, it.to.z - st.z) > this.stormSafeR(st)) it = null;
     if (!it && !e && want !== null && this.nav.nodes[want] && this.canReturn(c, want)) it = crossTo(c.view, H, this.nav.nodes[want]);
     if (it) this.hookIntent = { ...it, until: now + HOOK_HOLD_SEC };
     return it;
@@ -1167,7 +1170,9 @@ export class Bot {
       // A hard plug in my own doorway: only a charge gets through.
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
-      medkits: (this.healWant = healStock(total, this.difficulty, this.P.heal)),
+      // Heals to carry; with the storm coming in, no new ones (the decks and getting inside the ring come first).
+      medkits: (this.healWant = this.stormPrep(c.view) ? Math.min(hpHealsHeld(c.me), healStock(total, this.difficulty, this.P.heal))
+        : healStock(total, this.difficulty, this.P.heal)),
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
       // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
@@ -1298,6 +1303,9 @@ export class Bot {
       const d = dist2D(p, c.me.pos);
       if (d >= bestD || p.y < c.view.waterY + 0.2) continue;
       if (this.healDrops.some((h) => dist2D(h.pos, p) < 3)) continue; // dropped to make room for a heal
+      // Out past the storm's safe line: stormFence never lets me walk there (a bag I'd stand and stare at).
+      const st = c.view.storm;
+      if (st && this.difficulty !== 'easy' && Math.hypot(p.x - st.x, p.z - st.z) > this.stormSafeR(st) - 0.5) continue;
       const i = islandAt(c.view.map, p);
       if (i !== c.on && !this.nav.routeTo(p)) continue;
       best = p; bestD = d;
@@ -1448,6 +1456,8 @@ export class Bot {
         if (!c.homeReach) return 0;
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
+        // Topping up heals alone is no reason for a trip home once I hold one, nor with the storm coming in.
+        if (plan.items.every((i) => i === 'medkit') && (hpHealsHeld(me) > 0 || this.stormPrep(view))) return 0;
         if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return 0.9;
         const urgent = plan.items.includes('pistol') || plan.items.includes('charge');
         return (urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0) - away;
@@ -2356,13 +2366,19 @@ export class Bot {
       foe: e ? { dist: c.enemyDist, eff: e.hp + e.shield, reloadLeft: e.reloadUntil > now ? e.reloadUntil - now : 0 } : null,
       hurtAgo: now - this.mem.lastHurtAt, burst: now - this.burstAt <= 1.5 ? this.burst : 0,
       hidingFor: this.healHideAt === null ? null : now - this.healHideAt,
-      // Racing the storm: no hiding (that walks me back out), heal on the move.
-      coverFirst: this.healRoll.cover && this.goal !== 'storm', useReload: this.healRoll.reload, sheltered: false,
+      // Racing the storm or near its edge: no hiding (backing off walks me out into it), heal where I am.
+      coverFirst: this.healRoll.cover && this.goal !== 'storm' && !this.nearStormEdge(c), useReload: this.healRoll.reload, sheltered: false,
     }, H);
     if (plan?.act === 'hide') { this.healHideAt ??= now; this.healNote = { t: now, text: plan.why }; }
     else if (plan?.act !== 'wait' || !e) this.healHideAt = null;
     if (plan?.act === 'wait' && plan.why !== 'healing') this.healNote = { t: now, text: plan.why };
     return plan;
+  }
+
+  /** Within a few metres of (or past) the line the storm is about to close to. */
+  private nearStormEdge(c: Ctx): boolean {
+    const st = c.view.storm;
+    return !!st && Math.hypot(c.me.pos.x - st.x, c.me.pos.z - st.z) > this.stormSafeR(st) - 4;
   }
 
   /** Low with an enemy in sight: get out of their line of sight to heal (cover nearby, a wall thrown down, or back off). */

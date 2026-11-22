@@ -208,6 +208,8 @@ export function shoppingPlan(
 /** Cash a bot keeps back from potion shopping (for guns, ammo and seal kit). */
 export const POTION_RESERVE = 150;
 const SHIELD_STOCK = 2;
+/** Hotbar slots a new potion kind must leave open. */
+const POTION_FREE_SLOTS = 2;
 
 /**
  * Bots value shields: at a potion seller they stock up on shield potions with spare cash, and out of
@@ -217,12 +219,17 @@ const SHIELD_STOCK = 2;
 export function potionAction(p: PlayerState, now: number, enemyInSight: boolean, atSeller: boolean, healWant = 0): { drink: number } | { buy: PotionKind } | null {
   if (!p.alive) return null;
   if (atSeller) {
-    // Heal potions toward the heal stock (they count with medkits), then shields.
-    if (p.inv.medkits + countOf(p.inv, 'healPotion') < healWant && p.inv.cash >= POTIONS.healPotion.price + POTION_RESERVE &&
-      (countOf(p.inv, 'healPotion') > 0 || canAdd(p.hotbar, 'healPotion'))) return { buy: 'healPotion' };
+    // Heal potions toward the heal stock (they count with medkits), then shields. A new potion kind takes a slot only
+    // while POTION_FREE_SLOTS more stay open (scaffolds, guns), and one shield kind at a time: potions must never clog
+    // the hotbar (a full one can't take the decks to reach anyone). The first heal of all may take any free slot.
+    const free = p.hotbar.filter((k) => k === null).length;
+    const heals = p.inv.medkits + countOf(p.inv, 'healPotion');
+    if (heals < healWant && p.inv.cash >= POTIONS.healPotion.price + POTION_RESERVE &&
+      (countOf(p.inv, 'healPotion') > 0 || free > POTION_FREE_SLOTS || (heals === 0 && free > 0))) return { buy: 'healPotion' };
     for (const kind of ['shieldBig', 'shieldSmall'] as const) {
       if (countOf(p.inv, kind) >= SHIELD_STOCK || p.inv.cash < POTIONS[kind].price + POTION_RESERVE) continue;
-      if (countOf(p.inv, kind) === 0 && !canAdd(p.hotbar, kind)) continue;
+      const other = kind === 'shieldBig' ? 'shieldSmall' : 'shieldBig';
+      if (countOf(p.inv, kind) === 0 && (free <= POTION_FREE_SLOTS || countOf(p.inv, other) > 0)) continue;
       return { buy: kind };
     }
   }
