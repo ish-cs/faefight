@@ -2285,9 +2285,9 @@ export class Bot {
     const pick = () => (strong ? STRONG_WALLS : WALLS).find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
     if (tall > c.openDoors.length) return pick();
     if ((inv.pieces.sandbags ?? 0) > 0) return 'sandbags';
-    // Skilled players spend a plug on cover when the doors are far off (they'll buy another): staying alive first.
+    // Masters (reinforce > 0.8) spend a plug on cover when the doors are far off (they'll buy another): staying alive first.
     const far = !c.rivalIsl || dist2D(c.me.pos, c.rivalIsl.bunker.center) > this.P.buildTuning.kitCoverM;
-    return tall > 0 && this.P.buildSkill[this.difficulty].reinforce > 0.5 && far ? pick() : null;
+    return tall > 0 && this.P.buildSkill[this.difficulty].reinforce > 0.8 && far ? pick() : null;
   }
 
   /** Should the next cover wall be the strongest I carry: at home, or I've held this spot a while. */
