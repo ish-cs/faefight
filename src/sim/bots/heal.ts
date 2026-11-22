@@ -81,6 +81,7 @@ export function healPlan(s: HealSituation, H: HealParams): HealPlan | null {
     const sh = (['shieldBig', 'shieldSmall'] as const).find((k) => usable(me, k, now));
     return use(me, sh ?? null, 'topping up shield');
   }
+  if (inFight) return null; // exp D
   const burst = s.burst >= H.burst;
   const low = eff <= H.fightHp[s.diff] || (burst && eff <= H.fightHp[s.diff] + H.burstHp);
   if (!low) return null;
