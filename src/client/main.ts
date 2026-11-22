@@ -14,6 +14,7 @@ import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, TRAP, WEAPONS } from '../sim/cons
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
+import { modeSeats } from '../sim/teams';
 import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { BuildPredictor } from './buildPredict';
@@ -773,7 +774,8 @@ async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bot
   const urlBots = DEBUG ? Number(new URLSearchParams(location.search).get('bots')) : 0;
   const backend = workerBackend(() => ({
     // ?debug=1&bots=N (1-7) overrides the menu's bot count (perf testing)
-    setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: Math.min(7, Math.max(1, urlBots || bots)) },
+    // Teams mode plays the mode's full seat count (bots fill your team and the others), whatever the bot slider says.
+    setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: Math.min(7, Math.max(1, urlBots || ((modeSeats(sanitizeSettings(settings).teamMode) ?? 0) - 1) || bots)) },
       (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map, settings: sanitizeSettings(settings) },
     humanId: 1,
   }), null);
@@ -874,6 +876,7 @@ async function hostLobby(name: string, menu: HTMLElement) {
     kick: (i) => session.kick(i),
     setMap: (c) => { session.setMap(c); localStorage.setItem(MAP_KEY, c); },
     setColor: (c) => { session.setColor(0, c); savePrefs({ color: c }); },
+    setTeam: (t) => session.setTeam(0, t),
     setSettings: (st) => { session.setSettings(st); savePrefs({ settings: session.settings }); },
     start: () => { savePrefs({ seats: seatPrefsOf(session.lobby.slots()) }); launch((w) => session.start(w), ui!.root); },
     back: () => location.reload(),
@@ -907,6 +910,7 @@ async function joinLobby(firstCode: string, name: string, menu: HTMLElement, rej
   }, {
     setReady: (ready) => link.send({ t: 'ready', ready }),
     setColor: (color) => { link.send({ t: 'color', color }); savePrefs({ color }); },
+    setTeam: (team) => link.send({ t: 'team', team }),
   });
   ui.render(lobby.slots, lobby.you, lobby.map, sanitizeSettings(lobby.settings));
   // Ask for the colour this player picked last time (the host refuses it if someone else has it).
@@ -2092,7 +2096,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (sample.fire && me?.alive && !spectating) predictShot(sample.yaw, sample.pitch);
     // Lag compensation: tell the host which moment of everyone else we were looking at when we fired.
     const viewT = renderer.renderTime;
-    if (sample.fire && viewT !== null) sample.viewT = viewT;
+    if ((sample.fire || sample.grapple) && viewT !== null) sample.viewT = viewT;
     // Camera mode rides along (cosmetic): spectators watching us see through the same camera.
     sample.view = fpv.mode === 'first' ? 1 : 0;
     if (backend.inputHz === null) { backend.input(sample, unsent); unsent = []; }

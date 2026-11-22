@@ -1,5 +1,5 @@
 import * as dm from './dmath';
-import { PLAYER } from './constants';
+import { GRAPPLE, PLAYER } from './constants';
 import type { Vec3 } from './types';
 
 /**
@@ -66,6 +66,11 @@ export type MoveState = {
   rest: number;
   /** Seconds of damage stress left (slower regen). */
   stress: number;
+  /**
+   * On a grappling hook's rope (sim/grapple.ts): pulled toward feet target (x, y, z) for at most `left` more
+   * seconds. `yank`: someone else's hook dragging you (your own movement is off). Absent = free.
+   */
+  pull?: { x: number; y: number; z: number; left: number; yank?: true };
 };
 
 /** One fixed (1/30 s) movement step's worth of input, numbered by the client for reconciliation. */
@@ -162,6 +167,7 @@ export function accelerate(vx: number, vz: number, wx: number, wz: number, groun
 export function stepMove(m: Mover, cmd: MoveCmd, dt: number, body: MoveBody, speedMult = 1): { landingSpeed: number } {
   const mv = m.mv;
   const moving = Math.hypot(cmd.moveX, cmd.moveZ) > EPS;
+  if (mv.pull && stepPull(m, cmd, moving, dt, body)) return { landingSpeed: 0 };
   const sprint = stepStamina(mv, cmd.sprint && moving, moving, dt);
   const w0 = wishVelocity(cmd.moveX, cmd.moveZ, cmd.yaw, sprint);
   const wish = { x: w0.x * speedMult, z: w0.z * speedMult };
@@ -192,4 +198,41 @@ export function stepMove(m: Mover, cmd: MoveCmd, dt: number, body: MoveBody, spe
   else mv.airTime = Math.min(AIR_CAP, mv.airTime + dt);
   if (!jumped) mv.jumpBuf = Math.max(0, mv.jumpBuf - dt);
   return { landingSpeed };
+}
+
+/**
+ * One step on a grappling rope (mv.pull). Returns false when the rope let go this step (arrived, timed out,
+ * or jump pressed on your own hook) so the caller runs a normal step instead. Pulls never hurt on landing.
+ * Your own hook eases you up to GRAPPLE.pullSpeed toward the point; a yank sets the velocity outright.
+ */
+function stepPull(m: Mover, cmd: MoveCmd, moving: boolean, dt: number, body: MoveBody): boolean {
+  const mv = m.mv, pl = mv.pull!;
+  if (!pl.yank && cmd.jump) { delete mv.pull; return false; }
+  const dx = pl.x - m.pos.x, dy = pl.y - m.pos.y, dz = pl.z - m.pos.z;
+  const d = Math.hypot(dx, dy, dz);
+  // A fresh object, never mutated in place: prediction shares it with snapshots and render-time part steps.
+  const left = pl.left - dt;
+  mv.pull = { ...pl, left };
+  if (d <= (pl.yank ? GRAPPLE.yankStop : GRAPPLE.arriveDist) || left <= EPS) {
+    delete mv.pull;
+    if (pl.yank) { m.vel.x *= GRAPPLE.yankKeep; m.vel.y = Math.min(m.vel.y, 0); m.vel.z *= GRAPPLE.yankKeep; }
+    else if (d <= GRAPPLE.arriveDist) {
+      // Arrived: shed most of the speed and pop up a little, so you land on the ledge instead of sailing past.
+      m.vel.x *= GRAPPLE.arriveKeep; m.vel.z *= GRAPPLE.arriveKeep;
+      m.vel.y = Math.max(m.vel.y * GRAPPLE.arriveKeep, GRAPPLE.arrivePop);
+    }
+    return false;
+  }
+  stepStamina(mv, false, moving, dt);
+  const speed = pl.yank ? GRAPPLE.yankSpeed : GRAPPLE.pullSpeed;
+  const k = pl.yank ? 1 : Math.min(1, GRAPPLE.pullResponse * dt);
+  m.vel.x += (dx / d * speed - m.vel.x) * k;
+  m.vel.y += (dy / d * speed - m.vel.y) * k;
+  m.vel.z += (dz / d * speed - m.vel.z) * k;
+  const r = body.movePlayer({ x: m.vel.x * dt, y: m.vel.y * dt, z: m.vel.z * dt });
+  m.pos = r.pos;
+  mv.grounded = r.grounded;
+  mv.airTime = r.grounded ? 0 : Math.min(AIR_CAP, mv.airTime + dt);
+  mv.jumpBuf = 0;
+  return true;
 }

@@ -1,5 +1,6 @@
 import { BUILD, CHARGE, GRENADE, PLAYER, ROCKET, TRAP } from './constants';
 import { applyPlayerDamage, type CombatCtx } from './combat';
+import { isAlly } from './teams';
 import { boxesOverlap } from './building';
 import type { Physics } from './physics';
 import type { MatchEvent, PlayerState, TrapNet, TrapRequest, Vec3 } from './types';
@@ -20,8 +21,9 @@ import { add, dist, dist2D, forward, right, scale, v3, yawOf } from './vec';
  */
 export type TrapState = TrapNet & { /** Piece it is set on (breaks with it), null on the world. */ on: number | null };
 
-/** Same side: never hurt by this owner's traps. Teams: also `|| (team(owner) !== undefined && team(owner) === team(p))`. */
-export const friendly = (owner: number, p: Pick<PlayerState, 'id'>): boolean => p.id === owner;
+/** Same side: never hurt by this owner's traps (its owner, and in a teams match the owner's teammates: teams.ts isAlly). */
+export const friendly = (owner: number, p: Pick<PlayerState, 'id' | 'team'>, ownerTeam?: number): boolean =>
+  isAlly({ id: owner, team: ownerTeam }, p);
 
 const ev = (t: number, data: Record<string, unknown>): MatchEvent => ({ t, type: 'trap', data });
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -199,7 +201,7 @@ export class Traps {
       if (now < t.arm - 1e-9) continue;
       let sprung = false;
       for (const pl of ctx.players.values()) {
-        if (!pl.alive || friendly(t.owner, pl) || now < pl.invulnUntil || !inTrapZone(t, pl.pos)) continue;
+        if (!pl.alive || friendly(t.owner, pl, ctx.players.get(t.owner)?.team) || now < pl.invulnUntil || !inTrapZone(t, pl.pos)) continue;
         if (!sprung) {
           sprung = true;
           t.fired = r3(now);
