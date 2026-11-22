@@ -15,7 +15,11 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed'] as const;
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed'] as const;
+/** 1v1 ladder steps: [higher tier, lower tier]. The higher tier takes seat 1 on odd seeds. */
+const LADDER: Partial<Record<Scenario, [Difficulty, Difficulty]>> = {
+  '1v1-pro-vs-hard': ['pro', 'hard'], '1v1-hard-vs-medium': ['hard', 'medium'], '1v1-medium-vs-easy': ['medium', 'easy'],
+};
 type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
@@ -26,7 +30,10 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
   switch (scenario) {
     case '1v1-hard': return { diffs: ['hard', 'hard'], maxSec: 25 * 60 };
     // Same seat rule as tests/sim/botSeries.test.ts: PRO is seat 1 on odd seeds.
-    case '1v1-pro-vs-hard': return { diffs: seed % 2 ? ['pro', 'hard'] : ['hard', 'pro'], maxSec: 25 * 60 };
+    case '1v1-pro-vs-hard': case '1v1-hard-vs-medium': case '1v1-medium-vs-easy': {
+      const [hi, lo] = LADDER[scenario]!;
+      return { diffs: seed % 2 ? [hi, lo] : [lo, hi], maxSec: 25 * 60 };
+    }
     case 'ffa8-pro': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
     case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 180 };
@@ -198,6 +205,10 @@ export type ScenarioSummary = {
   attackPct: number; homePct: number; medianFirstSealSec: number | null; gamesWithSeal: number;
   longestHomeSitSec: number; avgMinutes: number; msPerTick: number; maxWallSec: number;
   proVsHard: { share: number; ci95: number; games: number } | null;
+  /** 1v1 ladder step: the higher tier's win share (draws count half). */
+  ladder?: { upper: Difficulty; lower: Difficulty; share: number; ci95: number; games: number };
+  /** Mixed FFA: mean finishing place by tier (1 = winner; survivors without a winner share the top places). */
+  placement?: Record<string, number>;
   /** Combat building per skill (absent when the shards predate it). */
   build?: Record<string, BuildSummary>;
   shipCheck: { pass: boolean | null; checks: Check[] };
@@ -246,6 +257,24 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     proVsHard,
     shipCheck: { pass: null, checks: [] },
   };
+  const step = LADDER[scenario];
+  if (step) {
+    const scores: number[] = games.map((g) => (g.winner === null ? 0.5 : g.winnerDifficulty === step[0] ? 1 : 0));
+    s.ladder = { upper: step[0], lower: step[1], share: scores.reduce((a, b) => a + b, 0) / Math.max(1, scores.length), ci95: ci95(scores), games: scores.length };
+  }
+  if (scenario === 'ffa8-mixed') {
+    const places: Record<string, number[]> = {};
+    for (const g of games) {
+      // Later eliminated = better; never eliminated: the winner (1st) or tied survivors at the top.
+      const order = g.seats.map((x, i) => ({ d: x.difficulty, i, k: x.eliminatedAt ?? Infinity })).sort((a, b) => b.k - a.k);
+      const alive = order.filter((o) => o.k === Infinity).length;
+      order.forEach((o, rank) => {
+        const place = o.k === Infinity ? (g.winner === o.i + 1 || alive === 1 ? 1 : (1 + alive) / 2) : rank + 1;
+        (places[o.d] ??= []).push(place);
+      });
+    }
+    s.placement = Object.fromEntries(Object.entries(places).map(([d, xs]) => [d, xs.reduce((a, b) => a + b, 0) / xs.length]));
+  }
   const withBuild = seats.filter((x) => x.build);
   if (withBuild.length) {
     s.build = {};
@@ -263,6 +292,8 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     checks.push({ name: 'nobody sits at home geared > 60 s', pass: s.longestHomeSitSec <= 60, value: `${s.longestHomeSitSec.toFixed(0)} s` });
   } else if (scenario === '1v1-pro-vs-hard' && proVsHard) {
     checks.push({ name: 'PRO beats hard ≥ 70%', pass: proVsHard.share >= 0.7, value: `${(100 * proVsHard.share).toFixed(0)}%` });
+  } else if (s.ladder) {
+    checks.push({ name: `${s.ladder.upper} beats ${s.ladder.lower} ≥ 80%`, pass: s.ladder.share >= 0.8, value: `${(100 * s.ladder.share).toFixed(0)}%` });
   }
   s.shipCheck = { pass: checks.length ? checks.every((c) => c.pass) : null, checks };
   return s;
@@ -284,6 +315,10 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '',
     '### Ship-check details',
     ...sums.flatMap((s) => s.shipCheck.checks.map((c) => `- ${s.scenario}: ${c.pass ? '✅' : '❌'} ${c.name} (${c.value})`)),
+    '',
+    '### Ladder',
+    ...sums.filter((s) => s.ladder).map((s) => `- ${s.ladder!.upper} vs ${s.ladder!.lower}: ${(100 * s.ladder!.share).toFixed(0)}% ± ${(100 * s.ladder!.ci95).toFixed(0)} (${s.ladder!.games} games)`),
+    ...sums.filter((s) => s.placement).map((s) => `- ${s.scenario} mean place: ${Object.entries(s.placement!).sort((a, b) => a[1] - b[1]).map(([d, p]) => `${d} ${p.toFixed(2)}`).join(' · ')}`),
     '',
     '### Combat building',
     '| scenario | skill | fights | pieces / fight | fights with building | win % building | win % not | bullets blocked by own cover | hits from high ground | pieces |',
