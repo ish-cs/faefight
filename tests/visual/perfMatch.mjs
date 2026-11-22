@@ -56,18 +56,18 @@ async function run(quality) {
   const yawToward = (from, to) => { const a = toWorld(...from), b = toWorld(...to); return Math.atan2(-(b.x - a.x), -(b.z - a.z)); };
   if (atTime > 0) { await dbg('time', atTime); await page.waitForTimeout(1500); }
   const per = [];
-  // --views=extra adds 'mid' (halfway to the map centre, looking across it at the other islands and bots) and
+  // --views=extra adds 'mid' (on the centre island, looking across the map at the other islands and bots) and
   // 'storm' (sudden death, inside the closing ring looking out at the wall through the rain; irreversible, so last)
   const L = Math.hypot(home.center.x, home.center.z), ux = home.center.x / L, uz = home.center.z / L;
   const extra = ([
-    { name: 'mid', world: { x: ux * L * 0.45, z: uz * L * 0.45 }, yaw: Math.atan2(ux, uz), pitch: 0.0 },
+    { name: 'mid', world: { x: ux * 6, z: uz * 6 }, yaw: Math.atan2(uz, -ux), pitch: 0.0 },
     { name: 'storm', storm: true, world: { x: ux * 6, z: uz * 6 }, yaw: Math.atan2(-ux, -uz), pitch: 0.04 },
   ]);
   // --views=base | extra (base + mid + storm) | storm (storm only)
   const spots = views === 'storm' ? extra.slice(1) : [...SPOTS, ...(views === 'extra' ? extra : [])];
   for (const s of spots) {
     await dbg('hp', 100000);
-    // the mid spot is over water: wait until the player has respawned, or sudden death eliminates a dead player
+    // a dead player at sudden death is eliminated for good: wait out any respawn first
     if (s.storm) await page.waitForFunction(() => { const f = window.__faefight; return f.snapshot().players.find((p) => p.id === f.humanId())?.alive; }, null, { timeout: 20_000 });
     if (s.storm) { await dbg('teleport', s.world.x, s.world.z); await page.evaluate(() => { window.__keepAlive = setInterval(() => window.__faefight.hp(100000), 100); }); await dbg('time', 899); await page.waitForTimeout(9000); await dbg('time', 1000); await page.waitForTimeout(1500); await dbg('hp', 100000); }
     const w = s.world ?? toWorld(...s.at);
@@ -82,6 +82,9 @@ async function run(quality) {
     const infos = [];
     for (let i = 0; i < 4; i++) { await page.waitForTimeout(sampleMs / 4); infos.push(await dbg('renderInfo')); }
     await page.evaluate(() => clearInterval(window.__probe));
+    // a spot must measure the live game: dead (respawn / eliminated view) or in the water (drowning) fails the run
+    const me = await page.evaluate(() => { const f = window.__faefight; const p = f.snapshot().players.find((q) => q.id === f.humanId()); return p ? { alive: p.alive, y: p.pos.y } : null; });
+    if (!me?.alive || me.y < 0.5) throw new Error(`spot '${s.name}' is not measuring live play: ${me ? (me.alive ? `player at water level (y ${me.y.toFixed(2)})` : 'player dead') : 'no player'}`);
     const f = await dbg('frames');
     const gpu = await dbg('gpuMs');
     const lat = await dbg('latency');
