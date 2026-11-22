@@ -15,8 +15,8 @@ const DEG = Math.PI / 180;
 export type AimProfile = { reactSec: number; coneRad: number; maxTurn: number; recoilComp: number };
 
 export const AIM: Record<Difficulty, Omit<AimProfile, 'recoilComp'>> = {
-  easy: { reactSec: 0.8, coneRad: 14 * DEG, maxTurn: 6 },
-  medium: { reactSec: 0.5, coneRad: 8 * DEG, maxTurn: 8 },
+  easy: { reactSec: 0.95, coneRad: 17 * DEG, maxTurn: 6 },
+  medium: { reactSec: 0.45, coneRad: 7 * DEG, maxTurn: 8 },
   hard: { reactSec: 0.24, coneRad: 3 * DEG, maxTurn: 11 },
   // Human pro: ~0.2 s reaction, ~2° error that tightens to ~1.4° while tracking (still misses at range),
   // fast smooth tracking, flicks capped at ~690°/s (spray control: params.ts GUN_SKILL).
