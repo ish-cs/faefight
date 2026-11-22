@@ -107,7 +107,7 @@ const { passes, groups: passGroups } = await page.evaluate((byGroup) => new Prom
   let frames = 0;
   gpu._renderObjectDirect = function (object, material, scene, camera, ...rest) {
     const k = camera === r.camera ? (scene === r.scene ? 'camera' : 'camera:other-scene') : camera.isOrthographicCamera && scene === r.scene ? `shadow#${(names.has(camera) ? names : names.set(camera, names.size)).get(camera)}` : `post/other (${object.name || object.type})`;
-    if (byGroup && (k === 'camera' || k === 'shadow#0')) {
+    if (byGroup && (k === 'camera' || k.startsWith('shadow'))) {
       const nm = (object.name || object.parent?.name || object.type).replace(/\d+/g, '#').split(':').slice(0, 2).join(':');
       const gk = `${k}|${nm}`;
       groups.set(gk, (groups.get(gk) ?? 0) + 1);

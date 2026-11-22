@@ -6,7 +6,7 @@ import type { IslandLayout } from '../../sim/map';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
 import { Lighting, type ShadowPreset, SUN_DIR as LIGHT_SUN_DIR } from './lighting';
-import { CAST_FAR_LAYER, SHADOW_ONLY_FIRST_LAYER, SHADOW_ONLY_LAYER, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
+import { SHADOW_ONLY_FIRST_LAYER, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
 import { cascadeToRefresh, type CascadeCacheState, nearCascadeDue, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen, upscaleInput } from './post';
 import { lightU } from './lightUniforms';
@@ -106,7 +106,6 @@ export class SkyLighting {
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
     camera.layers.enable(SMALL_CASTER_LAYER); // small props: drawn by the camera, cast into the near cascades only
-    camera.layers.enable(CAST_FAR_LAYER); // merged meshes whose near-cascade shadows come from stand-ins (geo.ts)
     camera.layers.enable(TINY_CASTER_LAYER); // tiny moving props: first cascade only
     lightU.sunDir.value.copy(LIGHT_SUN_DIR);
     lightU.keyDir.value.copy(LIGHT_SUN_DIR);
@@ -311,9 +310,9 @@ export class SkyLighting {
     // cascade 0: everything; other near cascades: not the tiny casters; far cascades: neither tiny nor small
     const noTiny = this.camera.layers.mask & ~(1 << TINY_CASTER_LAYER);
     // + shadow-only stand-ins of map-wide static meshes (geo.ts): every cascade, small-part ones the first only
-    // near cascades: stand-ins instead of their map-wide originals (CAST_FAR_LAYER); far cascades: the originals
-    const so = 1 << SHADOW_ONLY_LAYER, so1 = 1 << SHADOW_ONLY_FIRST_LAYER, cf = 1 << CAST_FAR_LAYER;
-    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i === 0 ? (this.camera.layers.mask & ~cf) | so | so1 : i < near ? (noTiny & ~cf) | so | (1 << 31) : FAR_CASCADE_MASK | cf;
+    // + shadow-only casters for the first cascade (gameProps.ts)
+    const so1 = 1 << SHADOW_ONLY_FIRST_LAYER;
+    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i === 0 ? this.camera.layers.mask | so1 : i < near ? noTiny | (1 << 31) : FAR_CASCADE_MASK;
     this.cacheFarCascades(lights, near);
   }
 

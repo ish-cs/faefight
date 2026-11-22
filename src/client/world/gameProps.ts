@@ -3,7 +3,8 @@ import { PROP_KIND_LIST, type PropKind, type PropPose, type PropSpawn } from '..
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrelModel } from './mapProps';
 import { faceLabel, labelMaterial } from './labels';
-import { TINY_CASTER_LAYER } from './lod';
+import { SHADOW_ONLY_FIRST_LAYER } from './lod';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mats } from './materials';
 import { movingVariant } from './weathering';
 
@@ -65,6 +66,8 @@ const MODELS: Record<PropKind, (b: StaticBatch) => void> = {
 // No red: red drums are the explosive hazards (hazards.ts).
 const DRUM_COLORS = [0x1f5fa8, 0x6b6448, 0x2f6b3a, 0xc8641e];
 
+/** depth-only stand-in material for the props' shared shadow batch (never drawn by the camera) */
+const SHADOW_MAT = new THREE.MeshBasicNodeMaterial();
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(1, 1, 1), _m = new THREE.Matrix4();
 
 type Slot = { mesh: THREE.BatchedMesh; id: number };
@@ -99,8 +102,7 @@ export class GameProps {
       const verts = group.reduce((n, x) => n + x.geometry.getAttribute('position').count, 0);
       const mesh = new THREE.BatchedMesh(instances, verts, 0, material);
       mesh.name = `gameProp:${material.name || 'mat'}`;
-      mesh.castShadow = !material.name.startsWith('labels');
-      mesh.layers.set(TINY_CASTER_LAYER); // <= 1.2 m props: first shadow cascade only (far ones get contact AO)
+      mesh.castShadow = false; // the shadow batch below casts for every material at once
       mesh.receiveShadow = true;
       mesh.frustumCulled = false; // spans the map; perObjectFrustumCulled culls each instance instead
       this.root.add(mesh);
@@ -119,6 +121,26 @@ export class GameProps {
           it.slots.push({ mesh, id });
         }
       }
+    }
+    // shadows: one shadow-only batch holding every kind's opaque parts merged (first cascade only), instead of one
+    // shadow draw per material batch above
+    const byKind = new Map<PropKind, { geos: THREE.BufferGeometry[]; list: PropSpawn[] }>();
+    for (const x of parts) {
+      if (x.material.name.startsWith('labels')) continue;
+      const e = byKind.get(x.kind) ?? { geos: [], list: x.list };
+      e.geos.push(x.geometry);
+      byKind.set(x.kind, e);
+    }
+    const merged = [...byKind].map(([, e]) => ({ geo: mergeGeometries(e.geos, false)!, list: e.list }));
+    const shadow = new THREE.BatchedMesh(merged.reduce((n, x) => n + x.list.length, 0), merged.reduce((n, x) => n + x.geo.getAttribute('position').count, 0), 0, SHADOW_MAT);
+    shadow.name = 'gameProp:shadow';
+    shadow.castShadow = true;
+    shadow.layers.set(SHADOW_ONLY_FIRST_LAYER);
+    shadow.frustumCulled = false;
+    this.root.add(shadow);
+    for (const { geo, list } of merged) {
+      const gid = shadow.addGeometry(geo);
+      for (const sp of list) this.items.get(sp.id)!.slots.push({ mesh: shadow, id: shadow.addInstance(gid) });
     }
     for (const it of this.items.values()) this.write(it);
   }
