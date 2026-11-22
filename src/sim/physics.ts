@@ -438,7 +438,7 @@ export class Physics {
     const ray = new RAPIER.Ray(origin, dir);
     const exclude = ignorePlayer !== undefined ? this.players.get(ignorePlayer) : undefined;
     const h = this.world.castRay(ray, maxDist, true, undefined, undefined, exclude, undefined,
-      throughSlits ? (c) => !this.slits.has(c.handle) : undefined);
+      (c) => this.entities.get(c.handle)?.type !== 'prop' && !(throughSlits && this.slits.has(c.handle))); // ABLATION
     if (!h) return null;
     const t = h.timeOfImpact;
     const hit = this.entities.get(h.collider.handle) ?? { type: 'world' as const };
@@ -458,7 +458,7 @@ export class Physics {
   raycastStatic(origin: Vec3, dir: Vec3, maxDist: number, throughSlits = true): RayHit | null {
     this.sync();
     const h = this.world.castRay(new RAPIER.Ray(origin, dir), maxDist, true, undefined, undefined, undefined, undefined,
-      (c) => this.entities.get(c.handle)?.type !== 'player' && !(throughSlits && this.slits.has(c.handle)));
+      (c) => { const t = this.entities.get(c.handle)?.type; return t !== 'player' && t !== 'prop' && !(throughSlits && this.slits.has(c.handle)); }); // ABLATION
     if (!h) return null;
     const t = h.timeOfImpact;
     return { dist: t, point: v3(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t), hit: this.entities.get(h.collider.handle) ?? { type: 'world' } };
