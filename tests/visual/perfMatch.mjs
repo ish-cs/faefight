@@ -67,6 +67,8 @@ async function run(quality) {
   const spots = views === 'storm' ? extra.slice(1) : [...SPOTS, ...(views === 'extra' ? extra : [])];
   for (const s of spots) {
     await dbg('hp', 100000);
+    // the mid spot is over water: wait until the player has respawned, or sudden death eliminates a dead player
+    if (s.storm) await page.waitForFunction(() => { const f = window.__faefight; return f.snapshot().players.find((p) => p.id === f.humanId())?.alive; }, null, { timeout: 20_000 });
     if (s.storm) { await dbg('teleport', s.world.x, s.world.z); await page.evaluate(() => { window.__keepAlive = setInterval(() => window.__faefight.hp(100000), 100); }); await dbg('time', 899); await page.waitForTimeout(9000); await dbg('time', 1000); await page.waitForTimeout(1500); await dbg('hp', 100000); }
     const w = s.world ?? toWorld(...s.at);
     await dbg('teleport', w.x, w.z);
