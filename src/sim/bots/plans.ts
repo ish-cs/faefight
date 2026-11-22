@@ -113,16 +113,13 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
-  // Short of heals with none slotted: the last free slot is kept for a medkit.
-  const healShort = inv.medkits + (inv.potions.healPotion ?? 0) < (needs.medkits ?? 0) && !p.hotbar.includes('medkit') && !p.hotbar.includes('healPotion');
+  // Short of heals with none slotted (and the cash for one): the last free slot is kept for a medkit.
+  const healShort = cash >= MEDKIT.price && inv.medkits + (inv.potions.healPotion ?? 0) < (needs.medkits ?? 0) && !p.hotbar.includes('medkit') && !p.hotbar.includes('healPotion');
   const room = (k: HotbarItem) => countOf(inv, k) > 0 ||
     (canAdd(p.hotbar, k) && (!healShort || k === 'medkit' || p.hotbar.filter((x) => x === null).length >= 2));
-  // The first heal before bridging gear; more after the seal kit (a strong player never heads out without one).
-  const heals = inv.medkits + (inv.potions.healPotion ?? 0);
-  if (heals === 0 && (needs.medkits ?? 0) > 0 && room('medkit') && cash >= MEDKIT.price) return 'medkit';
   if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   if (needs.grapple === 'cross' && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
-  if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
+  if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0) && room('scaffold')) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
     // (A kind the hotbar has no room for is skipped: the shop would refuse it.)
     if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price && room('steel')) return 'steel';
@@ -132,7 +129,8 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     if (wantMetal && room('metal')) return 'metal';
     if (room('wood')) return cash >= PIECES.wood.price ? 'wood' : null;
   }
-  if (heals < (needs.medkits ?? 0) && room('medkit') && cash >= MEDKIT.price) return 'medkit';
+  // Heals right after the seal kit (a strong player never heads out without one once the money's there).
+  if (inv.medkits + (inv.potions.healPotion ?? 0) < (needs.medkits ?? 0) && room('medkit') && cash >= MEDKIT.price) return 'medkit';
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
