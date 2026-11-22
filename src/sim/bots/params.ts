@@ -547,8 +547,12 @@ export const PARAM_RANGES: Readonly<Record<string, [number, number]>> = Object.f
 
 // ---------------------------------------------------------------- trainer view
 
-/** What the trainer searches over: every key with a range (brain.*, drive.*, buildSkill.*, buildTuning.*), in a fixed order. */
-export const PARAM_KEYS: readonly string[] = Object.freeze(Object.keys(PARAM_RANGES));
+/**
+ * What the trainer searches over, in a fixed order: every key with a range, except team.* (training games are FFAs
+ * and duels, which never read TEAM: those keys would only random-walk; they keep their hand values until team games
+ * are part of the fitness).
+ */
+export const PARAM_KEYS: readonly string[] = Object.freeze(Object.keys(PARAM_RANGES).filter((k) => !k.startsWith('team.')));
 /** A full set of tunable values by flat key (JSON-safe, unlike BotParams with easy's Infinity entries). */
 export type FlatParams = Record<string, number>;
 
