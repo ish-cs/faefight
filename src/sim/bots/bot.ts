@@ -2432,7 +2432,8 @@ export class Bot {
       sinceFightHeal: now - this.fightHealAt,
     }, H);
     if (plan?.act === 'hide') { this.healHideAt ??= now; this.healNote = { t: now, text: plan.why }; }
-    else if (plan?.act !== 'wait' || !e) this.healHideAt = null;
+    // Stay hidden only while the heal itself is going (a "wait" to trade or press means fight on, not keep hiding).
+    else if (!(plan?.act === 'wait' && plan.why === 'healing') || !e) this.healHideAt = null;
     if (plan?.act === 'wait' && plan.why !== 'healing') this.healNote = { t: now, text: plan.why };
     return plan;
   }
