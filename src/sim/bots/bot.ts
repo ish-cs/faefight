@@ -1320,8 +1320,9 @@ export class Bot {
     for (const p of c.view.loot) {
       const d = dist2D(p, c.me.pos);
       if (d >= bestD || p.y < c.view.waterY + 0.2) continue;
-      const i = islandAt(c.view.map, p);
-      if (i !== c.on && !this.nav.routeTo(p)) continue;
+      // No route, even on my own island (e.g. past a wall): goTo would idle on it forever (measured: two medium bots
+      // stood 160 s in the final ring, out of ammo, each "looting" a bag it couldn't reach; the watchdog is off then).
+      if (!this.nav.routeTo(p)) continue;
       best = p; bestD = d;
     }
     return best;
