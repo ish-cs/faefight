@@ -14,7 +14,7 @@ import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, TRAP, WEAPONS } from '../sim/cons
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
-import { modeSeats } from '../sim/teams';
+import { soloBotCount } from '../sim/teams';
 import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
 import { BuildPredictor } from './buildPredict';
@@ -775,7 +775,7 @@ async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bot
   const backend = workerBackend(() => ({
     // ?debug=1&bots=N (1-7) overrides the menu's bot count (perf testing)
     // Teams mode plays the mode's full seat count (bots fill your team and the others), whatever the bot slider says.
-    setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: Math.min(7, Math.max(1, urlBots || ((modeSeats(sanitizeSettings(settings).teamMode) ?? 0) - 1) || bots)) },
+    setup: { players: [{ name: 'You', isBot: false }, ...Array.from({ length: soloBotCount(bots, sanitizeSettings(settings).teamMode, urlBots) },
       (_, i) => ({ name: `Bot (${d})${i ? ` ${i + 1}` : ''}`, isBot: true, difficulty: d }))], map, settings: sanitizeSettings(settings) },
     humanId: 1,
   }), null);
