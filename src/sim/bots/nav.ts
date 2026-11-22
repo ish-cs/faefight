@@ -450,6 +450,16 @@ export class Nav {
       l = this.nearestLane(me);
       if (!l) return null;
       sTarget = b >= 0 ? this.landS(l, b) : laneS(l, dest);
+      // Out on one bridge, heading for a spot on another (e.g. the tip of a pier on a new lane): back to the island
+      // both lanes hang off first, not straight at it across the water (that flip-flops on the deck forever).
+      if (b < 0) {
+        const ld = this.nearestLane(dest);
+        if (ld && !(ld.from === l.from && ld.to === l.to) && !(ld.from === l.to && ld.to === l.from)) {
+          const shared = [l.from, l.to].find((n) => n === ld.from || n === ld.to);
+          if (shared === undefined) return null;
+          sTarget = this.landS(l, shared);
+        }
+      }
     } else {
       l = this.nearestLane(dest);
       if (!l || (l.from !== a && l.to !== a)) return null;
