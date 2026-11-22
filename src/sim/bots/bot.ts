@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
@@ -20,7 +20,7 @@ import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from '
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
-  TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
+  GUNS, TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
   shoppingPlan,
   type Needs, type ShopStyle,
 } from './plans';
@@ -1361,8 +1361,10 @@ export class Bot {
         // Nothing that can clear what's there (steel needs a charge): better to go buy one than stand at the door.
         const can = blockers.some((p) => this.canClear(c, p));
         if (view.sealed[home.index]) return (can ? 0.85 : 0.1) + 0.1 * t.caution;
-        // One plugged doorway is most of a seal: clear it before going out.
-        return c.homeReach && can ? 0.7 + 0.15 * t.caution : 0;
+        // One plugged doorway is most of a seal: clear it before going out. Out of ammo with the money for a box
+        // (vault too): fetch it first, punching sandbags out one by one takes a minute (ffa8-mixed seed 18: 61 s).
+        const restock = !ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) && me.inv.cash + me.vault.cash >= AMMO_BOX.price;
+        return c.homeReach && can ? (restock ? 0.5 : 0.7 + 0.15 * t.caution) : 0;
       }
       case 'heal': {
         // Health comes back slowly out of combat: low and away from home, go back and recover.
@@ -1424,7 +1426,8 @@ export class Bot {
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
         if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return 0.9;
-        const urgent = plan.items.includes('pistol') || plan.items.includes('charge');
+        // An empty gun is as good as none: restocking it is as urgent as buying one.
+        const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv));
         return (urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0) - away;
       }
       case 'bridge': {
