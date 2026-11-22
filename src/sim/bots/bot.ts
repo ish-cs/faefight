@@ -2346,10 +2346,11 @@ export class Bot {
     return tall > 0 && this.P.buildSkill[this.difficulty].reinforce > 0.8 && far ? pick() : null;
   }
 
-  /** Should the next cover wall be the strongest I carry: at home, or I've held this spot a while. */
+  /** Should the next cover wall be the strongest I carry: at home, rich enough to spend it, or I've held this spot a while. */
   private strongCover(c: Ctx): boolean {
     const cv = this.cover;
-    return c.on === c.home.index || (!!cv && cv.heldSince !== null && c.view.now - cv.heldSince >= this.P.buildTuning.holdSec);
+    return c.on === c.home.index || c.me.inv.cash + c.me.vault.cash >= this.P.buildTuning.metalCoverAt ||
+      (!!cv && cv.heldSince !== null && c.view.now - cv.heldSince >= this.P.buildTuning.holdSec);
   }
 
   /** Behind something solid from whoever is shooting at me (heals are safe here even with them in sight). */
@@ -2451,7 +2452,7 @@ export class Bot {
       }
       // Set off to the side away from where I'll peek, so stepping out to shoot is one short step.
       const off = scale(right(yawOf(to)), -cv.side * this.P.buildTuning.coverOffset);
-      const why = `cover: ${kind} vs @${cv.threatId} (${strong ? 'holding, strongest' : 'fast, cheap'})`;
+      const why = `cover: ${kind} vs @${cv.threatId} (${strong ? 'strongest: home, rich or holding' : 'fast, cheap'})`;
       for (const d of this.P.buildTuning.coverDist) {
         let pos = add(add(me.pos, scale(to, d)), off), rotY = yawOf(to);
         if (this.rng() < sk.misplace) ({ pos, rotY } = fumble(pos, rotY, this.rng));
