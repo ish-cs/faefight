@@ -21,6 +21,8 @@ export const TINY_CASTER_LAYER = 5;
  */
 export const SHADOW_ONLY_LAYER = 6;
 export const SHADOW_ONLY_FIRST_LAYER = 7;
+/** The merged mesh behind near-cascade stand-ins: drawn by the camera, casts into the (cached) far cascades only. */
+export const CAST_FAR_LAYER = 8;
 
 export interface LodTarget {
   /** Re-pick levels for a camera at `cam`; `scale` multiplies every registered distance. */

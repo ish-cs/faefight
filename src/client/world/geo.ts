@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { registerDistanceCull, SHADOW_ONLY_FIRST_LAYER, SHADOW_ONLY_LAYER, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
+import { CAST_FAR_LAYER, registerDistanceCull, SHADOW_ONLY_FIRST_LAYER, SHADOW_ONLY_LAYER, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
 import { chunkCoord } from './lodMath';
 import { stressMatrices } from './stress';
 
@@ -88,12 +88,13 @@ export const STATIC_CHUNKS = {
 };
 
 /**
- * Shadow stand-ins for map-wide static meshes: a merged mesh spanning the map is one cheap camera draw, but every
- * shadow cascade then rasterises all of it (realism3's dock wood/galv/frond bins: ~800k tris into cascade 0, whose
- * frustum covers ~20 m). Such a mesh stops casting; per-`grid` copies of its parts on a shadow-only layer cast
- * instead, so each cascade draws only the cells its frustum touches.
+ * Shadow stand-ins for heavy map-wide static meshes: a merged mesh spanning the map is one cheap camera draw, but the
+ * near shadow cascades then rasterise all of it every frame (realism3's dock wood/galv/frond bins: ~800k tris into
+ * cascade 0, whose frustum covers ~20 m). For the near cascades, per-`grid` copies of its parts on a shadow-only
+ * layer cast instead, so each draws only the cells its frustum touches; the merged mesh still casts into the cached
+ * far cascades (one draw each, rarely), via CAST_FAR_LAYER. Only heavy bins: every stand-in cell is a shadow draw.
  */
-export const SHADOW_STANDINS = { minRadius: 60, minTris: 20_000, grid: 48 };
+export const SHADOW_STANDINS = { minRadius: 60, minTris: 60_000, grid: 96 };
 
 function shadowStandIns(mesh: THREE.Mesh, parts: THREE.BufferGeometry[], material: THREE.Material, firstOnly: boolean, parent: THREE.Object3D) {
   const g = mesh.geometry;
@@ -107,7 +108,9 @@ function shadowStandIns(mesh: THREE.Mesh, parts: THREE.BufferGeometry[], materia
     if (!e) cells.set(k, (e = []));
     e.push(p);
   }
-  mesh.castShadow = false;
+  // small-part bins cast into cascade 0 only: their stand-ins replace them there entirely
+  if (firstOnly) mesh.castShadow = false;
+  else mesh.layers.set(CAST_FAR_LAYER);
   for (const [k, e] of cells) {
     const s = new THREE.Mesh(merge(e), material);
     s.name = `${mesh.name}:shadow@${k}`;
