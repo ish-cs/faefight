@@ -377,7 +377,8 @@ function jungleHill(b: StaticBatch, { at, z1, hw, top }: Frame, rng: Rng, isl: I
   g.computeVertexNormals();
   const hillZ = z1 - 4 + D / 2;
   b.add(M.terrain, g, at(0, top - 0.25, hillZ), 0xffffff, false);
-  const blob = new THREE.IcosahedronGeometry(1, 2);
+  // detail 1 (80 tris): backdrop canopy seen from 60 m+; detail 2 was 356k tris map-wide for no visible gain
+  const blob = new THREE.IcosahedronGeometry(1, 1);
   {
     const bp = blob.getAttribute('position');
     for (let i = 0; i < bp.count; i++) {

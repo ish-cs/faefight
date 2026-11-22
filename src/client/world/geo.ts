@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { registerDistanceCull, shrinkMaterial, SMALL_CASTER_LAYER } from './lod';
+import { registerDistanceCull, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
 import { chunkCoord } from './lodMath';
 import { stressMatrices } from './stress';
 
@@ -175,7 +175,7 @@ export class StaticBatch {
           if (cls === 'medium') continue;
           mesh.geometry.computeBoundingSphere();
           const sp = mesh.geometry.boundingSphere!;
-          mesh.layers.set(SMALL_CASTER_LAYER);
+          mesh.layers.set(TINY_CASTER_LAYER); // small parts (< 0.6 m) cast into the first cascade only
           mesh.material = shrinkMaterial(bin.material, C.cull);
           mesh.userData.lod = registerDistanceCull(mesh, C.cull, { center: sp.center, radius: sp.radius });
         }
@@ -183,7 +183,7 @@ export class StaticBatch {
         if (cls === 'medium') { rest.push(...leftover); continue; }
         // sparse small parts: one map-wide mesh, still shrinking away with distance in the shader
         const mesh = emit(bin, leftover, '@small:sparse');
-        mesh.layers.set(SMALL_CASTER_LAYER);
+        mesh.layers.set(TINY_CASTER_LAYER);
         mesh.material = shrinkMaterial(bin.material, C.cull);
       }
       if (rest.length) emit(bin, rest, '@rest');
