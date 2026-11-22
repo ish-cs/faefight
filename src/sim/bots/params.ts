@@ -152,12 +152,20 @@ export type BuildTuning = {
  *   (and is nearer their island) catches up first (goal 'regroup'), so the team arrives together.
  * - defendMin: from this many players left on my team, one bot (the lowest id) stays home as the defender.
  * - defendBias: the defender's guard/fortify/cut/defend bonus, also taken off its bridge/attack/seal.
+ * - follow: rival-choice bonus for the push lead's rival (the lead: the non-defender bot whose home is nearest an
+ *   enemy island, lowest id on ties); the rest of the team goes for the same island instead of each its own neighbour.
+ * - assistLowHp: extra assist score for a teammate in trouble, × their missing health (0..1).
+ * - focusFire: in teams, an enemy who is hurting a teammate counts as this many times closer when picking whom to
+ *   shoot (focus one target).
+ * - waitM / waitSec: the push lead, about to step onto the rival island, waits up to waitSec at the bridge head for
+ *   a pusher still more than waitM behind (so the team hits together; never in sight of an enemy).
  */
 export type TeamParams = {
   focus: number; groupPush: number;
   assistM: number; assistSec: number; assistScore: number;
   regroupM: number; regroupScore: number;
   defendMin: number; defendBias: number;
+  follow: number; assistLowHp: number; focusFire: number; waitM: number; waitSec: number;
 };
 
 /**
@@ -286,9 +294,10 @@ export const BUILD_TUNING: BuildTuning = {
 
 export const TEAM: TeamParams = {
   focus: 0.45, groupPush: 0.3,
-  assistM: 45, assistSec: 4, assistScore: 0.9,
+  assistM: 75, assistSec: 6, assistScore: 0.9,
   regroupM: 12, regroupScore: 1.1,
   defendMin: 3, defendBias: 0.45,
+  follow: 0.9, assistLowHp: 0.4, focusFire: 1.4, waitM: 25, waitSec: 8,
 };
 
 export const HOOK: HookParams = {
@@ -389,6 +398,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
   ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
+  ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {
   const a = pattern.split('.'), b = key.split('.');
