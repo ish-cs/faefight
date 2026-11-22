@@ -20,7 +20,8 @@ page.setDefaultTimeout(240_000);
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
 await page.addInitScript((q) => { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q, dynamicResolution: false }, onboarding: { howToSeen: true } })); }, preset);
-await page.goto(`${url}/?debug=1&bots=7&gputime=1`);
+const params = arg('params', '');
+await page.goto(`${url}/?debug=1&bots=7&gputime=1${params ? `&${params}` : ''}`);
 await page.getByTestId('play-easy').click();
 await page.waitForFunction(() => window.__faefight?.snapshot?.() && !window.__faefightLoading?.visible(), null, { timeout: 180_000 });
 await page.waitForTimeout(2500);
@@ -34,6 +35,8 @@ const W = (x, z) => ({ x: home.center.x + x * Math.cos(yaw0) + z * Math.sin(yaw0
 await dbg('hp', 100000);
 const L = Math.hypot(home.center.x, home.center.z), ux = home.center.x / L, uz = home.center.z / L;
 const [at, to, pitch] = spot === 'props' ? [W(-8, -12), W(-1, -8), -0.32]
+  : spot === 'edge' ? [W(-15, 12), W(-25, 30), -0.12]
+  : spot === 'across' ? [W(-3, -15), W(-3, -80), -0.02]
   : spot === 'mid' ? [{ x: ux * L * 0.45, z: uz * L * 0.45 }, { x: 0, z: 0 }, 0]
     : [W(6, 13), W(14, 60), 0.02];
 await dbg('teleport', at.x, at.z);
@@ -97,8 +100,41 @@ if (await page.evaluate(() => typeof window.__faefight.lookProbe === 'function')
   lat = await dbg('latency');
   await dbg('lookProbe', false);
 }
+// draws per pass: tally the renderer's per-object draws by camera for 60 frames (main camera, each shadow camera, post quads)
+const { passes, groups: passGroups } = await page.evaluate((byGroup) => new Promise((res) => {
+  const r = window.__faefight.renderer, gpu = r.gpu, orig = gpu._renderObjectDirect;
+  const tally = new Map(), names = new Map(), groups = new Map();
+  let frames = 0;
+  gpu._renderObjectDirect = function (object, material, scene, camera, ...rest) {
+    const k = camera === r.camera ? (scene === r.scene ? 'camera' : 'camera:other-scene') : camera.isOrthographicCamera && scene === r.scene ? `shadow#${(names.has(camera) ? names : names.set(camera, names.size)).get(camera)}` : `post/other (${object.name || object.type})`;
+    if (byGroup && (k === 'camera' || k.startsWith('shadow'))) {
+      const nm = (object.name || object.parent?.name || object.type).replace(/\d+/g, '#').split(':').slice(0, 2).join(':');
+      const gk = `${k}|${nm}`;
+      groups.set(gk, (groups.get(gk) ?? 0) + 1);
+    }
+    const e = tally.get(k) ?? { draws: 0, tris: 0 };
+    e.draws++;
+    const g = object.geometry, n = g ? (g.index ? g.index.count : g.attributes.position?.count ?? 0) / 3 : 0;
+    e.tris += n * (object.isInstancedMesh ? object.count : g?.isInstancedBufferGeometry ? g.instanceCount : 1);
+    tally.set(k, e);
+    return orig.call(this, object, material, scene, camera, ...rest);
+  };
+  const tick = () => { if (++frames < 60) requestAnimationFrame(tick); else { gpu._renderObjectDirect = orig; res({ passes: [...tally].map(([k, e]) => [k, Math.round(e.draws / 60), Math.round(e.tris / 60)]), groups: [...groups].map(([k, n]) => [k, +(n / 60).toFixed(1)]).sort((a, b) => b[1] - a[1]) }); } };
+  requestAnimationFrame(tick);
+}), arg('groups', '') === '1');
+console.log('-- draws / tris per pass (per frame, 60-frame mean) --');
+for (const [k, d, t] of passes) console.log(`${String(d).padStart(5)} ${String(Math.round(t / 1000)).padStart(6)}kt  ${k}`);
+if (passGroups.length) { console.log('-- draws per frame by pass|group (--groups=1) --'); for (const [k, n] of passGroups) console.log(`${String(n).padStart(6)}  ${k}`); }
+const graph = await page.evaluate(() => {
+  const sc = window.__faefight.renderer.scene;
+  let all = 0, meshes = 0, auto = 0, autoW = 0, visible = 0;
+  sc.traverse((o) => { all++; if (o.isMesh || o.isSprite || o.isPoints || o.isLine) meshes++; if (o.matrixAutoUpdate) auto++; if (o.matrixWorldAutoUpdate) autoW++; });
+  sc.traverseVisible(() => { visible++; });
+  return { all, meshes, visible, matrixAutoUpdate: auto, matrixWorldAutoUpdate: autoW };
+});
+console.log(`-- scene graph: ${JSON.stringify(graph)} --`);
 // draw census at this view: visible meshes inside the camera frustum, grouped by name prefix
-const census = await page.evaluate((full) => {
+const census = await page.evaluate(([full, sortTris]) => {
   const r = window.__faefight.renderer, cam = r.camera, scene = r.scene;
   const m = cam.projectionMatrix.clone().multiply(cam.matrixWorldInverse);
   const e = m.elements, planes = [[e[3] + e[0], e[7] + e[4], e[11] + e[8], e[15] + e[12]], [e[3] - e[0], e[7] - e[4], e[11] - e[8], e[15] - e[12]], [e[3] + e[1], e[7] + e[5], e[11] + e[9], e[15] + e[13]], [e[3] - e[1], e[7] - e[5], e[11] - e[9], e[15] - e[13]], [e[3] + e[2], e[7] + e[6], e[11] + e[10], e[15] + e[14]], [e[3] - e[2], e[7] - e[6], e[11] - e[10], e[15] - e[14]]];
@@ -109,24 +145,29 @@ const census = await page.evaluate((full) => {
       let inside = true;
       if (o.frustumCulled !== false && o.geometry) {
         if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
-        const bs = o.geometry.boundingSphere, c = bs.center.clone().applyMatrix4(o.matrixWorld), rad = bs.radius * o.matrixWorld.getMaxScaleOnAxis();
+        if (o.isInstancedMesh && !o.boundingSphere) o.computeBoundingSphere();
+        const bs = o.isInstancedMesh ? o.boundingSphere : o.geometry.boundingSphere, c = bs.center.clone().applyMatrix4(o.matrixWorld), rad = bs.radius * o.matrixWorld.getMaxScaleOnAxis();
         for (const p of planes) { const n = Math.hypot(p[0], p[1], p[2]); if ((p[0] * c.x + p[1] * c.y + p[2] * c.z + p[3]) / n < -rad) { inside = false; break; } }
       }
       if (inside && !(o.isInstancedMesh && o.count === 0)) {
         const nm = o.name || o.parent?.name || o.type;
         const k = full ? nm.replace(/\d+/g, '#').split(':').slice(0, 3).join(':') : nm.split(/[:#\d]/)[0] || o.type;
         const mats = Array.isArray(o.material) ? o.material.length : 1;
-        out[k] = (out[k] ?? 0) + mats;
+        const g = o.geometry, n = g ? (g.index ? g.index.count : g.attributes.position?.count ?? 0) / 3 : 0;
+        const inst = o.isInstancedMesh ? o.count : (g?.isInstancedBufferGeometry ? g.instanceCount : 1);
+        const e = (out[k] ??= [0, 0]); e[0] += mats; e[1] += n * inst;
       }
     }
     for (const ch of o.children) visit(ch);
   };
   visit(scene);
-  return Object.entries(out).sort((a, b) => b[1] - a[1]).slice(0, full ? 60 : 25);
-}, arg('census', '') === 'full');
+  return Object.entries(out).sort((a, b) => (sortTris ? b[1][1] - a[1][1] : b[1][0] - a[1][0])).slice(0, full ? 60 : 25);
+}, [arg('census', '') !== '', arg('census', '') === 'tris']);
 await browser.close();
-console.log('-- camera draws by group (approx) --');
-for (const [k, v] of census) console.log(`${String(v).padStart(5)}  ${k}`);
+console.log('-- camera draws / triangles by group (approx; --census=full|tris) --');
+const totT = census.reduce((a, [, v]) => a + v[1], 0);
+console.log(`(listed: ${census.reduce((a, [, v]) => a + v[0], 0)} draws, ${(totT / 1e6).toFixed(2)} M tris)`);
+for (const [k, v] of census) console.log(`${String(v[0]).padStart(5)} ${String(Math.round(v[1] / 1000)).padStart(6)}kt  ${k}`);
 
 console.log(`\n== ${label} (${preset}, ${spot}, dpr ${dpr}, ${secs}s, ${frames.n} frames) ==`);
 console.log(`fps ${(1000 / frames.avg).toFixed(1)} · avg ${frames.avg.toFixed(2)} ms · p99 ${frames.p99.toFixed(2)} ms · hitches>25ms ${frames.hitches} · main-thread work ${frames.cpuAvg.toFixed(2)} ms/frame · gpu ${(gpu.avg ?? 0).toFixed(2)} ms · draws ${info.drawCalls} · tris ${(info.triangles / 1e6).toFixed(2)}M`);

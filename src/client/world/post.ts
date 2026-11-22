@@ -7,6 +7,7 @@ import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { taau } from 'three/addons/tsl/display/TAAUNode.js';
 import { fsr1 } from 'three/addons/tsl/display/FSR1Node.js';
+import { perfOff } from './perfFlags';
 
 export type PostOptions = {
   samples: number; bloom: boolean; ao: false | { resolution: number; samples: number }; flare?: boolean;
@@ -67,6 +68,8 @@ export const grade = {
   vignette: uniform(0.26),
   /** ambient-occlusion strength (high/ultra) */
   ao: uniform(0.9),
+  /** scene-linear luminance where geometry highlights start to bloom (high/ultra) */
+  bloomThreshold: uniform(6),
 };
 
 /**
@@ -110,10 +113,12 @@ export function buildPipeline(
     aoPass = ao(scenePass.getTextureNode('depth'), scenePass.getTextureNode('normal'), camera);
     aoPass.resolutionScale = o.ao.resolution;
     aoPass.samples.value = o.ao.samples;
-    aoPass.radius.value = 0.9;
-    aoPass.thickness.value = 1.2;
-    aoPass.distanceExponent.value = 1.4;
-    aoPass.scale.value = 1.15;
+    // ~1.1 m reach: crate/drum/container feet, wall bases and characters get a contact shadow; a lower thickness
+    // keeps thin poles from smearing a halo onto the wall behind them
+    aoPass.radius.value = 1.1;
+    aoPass.thickness.value = 0.9;
+    aoPass.distanceExponent.value = 1.6;
+    aoPass.scale.value = 1.25;
     // Post-applied AO also hits direct sunlight: full strength in shade, lighter on bright sunlit pixels, so contact
     // shadows ground props and characters without dirtying lit walls.
     const occ = aoPass.getTextureNode().sample(screenUV).r;
@@ -122,8 +127,13 @@ export function buildPipeline(
   }
   let bloomPass: ReturnType<typeof bloom> | null = null;
   if (o.bloom) {
-    // only emissive output blooms (generator glow, water sun-glints write emissive) — never the bright sky
-    bloomPass = bloom(scenePass.getTextureNode('emissive'), 0.75, 0.45, 0);
+    // Emissive output blooms (generator glow, water sun-glints write emissive), plus a subtle bloom of geometry hot
+    // spots: sun specular on wet ground, chrome, galvanised steel. Never the sky (depth ≈ 1) — the sky dome is bright
+    // everywhere and would fog the whole horizon.
+    const lum = luminance(col.rgb);
+    const notSky = step(scenePass.getTextureNode('depth').r, 0.9999);
+    const hot = col.rgb.mul(smoothstep(grade.bloomThreshold, grade.bloomThreshold.mul(2.5), lum)).mul(notSky).mul(0.35);
+    bloomPass = bloom(perfOff('nohotbloom') ? scenePass.getTextureNode('emissive') : vec4(scenePass.getTextureNode('emissive').rgb.add(hot), 1), 0.75, 0.45, 0);
     // bloom sizes itself off the drawing buffer: keep it at half the *scene* resolution under TAAU
     if (o.upscale) bloomPass.setResolutionScale(0.5 * o.upscale.scale);
     hdr = hdr.add(bloomPass.rgb);

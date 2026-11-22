@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { registerDistanceCull, shrinkMaterial, SMALL_CASTER_LAYER } from './lod';
+import { NO_SHADOW, registerDistanceCull, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
 import { chunkCoord } from './lodMath';
 import { stressMatrices } from './stress';
 
@@ -9,9 +9,16 @@ const ATTRS = ['position', 'normal', 'uv', 'color', 'pc'] as const;
 /**
  * Normalise a geometry for merging: non-indexed, exactly position/normal/uv/color, transformed by `m`.
  * `col` fills the vertex colour (used as a per-part tint; materials multiply it with their map).
+ * An indexed source also keeps an indexed twin (`userData.indexed`, same attributes) so StaticBatch can emit heavy
+ * meshes indexed without re-welding vertices (mergeVertices on millions of vertices cost seconds of load).
  */
 export function part(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation = 0xffffff): THREE.BufferGeometry {
-  const g = geo.index ? geo.toNonIndexed() : geo.clone();
+  const g = normalise(geo.index ? geo.toNonIndexed() : geo.clone(), m, col);
+  if (geo.index) g.userData.indexed = normalise(geo.clone(), m, col);
+  return g;
+}
+
+function normalise(g: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation): THREE.BufferGeometry {
   if (!g.getAttribute('normal')) g.computeVertexNormals();
   const n = g.getAttribute('position').count;
   if (!g.getAttribute('uv')) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(n * 2), 2));
@@ -24,6 +31,7 @@ export function part(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: TH
   for (const k of Object.keys(g.attributes)) if (!(ATTRS as readonly string[]).includes(k)) g.deleteAttribute(k);
   g.morphAttributes = {};
   g.clearGroups();
+  g.userData = {};
   if (m) g.applyMatrix4(m);
   // part centre per vertex: lets a chunk's material shrink each part to its centre with distance (lod.ts)
   g.computeBoundingSphere();
@@ -80,12 +88,15 @@ export const STATIC_CHUNKS = {
   /** a bin (material × shadow flags) lighter than this stays one mesh */
   minTris: 40_000,
   /** small parts: shrink away between 70 % and 100 % of `cull` (no pop), chunk hidden past it */
-  small: { maxR: 0.6, grid: 48, cull: 90, splitTris: 25_000, maxChunks: 8 },
+  small: { maxR: 0.6, grid: 48, cull: 90, splitTris: 25_000, maxChunks: 4 },
   /** medium parts: chunked for frustum culling only (no impostors yet, so never distance-culled) */
-  medium: { maxR: 4, grid: 160, cull: Infinity, splitTris: 60_000, maxChunks: 6 },
+  medium: { maxR: 4, grid: 160, cull: Infinity, splitTris: 60_000, maxChunks: 3 },
   /** a grid cell lighter than this isn't worth its own draw: it joins the bin's leftover mesh */
-  minChunkTris: 8_000,
+  minChunkTris: 16_000,
 };
+
+/** merged static meshes with at least this many vertices get an index (StaticBatch.build) */
+export const STATIC_INDEX_MIN_VERTS = 30_000;
 
 const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + g.getAttribute('position').count / 3, 0);
 
@@ -107,6 +118,7 @@ export class StaticBatch {
   }
 
   add(material: THREE.Material, geo: THREE.BufferGeometry, m: THREE.Matrix4 | null = null, col: THREE.ColorRepresentation = 0xffffff, cast = true, receive = true) {
+    if (NO_SHADOW.has(material)) cast = false;
     const key = `${material.uuid}:${+cast}${+receive}`;
     let bin = this.bins.get(key);
     if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
@@ -114,10 +126,29 @@ export class StaticBatch {
     for (const T of this.copies) bin.parts.push(part(geo, m ? T.clone().multiply(m) : T, col));
   }
 
+  /** Push a geometry already in merge form (non-indexed; exactly position/normal/uv/color; final space). No copy. */
+  addRaw(material: THREE.Material, geo: THREE.BufferGeometry, cast = true, receive = true) {
+    const key = `${material.uuid}:${+cast}${+receive}`;
+    let bin = this.bins.get(key);
+    if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
+    if (!geo.getAttribute('pc')) { // part centre per vertex (see part()), so raw parts merge with normal ones
+      geo.computeBoundingSphere();
+      const c = geo.boundingSphere!.center, n = geo.getAttribute('position').count, pc = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { pc[i * 3] = c.x; pc[i * 3 + 1] = c.y; pc[i * 3 + 2] = c.z; }
+      geo.setAttribute('pc', new THREE.Float32BufferAttribute(pc, 3));
+    }
+    bin.parts.push(geo);
+  }
+
   build(parent: THREE.Object3D, name: string, opts: { chunked?: boolean } = {}): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
     const emit = (bin: Bin, parts: THREE.BufferGeometry[], suffix: string) => {
-      const mesh = new THREE.Mesh(merge(parts), bin.material);
+      // heavy static meshes are drawn by the camera and every shadow cascade: emit them indexed (from the parts'
+      // indexed twins) so shared corners are shaded once per pass, not once per triangle
+      const twins = trisOf(parts) * 3 >= STATIC_INDEX_MIN_VERTS && parts.every((p) => p.userData.indexed) ? parts.map((p) => p.userData.indexed as THREE.BufferGeometry) : null;
+      const geo = twins ? merge(twins) : merge(parts);
+      if (twins) for (const p of parts) p.dispose();
+      const mesh = new THREE.Mesh(geo, bin.material);
       mesh.castShadow = bin.cast; mesh.receiveShadow = bin.receive;
       mesh.name = `${name}:${bin.material.name || 'mat'}${suffix}`;
       parent.add(mesh);
@@ -161,7 +192,7 @@ export class StaticBatch {
           if (cls === 'medium') continue;
           mesh.geometry.computeBoundingSphere();
           const sp = mesh.geometry.boundingSphere!;
-          mesh.layers.set(SMALL_CASTER_LAYER);
+          mesh.layers.set(TINY_CASTER_LAYER); // small parts (< 0.6 m) cast into the first cascade only
           mesh.material = shrinkMaterial(bin.material, C.cull);
           mesh.userData.lod = registerDistanceCull(mesh, C.cull, { center: sp.center, radius: sp.radius });
         }
@@ -169,7 +200,7 @@ export class StaticBatch {
         if (cls === 'medium') { rest.push(...leftover); continue; }
         // sparse small parts: one map-wide mesh, still shrinking away with distance in the shader
         const mesh = emit(bin, leftover, '@small:sparse');
-        mesh.layers.set(SMALL_CASTER_LAYER);
+        mesh.layers.set(TINY_CASTER_LAYER);
         mesh.material = shrinkMaterial(bin.material, C.cull);
       }
       if (rest.length) emit(bin, rest, '@rest');

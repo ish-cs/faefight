@@ -143,6 +143,8 @@ export class Predictor {
       if (!this.pieceIds.has(p.id)) { this.physics.addPiece(p); this.pieceIds.add(p.id); }
     }
     for (const id of this.pieceIds) if (!seen.has(id)) { this.physics.removePiece(id); this.pieceIds.delete(id); }
+    // Gameplay props are obstacles at their last known pose (no prediction of the prop itself).
+    this.physics.setPropPoses(snap.props);
     // Broken pier sections: open water (removeDock ignores ones already gone).
     if (snap.docks && snap.docks.length !== this.docksGone) { for (const id of snap.docks) this.physics.removeDock(id); this.docksGone = snap.docks.length; }
 

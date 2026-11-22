@@ -2,6 +2,7 @@ import * as dm from './dmath';
 import { CENTER, DOCK, MAP } from './constants';
 import type { Vec3 } from './types';
 import type { GameSettings } from './settings';
+import { placeProps, type PropSpawn } from './propPlace';
 import { add, forward, right, rotateY, scale, v3, yawOf } from './vec';
 
 export type Doorway = { center: Vec3; yaw: number; width: number };
@@ -108,6 +109,8 @@ export type MapDef = {
   /** Set by the match: the rules in force (clamped) and the palette colour per island (index = island). */
   settings?: GameSettings;
   colors?: number[];
+  /** Tier A gameplay props (props.ts): dynamic bodies at these spawns. Optional for hand-built maps (tests). */
+  props?: PropSpawn[];
 };
 
 type TemplateSpec = {
@@ -260,6 +263,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
     template, name: MAP_NAMES[template], seed,
     waterY: MAP.waterY,
     islands, center, statics, cosmetics, hazards,
+    props: placeProps({ islands, center, statics, cosmetics, seed, avoid: hazards.map((h) => h.pos) }),
     docks: buildDocks(islands, center),
   };
 }

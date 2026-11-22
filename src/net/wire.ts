@@ -58,6 +58,8 @@ const DICT = [
   'emote', 'quip', 'wheel',
   'team',
   'hook', 'st', 't0', 'tgt', 'pc', 'hookReadyAt', 'pull', 'left', 'yank', 'grapple', 'grapples', 'phase',
+  // appended after main's keys (keep earlier indices stable): gameplay props
+  'pr', 'p', 'q',
 ];
 
 const enc = new TextEncoder();

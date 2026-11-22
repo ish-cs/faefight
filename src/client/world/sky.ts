@@ -1,13 +1,13 @@
 import * as THREE from 'three/webgpu';
-import { cameraPosition, color, cos, dot, exp, float, floor, fog, fract, hash, length, luminance, max, min, mix, normalize, positionView, positionWorld, pow, sin, smoothstep, step, time, uniform, vec3, vec4 } from 'three/tsl';
+import { cameraPosition, cos, dot, float, floor, fract, hash, length, max, min, mix, normalize, positionWorld, pow, sin, smoothstep, step, time, uniform, vec3, vec4 } from 'three/tsl';
+import type { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { MAP } from '../../sim/constants';
 import type { IslandLayout } from '../../sim/map';
-import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
-import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
-import { SMALL_CASTER_LAYER } from './lod';
-import { cascadeToRefresh, type CascadeCacheState, newCacheState, SHADOW_CACHE } from './shadowCache';
+import { Lighting, type ShadowPreset, SUN_DIR as LIGHT_SUN_DIR } from './lighting';
+import { SHADOW_ONLY_FIRST_LAYER, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
+import { cascadeToRefresh, type CascadeCacheState, nearCascadeDue, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen, upscaleInput } from './post';
 import { lightU } from './lightUniforms';
 
@@ -22,13 +22,12 @@ function saveQuality(q: Quality) {
   settings.update((s) => { s.video.quality = q; });
 }
 
-/** Late-morning sun ≈ 38° elevation. Sky dome, environment map, key light, haze and water glints all derive from this. */
-export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 38), THREE.MathUtils.degToRad(58));
+export { SUN_DIR } from './lighting';
 
 type Preset = {
   pixelRatio: number;
-  /** cascaded shadow maps: count × size², shadow distance (m) */
-  cascades: number; shadowMap: number; shadowFar: number;
+  /** cascaded shadow maps: count, size², shadow distance (m) */
+  shadow: ShadowPreset;
   post: PostOptions;
 };
 /** Competitive mode's post chain overrides (see setCompetitive). */
@@ -44,37 +43,17 @@ const UP_SCALE = Math.min(1, Math.max(0.4, Number(Q?.get('upscaleScale')) || (UP
 const UPSCALE_ULTRA: PostOptions['upscale'] = UP_MODE === '0' ? undefined
   : { mode: UP_MODE === 'taau' || UP_MODE === 'fsr' ? UP_MODE : 'cas', scale: UP_SCALE, sharpen: UP_MODE === 'cas' ? 0.5 : 0.25 };
 
+// low: 2 small cascades over a short range; high: 3 cascades (crisp near, shorter reach than ultra);
+// ultra: 4 cascades with a long reach. GTAO + bloom on high/ultra (AO at half resolution).
 const PRESETS: Record<Quality, Preset> = {
-  low: { pixelRatio: 1, cascades: 2, shadowMap: 1024, shadowFar: 110, post: { samples: 4, bloom: false, ao: false } },
-  high: { pixelRatio: 1.25, cascades: 3, shadowMap: 2048, shadowFar: 220, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true } },
+  low: { pixelRatio: 1, shadow: { cascades: 2, mapSize: 1024, far: 90 }, post: { samples: 4, bloom: false, ao: false } },
+  high: { pixelRatio: 1.25, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true } },
   // ultra: native Retina output, scene rendered at 0.7× (MSAA ×4) and upscaled bilinear + contrast-adaptive sharpen in the grade pass
-  ultra: { pixelRatio: 2, cascades: 4, shadowMap: 2048, shadowFar: 320, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, upscale: UPSCALE_ULTRA } },
+  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, upscale: UPSCALE_ULTRA } },
 };
 
 /** Far-cascade caster mask: layer 0 only (+ unused bit 31, see cascadeLayers). */
 const FAR_CASCADE_MASK = 1 | (1 << 31);
-
-const SKY = { turbidity: 3, rayleigh: 1.5, mieCoefficient: 0.002, mieDirectionalG: 0.9 };
-
-function makeSky(clouds: boolean) {
-  const sky = new SkyMesh();
-  sky.scale.setScalar(4000);
-  sky.turbidity.value = SKY.turbidity;
-  sky.rayleigh.value = SKY.rayleigh;
-  sky.mieCoefficient.value = SKY.mieCoefficient;
-  sky.mieDirectionalG.value = SKY.mieDirectionalG;
-  sky.sunPosition.value.copy(SUN_DIR);
-  sky.cloudCoverage.value = clouds ? 0.35 : 0.2;
-  sky.cloudDensity.value = clouds ? 0.5 : 0.35;
-  return sky;
-}
-
-/** Re-grade a SkyMesh's output: gain + saturation around luminance. */
-function regradeSky(sky: SkyMesh, gain: THREE.Node<'float'> | number, saturation: THREE.Node<'float'> | number) {
-  const mat = sky.material as THREE.NodeMaterial;
-  const rgb = (mat.colorNode as THREE.Node<'vec4'>).rgb.mul(gain);
-  mat.colorNode = vec4(mix(vec3(luminance(rgb)), rgb, saturation), 1);
-}
 
 /**
  * Night sky on top of the (by then black) Preetham dome, scaled by lightU.night: a deep blue gradient that is
@@ -105,103 +84,45 @@ function addNightSky(sky: SkyMesh) {
  * grade, and (high/ultra) GTAO + bloom. Owns the frame's final draw so the post chain follows the quality preset.
  */
 export class SkyLighting {
-  readonly sun = new THREE.DirectionalLight(0xffe9cc, 6);
+  /** the lighting rig (sun, hemisphere bounce, sky, env map, haze, weather): world/lighting.ts */
+  readonly lighting: Lighting;
+  readonly sun: THREE.DirectionalLight;
   /** live-tweakable grade uniforms (debug) */
   readonly grade = grade;
   /** haze uniforms (debug) */
-  readonly haze = {
-    color: uniform(new THREE.Color(0x9fc0dc)),
-    sunColor: uniform(new THREE.Color(0xf4dcb4)),
-    density: uniform(0.0011),
-    heightFalloff: uniform(0.012),
-  };
-  /** brightness of the bounce hemisphere baked into the environment map (debug: tweak, then buildEnvironment()) */
-  readonly envGround = uniform(12);
-  /** main sky dome brightness / saturation (the env map uses its own hazier copy) */
-  readonly skyGain = uniform(0.7);
-  readonly skySaturation = uniform(1.12);
-  /** bunker interiors (x, groundY, z, yaw) — up to 8; parked far away until setMap */
+  readonly haze: { color: Lighting['u']['hazeColor']; sunColor: Lighting['u']['hazeSunColor']; density: Lighting['u']['hazeDensity']; heightFalloff: Lighting['u']['hazeHeightFalloff'] };
+  /** bunker interiors (x, groundY, z, yaw) - up to 8; parked far away until setMap */
   private interiors = Array.from({ length: 8 }, () => uniform(new THREE.Vector4(1e6, 0, 1e6, 0)));
   private interiorAO = this.buildInteriorAO();
   quality: Quality;
-  /** Settings → Video resolution scale: multiplies the preset's pixel ratio (result clamped to 0.5–2). */
+  /** Settings / Video resolution scale: multiplies the preset's pixel ratio (result clamped to 0.5-2). */
   private resScale = settings.get().video.resolutionScale;
   private pipeline: THREE.RenderPipeline | null = null;
   /** Main lit-scene pass of the post chain (render target + MRT + context every world material compiles for). */
   scenePass: THREE.PassNode | null = null;
-  private csm: CSMShadowNode | null = null;
   private sunTmp = new THREE.Vector3();
   private dome: SkyMesh;
 
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, readonly camera: THREE.PerspectiveCamera) {
     this.quality = loadQuality();
     camera.layers.enable(SMALL_CASTER_LAYER); // small props: drawn by the camera, cast into the near cascades only
-    gpu.toneMapping = THREE.ACESFilmicToneMapping;
-    gpu.toneMappingExposure = 0.5;
-    gpu.shadowMap.enabled = true;
-    gpu.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is removed in WebGPURenderer; soften via radius
-
-    const sky = makeSky(true);
-    regradeSky(sky, this.skyGain, this.skySaturation);
-    addNightSky(sky);
-    scene.add(sky);
-    this.dome = sky;
-    lightU.sunDir.value.copy(SUN_DIR);
-    lightU.keyDir.value.copy(SUN_DIR);
-    this.buildEnvironment();
-
-    this.sun.castShadow = true;
-    this.sun.shadow.bias = -0.0002;
-    this.sun.shadow.normalBias = 0.035;
-    this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 700;
-    this.sun.position.copy(SUN_DIR).multiplyScalar(200);
-    this.sun.target.position.set(0, 0, 0);
-    scene.add(this.sun, this.sun.target);
-
-    // Aerial perspective: exponential distance haze that thins with altitude, warmer when looking toward the sun.
-    const h = this.haze;
-    const viewDir = normalize(positionWorld.sub(cameraPosition));
-    const toSun = pow(max(dot(viewDir, lightU.sunDir), 0), 6);
-    const dist = positionView.z.negate();
-    const heightK = exp(max(positionWorld.y, 0).mul(h.heightFalloff).negate());
-    const amount = float(1).sub(exp(dist.mul(h.density).mul(heightK).negate()));
-    scene.fogNode = fog(mix(h.color, h.sunColor, toSun.mul(0.6)), amount);
-
+    camera.layers.enable(TINY_CASTER_LAYER); // tiny moving props: first cascade only
+    lightU.sunDir.value.copy(LIGHT_SUN_DIR);
+    lightU.keyDir.value.copy(LIGHT_SUN_DIR);
+    this.lighting = new Lighting(gpu, scene);
+    this.sun = this.lighting.sun;
+    const u = this.lighting.u;
+    this.haze = { color: u.hazeColor, sunColor: u.hazeSunColor, density: u.hazeDensity, heightFalloff: u.hazeHeightFalloff };
+    this.dome = this.lighting.sky;
+    addNightSky(this.dome);
     this.apply();
   }
 
-  /**
-   * IBL: PMREM of the same sky (sun disc removed — the DirectionalLight is the sun) above a lower hemisphere that
-   * stands in for light bounced off the sea and sun-baked concrete. Gives every PBR material matching ambient +
-   * reflections (containers, galvanised steel, water). The ambient sky is hazier and half-desaturated: a pure
-   * Rayleigh dome turns every shaded face violet-blue.
-   */
-  buildEnvironment() {
-    try {
-      (this.scene.environment as THREE.Texture | null)?.dispose();
-      const envScene = new THREE.Scene();
-      const sky = makeSky(false);
-      sky.showSunDisc.value = 0;
-      sky.turbidity.value = 9;
-      sky.rayleigh.value = 0.9;
-      regradeSky(sky, 1, 0.5);
-      envScene.add(sky);
-      const groundMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide });
-      // warm sunlit-quay bounce near the horizon, teal-grey sea straight down
-      const y = normalize(positionWorld).y.negate().clamp(0, 1);
-      groundMat.colorNode = mix(color(0.34, 0.33, 0.28), color(0.1, 0.17, 0.19), y.pow(0.5)).mul(this.envGround);
-      groundMat.fog = false;
-      envScene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 48, 16, 0, Math.PI * 2, Math.PI / 2 + 0.02, Math.PI / 2), groundMat));
-      const pmrem = new THREE.PMREMGenerator(this.gpu);
-      this.scene.environment = pmrem.fromScene(envScene, 0.02).texture;
-      this.scene.environmentIntensity = 0.8;
-      pmrem.dispose();
-    } catch (err) {
-      console.warn('[world/sky] sky environment map unavailable, using hemisphere light only', err);
-      this.scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x8a7a58, 0.8));
-    }
-  }
+  /** Rebuild the IBL map (debug: after tweaking `lighting.u.envGround`). */
+  buildEnvironment() { this.lighting.buildEnvironment(); }
+
+  /** Blend clear (0) to storm (1); see world/lighting.ts. */
+  setWeather(t: number) { this.lighting.setWeather(t); }
 
   /**
    * Ambient occlusion for the roofed bunkers: the environment map has no idea a point is under a concrete slab, so
@@ -289,21 +210,9 @@ export class SkyLighting {
     const p = PRESETS[this.quality];
     this.applyPixelRatio();
 
-    // Cascaded shadows: crisp near the player, still casting long shadows out to `shadowFar`. CSMShadowNode
-    // snaps each cascade to its texel grid, so edges don't shimmer as the camera moves.
-    const sh = this.sun.shadow;
-    const size = p.shadowMap * this.govShadow;
-    sh.mapSize.set(size, size);
-    sh.radius = p.shadowMap >= 2048 ? 2.5 : 1.5;
-    const prev = this.csm;
-    const csm = new CSMShadowNode(this.sun, { cascades: p.cascades, maxFar: p.shadowFar, mode: 'practical', lightMargin: 120 });
-    csm.fade = true;
-    sh.shadowNode = csm;
-    this.csm = csm;
-    this.shadowCache = null; // new cascades: render them all fresh
-    if (prev) {
-      prev.dispose();
-      // the shadow node is baked into every lit material's shader → rebuild them
+    this.shadowCache = null; // new or resized cascades: render them all fresh
+    if (this.lighting.applyShadows({ ...p.shadow, mapSize: Math.round(p.shadow.mapSize * this.govShadow) })) {
+      // the shadow node is baked into every lit material's shader: rebuild them
       this.scene.traverse((o) => {
         const m = (o as THREE.Mesh).material;
         if (m) for (const x of Array.isArray(m) ? m : [m]) x.needsUpdate = true;
@@ -347,9 +256,9 @@ export class SkyLighting {
     if (k.ao !== this.govAo) { this.govAo = k.ao; this.applyAoBudget(); }
     if (k.shadowScale !== this.govShadow) {
       this.govShadow = k.shadowScale;
-      const size = PRESETS[this.quality].shadowMap * k.shadowScale;
+      const size = Math.round(PRESETS[this.quality].shadow.mapSize * k.shadowScale);
       this.sun.shadow.mapSize.set(size, size);
-      for (const l of this.csm?.lights ?? []) l.shadow!.mapSize.set(size, size);
+      for (const l of this.lighting.csm?.lights ?? []) l.shadow!.mapSize.set(size, size);
       this.shadowCache = null; // cached far maps are the old size: redraw them
     }
   }
@@ -395,10 +304,15 @@ export class SkyLighting {
    * SMALL_CASTER_LAYER (an extra unused layer bit keeps ShadowNode from copying the camera's mask over it).
    */
   private cascadeLayers() {
-    const lights = this.csm?.lights;
+    const lights = this.lighting.csm?.lights;
     if (!lights?.length) return;
     const near = lights.length >= 3 ? 2 : 1;
-    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i < near ? this.camera.layers.mask : FAR_CASCADE_MASK;
+    // cascade 0: everything; other near cascades: not the tiny casters; far cascades: neither tiny nor small
+    const noTiny = this.camera.layers.mask & ~(1 << TINY_CASTER_LAYER);
+    // + shadow-only stand-ins of map-wide static meshes (geo.ts): every cascade, small-part ones the first only
+    // + shadow-only casters for the first cascade (gameProps.ts)
+    const so1 = 1 << SHADOW_ONLY_FIRST_LAYER;
+    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i === 0 ? this.camera.layers.mask | so1 : i < near ? noTiny | (1 << 31) : FAR_CASCADE_MASK;
     this.cacheFarCascades(lights, near);
   }
 
@@ -408,6 +322,7 @@ export class SkyLighting {
   private cacheAnchor = { pos: new THREE.Vector3(), dir: new THREE.Vector3(), tmp: new THREE.Vector3() };
   /** far-cascade renders skipped / done (debug) */
   readonly shadowCacheStats = { skipped: 0, rendered: 0 };
+  private nearFrame = 0;
   private cacheFarCascades(lights: { shadow?: THREE.LightShadow | null }[], near: number) {
     if (!this.shadowCacheEnabled) { for (const l of lights) l.shadow!.autoUpdate = true; return; }
     if (!this.shadowCache || this.shadowCache.age.length !== lights.length) {
@@ -424,15 +339,16 @@ export class SkyLighting {
     const moved = cam.position.distanceTo(a.pos) > SHADOW_CACHE.moveM || a.tmp.angleTo(a.dir) > SHADOW_CACHE.turnRad;
     if (moved) { a.pos.copy(cam.position); a.dir.copy(a.tmp); }
     const pick = cascadeToRefresh(this.shadowCache, near, moved);
+    const frame = this.nearFrame++;
     for (let i = 0; i < lights.length; i++) {
       const sh = lights[i].shadow!;
-      if (i < near) { sh.autoUpdate = true; continue; }
+      if (i < near) { sh.autoUpdate = false; sh.needsUpdate = nearCascadeDue(i, frame); continue; }
       sh.autoUpdate = false;
       if (i === pick) { sh.needsUpdate = true; this.shadowCacheStats.rendered++; } else this.shadowCacheStats.skipped++;
     }
   }
 
-  dispose() { this.pipeline?.dispose(); this.csm?.dispose(); }
+  dispose() { this.pipeline?.dispose(); this.lighting.dispose(); }
 }
 
 /** 'P' cycles the preset low → high → ultra (ignored while typing in an input). */

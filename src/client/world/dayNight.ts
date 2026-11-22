@@ -6,14 +6,6 @@ import { dayNightState, lightU } from './lightUniforms';
 import { setDaylight } from '../audio/api';
 import type { SkyLighting } from './sky';
 
-/** Clear-weather lighting of the moment: what the storm (storm.ts) darkens from. */
-export type Weather = {
-  sunI: number; sunC: THREE.Color; skyGain: number; skySat: number; haze: THREE.Color; hazeSun: THREE.Color;
-  density: number; env: number; exposure: number;
-  /** 0 = day → 1 = night */
-  night: number;
-};
-
 /** The day sun the impostors were baked under (sky.ts phase 0): impostor tint = current light ÷ this. */
 const BAKE = { light: 6, color: new THREE.Color(0xffe9cc), env: 0.8 };
 
@@ -21,13 +13,13 @@ const rad = THREE.MathUtils.degToRad;
 const setSrgb = (c: THREE.Color, v: Rgb) => c.setRGB(v[0], v[1], v[2], THREE.SRGBColorSpace);
 
 /**
- * Applies the day/night cycle (dayCycle.ts) to the world lighting each frame: sky dome sun, key light (sun → moon),
- * haze, ambient, exposure, lamps, night sky, water glints and impostor tint. Scalar and uniform writes only; the key
- * light (the shadow caster) moves in DAY_CYCLE.lightStepSec steps (cached far cascades redraw then, one per frame).
- * Runs before StormFx, which darkens from `base` instead of a fixed daytime baseline.
+ * Applies the day/night cycle (dayCycle.ts) to the world each frame: sky dome sun, key light direction (sun → moon),
+ * the lighting rig's time of day (lighting.ts setDay: key light, ambient, haze, exposure, night sky, water glints),
+ * lamps, blue hour and impostor tint. Scalar and uniform writes only; the key light (the shadow caster) moves in
+ * DAY_CYCLE.lightStepSec steps (cached far cascades redraw then, one per frame). The storm (StormFx → setWeather)
+ * blends on top of whatever time of day the rig holds.
  */
 export class DayNight {
-  readonly base: Weather;
   private sdAt: number | null = null;
   private lastP = -1;
   private lastComp = false;
@@ -35,12 +27,9 @@ export class DayNight {
   private look = newDayLook();
   private dir = new THREE.Vector3();
   private tmpC = new THREE.Color();
+  private sunC = new THREE.Color();
 
-  constructor(private sky: SkyLighting, private gpu: THREE.WebGPURenderer, private scene: THREE.Scene) {
-    this.base = {
-      sunI: 0, sunC: new THREE.Color(), skyGain: 0, skySat: 0, haze: new THREE.Color(), hazeSun: new THREE.Color(),
-      density: 0, env: 0, exposure: 0, night: 0,
-    };
+  constructor(private sky: SkyLighting) {
     const m = lightAngles(1);
     lightU.moonDir.value.setFromSphericalCoords(1, rad(90 - m.elev), rad(m.az));
     this.frame(0, false);
@@ -70,47 +59,22 @@ export class DayNight {
     this.lastP = p;
     this.lastComp = comp;
     const L = dayLook(p, comp, this.look);
-    const s = this.sky, b = this.base;
-
+    const s = this.sky;
     s.setSunDir(this.dir.setFromSphericalCoords(1, rad(90 - L.sunElev), rad(L.sunAz)));
-    b.sunI = L.light;
-    setSrgb(b.sunC, L.lightC);
-    b.skyGain = L.skyGain;
-    b.skySat = L.skySat;
-    setSrgb(b.haze, L.haze);
-    setSrgb(b.hazeSun, L.hazeSun);
-    b.density = L.density;
-    b.env = L.env;
-    b.exposure = L.exposure;
-    b.night = L.night;
-
-    s.sun.intensity = b.sunI;
-    s.sun.color.copy(b.sunC);
-    s.skyGain.value = b.skyGain;
-    s.skySaturation.value = b.skySat;
-    (s.haze.color.value as THREE.Color).copy(b.haze);
-    (s.haze.sunColor.value as THREE.Color).copy(b.hazeSun);
-    s.haze.density.value = b.density;
-    this.scene.environmentIntensity = b.env;
-    this.gpu.toneMappingExposure = b.exposure;
-
+    s.lighting.setDay(L);
     lightU.lamps.value = L.lamps;
-    lightU.night.value = L.night;
     lightU.twilight.value = L.twilight;
-    // sun sparkle → a fainter, cooler moon path on the water
-    const k = L.light / BAKE.light;
-    const g = Math.min(1, k * (1 + 3 * L.night));
-    (lightU.glint.value as THREE.Vector3).set(b.sunC.r / BAKE.color.r * g, b.sunC.g / BAKE.color.g * g, b.sunC.b / BAKE.color.b * g);
+    const k = L.light / BAKE.light, sunC = setSrgb(this.sunC, L.lightC);
     // impostors: baked under the day sun + ambient; scale each part by how much of it is left
-    const t = this.tmpC.copy(b.sunC);
+    const t = this.tmpC.copy(sunC);
     t.r /= BAKE.color.r; t.g /= BAKE.color.g; t.b /= BAKE.color.b;
-    t.multiplyScalar(0.6 * k).addScalar(0.4 * (b.env / BAKE.env));
+    t.multiplyScalar(0.6 * k).addScalar(0.4 * (L.env / BAKE.env));
     (lightU.impostor.value as THREE.Color).copy(t);
     dayNightState.night = L.night;
     setDaylight(1 - L.night); // ambience: gulls by day, crickets and owls at night
     dayNightState.key = k;
-    dayNightState.env = b.env / BAKE.env;
-    dayNightState.keyColor.copy(b.sunC);
+    dayNightState.env = L.env / BAKE.env;
+    dayNightState.keyColor.copy(sunC);
   }
 }
 

@@ -2,7 +2,7 @@
 // resolution + governor off. Per preset (fresh page each): load time, avg fps, p99 frame ms, draw calls, triangles,
 // averaged over fixed camera spots. Optional same-view screenshots.
 // Needs a dev server (`pnpm vite --port 5299`); run under the heavy lock:
-//   node tests/visual/perfMatch.mjs [--time=870] [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
+//   node tests/visual/perfMatch.mjs [--query=noprops] [--time=870] [--stress=3] [--presets=low,high,ultra] [--shots=docs/screens/perf-before] [--label=x]
 import { chromium } from '@playwright/test';
 
 const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
@@ -36,9 +36,9 @@ async function run(quality) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript((q) => {
-    try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q.q, dynamicResolution: false, competitive: q.c }, onboarding: { howToSeen: true } })); } catch { /* fresh profile */ }
+    try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q.q, dynamicResolution: false, competitive: q.c } })); } catch { /* fresh profile */ }
   }, { q: quality, c: competitive });
-  await page.goto(`${url}/?debug=1&bots=7&gputime=1${stress > 1 ? `&stress=${stress}` : ''}${params ? `&${params}` : ''}`);
+  await page.goto(`${url}/?debug=1&bots=7&gputime=1${stress > 1 ? `&stress=${stress}` : ''}${arg('query', '') ? `&${arg('query', '')}` : ''}${params ? `&${params}` : ''}`);
   const t0 = Date.now();
   await page.getByTestId('play-easy').click();
   await page.waitForFunction(() => window.__faefight?.snapshot?.(), null, { timeout: 120_000 });
@@ -67,6 +67,8 @@ async function run(quality) {
   const spots = views === 'storm' ? extra.slice(1) : [...SPOTS, ...(views === 'extra' ? extra : [])];
   for (const s of spots) {
     await dbg('hp', 100000);
+    // the mid spot is over water: wait until the player has respawned, or sudden death eliminates a dead player
+    if (s.storm) await page.waitForFunction(() => { const f = window.__faefight; return f.snapshot().players.find((p) => p.id === f.humanId())?.alive; }, null, { timeout: 20_000 });
     if (s.storm) { await dbg('teleport', s.world.x, s.world.z); await page.evaluate(() => { window.__keepAlive = setInterval(() => window.__faefight.hp(100000), 100); }); await dbg('time', 899); await page.waitForTimeout(9000); await dbg('time', 1000); await page.waitForTimeout(1500); await dbg('hp', 100000); }
     const w = s.world ?? toWorld(...s.at);
     await dbg('teleport', w.x, w.z);

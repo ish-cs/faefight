@@ -4,8 +4,6 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MAP, STORM } from '../../sim/constants';
 import type { IslandLayout } from '../../sim/map';
 import type { StormSnap, Vec3 } from '../../sim/types';
-import type { Weather } from './dayNight';
-import { lightU } from './lightUniforms';
 import type { Quality, SkyLighting } from './sky';
 import { stepWetness, WET, wetness, wetOverride } from './wetness';
 
@@ -41,7 +39,6 @@ export class StormFx {
   private readonly markers: { ring: THREE.Mesh; disc: THREE.Mesh; ringMat: THREE.MeshBasicNodeMaterial; discMat: THREE.MeshBasicNodeMaterial }[] = [];
   private bolts: { mesh: THREE.Mesh; born: number }[] = [];
   private boltMat = new THREE.MeshBasicNodeMaterial({ color: new THREE.Color(0xd8e4ff).multiplyScalar(BOOST * 1.6), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
-  private stormHaze = new THREE.Color(0x3c4252);
   private stormHazeOut = new THREE.Color(0x4a3a6e);
   private tmpC = new THREE.Color();
   private tmpH = new THREE.Color();
@@ -52,8 +49,7 @@ export class StormFx {
   /** Perf debugging (tests/visual/storm.mjs): hide one part. */
   debugHide: 'rain' | 'wall' | null = null;
 
-  /** `base`: the clear-weather lighting of the moment (DayNight keeps it current); the storm darkens from it. */
-  constructor(private sky: SkyLighting, private gpu: THREE.WebGPURenderer, private scene: THREE.Scene, private base: Weather) {
+  constructor(private sky: SkyLighting, private gpu: THREE.WebGPURenderer, private scene: THREE.Scene) {
     this.root.name = 'storm';
 
     // Storm wall: violet streaks drifting sideways, fading out toward the top.
@@ -150,7 +146,7 @@ export class StormFx {
     this.wet += (this.target - this.wet) * Math.min(1, dt / 2.5);
     if (this.target === 0 && this.wet < 0.003) this.wet = 0;
     const w = this.wet;
-    this.soak = stepWetness(this.soak, Math.max(w, this.base.night * WET.nightDew), dt);
+    this.soak = stepWetness(this.soak, Math.max(w, this.sky.lighting.night * WET.nightDew), dt);
     wetness.value = this.wetPin ?? this.soak;
 
     // Flash: a bright pulse with a second flicker ~150 ms later.
@@ -203,28 +199,27 @@ export class StormFx {
   }
 
   /**
-   * Storm look on top of the day/night lighting (`base`). The storm darkens toward its own overcast levels but never
-   * below what the night already is (min), and its haze is scaled down by the night, so night + storm reads as a
-   * stormy night rather than double darkness. Lightning lights a dark night harder (night boost on the flash).
+   * Storm lighting = the lighting rig's own weather blend on top of the time of day (world/lighting.ts setWeather:
+   * sun, sky, env, exposure, haze, stars hidden; night-aware) plus this module's extras: lightning flashes (harder at
+   * night, when they light a dark scene) and the violet haze outside the storm wall.
    */
   private applyWeather(w: number, flash: number, outside: boolean) {
-    const b = this.base, s = this.sky, L = THREE.MathUtils.lerp;
-    // Clear weather: DayNight owns the lighting; after one exact restore to its current baseline, leave it alone.
+    const s = this.sky;
+    // Clear weather: DayNight owns the lighting; after one exact restore to its current time of day, leave it alone.
     if (w === 0 && flash < 0.001) { if (!this.weatherDirty) return; this.weatherDirty = false; } else this.weatherDirty = true;
-    const n = b.night, f = flash * (1 + 0.8 * n);
-    s.sun.intensity = L(b.sunI, Math.min(b.sunI, 1.4), w) + f * 16;
-    s.sun.color.copy(b.sunC).lerp(this.tmpC.set(0xaab4c8), w);
-    s.skyGain.value = L(b.skyGain, Math.min(b.skyGain, 0.14), w) + f * 0.9;
-    s.skySaturation.value = L(b.skySat, Math.min(b.skySat, 0.3), w);
-    // storm clouds hide the stars and moon (lightning still shows through the dark sky gain)
-    lightU.night.value = n * (1 - 0.85 * w);
-    const dark = 1 - 0.55 * n;
-    const haze = s.haze.color.value as THREE.Color;
-    haze.copy(b.haze).lerp(this.tmpH.copy(outside ? this.stormHazeOut : this.stormHaze).multiplyScalar(dark), w);
-    if (flash > 0.001) haze.lerp(this.tmpC.set(0xc8d0ff), Math.min(1, f * 0.6));
-    (s.haze.sunColor.value as THREE.Color).copy(b.hazeSun).lerp(this.tmpH.copy(this.stormHaze).multiplyScalar(dark), w);
-    s.haze.density.value = L(b.density, Math.max(b.density, outside ? 0.009 : 0.0042), w);
-    this.scene.environmentIntensity = L(b.env, Math.min(b.env, 0.32), w) + f * 0.9;
-    this.gpu.toneMappingExposure = L(b.exposure, b.exposure * 0.88, w) + f * 0.2;
+    s.setWeather(w);
+    const L = s.lighting, f = flash * (1 + 0.8 * L.night);
+    if (outside) {
+      (L.u.hazeColor.value as THREE.Color).lerp(this.tmpH.copy(this.stormHazeOut).multiplyScalar(1 - 0.55 * L.night), w);
+      L.u.hazeDensity.value = (L.u.hazeDensity.value as number) * (1 + w);
+    }
+    if (f > 0.001) {
+      L.sun.intensity += f * 16;
+      L.u.skyGain.value = (L.u.skyGain.value as number) + f * 0.9;
+      (L.u.hazeColor.value as THREE.Color).lerp(this.tmpC.set(0xc8d0ff), Math.min(1, f * 0.6));
+      this.scene.environmentIntensity += f * 0.9;
+      this.gpu.toneMappingExposure += f * 0.2;
+    }
   }
+
 }

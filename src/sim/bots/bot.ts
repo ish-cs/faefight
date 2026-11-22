@@ -699,11 +699,16 @@ export class Bot {
   private aimTarget(view: BotView, nearest: PlayerState | null, now: number): PlayerState | null {
     const me = view.self, A = this.P.aim;
     let cur = this.aimId === null ? null : view.enemies.find((e) => e.id === this.aimId && e.alive) ?? null;
-    if (!cur && this.aimId !== null) {
+    if (!cur && this.aimId !== null && !this.aimLost) {
+      // Just lost sight: keep them as my target for the hold (a blink behind a crate or a post brings them back
+      // into my sights, not onto someone else and back).
       const alive = view.others.find((o) => o.id === this.aimId)?.alive ?? false;
       this.aimLost = alive && this.aimAt ? { at: this.aimAt, until: now + A.feel[this.difficulty].holdSec } : null;
-      this.aimId = null;
+      if (!this.aimLost) this.aimId = null;
     }
+    if (!cur && this.aimLost && now >= this.aimLost.until) { this.aimLost = null; this.aimId = null; }
+    // While holding on someone I just lost, only a clearly closer enemy takes my eyes off where they were.
+    if (!cur && this.aimLost && nearest && dist2D(nearest.pos, me.pos) >= A.switchRatio * dist2D(this.aimLost.at, me.pos)) nearest = null;
     if (cur && nearest && nearest.id !== cur.id && now - this.aimSince >= A.commitSec &&
         dist2D(nearest.pos, me.pos) < A.switchRatio * dist2D(cur.pos, me.pos)) cur = null;
     if (!cur && nearest) { cur = nearest; this.aimId = nearest.id; this.aimSince = now; }
