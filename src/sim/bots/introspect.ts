@@ -8,7 +8,7 @@
  *
  * Player references inside text are written `@<id>` and turned into names by the client.
  */
-import { AMMO_BOX, CHARGE, GRENADE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, GRAPPLE, GRENADE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
 import type { Doorway, IslandLayout } from '../map';
 import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
 import { dist2D } from '../vec';
@@ -58,6 +58,8 @@ export type BrainDigest = {
   plan: string[]; planAt: number;
   shop: { items: ShopItem[]; why: string; cost: number } | null;
   build: { kind: PieceKind; x: number; y: number; z: number; rotY: number; why: string } | null;
+  /** Grappling hook: on a rope now, or its last use (a few seconds), or what it carries it for; absent when none. */
+  hook?: string;
   /** Route ahead: [x, y, z] points from its feet. */
   path: [number, number, number][];
   /** Where it's aiming / shooting at, and whether it fired this tick. */
@@ -110,6 +112,7 @@ type Internals = {
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
   defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
+  hookNote: { t: number; text: string } | null;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
@@ -551,7 +554,7 @@ function invValue(inv: Inventory): number {
   for (const [k, a] of Object.entries(inv.weapons)) if (k !== 'fists') v += (WEAPONS[k as WeaponKind]?.price ?? 0) + (a && a.spare > 0 ? AMMO_BOX.price * Math.min(1, a.spare / 30) : 0);
   for (const [k, n] of Object.entries(inv.pieces)) v += (PIECES[k as PieceKind]?.price ?? 0) * (n ?? 0);
   for (const [k, n] of Object.entries(inv.potions ?? {})) v += (POTIONS[k as keyof typeof POTIONS]?.price ?? 0) * (n ?? 0);
-  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price + inv.traps * TRAP.price);
+  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price + inv.traps * TRAP.price + ((inv.grapples ?? 0) * GRAPPLE.price) / GRAPPLE.uses);
 }
 
 /** Steps of the current goal, and which one it's on (from what it did this tick). */
@@ -675,6 +678,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     ...(view?.allies ? { team: { role: I.defender ? 'defend' as const : 'push' as const, focus: view.allies.filter((x) => !x.eliminated && x.target !== null && x.target === I.targetId).map((x) => x.id) } } : {}),
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
+    ...hookLine(I, me, now),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
     st: {
@@ -688,6 +692,18 @@ export function debugBrain(bot: Bot): BrainDigest {
     },
   };
   return fitDigest(d);
+}
+
+/** The brain panel's grappling hook line. */
+function hookLine(I: Internals, me: PlayerState | undefined, now: number): { hook?: string } {
+  if (!me?.alive) return {};
+  const note = I.hookNote && now - I.hookNote.t < 4 ? I.hookNote.text : null;
+  if (me.mv?.pull?.yank) return { hook: 'Being yanked by an enemy hook' };
+  if (me.mv?.pull) return { hook: `On the rope${note ? `: ${note}` : ''}` };
+  if (me.hook) return { hook: note ?? 'Hook out' };
+  if (note) return { hook: note };
+  const n = me.inv.grapples ?? 0;
+  return n > 0 ? { hook: `Carrying one (${n} use${n === 1 ? '' : 's'}): for crossing gaps, getting away, yanking` } : {};
 }
 
 function nearest(es: PlayerState[], p: Vec3): PlayerState | null {

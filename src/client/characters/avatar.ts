@@ -94,6 +94,8 @@ export type AvatarFrame = {
   shield: number;
   /** Sights up (holds the aim pose). */
   ads?: boolean;
+  /** On a grappling hook rope (own hook out): arms up along the aim. */
+  grapple?: boolean;
   /** Reload choreography for this frame (null when not reloading). */
   reload?: ReloadPose | null;
   /** Emote playing, `t` s in (sim clock); null/absent = none. */
@@ -443,6 +445,13 @@ export class Avatar {
     if (this.blob) this.blob.visible = true;
   }
 
+  /** World position of the right hand (where a grappling rope starts); null before the model loads or hidden. */
+  handPoint(out: THREE.Vector3): THREE.Vector3 | null {
+    if (!this.hand || !this.group.visible) return null;
+    this.hand.updateWorldMatrix(true, false);
+    return out.setFromMatrixPosition(this.hand.matrixWorld);
+  }
+
   /** World position of this avatar's muzzle or ejection port (null with fists / hidden). */
   gunPoint(which: 'muzzle' | 'eject', out: THREE.Vector3): THREE.Vector3 | null {
     const local = this.gun?.userData[which] as THREE.Vector3 | undefined;
@@ -617,6 +626,8 @@ export class Avatar {
       if (this.lowReady > 0.01) this.bend(this.upperArm, -LOW_READY_RAD * this.lowReady);
       // Off hand drops to the magazine during the swap.
       if (r && r.hand > 0) this.bend(this.upperArmL, -0.45 * r.hand);
+      // Grappling: both arms up along the rope (the spine already carries the look pitch).
+      if (f.grapple) { this.bend(this.upperArm, 1.45); this.bend(this.upperArmL, 1.2); }
       // Breathing (deeper after running) and the additive flinch: lean back + twist, springing out.
       this.effort += ((speed > 4 ? 1 : 0) - this.effort) * Math.min(1, dt * (speed > 4 ? 0.5 : 0.15));
       this.bend(this.chest, breath(now / 1000, this.effort));
@@ -733,6 +744,10 @@ export class CharacterSystem {
     return this.avatars.get(id)?.gunPoint(which, out) ?? null;
   }
 
+  handPoint(id: number, out: THREE.Vector3): THREE.Vector3 | null {
+    return this.avatars.get(id)?.handPoint(out) ?? null;
+  }
+
   onEvent(e: MatchEvent) {
     const now = performance.now();
     // echo = the host confirming a shot we already showed (client shot prediction): animated once.
@@ -809,6 +824,7 @@ export class CharacterSystem {
         pos: m.pos, vel: m.vel, yaw: p.id === humanId ? localYaw : m.yaw, pitch: m.pitch, alive: p.alive, equipped: p.equipped,
         blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0, shield: p.shield ?? 0,
         ads: p.ads,
+        grapple: !!p.hook && p.hook.st !== 3,
         emote: p.emote ? { id: p.emote.id, t: simNow - p.emote.at } : null,
         quip: p.quip && simNow - p.quip.at < QUIP_SHOW_SEC ? p.quip.id : null,
         reload: (() => {

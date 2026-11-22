@@ -1,7 +1,7 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { BUILD, DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
+import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
@@ -14,6 +14,7 @@ import { Fire, fireZones, type FireCtx } from './fire';
 import { Traps, validateTrap } from './traps';
 import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
+import { clearGrapple, fireGrapple, tickGrapple, type GrappleCtx } from './grapple';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
 import { HitboxHistory, LAG_COMP, rayPlayer } from './lagComp';
@@ -68,6 +69,8 @@ export class Match implements MatchApi {
   private supportDirty = false;
   private kills: { victim: number; killer: number | null }[] = [];
   private ctx: CombatCtx;
+  /** Grappling hooks' view of this match (grapple.ts); bound like ctx. */
+  private grappleCtx!: GrappleCtx;
   /** Public recent history a human would have on screen: hits, tracers, kill feed, scoreboard. */
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
@@ -160,6 +163,7 @@ export class Match implements MatchApi {
     this.ctx = this.makeCtx();
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
     this.hazardHost = { ctx: this.ctx, loot: this.s.loot, seed: this.hazardSeed };
+    this.grappleCtx = this.makeGrappleCtx();
     if (setup.practice) {
       this.s.practice = true;
       this.practice = new PracticeRange({ s: this.s, physics: this.physics, removePiece: (id) => this.ctx.onPieceDestroyed(id) }, 1);
@@ -174,7 +178,23 @@ export class Match implements MatchApi {
     this.ctx = this.makeCtx();
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
     this.hazardHost = { ctx: this.ctx, loot: this.s.loot, seed: this.hazardSeed };
+    this.grappleCtx = this.makeGrappleCtx();
     this.fire.nextId = () => this.s.nextId++;
+  }
+
+  private makeGrappleCtx(): GrappleCtx {
+    const s = this.s, physics = this.physics;
+    return {
+      players: s.players,
+      pieces: s.pieces,
+      get waterY() { return s.waterY; },
+      // The rope never threads a firing slit; aimed at players it is lag-compensated like a shot.
+      cast: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, false) : this.rewoundRay(o, d, max, shooter, this.rewindT, false)),
+      clear: (a, b) => {
+        const d = sub(b, a), l = Math.hypot(d.x, d.y, d.z);
+        return l < 1e-6 || physics.raycastStatic(a, norm(d), l, false) === null;
+      },
+    };
   }
 
   /** Combat's view of this match (callbacks bound to this instance: rebuilt by fork). */
@@ -254,7 +274,7 @@ export class Match implements MatchApi {
     const m = Object.create(Match.prototype) as Match;
     const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
     const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
-    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx' && k !== 'hazardHost') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
+    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx' && k !== 'hazardHost' && k !== 'grappleCtx') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
     m.rebind();
     return m;
   }
@@ -284,6 +304,7 @@ export class Match implements MatchApi {
         // Dead: commands are consumed (acked) but do nothing.
         if (cmds?.length) (p.mv ??= newMoveState()).ack = cmds[cmds.length - 1].seq;
         if (p.emote) delete p.emote;
+        if (p.hook || p.mv?.pull) clearGrapple(this.grappleCtx, p, now);
         continue;
       }
       const bot = this.bots.get(p.id);
@@ -564,6 +585,7 @@ export class Match implements MatchApi {
     // Sights need a gun in hand and no reload; aiming rules out sprinting (see move).
     p.ads = input.ads && p.alive && p.equipped !== 'fists' && p.reloadUntil === 0;
     if (input.view !== undefined) p.view = input.view === 1 ? 1 : 0;
+    if (p.hook) this.events.push(...tickGrapple(this.grappleCtx, p, now));
 
     if (cmds) {
       for (const c of cmds) {
@@ -625,6 +647,10 @@ export class Match implements MatchApi {
     if (input.trap) this.events.push(...this.traps.place(this.physics, p, input.trap, now, () => this.s.nextId++));
     if (input.useMedkit) startMedkit(p, now);
     if (input.drink) startDrink(p, now);
+    if (input.grapple) {
+      this.rewindT = this.rewindTime(p, input, now);
+      try { this.events.push(...fireGrapple(this.grappleCtx, p, now)); } finally { this.rewindT = null; }
+    }
     const queued = this.queuedBuild.get(p.id);
     if (queued) {
       this.queuedBuild.delete(p.id);
@@ -649,8 +675,8 @@ export class Match implements MatchApi {
   }
 
   /** A shot ray against the world as it is now and every other player where they were at time t. */
-  private rewoundRay(o: Vec3, d: Vec3, maxDist: number, shooter: number, t: number): RayHit | null {
-    let best = this.physics.raycastStatic(o, d, maxDist);
+  private rewoundRay(o: Vec3, d: Vec3, maxDist: number, shooter: number, t: number, throughSlits = true): RayHit | null {
+    let best = this.physics.raycastStatic(o, d, maxDist, throughSlits);
     let lim = best ? best.dist : maxDist;
     const feet = v3();
     for (const q of this.s.players.values()) {
@@ -815,6 +841,10 @@ export class Match implements MatchApi {
         if (this.physics.raycast(eye, dir, d, self.id, true)) return false;
         const hz = this.hazards.ray(eye, dir, d + 0.5);
         return !hz || dist(add3(eye, dir, hz.dist), to) < 1;
+      },
+      castHook: (dir) => {
+        const h = this.physics.raycast(eye, dir, GRAPPLE.range, self.id, false);
+        return h ? { point: h.point, dist: h.dist, player: h.hit.type === 'player' ? h.hit.id : null } : null;
       },
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,

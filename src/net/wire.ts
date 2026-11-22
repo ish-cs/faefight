@@ -57,6 +57,7 @@ const DICT = [
   'burning', 'fire', 'view',
   'emote', 'quip', 'wheel',
   'team',
+  'hook', 'st', 't0', 'tgt', 'pc', 'hookReadyAt', 'pull', 'left', 'yank', 'grapple', 'grapples', 'phase',
 ];
 
 const enc = new TextEncoder();

@@ -361,7 +361,7 @@ export class InvariantChecker {
 /** Every count in an inventory as [path, value] (gun mag/spare included). */
 function inventoryCounts(inv: Inventory): [string, number][] {
   const out: [string, number][] = [
-    ['cash', inv.cash], ['grenades', inv.grenades], ['charges', inv.charges], ['medkits', inv.medkits], ['traps', inv.traps],
+    ['cash', inv.cash], ['grenades', inv.grenades], ['charges', inv.charges], ['medkits', inv.medkits], ['traps', inv.traps], ['grapples', inv.grapples ?? 0],
   ];
   for (const [k, n] of Object.entries(inv.pieces ?? {})) if (n !== undefined) out.push([`pieces.${k}`, n]);
   for (const [k, n] of Object.entries(inv.potions ?? {})) if (n !== undefined) out.push([`potions.${k}`, n]);

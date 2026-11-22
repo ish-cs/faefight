@@ -1,4 +1,4 @@
-import { LIFECYCLE, MAP, PLAYER, SEAL, WEAPONS } from './constants';
+import { GRAPPLE, LIFECYCLE, MAP, PLAYER, SEAL, WEAPONS } from './constants';
 import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
 import { addKind, countOf, emptyHotbar, heldKinds, isGunItem, takeOut } from './hotbar';
 import { spawnYaw, type IslandLayout } from './map';
@@ -57,7 +57,7 @@ const ev = (t: number, type: MatchEvent['type'], data: Record<string, unknown>):
 const PARKED = v3(0, -1000, 0);
 
 const isEmpty = (inv: Inventory) =>
-  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 && !inv.traps && Object.values(inv.potions).every((n) => !n) &&
+  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 && !inv.traps && !inv.grapples && Object.values(inv.potions).every((n) => !n) &&
   Object.keys(inv.weapons).length === 0 && Object.values(inv.pieces).every((n) => !n);
 
 /**
@@ -107,6 +107,7 @@ export function killPlayer(
   p.hp = 0;
   p.alive = false;
   p.vel = v3();
+  delete p.yankedBy;
   p.deaths++;
   const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
   if (k) k.kills++;
@@ -188,8 +189,13 @@ export function tickLifecycle(
     out.push(ev(now, 'suddenDeath', {}));
   }
 
-  for (const p of s.players.values())
-    if (p.alive && p.pos.y < s.waterY) out.push(...killPlayer(s, physics, p.id, now, true));
+  // Drowned: a grappling hook yank just before it makes it the yanker's kill ("X via grapple").
+  for (const p of s.players.values()) {
+    if (!p.alive || p.pos.y >= s.waterY) continue;
+    const y = p.yankedBy;
+    const by = y && now - y.at <= GRAPPLE.yankCreditSec && y.by !== p.id ? y.by : null;
+    out.push(...killPlayer(s, physics, p.id, now, true, by, undefined, by !== null ? 'grapple' : undefined));
+  }
 
   for (const p of s.players.values())
     if (p.alive && p.hp < PLAYER.hp && now - p.lastDamagedAt >= LIFECYCLE.regenDelaySec)

@@ -15,6 +15,7 @@ import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
 import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { DEFAULT_BOT_PARAMS, type BotParams } from './params';
+import { crossTo, escapeFrom, hookReady, yankReason, type HookIntent } from './hook';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
@@ -107,6 +108,10 @@ const MEDKIT_AT: Record<Difficulty, number> = { easy: 35, medium: 45, hard: 55, 
  * escape countdown, so never hang around closer than this.
  */
 const BUNKER_OUT = SEAL.exitRadius + 0.8;
+/** Grappling hook: uses are weighed this often; a chosen one holds this long while I turn to fire it. */
+const HOOK_CHECK_SEC = 0.25, HOOK_HOLD_SEC = 1.2;
+/** Goals that want me at home (hooked back to when I can't walk there). */
+const HOME_GOALS = new Set<Goal>(['shop', 'bank', 'collect', 'fortify', 'defend', 'guard', 'heal']);
 
 export { DRIVE } from './params';
 /** Goals the watchdog keeps an eye on (DriveParams.stallSec; attack gets longer: it waits at doors). */
@@ -239,6 +244,10 @@ export class Bot {
   private aimLost: { at: Vec3; until: number } | null = null;
   private barrelPlan: { id: number; until: number } | null = null;
   private nextBarrelRollAt = 0;
+  /** Grappling hook: what I'm about to use it for, when I next weigh it, and the last use (spectators). */
+  private hookIntent: (HookIntent & { until: number }) | null = null;
+  private nextHookCheck = 0;
+  hookNote: { t: number; text: string } | null = null;
   /** Blowing out a pier section under an enemy (or under the piece they hide behind): which, how, and why. */
   private dockPlan: { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number } | null = null;
   private nextDockRollAt = 0;
@@ -338,6 +347,7 @@ export class Bot {
       this.cover = null;
       this.perch = null;
       this.fightSince = null;
+      this.hookIntent = null;
       this.nextScoreAt = -Infinity;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
@@ -396,9 +406,19 @@ export class Bot {
       return me.reloadUntil === 0 && me.busyUntil <= now && range <= WEAPONS[w].range * 0.95 && (w === 'fists' || !!ammo && ammo.mag > 0);
     };
     let throwGrenade = false;
+    // Grappling hook (hook.ts): get away, cross over, or yank an enemy; on my own rope, look where it pulls.
+    const hook = this.hookPlan(ctx, best);
+    const rope = me.mv?.pull && !me.mv.pull.yank ? me.mv.pull : null;
+    let grapple = false;
     const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
     const barrel = enemy && !dock ? this.barrelShot(ctx) : null;
-    if (dock?.weapon === 'rocket') {
+    if (hook && hook.why !== 'yank') {
+      const want = lookAt(eye, hook.to);
+      look = hand(want, TURN_RATE * 1.5);
+      grapple = angleBetween(look, want) < 0.02;
+    } else if (rope && !enemy) {
+      look = hand(lookAt(eye, rope), TURN_RATE);
+    } else if (dock?.weapon === 'rocket') {
       // Blow the planks out from under them: aim at the deck at their feet (the blast catches them too), held
       // over for the rocket's drop at that range.
       const tof = dist2D(eye, dock.at) / ROCKET.speed;
@@ -429,6 +449,7 @@ export class Bot {
       const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult &&
         !(this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3);
       fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !this.burstRest(now, me, foeDist);
+      if (hook?.why === 'yank' && hook.target === foe.id && r.ready && r.onTarget) { grapple = true; fire = false; }
     } else if (nade) {
       look = hand(nade, TURN_RATE);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
@@ -458,14 +479,15 @@ export class Bot {
 
     // Weapons: hold the best gun, reload when nobody is in sight.
     const ammo = me.equipped === 'fists' ? null : me.inv.weapons[me.equipped];
-    const slot = best !== me.equipped && (me.reloadUntil === 0 || !ammo || ammo.mag === 0) ? best : null;
+    const slot = !grapple && best !== me.equipped && (me.reloadUntil === 0 || !ammo || ammo.mag === 0) ? best : null;
     if (slot) fire = false;
     // An empty mag gets reloaded whoever is in sight (a full one only tops up when nobody is).
     const reload = !slot && !!ammo && me.reloadUntil === 0 && ammo.spare > 0 &&
       (ammo.mag === 0 || (!enemy && ammo.mag < WEAPONS[me.equipped].mag * 0.6));
 
     // Movement: stuck recovery, then never step toward water.
-    let dir = act.dir;
+    // Lining up a crossing: stand still for the shot (walking on would only take me off the edge).
+    let dir = hook?.why === 'cross' ? null : act.dir;
     let jump = !!act.jump;
     const dodge = this.dodgeBolt(me, view);
     if (dodge) { dir = dodge; act = { ...act, sprint: true }; }
@@ -493,6 +515,7 @@ export class Bot {
     this.trackStuck(now, me, dir);
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
     if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
+    if (rope || grapple) jump = false; // a jump lets go of the rope
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
@@ -514,23 +537,65 @@ export class Bot {
     if (act.build) {
       this.lastPieceAt = now;
     }
+    if (grapple) {
+      select = me.hotbar.indexOf('grapple');
+      useMedkit = false;
+      this.hookNote = { t: now, text: hook!.note };
+      this.hookIntent = null;
+      this.lastDidAt = now;
+    }
     this.probe?.acted(act, look, fire);
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
+      ...(grapple ? { grapple: true, build: null, shop: null } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
     // Shields: stock up at a potion seller, drink out of combat (see potionAction).
-    if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge) {
+    if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge && !grapple) {
       const atSeller = (view.potionShops ?? []).some((s) => dist2D(me.pos, s) <= USE_RANGE);
       const pot = potionAction(me, now, !!enemy, atSeller);
       if (pot && 'buy' in pot) out.shop = { buy: pot.buy };
       else if (pot) Object.assign(out, { select: pot.drink, slot: null, drink: true });
     }
     return out;
+  }
+
+  /**
+   * Grappling hook: what (if anything) to use it for now (hook.ts). Weighed every HOOK_CHECK_SEC; a choice holds
+   * HOOK_HOLD_SEC while I turn to fire. Order: escape when nearly dead, a yank that pays (keeping uses back for a
+   * crossing I still need), then a crossing (never with an enemy in sight).
+   */
+  private hookPlan(c: Ctx, gun: WeaponKind): HookIntent | null {
+    const me = c.me, now = c.view.now, H = this.P.hook;
+    if (!hookReady(me, now)) { this.hookIntent = null; return null; }
+    if (this.hookIntent && now < this.hookIntent.until) return this.hookIntent;
+    this.hookIntent = null;
+    if (now < this.nextHookCheck) return null;
+    this.nextHookCheck = now + HOOK_CHECK_SEC;
+    const e = c.enemy, want = this.hookNode(c);
+    let it: HookIntent | null = null;
+    if (e && c.enemyDist <= H.escapeNear && me.hp + me.shield < H.escapeHp) it = escapeFrom(c.view, H, e.pos, (p) => this.nav.nodeAt(p));
+    if (!it && e && (me.inv.grapples ?? 0) > (want !== null ? H.keepForTravel : 0)) {
+      const why = yankReason(c.view, H, e, c.enemyDist, gun);
+      if (why && this.rng() < H.yankRate * HOOK_CHECK_SEC) it = { why: 'yank', target: e.id, note: why };
+    }
+    if (!it && !e && want !== null && this.nav.nodes[want]) it = crossTo(c.view, H, this.nav.nodes[want]);
+    if (it) this.hookIntent = { ...it, until: now + HOOK_HOLD_SEC };
+    return it;
+  }
+
+  /** The node my goal wants me on when I can't walk there (null: walking, or no use for a hook). */
+  private hookNode(c: Ctx): number | null {
+    const g = this.goal, C = this.nav.centerNode;
+    if (g === 'bridge') return c.bridgeTo;
+    if ((g === 'attack' || g === 'seal') && c.rivalIsl && !c.reach) return c.rivalIsl.index;
+    if ((g === 'contest' || g === 'storm') && C >= 0 && !c.centerReach) return C;
+    if (HOME_GOALS.has(g) && !c.homeReach) return c.home.index;
+    return null;
   }
 
   /**
@@ -878,6 +943,9 @@ export class Bot {
       medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
+      // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
+      grapple: c.bridgeTo !== null && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c) && total >= this.P.hook.crossBuyAt[this.difficulty] ? 'cross'
+        : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
     };

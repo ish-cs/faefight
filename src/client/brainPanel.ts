@@ -192,8 +192,9 @@ export class BrainInspector {
     d.plan.forEach((s, i) => ol.append(el('li', i < d.planAt ? 'done' : i === d.planAt ? 'cur' : '', this.text(s))));
     const shop = d.shop ? el('div', 'bx-shop', `Shopping: ${d.shop.items.join(', ')} ($${d.shop.cost}) — ${d.shop.why}`) : null;
     const build = d.build ? el('div', 'bx-build', `Building: ${d.build.kind} at (${d.build.x.toFixed(0)}, ${d.build.z.toFixed(0)}) — ${this.text(d.build.why)}`) : null;
+    const hook = d.hook ? el('div', 'bx-build', `Grappling hook: ${this.text(d.hook)}`) : null;
     const path = d.path.length > 1 ? el('div', 'bx-dim', `Route: ${d.path.length - 1} waypoint${d.path.length > 2 ? 's' : ''} ahead`) : null;
-    return this.section('Plans', 'plans', ol, shop, build, path);
+    return this.section('Plans', 'plans', ol, shop, build, hook, path);
   }
 
   private state(d: BrainDigest) {
