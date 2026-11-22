@@ -36,6 +36,7 @@ A single new feature may cost at most **~2 % of frame time (≈ 0.15 ms GPU, 0.1
 | triangles | ≤ 3.5 M visible | GPU vertex cost is small next to fill, keep LOD anyway |
 | transparent / additive overdraw | ≤ 2 full-screen layers at worst view (rain + 1 effect) | fill-rate bound at Retina |
 | particles | pooled, one `InstancedMesh`/sprite batch per effect kind, no per-particle mesh | draw calls |
+| camera/aim raycast targets (`renderer.collidables`) | no map-wide mesh: pass merged meshes through `raycastProxies()` (raycastProxy.ts) | 2–3 rays/frame test every triangle of any mesh whose box they cross; merged slabs + bunkers cost realism3 ~0.9 ms/frame |
 | per-frame allocations | **none** in the frame loop (no `new Vector3`, `clone()`, closures, arrays) | GC hitches show as p99 spikes |
 | shader variants | no material may switch defines/nodes mid-match; build every variant at load (warm-up) | a mid-match compile is a 100 ms – 20 s freeze |
 | post passes | no new full-screen pass at output res without a measurement; prefer half-res | each full-res pass at 3456×2234 ≈ 0.3–0.6 ms |
