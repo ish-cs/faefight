@@ -52,7 +52,7 @@ export type BrainDigest = {
   /** Pushing a dead rival's bunker in their respawn window: [id, seconds left], or null. */
   window: [number, number] | null;
   /** Teams match: its role (defender stays home, the rest push) and the teammates going after the same target. */
-  team?: { role: 'defend' | 'push'; focus: number[] };
+  team?: { role: 'defend' | 'push'; focus: number[]; lead?: number };
   /** Rivals as it weighs them: [id, score]. */
   rivals: [number, number][];
   plan: string[]; planAt: number;
@@ -103,7 +103,7 @@ type Internals = {
   winded: boolean; centerMinded: boolean; view?: BotView; burstN: number; burstRestUntil: number;
   grid: unknown; lastScores: { goal: string; score: number }[];
   aim: { target: number; seenAt: number; lastSeen: number; err: Angles; p: AimProfile };
-  nav: { cache: Map<string, unknown>; planned: Planned; bridges: Map<number, unknown>; centerNode: number; nodeAt(p: Vec3): number };
+  nav: { cache: Map<string, unknown>; planned: Planned; bridges: Map<number, unknown>; centerNode: number; nodeAt(p: Vec3): number; routeTo(p: Vec3): Vec3 | null };
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
@@ -112,6 +112,9 @@ type Internals = {
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
   defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
+  waitFor(c: Ctx): AllyStatus | null; ownFight(c: Ctx): boolean; teamFocus(view: BotView, id: number): number;
+  pushLead(view: BotView): { id: number; target: number | null } | null; allyIsland(view: BotView, i: number): boolean;
+  sieging(c: Ctx): boolean; nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null;
   hookNote: { t: number; text: string } | null;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
@@ -165,7 +168,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     case 'fight': {
       const e = c.enemy;
       if (!e) return zero('no enemy in sight');
-      const same = islandAt(view.map, e.pos) === islandAt(view.map, me.pos);
+      const n = I.nav.nodeAt(me.pos), same = n >= 0 && n === I.nav.nodeAt(e.pos);
       if (!same && c.enemyDist > 25) return { f: [['far enemy', 0.2]], why: `@${e.id} in sight across the water (${m(c.enemyDist)}), too far to chase` };
       const armed = gun || c.enemyDist < 8;
       return {
@@ -214,22 +217,31 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     }
     case 'assist': {
       if (!view.allies) return zero('no team');
-      if (c.enemy) return zero('in my own fight');
+      if (I.ownFight(c)) return zero('in my own fight');
       if (!gun) return zero('no gun');
+      if (I.trapped(c)) return zero('sealed in');
       const a = I.allyInTrouble(c);
       if (!a) return zero('no teammate under fire nearby');
-      const f: [string, number][] = [['teammate hit', 0.9], ['aggression', 0.2 * t.aggression]];
-      if (I.defender && a.island !== home.index) f.push(['defender', -0.3]);
-      return { f, why: `Teammate @${a.id} is being shot${a.hurtBy !== null ? ` by @${a.hurtBy}` : ''} ${Math.round(dist2D(a.pos, me.pos))} m away: going to help` };
+      const there = islandAt(view.map, a.pos);
+      if (there !== c.on && !I.nav.routeTo(a.pos)) return zero(`no way to @${a.id}`);
+      const f: [string, number][] = [['teammate hit', I.P.team.assistScore], ['aggression', 0.2 * t.aggression],
+        ['their hp low', I.P.team.assistLowHp * (1 - Math.max(0, Math.min(100, a.hp)) / 100)]];
+      if (I.defender && there !== home.index) f.push(['defender', -0.3]);
+      return { f, why: `Teammate @${a.id} (${Math.round(a.hp)} hp) is being shot${a.hurtBy !== null ? ` by @${a.hurtBy}` : ''} ${Math.round(dist2D(a.pos, me.pos))} m away: going to help` };
     }
     case 'regroup': {
       if (!view.allies) return zero('no team');
       if (c.enemy) return zero('in my own fight');
       if (!gun) return zero('no gun');
+      if (I.trapped(c)) return zero('sealed in');
       if (!I.offensive(c)) return zero('not on offense');
       const a = I.regroupWith(c);
-      if (!a) return zero(I.defender ? 'defender: holding home' : 'with my team already (or pushing alone)');
-      return { f: [['regroup', I.P.team.regroupScore]], why: `@${a.id} leads the push on ${rivalName(c)} ${Math.round(dist2D(a.pos, me.pos))} m ahead: catching up so we hit together` };
+      if (a && (islandAt(view.map, a.pos) === c.on || I.nav.routeTo(a.pos))) {
+        return { f: [['regroup', I.P.team.regroupScore]], why: `@${a.id} leads the push on ${rivalName(c)} ${Math.round(dist2D(a.pos, me.pos))} m ahead: catching up so we hit together` };
+      }
+      const w = I.waitFor(c);
+      if (w) return { f: [['wait for team', I.P.team.regroupScore]], why: `At the bridge head to ${rivalName(c)}: waiting for @${w.id} (${Math.round(dist2D(w.pos, me.pos))} m back) so we go in together` };
+      return zero(I.defender ? 'defender: holding home' : 'with my team already (or pushing alone)');
     }
     case 'guard': {
       if (!c.homeReach) return zero("can't walk home");
@@ -300,12 +312,13 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (have === 0) return zero('no scaffolds');
       if (now < ((I as unknown as { bridgeHoldUntil?: number }).bridgeHoldUntil ?? -Infinity)) return zero('holding off the bridge');
       const need = I.scaffoldsNeeded(c);
-      const toRival = c.bridgeTo !== I.nav.centerNode;
+      const toRival = c.bridgeTo !== I.nav.centerNode && !I.allyIsland(view, c.bridgeTo);
       if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return zero('need a seal kit before landing');
       const f: [string, number][] = [['base', 0.45], ['aggression', 0.15 * t.aggression]];
       if (have >= need) f.push(['enough decks', 0.1]);
       if (!toRival) { f.push(['greed', 0.05 * t.greed]); if (I.stormPrep(view)) f.push(['storm prep', 0.45]); }
-      const to = toRival ? `${c.rival && view.map[c.bridgeTo] && c.rival.island === c.bridgeTo ? rivalName(c) : 'a rival'}'s island` : 'the centre island';
+      const to = toRival ? `${c.rival && view.map[c.bridgeTo] && c.rival.island === c.bridgeTo ? rivalName(c) : 'a rival'}'s island`
+        : c.bridgeTo !== I.nav.centerNode ? `a teammate's island (on the way to ${rivalName(c)})` : 'the centre island';
       return { f, why: `Bridging to ${to}: ${have} decks carried, ${need} still needed` };
     }
     case 'contest': {
@@ -331,6 +344,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
         if (c.reach && view.suddenDeath) return { f: [['sudden death', 0.3]], why: `Sudden death: hunting ${rivalName(c)} down` };
         return zero(!c.rival ? 'no rival' : `no route to ${rivalName(c)}'s island`);
       }
+      if (I.sieging(c)) {
+        return { f: [['siege', I.P.drive.siegeScore], ['sealed hunt', I.P.drive.sealedHunt], ['opportunism', 0.2 * t.opportunism]], why: `${rivalName(c)}'s bunker is sealed: camping it to finish them` };
+      }
       if (rivalDown) {
         const wait = gun && sealKit(me.inv) === 0;
         const back = c.rival.respawnAt! - now;
@@ -345,6 +361,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const k = 0.5 + 0.5 * Math.max(hp, 1 - t.caution);
       const f: [string, number][] = [['base', 0.3 * k], ['aggression', 0.25 * t.aggression * k]];
       if (!up) f.push(['patience (no upgrade)', -0.12 * t.patience * k]);
+      if (c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive) f.push(['sealed hunt', I.P.drive.sealedHunt]);
       const where = recent ? `seen ${secs(now - recent.t)} ago${recent.island >= 0 && recent.island !== c.rival.island ? ' away from home' : ''}` : 'whereabouts unknown';
       return { f, why: `Going after ${rivalName(c)} (${where}) with my ${gunName(best(me.inv))}` };
     }
@@ -384,7 +401,13 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       return { f, why: `@${deck.owner} bridged into my island${crossing && c.enemy ? `, @${c.enemy.id} is on it` : ''}: shooting the deck out` };
     }
     case 'loot': {
-      const bag = I.nearestLoot(c);
+      const bag = I.nearestLoot(c), crate = I.nearestCrate(c);
+      if (!bag && !crate) return zero('no loot in reach');
+      const crateS = crate ? 0.2 + 0.3 * t.greed - dist2D(crate.pos, me.pos) / 30 : 0;
+      const bagS = bag ? 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70 : 0;
+      if (crate && (!bag || crateS > bagS)) {
+        return { f: [['crate', 0.2], ['greed', 0.3 * t.greed], ['distance', -dist2D(crate.pos, me.pos) / 30]], why: `A supply crate ${m(dist2D(crate.pos, me.pos))} away: breaking it open` };
+      }
       if (!bag) return zero('no loot in reach');
       const f: [string, number][] = [['base', 0.35], ['greed', 0.45 * t.greed]];
       if (!gun) f.push(['unarmed', 0.2]);
@@ -500,7 +523,7 @@ export class BrainProbe {
       this.why = this.explained.get(chosen)?.why ?? '';
       // Rivals as chooseTarget weighs them (without its decision noise).
       const facts = I.rivalFacts(c.view);
-      this.rivals = facts.map((f) => [f.id, r2(rivalScore(f, I.t))] as [number, number]).sort((a, b) => b[1] - a[1]);
+      this.rivals = facts.map((f) => [f.id, r2(rivalScore(f, I.t) + I.teamFocus(c.view, f.id))] as [number, number]).sort((a, b) => b[1] - a[1]);
       const tf = facts.find((f) => f.id === I.targetId);
       this.target = tf ? { id: tf.id, why: targetWhy(tf, now, I.mem.seen.get(tf.id)?.t ?? null) } : c.rival ? { id: c.rival.id, why: 'nearest rival (no pick yet)' } : null;
       if (c.homeReach && !c.view.suddenDeath) {
@@ -675,7 +698,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     seen: seen.slice(0, 8), hurt: hurt.slice(0, 4), grudge,
     target: p.target, rivals: p.rivals.slice(0, 7),
     window: I.respawnWindow ? [I.respawnWindow.id, r1(I.respawnWindow.left)] : null,
-    ...(view?.allies ? { team: { role: I.defender ? 'defend' as const : 'push' as const, focus: view.allies.filter((x) => !x.eliminated && x.target !== null && x.target === I.targetId).map((x) => x.id) } } : {}),
+    ...(view?.allies ? { team: { role: I.defender ? 'defend' as const : 'push' as const, focus: view.allies.filter((x) => !x.eliminated && x.target !== null && x.target === I.targetId).map((x) => x.id), ...leadOf(I, view) } } : {}),
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     ...hookLine(I, me, now),
@@ -692,6 +715,12 @@ export function debugBrain(bot: Bot): BrainDigest {
     },
   };
   return fitDigest(d);
+}
+
+/** Teams: the push lead the bot follows (absent when it leads, or defends). */
+function leadOf(I: Internals, view: BotView): { lead?: number } {
+  const l = sandbox(I, () => I.pushLead(view));
+  return l && l.id !== I.id ? { lead: l.id } : {};
 }
 
 /** The brain panel's grappling hook line. */
