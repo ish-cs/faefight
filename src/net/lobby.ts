@@ -2,6 +2,8 @@ import type { MatchSetup } from '../sim/matchApi';
 import { nickname } from '../sim/names';
 import { isColor, resolveColors } from '../sim/settings';
 import { MAX_PLAYERS, type Slot } from './protocol';
+import { resolveTeams } from '../sim/teams';
+import type { Difficulty } from '../sim/types';
 
 const MIN_SEATS = 2;
 const NAME_MAX = 16;
@@ -130,6 +132,31 @@ export class Lobby {
     return true;
   }
 
+  /** A human seat picks a team (teams mode; any team 0-3: seatTeams keeps it while that team has room). */
+  setTeam(i: number, team: number): boolean {
+    const s = this.seats[i];
+    if (!s || s.kind !== 'human' || !Number.isInteger(team) || team < 0 || team > 3) return false;
+    s.team = team;
+    return true;
+  }
+
+  /**
+   * Teams mode: grow to the mode's seat count with open seats (friends can still join them; start() fills what's
+   * left with bots), and trim open/bot seats past it. Never removes a human. True if anything changed.
+   */
+  fitSeats(seats: number): boolean {
+    let changed = false;
+    while (this.seats.length < Math.min(seats, MAX_PLAYERS)) { this.seats.push({ kind: 'open' }); changed = true; }
+    for (let i = this.seats.length - 1; i > 0 && this.playerCount() > seats; i--)
+      if (this.seats[i].kind !== 'human') { this.seats.splice(i, 1); changed = true; }
+    return changed;
+  }
+
+  /** Every open seat becomes a bot (teams mode: bots fill the slots nobody took). */
+  fillOpen(difficulty: Difficulty): void {
+    this.seats.forEach((s, i) => { if (s.kind === 'open') this.setSeat(i, { kind: 'bot', difficulty }); });
+  }
+
   /** Host watches instead of playing (still hosts and runs the sim): its seat gets no player/island. */
   setHostSpectator(on: boolean) {
     const h = this.seats[0];
@@ -174,7 +201,7 @@ export class Lobby {
     if (open >= 0) throw new Error(`Seat ${open + 1} is still open; fill it with a bot or wait for a player`);
     return {
       players: this.seats.filter((s) => !(s.kind === 'human' && s.spectator)).map((s) => {
-        if (s.kind === 'human') return s.color === undefined ? { name: s.name, isBot: false } : { name: s.name, isBot: false, color: s.color };
+        if (s.kind === 'human') return { name: s.name, isBot: false, ...(s.color === undefined ? {} : { color: s.color }), ...(s.team === undefined ? {} : { team: s.team }) };
         if (s.kind === 'bot') return { name: s.name ?? '', isBot: true, difficulty: s.difficulty };
         throw new Error('unreachable: open seat');
       }),
@@ -192,5 +219,17 @@ export function seatColors(slots: Slot[]): (number | null)[] {
   const colors = resolveColors(playing.map(([s]) => (s.kind === 'human' ? s.color : undefined)));
   const out: (number | null)[] = slots.map(() => null);
   playing.forEach(([, i], k) => { out[i] = colors[k]; });
+  return out;
+}
+
+/**
+ * The team each seat plays on in a teams match (null: spectating host, or free-for-all). Same rule the sim applies
+ * (resolveTeams), so the lobby shows exactly what the match uses.
+ */
+export function seatTeams(slots: Slot[], mode: number): (number | null)[] {
+  const playing = slots.map((s, i) => [s, i] as const).filter(([s]) => !(s.kind === 'human' && s.spectator));
+  const teams = resolveTeams(playing.map(([s]) => (s.kind === 'human' ? s.team : undefined)), mode);
+  const out: (number | null)[] = slots.map(() => null);
+  playing.forEach(([, i], k) => { out[i] = teams[k] ?? null; });
   return out;
 }

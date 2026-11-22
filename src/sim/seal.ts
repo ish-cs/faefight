@@ -136,13 +136,16 @@ export class DoorwayTracker {
     this.keys = bunkers.map(() => '0:0'); // no pieces: nothing blocked
   }
 
-  /** Call after the piece set changed; returns the blocked-doorway count per bunker index. */
-  update(pieces: Iterable<PieceState>): readonly number[] {
+  /**
+   * Call after the piece set changed; returns the blocked-doorway count per bunker index. `counts`: whether a piece
+   * counts for that bunker (teams: a teammate's pieces never do); omitted = every piece.
+   */
+  update(pieces: Iterable<PieceState>, counts?: (bunker: number, p: PieceState) => boolean): readonly number[] {
     const list = [...pieces];
     this.bunkers.forEach((b, i) => {
       const near: PieceState[] = [];
       let sum = 0;
-      for (const p of list) if (blocksNear(b, p)) { near.push(p); sum += p.id; }
+      for (const p of list) if (blocksNear(b, p) && (!counts || counts(i, p))) { near.push(p); sum += p.id; }
       const key = `${near.length}:${sum}`;
       if (key === this.keys[i]) return;
       this.keys[i] = key;

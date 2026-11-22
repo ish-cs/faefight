@@ -45,6 +45,17 @@ Every map has a neutral **center island**, reachable only by bridging to it. Any
 
 Every bunker wall has narrow firing slits at chest height: you can shoot and see through them, but nobody (and no grenade or rocket) gets through, and they never count as a way out for sealing.
 
+## Teams
+
+The host picks the **Mode** in the game settings: Free-for-all, **2v2v2v2**, **3v3** or **4v4** (offline vs-bots too).
+
+- **Lobby**: a team mode sizes the lobby (8, 6 or 8 seats). Players pick a team (kept while it has room); everyone else is auto-balanced. Open seats are filled with medium bots at start.
+- **Islands**: everyone keeps their own island and bunker; teammates get neighbouring islands, so each team holds one arc of the ring. Each team plays in one colour (red, blue, green, gold) on name tags, the compass, the kill feed, the scoreboard and the islands.
+- **Rules**: no friendly fire (bullets, explosions, fire, set-off barrels; blast knockback too). Your own rockets and grenades still hurt you. A teammate's pieces never count toward sealing your bunker, so teammates can't seal each other in. A team is out when all its players are eliminated; the last team standing wins. Storm and sudden death still finish the match.
+- **Team info**: teammates are always known: their name tag shows through walls and the compass marks each one with distance.
+- **Bots** never shoot teammates or go after their bunkers. They share sightings, focus the same rival (pushing one enemy island together), go help a teammate under fire nearby, and in teams of 3+ one bot stays home as the defender (knobs: `team.*` in `src/sim/bots/params.ts`).
+- **Code**: `src/sim/teams.ts` (`isAlly(a, b)` is the one helper every friendly-fire rule uses; true for the same player too).
+
 ## Controls
 
 | Key | Action |

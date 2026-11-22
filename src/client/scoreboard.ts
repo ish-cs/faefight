@@ -9,6 +9,8 @@ export const STATUS_LABEL: Record<ScoreStatus, string> = {
 export type ScoreRow = {
   id: number; name: string; island: number; isBot: boolean; isYou: boolean; isHost: boolean;
   kills: number; deaths: number; status: ScoreStatus; sealed: boolean;
+  /** Teams match: the player's team (rows are grouped by it). */
+  team?: number;
 };
 
 /** An eliminated human keeps watching (free-fly spectator); an eliminated bot is just out. */
@@ -20,12 +22,12 @@ export function statusOf(p: PlayerState): ScoreStatus {
 
 const GROUP: Record<ScoreStatus, number> = { alive: 0, trapped: 0, dead: 1, eliminated: 2, spectating: 2 };
 
-/** Scoreboard rows: still in it first (alive/trapped, then respawning, then out), then most kills, fewest deaths. */
+/** Scoreboard rows (teams match: grouped by team first): still in it first (alive/trapped, then respawning, then out), then most kills, fewest deaths. */
 export function scoreRows(snap: Snapshot, o: { humanId: number; hostId: number | null }): ScoreRow[] {
   return snap.players.map((p): ScoreRow => ({
     id: p.id, name: p.name, island: p.island, isBot: p.isBot, isYou: p.id === o.humanId, isHost: p.id === o.hostId,
-    kills: p.kills ?? 0, deaths: p.deaths ?? 0, status: statusOf(p), sealed: !!snap.sealed[p.island],
-  })).sort((a, b) => GROUP[a.status] - GROUP[b.status] || b.kills - a.kills || a.deaths - b.deaths || a.id - b.id);
+    kills: p.kills ?? 0, deaths: p.deaths ?? 0, status: statusOf(p), sealed: !!snap.sealed[p.island], team: p.team,
+  })).sort((a, b) => (a.team ?? 0) - (b.team ?? 0) || GROUP[a.status] - GROUP[b.status] || b.kills - a.kills || a.deaths - b.deaths || a.id - b.id);
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
@@ -86,6 +88,7 @@ export class Scoreboard {
       if (r.isBot) name.append(el('span', 'tagpill', 'BOT'));
       if (r.isHost) name.append(el('span', 'tagpill', 'host'));
       if (r.isYou) name.append(el('span', 'tagpill you', 'you'));
+      if (r.team !== undefined) name.append(el('span', 'tagpill team', `team ${r.team + 1}`));
       const dotCell = el('td');
       dotCell.append(dot);
       tr.append(dotCell, name, el('td', 'num', String(r.kills)), el('td', 'num', String(r.deaths)),

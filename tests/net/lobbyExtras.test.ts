@@ -81,7 +81,7 @@ describe('sanitize: lobby messages and settings', () => {
 
   test('settings are clamped, junk falls back to defaults', () => {
     expect(sanitizeSettings(undefined)).toEqual(DEFAULT_SETTINGS);
-    expect(sanitizeSettings({ startCash: -10, suddenDeathSec: 99999, genMult: 0.1 })).toEqual({ startCash: 0, suddenDeathSec: 1500, genMult: 0.5 });
+    expect(sanitizeSettings({ startCash: -10, suddenDeathSec: 99999, genMult: 0.1 })).toEqual({ startCash: 0, suddenDeathSec: 1500, genMult: 0.5, teamMode: 0 });
     expect(sanitizeSettings({ startCash: '500' })).toEqual(DEFAULT_SETTINGS);
   });
 });

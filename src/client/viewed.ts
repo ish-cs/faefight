@@ -92,12 +92,13 @@ export class EarlyKey {
   }
 }
 
-type Alive = { id: number; alive: boolean; eliminated: boolean; pos: { x: number; z: number } };
+type Alive = { id: number; alive: boolean; eliminated: boolean; pos: { x: number; z: number }; team?: number };
 
 /**
  * Who the spectator follows once the followed player's death (killcam) has played: the killer (a player or bot;
  * barrel and fire kills are credited to whoever caused them) while they are alive; else the victim until they
- * respawn; else (eliminated) the living player nearest to where they fell. Never the local player; null = nobody.
+ * respawn; else (eliminated) the living player nearest to where they fell (teams: a living teammate of yours first).
+ * Never the local player; null = nobody.
  */
 export function followAfterDeath(victim: number, killer: number | null, players: Alive[], selfId: number): number | null {
   const ok = (p: Alive | undefined) => !!p && p.alive && !p.eliminated && p.id !== selfId;
@@ -106,9 +107,11 @@ export function followAfterDeath(victim: number, killer: number | null, players:
   const v = players.find((p) => p.id === victim);
   if (v && !v.eliminated) return victim;
   let best: Alive | null = null, bestD = Infinity;
+  const myTeam = players.find((p) => p.id === selfId)?.team;
   for (const p of players) {
     if (!ok(p)) continue;
-    const d = v ? Math.hypot(p.pos.x - v.pos.x, p.pos.z - v.pos.z) : 0;
+    // Teams: your own side first (a big offset ranks every teammate ahead of any enemy).
+    const d = (v ? Math.hypot(p.pos.x - v.pos.x, p.pos.z - v.pos.z) : 0) + (myTeam !== undefined && p.team !== myTeam ? 1e6 : 0);
     if (d < bestD) { bestD = d; best = p; }
   }
   return best?.id ?? null;

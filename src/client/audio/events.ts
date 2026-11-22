@@ -165,6 +165,8 @@ const SAME_POINT = 0.8;
 export class SoundDirector {
   private map: IslandLayout[] = [];
   private docks: readonly DockDef[] = [];
+  /** Grappling hook: last winch-rattle time per player (reel cue every 0.6 s while reeling in). */
+  private reelAt = new Map<number, number>();
   private humanId = -1;
   private prev: Snapshot | null = null;
   private steps = new Map<number, StepTrack>();
@@ -244,6 +246,21 @@ export class SoundDirector {
           else if (d.killer === this.humanId) out.push({ sound: 'kill', pos: null, gain: 0.9 });
           if (d.inWater) { const at = chest(d.victim); if (at) out.push({ sound: 'splash', pos: at, gain: 0.8 }); }
           break;
+        case 'grapple': {
+          const own = d.by === this.humanId || d.target === this.humanId;
+          const phase = String(d.phase);
+          const at = chest(d.by);
+          if (!own && !at) break;
+          const pos = own ? null : at;
+          if (phase === 'fire') out.push({ sound: 'grappleFire', pos, gain: own ? 0.7 : 0.6, own });
+          else if (phase === 'latch' || phase === 'yank') {
+            // The claw bites where the hook is (PlayerState.hook), else at the shooter.
+            const h = s.players.find((p) => p.id === d.by)?.hook as { x?: number; y?: number; z?: number } | undefined;
+            const hp = h && h.x !== undefined ? { x: h.x, y: h.y ?? 0, z: h.z ?? 0 } : pos;
+            out.push({ sound: 'grappleAttach', pos: hp, gain: own ? 0.7 : 0.6, own });
+          } else out.push({ sound: 'grappleRelease', pos, gain: own ? 0.6 : 0.5, own });
+          break;
+        }
         case 'dry': {
           const own = d.by === this.humanId;
           const at = chest(d.by);
@@ -318,6 +335,15 @@ export class SoundDirector {
     this.countdown(me, s, out);
     this.footsteps(s, prev, out);
     this.landings(s, prev, out);
+    // Grappling hook reeling in (st 1): a winch rattle every 0.6 s at the user.
+    for (const p of s.players) {
+      if (p.hook?.st !== 1) { this.reelAt.delete(p.id); continue; }
+      const last = this.reelAt.get(p.id);
+      if (last !== undefined && s.time - last < 0.6) continue;
+      this.reelAt.set(p.id, s.time);
+      const own = p.id === this.humanId;
+      out.push({ sound: 'grappleReel', pos: own ? null : { ...p.pos }, gain: own ? 0.5 : 0.45, own });
+    }
     // Pier planks stressed by a blast (newly scorched sections): a creak where they stand.
     for (const id of s.dockHurt ?? []) {
       if (prev?.dockHurt?.includes(id)) continue;

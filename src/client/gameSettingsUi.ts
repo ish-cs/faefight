@@ -1,3 +1,4 @@
+import { TEAM_MODES } from '../sim/teams';
 import { DEFAULT_SETTINGS, SETTING_KEYS, SETTING_RANGES, clampSettings, sameSettings, type GameSettings } from '../sim/settings';
 
 /** Labels and value text per setting (pure: unit-tested). */
@@ -5,11 +6,13 @@ export const SETTING_LABEL: Record<keyof GameSettings, string> = {
   startCash: 'Starting cash',
   suddenDeathSec: 'Sudden death at',
   genMult: 'Generator speed',
+  teamMode: 'Mode',
 };
 
 export function formatSetting(key: keyof GameSettings, v: number): string {
   if (key === 'startCash') return `$${v}`;
   if (key === 'suddenDeathSec') return `${Math.round(v / 60)} min`;
+  if (key === 'teamMode') return TEAM_MODES[v]?.name ?? TEAM_MODES[0].name;
   return `${v}×`;
 }
 
@@ -22,6 +25,7 @@ export class GameSettingsPanel {
   readonly root = document.createElement('div');
   private inputs = new Map<keyof GameSettings, { input: HTMLInputElement; out: HTMLElement }>();
   private reset: HTMLButtonElement | null = null;
+  private modeButtons: HTMLButtonElement[] = [];
   private current: GameSettings;
 
   constructor(value: GameSettings, private onChange: ((s: GameSettings) => void) | null, testid = 'game-settings') {
@@ -44,7 +48,32 @@ export class GameSettingsPanel {
       head.append(this.reset);
     }
     this.root.append(head);
+    // Mode: a segmented control (Free-for-all / 2v2v2v2 / 3v3 / 4v4), like the map picker.
+    const modeRow = document.createElement('div');
+    modeRow.className = 'gs-row gs-mode';
+    const modeName = document.createElement('span');
+    modeName.className = 'gs-name';
+    modeName.textContent = SETTING_LABEL.teamMode;
+    const modes = document.createElement('div');
+    modes.className = 'map-picker';
+    modes.setAttribute('role', 'radiogroup');
+    modes.dataset.testid = `${testid}-teamMode`;
+    for (const m of TEAM_MODES) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'map-opt';
+      b.textContent = m.name;
+      b.setAttribute('role', 'radio');
+      b.dataset.testid = `${testid}-teamMode-${m.id}`;
+      b.disabled = !onChange;
+      b.onclick = () => { if (this.current.teamMode !== m.id) this.commit({ ...this.current, teamMode: m.id }); };
+      this.modeButtons.push(b);
+      modes.append(b);
+    }
+    modeRow.append(modeName, modes);
+    this.root.append(modeRow);
     for (const key of SETTING_KEYS) {
+      if (key === 'teamMode') continue;
       const { min, max, step } = SETTING_RANGES[key];
       const row = document.createElement('label');
       row.className = 'gs-row';
@@ -76,12 +105,14 @@ export class GameSettingsPanel {
       input.value = String(this.current[key]);
       out.textContent = formatSetting(key, this.current[key]);
     }
+    this.modeButtons.forEach((b, k) => { b.classList.toggle('selected', k === this.current.teamMode); b.setAttribute('aria-checked', String(k === this.current.teamMode)); });
     if (this.reset) this.reset.disabled = sameSettings(this.current, DEFAULT_SETTINGS);
   }
 
   set disabled(d: boolean) {
     if (!this.onChange) return;
     for (const { input } of this.inputs.values()) input.disabled = d;
+    for (const b of this.modeButtons) b.disabled = d;
     if (this.reset) this.reset.disabled = d || sameSettings(this.current, DEFAULT_SETTINGS);
   }
 

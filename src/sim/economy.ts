@@ -1,5 +1,5 @@
-import { AMMO_BOX, CHARGE, TRAP, GENERATOR_LEVELS, GENERATOR_MAX_LEVEL, GRENADE, LOCK_PRICE_MULT, MEDKIT, PIECES, PLAYER, POTIONS, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
-import { addKind, canAdd, countOf, isHotbarItem, isPotionItem, removeIfEmpty, syncFromInventory } from './hotbar';
+import { AMMO_BOX, CHARGE, TRAP, GENERATOR_LEVELS, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, LOCK_PRICE_MULT, MEDKIT, PIECES, PLAYER, POTIONS, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
+import { addKind, canAdd, countOf, isHotbarItem, isPotionItem, removeIfEmpty, setGrapples, syncFromInventory } from './hotbar';
 import { SHOP_LABEL, shopFor, type ShopKind } from './potions';
 import type { GunKind, HotbarItem, Inventory, LockItem, PieceKind, PlayerState, PotionKind, ShopAction, ShopItem, VaultAction, WeaponKind } from './types';
 
@@ -73,6 +73,7 @@ export function priceOf(item: ShopAction['buy'], player?: PlayerState): number {
   if (item === 'ammo') return ammoPrice(player ? ammoTarget(player) : undefined);
   if (item === 'grenade') return GRENADE.price;
   if (item === 'medkit') return MEDKIT.price;
+  if (item === 'grapple') return GRAPPLE.price;
   if (item === 'trap') return TRAP.price;
   return CHARGE.price;
 }
@@ -108,6 +109,8 @@ export function buy(player: PlayerState, action: ShopAction, genLevels?: number[
     inv.grenades += 1;
   } else if (item === 'medkit') {
     inv.medkits += 1;
+  } else if (item === 'grapple') {
+    setGrapples(inv, (inv.grapples ?? 0) + GRAPPLE.uses);
   } else if (item === 'trap') {
     inv.traps += 1;
   } else if (isPotionItem(item)) {
@@ -169,12 +172,13 @@ export function buyAt(player: PlayerState, at: ShopKind, action: ShopAction, gen
 
 /** Checks `from` holds everything `req` asks for. Weapon entries in `req` are matched by key only. */
 function holds(from: Inventory, req: Partial<Inventory>): string | null {
-  const amounts = [req.cash, req.grenades, req.charges, req.medkits, req.traps, ...Object.values(req.pieces ?? {}), ...Object.values(req.potions ?? {})];
+  const amounts = [req.cash, req.grenades, req.charges, req.medkits, req.traps, req.grapples, ...Object.values(req.pieces ?? {}), ...Object.values(req.potions ?? {})];
   if (amounts.some((n) => n !== undefined && (!Number.isFinite(n) || n < 0))) return 'amounts must be zero or more';
   if ((req.cash ?? 0) > from.cash) return `only $${from.cash} available`;
   if ((req.grenades ?? 0) > from.grenades) return 'not enough grenades';
   if ((req.charges ?? 0) > from.charges) return 'not enough charges';
   if ((req.medkits ?? 0) > from.medkits) return 'not enough medkits';
+  if ((req.grapples ?? 0) > (from.grapples ?? 0)) return 'not enough grappling hooks';
   if ((req.traps ?? 0) > from.traps) return 'not enough traps';
   for (const [k, n] of Object.entries(req.pieces ?? {})) if ((n ?? 0) > (from.pieces[k as PieceKind] ?? 0)) return `not enough ${k}`;
   for (const [k, n] of Object.entries(req.potions ?? {})) if ((n ?? 0) > (from.potions[k as PotionKind] ?? 0)) return `not enough ${k}`;
@@ -193,6 +197,7 @@ function move(from: Inventory, to: Inventory, req: Partial<Inventory>) {
   from.grenades -= moved.grenades;
   from.charges -= moved.charges;
   from.medkits -= moved.medkits;
+  if (req.grapples) { setGrapples(moved, req.grapples); setGrapples(from, (from.grapples ?? 0) - req.grapples); }
   from.traps -= moved.traps;
   for (const [k, n] of Object.entries(req.pieces ?? {})) {
     const kind = k as PieceKind;
@@ -237,6 +242,7 @@ function kindsIn(req: Partial<Inventory>): HotbarItem[] {
   if (req.grenades) out.push('grenade');
   if (req.charges) out.push('charge');
   if (req.medkits) out.push('medkit');
+  if (req.grapples) out.push('grapple');
   if (req.traps) out.push('trap');
   for (const [k, n] of Object.entries(req.potions ?? {})) if (n && isHotbarItem(k)) out.push(k);
   return out;
@@ -257,6 +263,7 @@ export function mergeInventory(into: Inventory, from: Inventory): void {
   into.grenades += from.grenades;
   into.charges += from.charges;
   into.medkits += from.medkits;
+  if (from.grapples) setGrapples(into, (into.grapples ?? 0) + from.grapples);
   into.traps += from.traps ?? 0;
   for (const [k, n] of Object.entries(from.potions ?? {})) {
     const kind = k as PotionKind;
