@@ -94,7 +94,7 @@ export const STATIC_CHUNKS = {
  * layer cast instead, so each draws only the cells its frustum touches; the merged mesh still casts into the cached
  * far cascades (one draw each, rarely), via CAST_FAR_LAYER. Only heavy bins: every stand-in cell is a shadow draw.
  */
-export const SHADOW_STANDINS = { minRadius: 60, minTris: 60_000, grid: 96 };
+export const SHADOW_STANDINS = { minRadius: 60, minTris: 60_000, grid: 160 };
 
 function shadowStandIns(mesh: THREE.Mesh, parts: THREE.BufferGeometry[], material: THREE.Material, firstOnly: boolean, parent: THREE.Object3D) {
   const g = mesh.geometry;

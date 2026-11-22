@@ -8,7 +8,7 @@ import { mats } from './materials';
 import { movingVariant } from './weathering';
 
 /**
- * Tier A gameplay props (sim/props.ts), drawn from the snapshot: one InstancedMesh per (kind, material), shared
+ * Tier A gameplay props (sim/props.ts), drawn from the snapshot: one BatchedMesh per material across kinds, shared
  * materials, every geometry for a kind built in one place below (MODELS) so a LOD API can swap it later.
  * Poses come from `sync` (snapshot: displaced props) and ease toward it each frame; unlisted props sit at spawn.
  */
@@ -67,7 +67,8 @@ const DRUM_COLORS = [0x1f5fa8, 0x6b6448, 0x2f6b3a, 0xc8641e];
 
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(1, 1, 1), _m = new THREE.Matrix4();
 
-type Item = { meshes: THREE.InstancedMesh[]; index: number; spawn: PropSpawn; pos: THREE.Vector3; rot: THREE.Quaternion; tPos: THREE.Vector3; tRot: THREE.Quaternion; moving: boolean };
+type Slot = { mesh: THREE.BatchedMesh; id: number };
+type Item = { slots: Slot[]; spawn: PropSpawn; pos: THREE.Vector3; rot: THREE.Quaternion; tPos: THREE.Vector3; tRot: THREE.Quaternion; moving: boolean };
 
 export class GameProps {
   readonly root = new THREE.Group();
@@ -75,36 +76,51 @@ export class GameProps {
   /** Called with each prop's eased pose whenever it moves (client debris follows these as kinematic obstacles). */
   onPose: ((id: number, pos: THREE.Vector3, rot: THREE.Quaternion) => void) | null = null;
 
+  /**
+   * One BatchedMesh per material across every prop kind (was one InstancedMesh per kind x material: ~13 draws in
+   * the camera and again in the first shadow cascade). A BatchedMesh is one render object (one pipeline, one set of
+   * bindings) however many kinds it holds, and culls per instance against each camera and cascade.
+   */
   constructor(spawns: PropSpawn[]) {
     this.root.name = 'gameProps';
+    const parts: { kind: PropKind; material: THREE.Material; geometry: THREE.BufferGeometry; list: PropSpawn[] }[] = [];
     for (const kind of PROP_KIND_LIST) {
       const list = spawns.filter((s) => s.kind === kind);
       if (!list.length) continue;
       const b = new StaticBatch();
       MODELS[kind](b);
-      const meshes = b.take().map(({ material, geometry }) => {
-        const m = new THREE.InstancedMesh(geometry, movingVariant(material), list.length);
-        m.name = `gameProp:${kind}:${material.name || 'mat'}`;
-        m.castShadow = !material.name.startsWith('labels');
-        m.layers.set(TINY_CASTER_LAYER); // ≤ 1.2 m props: first shadow cascade only (far ones get contact AO)
-        m.receiveShadow = true;
-        m.frustumCulled = false; // ~40 instances across the map: one draw each, no per-frame bounds
-        this.root.add(m);
-        return m;
-      });
-      const c = new THREE.Color();
-      list.forEach((s, i) => {
-        const pos = new THREE.Vector3(s.pos.x, s.pos.y, s.pos.z), rot = new THREE.Quaternion(...s.rot);
-        const it: Item = { meshes, index: i, spawn: s, pos, rot, tPos: pos.clone(), tRot: rot.clone(), moving: false };
-        this.items.set(s.id, it);
-        for (const m of meshes) {
-          const painted = kind === 'drum' && m.material === movingVariant(mats().paint);
-          m.setColorAt(i, painted ? c.setHex(DRUM_COLORS[s.id % DRUM_COLORS.length]) : c.setScalar(kind === 'crate' ? 0.82 + ((s.id * 37) % 7) * 0.04 : 1));
-        }
-        this.write(it);
-      });
-      for (const m of meshes) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+      for (const { material, geometry } of b.take()) parts.push({ kind, material: movingVariant(material), geometry, list });
     }
+    const byMat = new Map<THREE.Material, typeof parts>();
+    for (const x of parts) { const e = byMat.get(x.material) ?? []; e.push(x); byMat.set(x.material, e); }
+    const c = new THREE.Color();
+    for (const [material, group] of byMat) {
+      const instances = group.reduce((n, x) => n + x.list.length, 0);
+      const verts = group.reduce((n, x) => n + x.geometry.getAttribute('position').count, 0);
+      const mesh = new THREE.BatchedMesh(instances, verts, 0, material);
+      mesh.name = `gameProp:${material.name || 'mat'}`;
+      mesh.castShadow = !material.name.startsWith('labels');
+      mesh.layers.set(TINY_CASTER_LAYER); // <= 1.2 m props: first shadow cascade only (far ones get contact AO)
+      mesh.receiveShadow = true;
+      mesh.frustumCulled = false; // spans the map; perObjectFrustumCulled culls each instance instead
+      this.root.add(mesh);
+      for (const { kind, geometry, list } of group) {
+        const gid = mesh.addGeometry(geometry);
+        const painted = kind === 'drum' && material === movingVariant(mats().paint);
+        for (const sp of list) {
+          const id = mesh.addInstance(gid);
+          mesh.setColorAt(id, painted ? c.setHex(DRUM_COLORS[sp.id % DRUM_COLORS.length]) : c.setScalar(kind === 'crate' ? 0.82 + ((sp.id * 37) % 7) * 0.04 : 1));
+          let it = this.items.get(sp.id);
+          if (!it) {
+            const pos = new THREE.Vector3(sp.pos.x, sp.pos.y, sp.pos.z), rot = new THREE.Quaternion(...sp.rot);
+            it = { slots: [], spawn: sp, pos, rot, tPos: pos.clone(), tRot: rot.clone(), moving: false };
+            this.items.set(sp.id, it);
+          }
+          it.slots.push({ mesh, id });
+        }
+      }
+    }
+    for (const it of this.items.values()) this.write(it);
   }
 
   /** A snapshot's displaced props; every other prop is (back) at its spawn. */
@@ -128,7 +144,6 @@ export class GameProps {
   /** Per frame: ease each moving prop toward its latest pose (snapshots arrive at 15–30 Hz). */
   update(dt: number) {
     const k = 1 - Math.exp(-dt / 0.05);
-    const touched = new Set<THREE.InstancedMesh>();
     for (const it of this.items.values()) {
       if (!it.moving) continue;
       // a respawn (or anything that jumps more than 3 m) snaps instead of flying across the map
@@ -137,18 +152,16 @@ export class GameProps {
       if (it.pos.distanceToSquared(it.tPos) < 1e-6 && Math.abs(it.rot.dot(it.tRot)) > 0.999999) { it.pos.copy(it.tPos); it.rot.copy(it.tRot); it.moving = false; }
       this.write(it);
       this.onPose?.(it.spawn.id, it.pos, it.rot);
-      for (const m of it.meshes) touched.add(m);
     }
-    for (const m of touched) m.instanceMatrix.needsUpdate = true;
   }
 
   private write(it: Item) {
     _m.compose(_p.copy(it.pos), _q.copy(it.rot), _s);
-    for (const m of it.meshes) m.setMatrixAt(it.index, _m);
+    for (const sl of it.slots) sl.mesh.setMatrixAt(sl.id, _m);
   }
 
   dispose() {
-    for (const c of this.root.children) if (c instanceof THREE.InstancedMesh) { c.geometry.dispose(); c.dispose(); }
+    for (const c of this.root.children) if (c instanceof THREE.BatchedMesh) c.dispose();
     this.root.removeFromParent();
   }
 }

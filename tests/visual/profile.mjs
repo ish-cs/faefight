@@ -101,12 +101,17 @@ if (await page.evaluate(() => typeof window.__faefight.lookProbe === 'function')
   await dbg('lookProbe', false);
 }
 // draws per pass: tally the renderer's per-object draws by camera for 60 frames (main camera, each shadow camera, post quads)
-const passes = await page.evaluate(() => new Promise((res) => {
+const { passes, groups: passGroups } = await page.evaluate((byGroup) => new Promise((res) => {
   const r = window.__faefight.renderer, gpu = r.gpu, orig = gpu._renderObjectDirect;
-  const tally = new Map(), names = new Map();
+  const tally = new Map(), names = new Map(), groups = new Map();
   let frames = 0;
   gpu._renderObjectDirect = function (object, material, scene, camera, ...rest) {
     const k = camera === r.camera ? (scene === r.scene ? 'camera' : 'camera:other-scene') : camera.isOrthographicCamera && scene === r.scene ? `shadow#${(names.has(camera) ? names : names.set(camera, names.size)).get(camera)}` : `post/other (${object.name || object.type})`;
+    if (byGroup && (k === 'camera' || k === 'shadow#0')) {
+      const nm = (object.name || object.parent?.name || object.type).replace(/\d+/g, '#').split(':').slice(0, 2).join(':');
+      const gk = `${k}|${nm}`;
+      groups.set(gk, (groups.get(gk) ?? 0) + 1);
+    }
     const e = tally.get(k) ?? { draws: 0, tris: 0 };
     e.draws++;
     const g = object.geometry, n = g ? (g.index ? g.index.count : g.attributes.position?.count ?? 0) / 3 : 0;
@@ -114,11 +119,12 @@ const passes = await page.evaluate(() => new Promise((res) => {
     tally.set(k, e);
     return orig.call(this, object, material, scene, camera, ...rest);
   };
-  const tick = () => { if (++frames < 60) requestAnimationFrame(tick); else { gpu._renderObjectDirect = orig; res([...tally].map(([k, e]) => [k, Math.round(e.draws / 60), Math.round(e.tris / 60)])); } };
+  const tick = () => { if (++frames < 60) requestAnimationFrame(tick); else { gpu._renderObjectDirect = orig; res({ passes: [...tally].map(([k, e]) => [k, Math.round(e.draws / 60), Math.round(e.tris / 60)]), groups: [...groups].map(([k, n]) => [k, +(n / 60).toFixed(1)]).sort((a, b) => b[1] - a[1]) }); } };
   requestAnimationFrame(tick);
-}));
+}), arg('groups', '') === '1');
 console.log('-- draws / tris per pass (per frame, 60-frame mean) --');
 for (const [k, d, t] of passes) console.log(`${String(d).padStart(5)} ${String(Math.round(t / 1000)).padStart(6)}kt  ${k}`);
+if (passGroups.length) { console.log('-- draws per frame by pass|group (--groups=1) --'); for (const [k, n] of passGroups) console.log(`${String(n).padStart(6)}  ${k}`); }
 const graph = await page.evaluate(() => {
   const sc = window.__faefight.renderer.scene;
   let all = 0, meshes = 0, auto = 0, autoW = 0, visible = 0;
