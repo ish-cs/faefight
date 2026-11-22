@@ -161,6 +161,10 @@ export type BuildTuning = {
   rampCarry: Record<Difficulty, number>; metalCarry: Record<Difficulty, number>;
   /** Ramp toward a rival standing at least this much higher (m), within highGroundRange. */
   rampUpTo: number;
+  /** Ramps bought right after the gun (before bridging gear) by skill, if the cash is there. */
+  rampFirst: Record<Difficulty, number>;
+  /** Skilled players (reinforce > 0.5) throw a plug piece down as cover when the rival's bunker is further than this (m). */
+  kitCoverM: number;
 };
 
 /**
@@ -289,7 +293,7 @@ export const DRIVE: DriveParams = {
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
   easy: { coverChance: 0.12, coverDelay: 1.4, gap: 1.6, misplace: 0.35, fort: 0.3, peekHide: 2.0, peekOut: 1.6, highGround: false, bridgeCover: false, altRoute: false, pieceSec: 1.2, ramp: 0, rampChain: 0, reinforce: 0 },
   medium: { coverChance: 0.55, coverDelay: 0.8, gap: 0.8, misplace: 0.12, fort: 0.55, peekHide: 1.4, peekOut: 1.3, highGround: false, bridgeCover: true, altRoute: false, pieceSec: 0.7, ramp: 0, rampChain: 0, reinforce: 0.25 },
-  hard: { coverChance: 0.7, coverDelay: 0.5, gap: 0.3, misplace: 0.03, fort: 0.85, peekHide: 1.0, peekOut: 1.2, highGround: true, bridgeCover: true, altRoute: true, pieceSec: 0.45, ramp: 0.35, rampChain: 0, reinforce: 0.65 },
+  hard: { coverChance: 0.7, coverDelay: 0.5, gap: 0.3, misplace: 0.03, fort: 0.85, peekHide: 1.0, peekOut: 1.2, highGround: true, bridgeCover: true, altRoute: true, pieceSec: 0.45, ramp: 0.6, rampChain: 0, reinforce: 0.65 },
   pro: { coverChance: 0.95, coverDelay: 0.22, gap: 0.05, misplace: 0, fort: 1, peekHide: 0.6, peekOut: 0.9, highGround: true, bridgeCover: true, altRoute: true, pieceSec: 0.3, ramp: 0.85, rampChain: 1, reinforce: 1 },
 };
 
@@ -308,7 +312,7 @@ export const BUILD_TUNING: BuildTuning = {
   coverNearSpot: 3, coverForgetSec: 6,
   coverMaxPieces: 3, coverRetrySec: 5,
   coverDist: [1.3, 1.6, 1.05],
-  highGroundRange: [8, 35] as const, highGroundAfter: 1.2, perchSec: 12,
+  highGroundRange: [5, 35] as const, highGroundAfter: 1.2, perchSec: 12,
   slotBackoffSec: 30,
   pushLead: 30,
   bridgeRetrySec: 0.5, bridgeStuckSec: 4, bridgeHoldSec: 20,
@@ -316,6 +320,7 @@ export const BUILD_TUNING: BuildTuning = {
   coverScore: 1.05, fortifyScore: 0.5,
   crackedAt: 0.45, holdSec: 4, coverOffset: 0.45, peekStep: 0.7,
   rampCarry: D(0, 0, 1, 2), metalCarry: D(0, 0, 1, 1), rampUpTo: 1.2,
+  rampFirst: D(0, 0, 1, 1), kitCoverM: 30,
 };
 
 export const TEAM: TeamParams = {
@@ -408,7 +413,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['buildSkill.*.rampChain', [0, 3]], ['buildSkill.*.reinforce', [0, 1]],
   ['buildTuning.crackedAt', [0.15, 0.8]], ['buildTuning.holdSec', [1, 15]], ['buildTuning.coverOffset', [0, 0.9]],
   ['buildTuning.peekStep', [0.4, 1.4]], ['buildTuning.rampCarry.*', [0, 3]], ['buildTuning.metalCarry.*', [0, 3]],
-  ['buildTuning.rampUpTo', [0.6, 4]],
+  ['buildTuning.rampUpTo', [0.6, 4]], ['buildTuning.rampFirst.*', [0, 2]], ['buildTuning.kitCoverM', [0, 80]],
   ['buildTuning.fortReserve', [0, 600]], ['buildTuning.fortEarlyBuilder', [0.3, 1]], ['buildTuning.fortMinRivals', [1, 6]],
   ['buildTuning.coverCarry.*', [0, 4]], ['buildTuning.metalCoverAt', [100, 1500]], ['buildTuning.rampAt', [100, 1000]],
   ['buildTuning.scaffoldsPerBridgeWall', [2, 10]], ['buildTuning.bridgeWallFrom', [3, 20]], ['buildTuning.bridgeWallEvery', [4, 15]],

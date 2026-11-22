@@ -1158,6 +1158,7 @@ export class Bot {
         : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
+      combatKit: this.combatKit(c),
     };
   }
 
@@ -1199,6 +1200,14 @@ export class Bot {
       add1(wall, Math.floor(scaffolds / this.P.buildTuning.scaffoldsPerBridgeWall));
     if (sk.highGround && sk.ramp > 0 && total >= this.P.buildTuning.rampAt && t.builder >= 0.3) add1('ramp', this.P.buildTuning.rampCarry[this.difficulty]);
     return b;
+  }
+
+  /** Ramps carried from the first shop visit on (skills that ramp in fights; never with a full hotbar). */
+  private combatKit(c: Ctx): Partial<Record<PieceKind, number>> | undefined {
+    const n = this.P.buildTuning.rampFirst[this.difficulty];
+    if (c.view.suddenDeath || n < 1 || !this.P.buildSkill[this.difficulty].highGround) return undefined;
+    if (!c.me.hotbar.includes('ramp') && c.me.hotbar.filter((k) => k === null).length <= this.P.buildTuning.freeSlots) return undefined;
+    return { ramp: Math.round(n) };
   }
 
   /**
@@ -2273,8 +2282,12 @@ export class Bot {
   private wallKind(c: Ctx, strong = false): PieceKind | null {
     const inv = c.me.inv;
     const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
-    if (tall > c.openDoors.length) return (strong ? STRONG_WALLS : WALLS).find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
-    return (inv.pieces.sandbags ?? 0) > 0 ? 'sandbags' : null;
+    const pick = () => (strong ? STRONG_WALLS : WALLS).find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
+    if (tall > c.openDoors.length) return pick();
+    if ((inv.pieces.sandbags ?? 0) > 0) return 'sandbags';
+    // Skilled players spend a plug on cover when the doors are far off (they'll buy another): staying alive first.
+    const far = !c.rivalIsl || dist2D(c.me.pos, c.rivalIsl.bunker.center) > this.P.buildTuning.kitCoverM;
+    return tall > 0 && this.P.buildSkill[this.difficulty].reinforce > 0.5 && far ? pick() : null;
   }
 
   /** Should the next cover wall be the strongest I carry: at home, or I've held this spot a while. */
@@ -2316,7 +2329,9 @@ export class Bot {
     }
     const by = this.mem.lastHurtBy;
     if (by === null || by === me.id || now - this.mem.lastHurtAt > 1.0) return;
-    if (view.suddenDeath || c.on < 0 || insideBunker(c.home.bunker, me.pos)) return;
+    if (view.suddenDeath || insideBunker(c.home.bunker, me.pos)) return;
+    // On land (my island, a rival's, or the centre island), not out on a bridge deck.
+    if (c.on < 0 && this.nav.nodeAt(me.pos) < 0) return;
     const from = this.threatPos(c, by);
     if (!from) return;
     if (this.cover?.threatId === by) { this.cover.threat = from; this.cover.lastContact = now; return; }
