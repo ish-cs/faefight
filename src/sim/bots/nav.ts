@@ -27,7 +27,7 @@ const BUNKER_HALF = MAP.bunker.interior / 2 + MAP.bunker.wall;
 /** Within this (m) of a bunker corner waypoint counts as having rounded it (withinIsland). */
 const CORNER_REACHED = 0.6;
 /** Going round a bunker, keep the corner I'm heading for unless another is this much shorter (m). */
-const CORNER_STICK = 1.0;
+const CORNER_STICK = 0.5;
 /** Walk grid: cell size, and how far to keep the body from cover (player radius + margin). */
 const GRID_CELL = 0.5;
 const COVER_CLEARANCE = PLAYER.radius + 0.3;
