@@ -1724,7 +1724,14 @@ export class Bot {
     this.hideFrom = null;
     if (here.path) {
       const wp = here.path[Math.min(here.path.length - 1, 3)];
-      return { dir: norm(flat(sub(wp, me.pos))) };
+      const dir = norm(flat(sub(wp, me.pos)));
+      // The way out goes over a piece too low to block (a lone sandbag in a doorway): hop it, don't walk into it.
+      const hop = view.pieces.some((p) => {
+        if (p.kind === 'ramp' || p.kind === 'scaffold') return false;
+        const top = p.pos.y + PIECES[p.kind].h - me.pos.y, to = flat(sub(p.pos, me.pos));
+        return top > 0.4 && top < SEAL.blockHeight && dist2D(p.pos, me.pos) < 1.6 && to.x * dir.x + to.z * dir.z > 0;
+      });
+      return { dir, jump: hop };
     }
     const weapon = bestGun(me.inv, 1.5);
     const w = WEAPONS[weapon];
