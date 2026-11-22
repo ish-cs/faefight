@@ -6,7 +6,8 @@
  *   npx tsx scripts/ci/measure.ts run --tasks ffa8-pro:1,ffa8-pro:2 --out shard.json [--params path.json] [--workers N]
  *   npx tsx scripts/ci/measure.ts aggregate --in <dir of shard jsons> --json measure-summary.json --md summary.md
  *
- * Scenarios: 1v1-hard, 1v1-pro-vs-hard (PRO seat alternates by seed), ffa8-pro, ffa8-hard, ffa8-mixed.
+ * Scenarios: 1v1-hard, the 1v1 tier ladder (1v1-pro-vs-hard, 1v1-hard-vs-medium, 1v1-medium-vs-easy; the higher tier
+ * is seat 1 on odd seeds), ffa8-pro, ffa8-hard, ffa8-mixed (plus average placement per tier).
  * Metrics follow scripts/train/runMatch.ts and tests/sim/shipChecks.test.ts.
  */
 import fs from 'node:fs';
@@ -15,8 +16,14 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed'] as const;
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed'] as const;
 type Scenario = (typeof SCENARIOS)[number];
+/** The 1v1 tier ladder: the higher tier must win at least LADDER_BAR of the games. */
+const LADDER: Partial<Record<Scenario, [Difficulty, Difficulty]>> = {
+  '1v1-pro-vs-hard': ['pro', 'hard'], '1v1-hard-vs-medium': ['hard', 'medium'], '1v1-medium-vs-easy': ['medium', 'easy'],
+};
+const LADDER_BAR = 0.8;
+const TIER_ORDER: Difficulty[] = ['pro', 'hard', 'medium', 'easy'];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
 const ATTACK_GOALS = new Set(['attack', 'seal', 'bridge', 'raid', 'fight']);
@@ -27,6 +34,8 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
     case '1v1-hard': return { diffs: ['hard', 'hard'], maxSec: 25 * 60 };
     // Same seat rule as tests/sim/botSeries.test.ts: PRO is seat 1 on odd seeds.
     case '1v1-pro-vs-hard': return { diffs: seed % 2 ? ['pro', 'hard'] : ['hard', 'pro'], maxSec: 25 * 60 };
+    case '1v1-hard-vs-medium': return { diffs: seed % 2 ? ['hard', 'medium'] : ['medium', 'hard'], maxSec: 25 * 60 };
+    case '1v1-medium-vs-easy': return { diffs: seed % 2 ? ['medium', 'easy'] : ['easy', 'medium'], maxSec: 25 * 60 };
     case 'ffa8-pro': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
     case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 180 };
@@ -152,6 +161,10 @@ export type ScenarioSummary = {
   attackPct: number; homePct: number; medianFirstSealSec: number | null; gamesWithSeal: number;
   longestHomeSitSec: number; avgMinutes: number; msPerTick: number; maxWallSec: number;
   proVsHard: { share: number; ci95: number; games: number } | null;
+  /** 1v1 ladder scenarios: the higher tier's win share (draws count half). */
+  ladder: { hi: Difficulty; lo: Difficulty; share: number; ci95: number; games: number } | null;
+  /** ffa8-mixed: average placement per tier (1 = winner; eliminated players by order out, survivors share the top). */
+  tierPlacement: Partial<Record<Difficulty, number>> | null;
   shipCheck: { pass: boolean | null; checks: Check[] };
 };
 
@@ -161,10 +174,25 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
   const wins: Record<string, number> = {};
   for (const g of games) if (g.winnerDifficulty) wins[g.winnerDifficulty] = (wins[g.winnerDifficulty] ?? 0) + 1;
   const seals = games.filter((g) => g.firstSeal !== null).map((g) => g.firstSeal!);
-  let proVsHard: ScenarioSummary['proVsHard'] = null;
-  if (scenario === '1v1-pro-vs-hard') {
-    const scores: number[] = games.map((g) => (g.winner === null ? 0.5 : g.winnerDifficulty === 'pro' ? 1 : 0));
-    proVsHard = { share: scores.reduce((a, b) => a + b, 0) / Math.max(1, scores.length), ci95: ci95(scores), games: scores.length };
+  let proVsHard: ScenarioSummary['proVsHard'] = null, ladder: ScenarioSummary['ladder'] = null;
+  const pair = LADDER[scenario];
+  if (pair) {
+    const scores: number[] = games.map((g) => (g.winner === null ? 0.5 : g.winnerDifficulty === pair[0] ? 1 : 0));
+    ladder = { hi: pair[0], lo: pair[1], share: scores.reduce((a, b) => a + b, 0) / Math.max(1, scores.length), ci95: ci95(scores), games: scores.length };
+    if (scenario === '1v1-pro-vs-hard') proVsHard = { share: ladder.share, ci95: ladder.ci95, games: ladder.games };
+  }
+  let tierPlacement: ScenarioSummary['tierPlacement'] = null;
+  if (scenario === 'ffa8-mixed') {
+    const sum: Partial<Record<Difficulty, number>> = {}, n: Partial<Record<Difficulty, number>> = {};
+    for (const g of games) {
+      const out = g.seats.map((x, i) => ({ i, t: x.eliminatedAt })).filter((x) => x.t !== null).sort((a, b) => a.t! - b.t!);
+      const place = new Array<number>(g.seats.length);
+      out.forEach((x, k) => { place[x.i] = g.seats.length - k; });
+      const left = g.seats.map((_, i) => i).filter((i) => place[i] === undefined);
+      for (const i of left) place[i] = g.winner === i + 1 ? 1 : g.winner !== null ? 2 : (1 + left.length) / 2;
+      g.seats.forEach((x, i) => { sum[x.difficulty] = (sum[x.difficulty] ?? 0) + place[i]; n[x.difficulty] = (n[x.difficulty] ?? 0) + 1; });
+    }
+    tierPlacement = Object.fromEntries(Object.keys(sum).map((d) => [d, sum[d as Difficulty]! / n[d as Difficulty]!]));
   }
   const s: ScenarioSummary = {
     scenario, games: games.length, seeds: games.map((g) => g.seed).sort((a, b) => a - b),
@@ -179,18 +207,24 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     avgMinutes: games.reduce((a, g) => a + g.time, 0) / Math.max(1, games.length) / 60,
     msPerTick: games.reduce((a, g) => a + g.msPerTick, 0) / Math.max(1, games.length),
     maxWallSec: Math.max(0, ...games.map((g) => g.wallSec)),
-    proVsHard,
+    proVsHard, ladder, tierPlacement,
     shipCheck: { pass: null, checks: [] },
   };
-  // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%).
+  // Gates from tests/sim/shipChecks.test.ts (8-bot FFA), the tier ladder (each 1v1 step: the higher tier wins ≥ 80%) and
+  // ffa8-mixed average placement in tier order.
   // The shipChecks comparisons against the hand-tuned params need a second series and are not run here.
   const checks: Check[] = [];
   if (scenario.startsWith('ffa8')) {
     checks.push({ name: 'decisive before sudden death ≥ 60%', pass: s.decisive >= 0.6 * s.games, value: `${s.decisive}/${s.games}` });
     checks.push({ name: 'median engagement < 25 m', pass: s.medianEngagementM !== null && s.medianEngagementM < 25, value: `${s.medianEngagementM ?? '-'} m` });
     checks.push({ name: 'nobody sits at home geared > 60 s', pass: s.longestHomeSitSec <= 60, value: `${s.longestHomeSitSec.toFixed(0)} s` });
-  } else if (scenario === '1v1-pro-vs-hard' && proVsHard) {
-    checks.push({ name: 'PRO beats hard ≥ 70%', pass: proVsHard.share >= 0.7, value: `${(100 * proVsHard.share).toFixed(0)}%` });
+    if (tierPlacement) {
+      const order = TIER_ORDER.filter((d) => tierPlacement![d] !== undefined);
+      const inOrder = order.every((d, k) => k === 0 || tierPlacement![order[k - 1]]! < tierPlacement![d]!);
+      checks.push({ name: 'average placement in tier order (pro < hard < medium < easy)', pass: inOrder, value: order.map((d) => `${d} ${tierPlacement![d]!.toFixed(2)}`).join(', ') });
+    }
+  } else if (ladder) {
+    checks.push({ name: `${ladder.hi} beats ${ladder.lo} ≥ ${100 * LADDER_BAR}%`, pass: ladder.share >= LADDER_BAR, value: `${(100 * ladder.share).toFixed(0)}% ± ${(100 * ladder.ci95).toFixed(0)}` });
   }
   s.shipCheck = { pass: checks.length ? checks.every((c) => c.pass) : null, checks };
   return s;
@@ -206,9 +240,9 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '',
     Object.entries(meta).map(([k, v]) => `**${k}** ${v}`).join(' · '),
     '',
-    '| scenario | games | decisive < 15:00 | median elims < 15:00 | median engagement | attack | home | median first seal | PRO vs hard (95% CI) | avg length | ship check |',
+    '| scenario | games | decisive < 15:00 | median elims < 15:00 | median engagement | attack | home | median first seal | ladder: higher tier wins (95% CI) | avg length | ship check |',
     '|---|---|---|---|---|---|---|---|---|---|---|',
-    ...sums.map((s) => `| ${s.scenario} | ${s.games} | ${s.decisive}/${s.games} | ${s.medianPreSdElims ?? '-'} | ${s.medianEngagementM ?? '-'} m | ${pct(s.attackPct)} | ${pct(s.homePct)} | ${secs(s.medianFirstSealSec)} (${s.gamesWithSeal}/${s.games} games) | ${s.proVsHard ? `${(100 * s.proVsHard.share).toFixed(0)}% ± ${(100 * s.proVsHard.ci95).toFixed(0)}` : '-'} | ${s.avgMinutes.toFixed(1)} min | ${s.shipCheck.pass === null ? 'n/a' : s.shipCheck.pass ? '✅ pass' : '❌ fail'} |`),
+    ...sums.map((s) => `| ${s.scenario} | ${s.games} | ${s.decisive}/${s.games} | ${s.medianPreSdElims ?? '-'} | ${s.medianEngagementM ?? '-'} m | ${pct(s.attackPct)} | ${pct(s.homePct)} | ${secs(s.medianFirstSealSec)} (${s.gamesWithSeal}/${s.games} games) | ${s.ladder ? `${s.ladder.hi} vs ${s.ladder.lo} ${(100 * s.ladder.share).toFixed(0)}% ± ${(100 * s.ladder.ci95).toFixed(0)}` : '-'} | ${s.avgMinutes.toFixed(1)} min | ${s.shipCheck.pass === null ? 'n/a' : s.shipCheck.pass ? '✅ pass' : '❌ fail'} |`),
     '',
     '### Ship-check details',
     ...sums.flatMap((s) => s.shipCheck.checks.map((c) => `- ${s.scenario}: ${c.pass ? '✅' : '❌'} ${c.name} (${c.value})`)),
