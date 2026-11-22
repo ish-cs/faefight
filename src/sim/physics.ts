@@ -392,7 +392,7 @@ export class Physics {
   movePlayer(id: number, desired: Vec3): { pos: Vec3; grounded: boolean } {
     this.sync();
     const c = this.mustPlayer(id);
-    this.cc.computeColliderMovement(c, desired);
+    this.cc.computeColliderMovement(c, desired, undefined, undefined, (o) => this.entities.get(o.handle)?.type !== 'prop'); // ABLATION
     const m = this.cc.computedMovement();
     const t = c.translation();
     if (this.recordPushes && this.props.size) this.notePushes(id, t, desired);
@@ -422,7 +422,7 @@ export class Physics {
   peekMovePlayer(id: number, desired: Vec3): { pos: Vec3; grounded: boolean } {
     this.sync();
     const c = this.mustPlayer(id);
-    this.cc.computeColliderMovement(c, desired);
+    this.cc.computeColliderMovement(c, desired, undefined, undefined, (o) => this.entities.get(o.handle)?.type !== 'prop'); // ABLATION
     const m = this.cc.computedMovement();
     const t = c.translation();
     return { pos: v3(t.x + m.x, t.y + m.y - PLAYER.height / 2, t.z + m.z), grounded: this.cc.computedGrounded() };
