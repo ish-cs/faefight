@@ -7,7 +7,7 @@ import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
 import { Lighting, type ShadowPreset, SUN_DIR as LIGHT_SUN_DIR } from './lighting';
 import { SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
-import { cascadeToRefresh, type CascadeCacheState, newCacheState, SHADOW_CACHE } from './shadowCache';
+import { cascadeToRefresh, type CascadeCacheState, nearCascadeDue, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen, upscaleInput } from './post';
 import { lightU } from './lightUniforms';
 
@@ -319,6 +319,7 @@ export class SkyLighting {
   private cacheAnchor = { pos: new THREE.Vector3(), dir: new THREE.Vector3(), tmp: new THREE.Vector3() };
   /** far-cascade renders skipped / done (debug) */
   readonly shadowCacheStats = { skipped: 0, rendered: 0 };
+  private nearFrame = 0;
   private cacheFarCascades(lights: { shadow?: THREE.LightShadow | null }[], near: number) {
     if (!this.shadowCacheEnabled) { for (const l of lights) l.shadow!.autoUpdate = true; return; }
     if (!this.shadowCache || this.shadowCache.age.length !== lights.length) {
@@ -335,9 +336,10 @@ export class SkyLighting {
     const moved = cam.position.distanceTo(a.pos) > SHADOW_CACHE.moveM || a.tmp.angleTo(a.dir) > SHADOW_CACHE.turnRad;
     if (moved) { a.pos.copy(cam.position); a.dir.copy(a.tmp); }
     const pick = cascadeToRefresh(this.shadowCache, near, moved);
+    const frame = this.nearFrame++;
     for (let i = 0; i < lights.length; i++) {
       const sh = lights[i].shadow!;
-      if (i < near) { sh.autoUpdate = true; continue; }
+      if (i < near) { sh.autoUpdate = false; sh.needsUpdate = nearCascadeDue(i, frame); continue; }
       sh.autoUpdate = false;
       if (i === pick) { sh.needsUpdate = true; this.shadowCacheStats.rendered++; } else this.shadowCacheStats.skipped++;
     }

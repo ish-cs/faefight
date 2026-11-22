@@ -37,3 +37,12 @@ export function cascadeToRefresh(s: CascadeCacheState, near: number, moved: bool
   if (best >= 0) { s.age[best] = 0; s.dirty[best] = false; }
   return best;
 }
+
+/**
+ * Staggered near cascades: cascade 0 (closest, sharpest, fast casters up close) renders every frame; the other
+ * near cascades every second frame (a caster 20–60 m away lags one frame, 8 ms at 120 Hz). Halves that cascade's
+ * draws and triangles. Like the far cascades, its lookup matrix only moves when it renders.
+ */
+export function nearCascadeDue(i: number, frame: number): boolean {
+  return i === 0 || frame % 2 === 0;
+}
