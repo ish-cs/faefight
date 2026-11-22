@@ -99,6 +99,31 @@ function segHitsRect(a: Vec3, b: Vec3, hx: number, hz: number): boolean {
   return true;
 }
 
+/**
+ * Bunker-local: the first corner on the shortest walk a → c round the bunker square (Dijkstra over a, the four
+ * corners and c; a leg counts when it clears the wall), c itself when it's in sight, or null when c can't be reached
+ * that way (it hugs the wall).
+ * `at`: the corner I'm standing on; I count as being there, so the next waypoint is the one after it.
+ */
+function route(a: Vec3, c: Vec3, corners: Vec3[], at: Vec3 | undefined): Vec3 | null {
+  const H = BUNKER_HALF + 0.05;
+  const pts = [at ?? a, ...corners, c], n = pts.length, goal = n - 1;
+  const d = new Array<number>(n).fill(Infinity), first = new Array<number>(n).fill(-1), done = new Array<boolean>(n).fill(false);
+  d[0] = 0;
+  for (;;) {
+    let u = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && d[i] < Infinity && (u < 0 || d[i] < d[u])) u = i;
+    if (u < 0 || u === goal) break;
+    done[u] = true;
+    for (let v = 1; v < n; v++) {
+      if (done[v] || pts[v] === pts[u] || segHitsSquare(pts[u], pts[v], H)) continue;
+      const w = d[u] + dist2D(pts[u], pts[v]);
+      if (w < d[v]) { d[v] = w; first[v] = u === 0 ? v : first[u]; }
+    }
+  }
+  return first[goal] > 0 ? pts[first[goal]] : null;
+}
+
 /** Next waypoint toward dest on one island: through doorways when entering/leaving the bunker, around it otherwise. */
 /** `open`: doorways a player can still walk through (a plugged one is skipped unless all are). */
 export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open: (d: Doorway) => boolean = () => true): Vec3 {
@@ -122,6 +147,13 @@ export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open
     // bots dither on it, their view flipping with each step).
     const at = corners.find((q) => dist2D(a, q) < CORNER_REACHED);
     if (at && !segHitsSquare(a, c, BUNKER_HALF + 0.05)) return dest;
+    // Shortest walk round the square: me → corners (along the sides) → dest, every leg clear of the wall. Pricing a
+    // corner as me→corner→dest without checking the corner→dest leg made a corner whose way on cuts back through
+    // the bunker look cheapest; standing on the corner it was skipped for the next one, a step later it was
+    // cheapest again: bots paced between two corners, their view flipping each step (botAim seed 1, seal walk).
+    const next = route(a, c, corners, at);
+    if (next === c) return dest;
+    if (next) return toWorld(b, next);
     let best: Vec3 | null = null, bestCost = Infinity;
     for (const corner of corners) {
       if (corner === at || segHitsSquare(a, corner, BUNKER_HALF + 0.05)) continue;
