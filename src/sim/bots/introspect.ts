@@ -15,6 +15,7 @@ import { dist2D } from '../vec';
 import type { AimProfile, Angles } from './aim';
 import type { Bot, Goal } from './bot';
 import { rivalScore, type Memory, type RivalFacts, type Sighting } from './mind';
+import { hpHealsHeld } from './heal';
 import { islandAt } from './nav';
 import type { Traits } from './personality';
 import { BUILD_TUNING as BT } from './build';
@@ -60,6 +61,8 @@ export type BrainDigest = {
   build: { kind: PieceKind; x: number; y: number; z: number; rotY: number; why: string } | null;
   /** Grappling hook: on a rope now, or its last use (a few seconds), or what it carries it for; absent when none. */
   hook?: string;
+  /** Healing intent (heal.ts): the last heal decision (a few seconds), else heals carried vs the stock it wants. */
+  heal?: string;
   /** Route ahead: [x, y, z] points from its feet. */
   path: [number, number, number][];
   /** Where it's aiming / shooting at, and whether it fired this tick. */
@@ -116,6 +119,7 @@ type Internals = {
   pushLead(view: BotView): { id: number; target: number | null } | null; allyIsland(view: BotView, i: number): boolean;
   sieging(c: Ctx): boolean; nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null;
   hookNote: { t: number; text: string } | null;
+  healNote: { t: number; text: string } | null; healWant: number;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
@@ -702,6 +706,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     ...hookLine(I, me, now),
+    ...healLine(I, me, now),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
     st: {
@@ -733,6 +738,17 @@ function hookLine(I: Internals, me: PlayerState | undefined, now: number): { hoo
   if (note) return { hook: note };
   const n = me.inv.grapples ?? 0;
   return n > 0 ? { hook: `Carrying one (${n} use${n === 1 ? '' : 's'}): for crossing gaps, getting away, yanking` } : {};
+}
+
+/** The brain panel's healing line: what it's doing about health now, else what it carries. */
+function healLine(I: Internals, me: PlayerState | undefined, now: number): { heal?: string } {
+  if (!me?.alive) return {};
+  if (me.healAt !== null) return { heal: 'Using a medkit' };
+  if (me.drinking) return { heal: `Drinking ${me.drinking.kind}` };
+  if (I.healNote && now - I.healNote.t < 4) return { heal: I.healNote.text };
+  const n = hpHealsHeld(me), sh = (me.inv.potions.shieldSmall ?? 0) + (me.inv.potions.shieldBig ?? 0);
+  if (!n && !sh && !I.healWant) return {};
+  return { heal: `Carrying ${n} heal${n === 1 ? '' : 's'} (wants ${I.healWant})${sh ? `, ${sh} shield potion${sh === 1 ? '' : 's'}` : ''}` };
 }
 
 function nearest(es: PlayerState[], p: Vec3): PlayerState | null {

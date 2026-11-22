@@ -229,7 +229,34 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
  */
 export type GunSkill = { recoilComp: number; burstShots: number; burstPause: number; sprayRange: number };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams };
+/**
+ * Healing (heal.ts): what a strong player keeps stocked and when they use it, mid-fight included.
+ * - stock / stockAt / stockPer / stockMax: carry `stock` heals (medkits + heal potions) once `stockAt` cash (carried +
+ *   banked) is in hand, one more per `stockPer` above that, at most `stockMax`.
+ * - safeHp: out of a fight (no enemy in sight, unhurt for quietSec s), patch hp up at or below this.
+ * - fightHp: in a fight, hp + shield at or below this wants a heal; a burst of `burst` damage (about a second) wants one
+ *   up to fightHp + burstHp.
+ * - pressHp: the enemy in front of me at or under this hp + shield (and not above me): press the kill, no heal.
+ * - openDist: an enemy in sight this far off or more: heal where I stand.
+ * - reloadWeight: chance (per incident) to use an enemy's reload as the heal window (an item that finishes within their
+ *   reload + reloadSlack s).
+ * - coverFirst: chance (per incident) to break line of sight before healing; hideSec: give up hiding after this long
+ *   and heal in the open.
+ * - detourM: a potion seller this close on my island, short of heals or shields and no enemy in sight: go buy.
+ * - slotValue / keep: a full hotbar drops its least-wanted item (keep weight under slotValue) to make room for a heal.
+ */
+export type HealParams = {
+  stock: Record<Difficulty, number>; stockAt: Record<Difficulty, number>; stockPer: number; stockMax: number;
+  safeHp: Record<Difficulty, number>; quietSec: number;
+  fightHp: Record<Difficulty, number>; burst: number; burstHp: number; pressHp: number; openDist: number;
+  reloadWeight: Record<Difficulty, number>; reloadSlack: number;
+  coverFirst: Record<Difficulty, number>; hideSec: number;
+  detourM: number;
+  slotValue: number;
+  keep: { pistol: number; trap: number; ramp: number; speedPotion: number; grapple: number; sandbags: number; grenade: number };
+};
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; heal: HealParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -337,7 +364,18 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
   pro: { recoilComp: 0.95, burstShots: 4, burstPause: 0.22, sprayRange: 15 },
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM });
+export const HEAL: HealParams = {
+  stock: D(1, 1, 2, 2), stockAt: D(600, 350, 220, 200), stockPer: 350, stockMax: 3,
+  safeHp: D(45, 60, 75, 80), quietSec: 2.5,
+  fightHp: D(25, 40, 50, 55), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
+  reloadWeight: D(0, 0.4, 0.8, 1), reloadSlack: 0.3,
+  coverFirst: D(0.2, 0.5, 0.85, 0.95), hideSec: 2.5,
+  detourM: 18,
+  slotValue: 0.5,
+  keep: { pistol: 0.25, trap: 0.3, ramp: 0.35, speedPotion: 0.15, grapple: 0.45, sandbags: 0.4, grenade: 0.6 },
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, heal: HEAL });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -405,6 +443,11 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
   ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
+  ['heal.stock.*', [0, 3]], ['heal.stockAt.*', [100, 1200]], ['heal.stockPer', [150, 1000]], ['heal.stockMax', [1, 4]],
+  ['heal.safeHp.*', [30, 95]], ['heal.quietSec', [0.5, 6]], ['heal.fightHp.*', [15, 90]], ['heal.burst', [15, 80]],
+  ['heal.burstHp', [0, 50]], ['heal.pressHp', [0, 80]], ['heal.openDist', [15, 70]], ['heal.reloadWeight.*', [0, 1]],
+  ['heal.reloadSlack', [-0.5, 1]], ['heal.coverFirst.*', [0, 1]], ['heal.hideSec', [0.5, 6]], ['heal.detourM', [0, 40]],
+  ['heal.slotValue', [0, 1]], ['heal.keep.*', [0, 1]],
   ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {

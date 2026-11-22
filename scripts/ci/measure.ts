@@ -36,6 +36,9 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
 type SeatOut = {
   difficulty: Difficulty; kills: number; deaths: number; aliveSec: number; attackSec: number;
   idleHome: number; longestHomeIdle: number; hitDists: number[]; eliminatedAt: number | null;
+  /** Heals (medkits, heal/shield potions): got (bought or picked up), used, used mid-fight (an enemy within 30 m or hurt
+   * in the last 3 s), and deaths after at least 3 s at hp + shield ≤ 50 (a heal could have saved them). Optional: older shards. */
+  healsGot?: number; healsUsed?: number; healsUsedFight?: number; lowHpDeaths?: number;
 };
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
@@ -68,7 +71,11 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
     { players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed },
     { makeBot: (id, d, rng) => { const b = params ? new BotCtor(id, d, rng, undefined, params) : new BotCtor(id, d, rng); brains[id - 1] = b; return b as never; } },
   );
-  const seats: SeatOut[] = diffs.map((d) => ({ difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null }));
+  const seats: SeatOut[] = diffs.map((d) => ({ difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null, healsGot: 0, healsUsed: 0, healsUsedFight: 0, lowHpDeaths: 0 }));
+  type HealSeen = { alive: boolean; n: number; healAt: unknown; drinking: { kind: string } | null; lowSince: number | null; hurtAt: number };
+  const healSeen: HealSeen[] = diffs.map(() => ({ alive: false, n: 0, healAt: null, drinking: null, lowSince: null, hurtAt: -99 }));
+  type HealP = { id: number; alive: boolean; hp: number; shield: number; pos: { x: number; z: number }; healAt?: unknown; drinking?: { kind: string } | null; inv: { medkits: number; potions?: Record<string, number | undefined> } };
+  const healN = (p: HealP) => p.inv.medkits + (p.inv.potions?.healPotion ?? 0) + (p.inv.potions?.shieldSmall ?? 0) + (p.inv.potions?.shieldBig ?? 0);
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, firstSeal: number | null = null;
@@ -98,15 +105,36 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (geared && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) <= IDLE_M && !nearBunker && !snap.sealed[p.island]) s.idleHome += dt;
       }
     }
+    // Heals: per tick (a drink or medkit starts and finishes within a sample interval).
+    for (const p of snap.players as unknown as HealP[]) {
+      const h = healSeen[p.id - 1], s = seats[p.id - 1];
+      const n = healN(p), drinking = p.drinking ?? null, healAt = p.healAt ?? null;
+      if (p.alive && h.alive) {
+        const started = (healAt !== null && h.healAt === null) || (!!drinking && !h.drinking && drinking.kind !== 'speedPotion');
+        if (started) {
+          s.healsUsed!++;
+          const foe = (snap.players as unknown as HealP[]).some((o) => o.id !== p.id && o.alive && Math.hypot(o.pos.x - p.pos.x, o.pos.z - p.pos.z) < THREAT_M);
+          if (foe || snap.time - h.hurtAt < 3) s.healsUsedFight!++;
+        }
+        const got = n - h.n + (started ? 1 : 0);
+        if (got > 0) s.healsGot! += got;
+      }
+      if (p.alive && p.hp + p.shield <= 50) h.lowSince ??= snap.time; else if (p.alive) h.lowSince = null;
+      h.alive = p.alive; h.n = n; h.healAt = healAt; h.drinking = drinking;
+    }
     for (const e of snap.events) {
       if (e.type === 'hit') {
         const by = e.data.by as number | null, target = e.data.target as number;
+        if (by != null && by !== target && healSeen[target - 1]) healSeen[target - 1].hurtAt = e.t;
         const a = by != null ? snap.players[by - 1]?.pos : undefined, t = snap.players[target - 1]?.pos;
         if (by == null || by === target || !a || !t) continue;
         seats[by - 1].hitDists.push(Math.round(Math.hypot(a.x - t.x, a.z - t.z)));
       } else if (e.type === 'kill') {
         const v = e.data.victim as number, k = e.data.killer as number | null;
         seats[v - 1].deaths++;
+        const ls = healSeen[v - 1].lowSince;
+        if (ls !== null && e.t - ls >= 3) seats[v - 1].lowHpDeaths!++;
+        healSeen[v - 1].lowSince = null;
         if (k != null && k !== v) seats[k - 1].kills++;
       } else if (e.type === 'sealed') {
         const by = e.data.by as number | null | undefined;
@@ -152,6 +180,8 @@ export type ScenarioSummary = {
   attackPct: number; homePct: number; medianFirstSealSec: number | null; gamesWithSeal: number;
   longestHomeSitSec: number; avgMinutes: number; msPerTick: number; maxWallSec: number;
   proVsHard: { share: number; ci95: number; games: number } | null;
+  /** Per game (all seats): heals got, used, used mid-fight, deaths after ≥ 3 s at ≤ 50 hp + shield. Null: shards without heal data. */
+  heals: { got: number; used: number; usedFight: number; lowHpDeaths: number; deaths: number } | null;
   shipCheck: { pass: boolean | null; checks: Check[] };
 };
 
@@ -180,6 +210,13 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     msPerTick: games.reduce((a, g) => a + g.msPerTick, 0) / Math.max(1, games.length),
     maxWallSec: Math.max(0, ...games.map((g) => g.wallSec)),
     proVsHard,
+    heals: seats.every((x) => x.healsUsed !== undefined) ? {
+      got: seats.reduce((a, x) => a + x.healsGot!, 0) / Math.max(1, games.length),
+      used: seats.reduce((a, x) => a + x.healsUsed!, 0) / Math.max(1, games.length),
+      usedFight: seats.reduce((a, x) => a + x.healsUsedFight!, 0) / Math.max(1, games.length),
+      lowHpDeaths: seats.reduce((a, x) => a + x.lowHpDeaths!, 0) / Math.max(1, games.length),
+      deaths: seats.reduce((a, x) => a + x.deaths, 0) / Math.max(1, games.length),
+    } : null,
     shipCheck: { pass: null, checks: [] },
   };
   // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%).
@@ -212,6 +249,11 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '',
     '### Ship-check details',
     ...sums.flatMap((s) => s.shipCheck.checks.map((c) => `- ${s.scenario}: ${c.pass ? '✅' : '❌'} ${c.name} (${c.value})`)),
+    '',
+    '### Heals per game (all seats)',
+    '| scenario | heals got | heals used | used mid-fight | low-hp deaths (≥3 s at ≤50) | deaths |',
+    '|---|---|---|---|---|---|',
+    ...sums.map((s) => s.heals ? `| ${s.scenario} | ${s.heals.got.toFixed(1)} | ${s.heals.used.toFixed(1)} | ${s.heals.usedFight.toFixed(1)} | ${s.heals.lowHpDeaths.toFixed(1)} | ${s.heals.deaths.toFixed(1)} |` : `| ${s.scenario} | - | - | - | - | - |`),
     '',
     '### Wins by skill',
     ...sums.map((s) => `- ${s.scenario}: ${Object.entries(s.winsByDifficulty).map(([d, n]) => `${d} ${n}`).join(', ') || 'none'}; no winner ${s.noWinner} · ${s.msPerTick.toFixed(2)} ms/tick · slowest game ${s.maxWallSec.toFixed(0)} s wall`),

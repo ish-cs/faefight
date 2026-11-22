@@ -67,7 +67,9 @@ export function plugFor(inv: Inventory, pieces: PieceState[], door: Doorway): { 
 export type Needs = {
   /** A rival's base is wooden: worth a rocket launcher to set it on fire (medium+ bots, when rich). */
   rocket?: boolean;
-  scaffolds: number; kit: number; charge: boolean; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
+  scaffolds: number; kit: number; charge: boolean; grenades?: number;
+  /** Heals to carry (medkits + heal potions; HealParams stock). */
+  medkits?: number; steel?: boolean; genLevel?: number;
   /** Carry a grappling hook: 'cross' (a crossing to make: bought before scaffolds), 'rich' (spare cash). */
   grapple?: 'cross' | 'rich';
   /** Spike traps to carry (on top of the ones standing). */
@@ -111,7 +113,13 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
-  const room = (k: HotbarItem) => countOf(inv, k) > 0 || canAdd(p.hotbar, k);
+  // Short of heals with none slotted: the last free slot is kept for a medkit.
+  const healShort = inv.medkits + (inv.potions.healPotion ?? 0) < (needs.medkits ?? 0) && !p.hotbar.includes('medkit') && !p.hotbar.includes('healPotion');
+  const room = (k: HotbarItem) => countOf(inv, k) > 0 ||
+    (canAdd(p.hotbar, k) && (!healShort || k === 'medkit' || p.hotbar.filter((x) => x === null).length >= 2));
+  // The first heal before bridging gear; more after the seal kit (a strong player never heads out without one).
+  const heals = inv.medkits + (inv.potions.healPotion ?? 0);
+  if (heals === 0 && (needs.medkits ?? 0) > 0 && room('medkit') && cash >= MEDKIT.price) return 'medkit';
   if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   if (needs.grapple === 'cross' && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
@@ -123,6 +131,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     if (wantMetal) return 'metal';
     return cash >= PIECES.wood.price ? 'wood' : null;
   }
+  if (heals < (needs.medkits ?? 0) && room('medkit') && cash >= MEDKIT.price) return 'medkit';
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
@@ -132,7 +141,6 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (needs.rocket && !inv.weapons.rocket && canAdd(p.hotbar, 'rocket') && cash >= WEAPONS.rocket.price + 200) return 'rocket';
   // Extras only when there's a hotbar slot for them (a full hotbar makes the shop refuse: retrying every tick).
   if (inv.grenades < (needs.grenades ?? 0) && room('grenade')) return cash >= GRENADE.price ? 'grenade' : null;
-  if (inv.medkits < (needs.medkits ?? 0) && room('medkit')) return cash >= MEDKIT.price ? 'medkit' : null;
   // Spike traps for my doorways: never saved up for (nice to have, not essential).
   if (inv.traps < (needs.traps ?? 0) && room('trap') && cash >= TRAP.price) return 'trap';
   if (style.closeGun && !inv.weapons.shotgun && room('shotgun') && cash >= WEAPONS.shotgun.price) return 'shotgun';
@@ -205,9 +213,12 @@ const SHIELD_STOCK = 2;
  * combat (no enemy in sight) they drink one whenever it would help, so they walk into the next fight
  * shielded. Returns the hotbar slot to drink from, or a potion to buy, or null.
  */
-export function potionAction(p: PlayerState, now: number, enemyInSight: boolean, atSeller: boolean): { drink: number } | { buy: PotionKind } | null {
+export function potionAction(p: PlayerState, now: number, enemyInSight: boolean, atSeller: boolean, healWant = 0): { drink: number } | { buy: PotionKind } | null {
   if (!p.alive) return null;
   if (atSeller) {
+    // Heal potions toward the heal stock (they count with medkits), then shields.
+    if (p.inv.medkits + countOf(p.inv, 'healPotion') < healWant && p.inv.cash >= POTIONS.healPotion.price + POTION_RESERVE &&
+      (countOf(p.inv, 'healPotion') > 0 || canAdd(p.hotbar, 'healPotion'))) return { buy: 'healPotion' };
     for (const kind of ['shieldBig', 'shieldSmall'] as const) {
       if (countOf(p.inv, kind) >= SHIELD_STOCK || p.inv.cash < POTIONS[kind].price + POTION_RESERVE) continue;
       if (countOf(p.inv, kind) === 0 && !canAdd(p.hotbar, kind)) continue;
