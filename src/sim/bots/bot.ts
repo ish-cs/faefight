@@ -193,6 +193,7 @@ export class Bot {
   private readonly nav = new Nav();
   /** Parkour (parkour.ts): jumps in progress, balked edges, counts for measurement. */
   private readonly leaper: Leaper;
+  private readonly prng: () => number;
   /** Trusting jumps this time round (ParkourSkill.use, re-rolled every moodSec) and when it's next rolled. */
   private leapMood = false;
   private leapMoodAt = -Infinity;
@@ -317,7 +318,10 @@ export class Bot {
     const aimSeed = (base ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
     this.aim = new Aim({ ...AIM[difficulty], recoilComp: P.gunSkill[difficulty].recoilComp }, mulberry32(aimSeed), P.aim.feel[difficulty]);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
-    this.leaper = new Leaper(rng);
+    // Parkour rolls (jump mood, takeoff slop, ramp-rush odds) draw from their own stream, like the aim noise: how a
+    // bot jumps never shifts the match's other random rolls.
+    this.prng = mulberry32((aimSeed ^ 0x5bd1e995) >>> 0);
+    this.leaper = new Leaper(this.prng);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
 
@@ -629,7 +633,7 @@ export class Bot {
    */
   private setLeap(me: PlayerState, now: number) {
     const pk = this.P.parkour[this.difficulty], tune = this.P.parkourTuning;
-    if (now >= this.leapMoodAt) { this.leapMood = this.rng() < pk.use; this.leapMoodAt = now + tune.moodSec; }
+    if (now >= this.leapMoodAt) { this.leapMood = this.prng() < pk.use; this.leapMoodAt = now + tune.moodSec; }
     let max = this.leapMood ? pk.gapMax : 0;
     if (now - this.mem.lastHurtAt < 3) max *= pk.underFire;
     const speed = canSprint(me) ? PLAYER.sprint : PLAYER.walk;
@@ -722,7 +726,7 @@ export class Bot {
       // On their island already and level with them: no point (a ramp is for getting up onto them / over walls).
       if (!theirs || (c.on === c.rivalIsl.index && e.pos.y <= me.pos.y + 0.5) || c.enemyDist < lo || c.enemyDist > hi || this.building(c)) return null;
       this.rushRollAt = now + 10;
-      if (this.rng() >= pk.rush) return null;
+      if (this.prng() >= pk.rush) return null;
       r = this.rush = { dir: norm(flat(sub(e.pos, me.pos))), last: null, n: 0, deck: false, until: now + 15 };
       this.leaper.stats.rushes++;
     }
