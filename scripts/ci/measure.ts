@@ -19,7 +19,9 @@ type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
 export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
-const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
+// Sudden death time: read from the target ref's LIFECYCLE.suddenDeathAt at runtime (match-length experiments change it).
+let SD = 900;
+const BUCKET_SEC = 300;
 const ATTACK_GOALS = new Set(['attack', 'seal', 'bridge', 'raid', 'fight']);
 const IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15, HOME_SIT_M = 6;
 /** The 1v1 skill ladder: each scenario pits the higher tier against the one below. */
@@ -28,7 +30,7 @@ const LADDER: Partial<Record<Scenario, [Difficulty, Difficulty]>> = {
 };
 const TIERS: Difficulty[] = ['pro', 'hard', 'medium', 'easy'];
 
-function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxSec: number } {
+function seatsFor(scenario: Scenario, seed: number, SD: number): { diffs: Difficulty[]; maxSec: number } {
   switch (scenario) {
     case '1v1-hard': return { diffs: ['hard', 'hard'], maxSec: 25 * 60 };
     // Same seat rule as tests/sim/botSeries.test.ts: PRO is seat 1 on odd seeds.
@@ -36,11 +38,11 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
       const [hi, lo] = LADDER[scenario]!;
       return { diffs: seed % 2 ? [hi, lo] : [lo, hi], maxSec: 25 * 60 };
     }
-    case 'ffa8-pro': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
-    case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
-    case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 180 };
-    case 'ffa8-pro-arch': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
-    case 'ffa8-hard-arch': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
+    case 'ffa8-pro': return { diffs: Array(8).fill('pro'), maxSec: SD + 420 };
+    case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 420 };
+    case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 420 };
+    case 'ffa8-pro-arch': return { diffs: Array(8).fill('pro'), maxSec: SD + 420 };
+    case 'ffa8-hard-arch': return { diffs: Array(8).fill('hard'), maxSec: SD + 420 };
     case '1v1-pro-arch': return { diffs: ['pro', 'pro'], maxSec: 25 * 60 };
   }
 }
@@ -70,13 +72,18 @@ export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
   time: number; decisive: boolean; preSdElims: number; firstSeal: number | null; msPerTick: number; wallSec: number;
   seats: SeatOut[];
+  /** Match-length experiment extras (5-min buckets of match time, summed over seats). */
+  x?: {
+    sd: number; sealsPre: number; unsealsPre: number; sealedOwnersPre: number; convPre: number; elims: number; elimsPre: number;
+    aliveAtSd: number | null; goalB: Record<string, number[]>; aliveB: number[]; homeB: number[]; killsB: number[]; elimsB: number[]; sealsB: number[];
+  };
 };
 
 async function runOne(scenario: Scenario, seed: number, paramsPath: string | null): Promise<GameOut> {
   const { Match } = await import('../../src/sim/match');
   const { Bot } = await import('../../src/sim/bots/bot');
   const { LIFECYCLE, TICK_HZ } = await import('../../src/sim/constants');
-  if (LIFECYCLE.suddenDeathAt !== SD) throw new Error(`measure: sudden death is at ${LIFECYCLE.suddenDeathAt}s, script assumes ${SD}s — update SD`);
+  SD = LIFECYCLE.suddenDeathAt;
   let params: unknown = undefined;
   if (paramsPath) {
     let mod: { sanitize: (p: Record<string, number>) => unknown };
@@ -88,9 +95,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
     const j = JSON.parse(fs.readFileSync(paramsPath, 'utf8')) as { params?: Record<string, number> } & Record<string, number>;
     params = mod.sanitize(j.params ?? j);
   }
-  const { diffs } = seatsFor(scenario, seed);
+  const { diffs } = seatsFor(scenario, seed, SD);
   // MEASURE_MAX_SEC: cut games short (smoke tests of this script only; real measurements never set it).
-  const maxSec = Number(process.env.MEASURE_MAX_SEC) || seatsFor(scenario, seed).maxSec;
+  const maxSec = Number(process.env.MEASURE_MAX_SEC) || seatsFor(scenario, seed, SD).maxSec;
   type Brain = { currentGoal?: string; personality?: { archetype: string; traits: Record<string, number> } };
   const brains: Brain[] = [];
   const BotCtor = Bot as unknown as new (...a: unknown[]) => Brain;
@@ -115,6 +122,10 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, firstSeal: number | null = null;
+  const goalB: Record<string, number[]> = {}, aliveB: number[] = [], homeB: number[] = [], killsB: number[] = [], elimsB: number[] = [], sealsB: number[] = [];
+  const add = (a: number[], t: number, v: number) => { const i = Math.floor(t / BUCKET_SEC); while (a.length <= i) a.push(0); a[i] += v; };
+  let sealsPre = 0, unsealsPre = 0;
+  const sealedPre = new Set<number>(), elimPre = new Set<number>();
   const maxTicks = Math.round(maxSec * TICK_HZ);
   const w0 = performance.now();
   let snap = m.tick(new Map());
@@ -128,6 +139,8 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         const s = seats[p.id - 1];
         s.aliveSec += dt;
         const goal = brains[p.id - 1]?.currentGoal;
+        add(aliveB, snap.time, dt);
+        add(goalB[goal ?? 'none'] ??= [], snap.time, dt);
         if (goal && ATTACK_GOALS.has(goal)) s.attackSec += dt;
         const b = bunkers[p.island];
         const nearBunker = snap.players.some((o) => o.id !== p.id && o.alive && Math.hypot(o.pos.x - b.x, o.pos.z - b.z) < THREAT_M);
@@ -138,7 +151,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         s.longestHomeIdle = Math.max(s.longestHomeIdle, st);
         const w = p.inv.weapons as Record<string, unknown>;
         const geared = !!(w.smg || w.rifle || w.shotgun) || p.inv.cash + p.vault.cash >= 150;
-        if (geared && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) <= IDLE_M && !nearBunker && !snap.sealed[p.island]) s.idleHome += dt;
+        if (geared && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) <= IDLE_M && !nearBunker && !snap.sealed[p.island]) { s.idleHome += dt; add(homeB, snap.time, dt); }
       }
     }
     for (const e of snap.events) {
@@ -152,15 +165,20 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         const v = e.data.victim as number, k = e.data.killer as number | null;
         seats[v - 1].deaths++;
         if (k != null && k !== v) seats[k - 1].kills++;
+        add(killsB, e.t, 1);
       } else if (e.type === 'sealed') {
         const by = e.data.by as number | null | undefined;
         if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
         if (firstSeal === null && by != null && by !== e.data.owner && e.t < SD) firstSeal = e.t;
+        if (by != null && by !== e.data.owner && e.t < SD) { sealsPre++; add(sealsB, e.t, 1); if (e.data.owner != null) sealedPre.add(e.data.owner as number); }
+      } else if (e.type === 'unsealed') {
+        if (e.t < SD) unsealsPre++;
       } else if (e.type === 'eliminated') {
         const id = e.data.player as number;
         if (seats[id - 1].eliminatedAt === null) {
           seats[id - 1].eliminatedAt = e.t;
-          if (e.t < SD) preSdElims++;
+          if (e.t < SD) { preSdElims++; elimPre.add(id); }
+          add(elimsB, e.t, 1);
         }
       }
     }
@@ -172,6 +190,12 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   return {
     scenario, seed, winner, winnerDifficulty: winner ? diffs[winner - 1] : null, time: snap.time,
     decisive: winner !== null && snap.time < SD, preSdElims, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
+    x: {
+      sd: SD, sealsPre, unsealsPre, sealedOwnersPre: sealedPre.size, convPre: [...elimPre].filter((id) => sealedPre.has(id)).length,
+      elims: seats.filter((x) => x.eliminatedAt !== null).length, elimsPre: preSdElims,
+      aliveAtSd: snap.time >= SD ? seats.filter((x) => x.eliminatedAt === null || x.eliminatedAt >= SD).length : null,
+      goalB, aliveB, homeB, killsB, elimsB, sealsB,
+    },
   };
 }
 
