@@ -71,6 +71,7 @@ export class CosmeticLayer {
         name: `cosmetic:${kind}`,
         levels: [{ parts, maxDist: IMPOSTOR_FROM }, { parts: null, impostor: { views: 8, cell: tall ? 128 : 64 }, maxDist: 4000 }],
         small: !tall,
+        tiny: !tall, // crates, barrels, fences, bollards: first-cascade shadows like the gameplay props
         chunk: CHUNK,
       });
       for (const d of list) {
