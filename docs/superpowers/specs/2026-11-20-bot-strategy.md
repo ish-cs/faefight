@@ -290,3 +290,38 @@ fire past the gun's damage floor (`drive.fireRangeMult` = 1: PRO engagement 41 �
 Rule levers measured on this branch (8-PRO, 20 seeds, median eliminations before 15:00, decisive): respawn 3 → 10 s:
 5, 0/20; breakout 10 → 5 s: 4, 0/20; both: 5, 0/20. Neither gets near the ~7 eliminations a decisive 8-player game
 needs; see the agent report for the stronger levers.
+
+## 13. Team play (branch `bots-teamplay`, `TEAM` in `bots/params.ts`)
+
+Diagnosis (2v2v2v2 trace, seed 1): teammates each went for their own neighbour (island 0 → island 7, island 1 →
+island 2) and built one bridge each, so a push was always one bot; `assist` never fired (teammates fight ~80 m apart,
+`assistM` was 45, and any enemy in sight blocked it); two bots out on different bridges counted as the "same island"
+(`islandAt` -1 = -1) and plinked at each other from 70 m.
+
+What changed:
+- **Push lead** (`pushLead`): the non-defender bot whose home is nearest an enemy island (lowest id on ties). The rest
+  get `team.follow` (0.9) on the lead's rival; the lead isn't herded by the others' picks.
+- **Team road** (`stageIsland`): a follower bridges to the teammate island on the way (whose owner pushes the same
+  rival) instead of laying a long bridge of its own; linked to it, it waits for the lead's bridge (no second bridge).
+  A bridge to a teammate's island isn't a rival bridge (no seal-kit gate).
+- **Wait at the bridge head** (`waitFor`, goal `regroup`): the lead, rival island walkable and ≤ 45 m off its shore,
+  waits up to `team.waitSec` (8 s, then a 30 s break) for a pusher more than `team.waitM` (25 m) further back; never
+  while the rival is down (respawn window = race). `regroup` only chases a teammate who is out (off their home island).
+- **Assist**: `assistM` 45 → 75 m, `assistSec` 4 → 6 s, `+ team.assistLowHp` × their missing health; blocked only by
+  an enemy within 25 m or on my ground (`ownFight`), not by any enemy in sight.
+- **Focus fire**: an enemy hurting a teammate counts `team.focusFire` (1.4) × closer when picking whom to shoot.
+- **Fight across water** (all modes): "same island" for `fight` is now the same nav node ≥ 0 (`sameGround`), so two
+  players on different bridges are across water (plinkRange applies).
+- Brain panel digest: `team.lead`; rival scores include the team bonus; assist/regroup explanations mirror `score()`.
+
+Measured (`MEASURE=series MIX=duos,trios,quads`, Hard bots, seeds 1–24 each, before = 6ae38ed; push = ≥ 2 teammates
+on one enemy team's island at once, episodes per game; eliminations/seals before 15:00):
+
+| mode | push games | pushes/game | assist episodes/game | seals | elims < 15:00 | friendly hits |
+|---|---|---|---|---|---|---|
+| 2v2v2v2 | 4/24 → 24/24 | 1.0 → 13.9 | 0.1 → 26.8 | 6.96 → 8.83 | 3.42 → 4.12 | 0 → 0 |
+| 3v3 | 20/24 → 24/24 | 6.4 → 9.4 | 1.5 → 35.3 | 3.62 → 3.12 | 1.92 → 1.67 | 0 → 0 |
+| 4v4 | 9/24 → 23/24 | 1.6 → 12.4 | 0.5 → 35.9 | 2.50 → 3.54 | 1.04 → 2.00 | 0 → 0 |
+
+Paired by seed: duos elims +0.71 ± 0.25 (se), quads +0.96 ± 0.20; trios −0.25 ± 0.30 (not significant; 3v3 already
+pushed before). Kills per game drop (74 → 54 duos): fewer deck-to-deck trades.

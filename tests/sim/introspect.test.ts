@@ -57,7 +57,10 @@ describe('bot brain introspection', () => {
     const explainedGoals = new Set<Goal>();
     for (const b of r.bots.values()) {
       const probe = (b as unknown as { probe: BrainProbe }).probe;
-      expect(probe.rows?.length ?? ALL_GOALS.length).toBe(ALL_GOALS.length);
+      // Goals the watchdog banned for a while aren't scored (Bot.pick skips them).
+      const { goalBan, view } = b as unknown as { goalBan: Map<Goal, number>; view: { now: number } };
+      const banned = [...goalBan.values()].filter((until) => until > view.now).length;
+      expect((probe.rows?.length ?? ALL_GOALS.length) + (probe.rows ? banned : 0)).toBe(ALL_GOALS.length);
       for (const [g, e] of probe.explained) {
         expect(e.why, `${g} has no reason`).toMatch(/\S{3,}/);
         explainedGoals.add(g);

@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
+import { CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
@@ -84,6 +84,11 @@ const CHEST = 1.2;
 const SCAFFOLD_STEP = 3.8;
 /** A bridge this few decks short is "nearly there": buying them beats anything else on the shopping list. */
 const DECK_TOPUP = 4;
+/** Teams (waitFor): the bridge head is within this of the rival island's shore; a teammate within this of where I
+ *  stand (further out) is coming; after a wait, this long before waiting again. */
+const WAIT_HEAD_M = 45;
+const WAIT_COMING_M = 150;
+const WAIT_BREAK_SEC = 30;
 const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, smg: 12, pistol: 16, rifle: 25, rocket: 20 };
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
@@ -137,8 +142,11 @@ const INSURANCE = WEAPONS.pistol.price + 25;
 const BUNKER_OUT = SEAL.exitRadius + 0.8;
 /** Grappling hook: uses are weighed this often; a chosen one holds this long while I turn to fire it. */
 const HOOK_CHECK_SEC = 0.25, HOOK_HOLD_SEC = 1.2;
-/** Stranded this long with no way home: take to the water (respawn at home). */
-const STRANDED_SEC = 8;
+/**
+ * Cut off from home with no hook to buy and no way to bridge: hold out (fight, collect) this long before the last
+ * resort, the water (a death; the respawn puts me home).
+ */
+const STRANDED_LAST_SEC = 90;
 /** Goals that want me at home (hooked back to when I can't walk there). */
 const HOME_GOALS = new Set<Goal>(['shop', 'bank', 'collect', 'fortify', 'defend', 'guard', 'heal']);
 
@@ -213,6 +221,9 @@ export class Bot {
   private targetId: number | null = null;
   /** Teams: this bot is its team's home defender (one stays back while the others push). */
   private defender = false;
+  /** Teams: waiting at the bridge head for the team (waitFor): on which rival, since when. */
+  private waitRival: number | null = null;
+  private waitSince = -Infinity;
   private hesitateUntil = -Infinity;
   private nextScoreAt = -Infinity;
   private lastNow = NaN;
@@ -468,6 +479,9 @@ export class Bot {
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
+    // Cut off from home: get a hook here and hook home (fighting comes first: enemies in sight keep the goal's act).
+    const rescue = this.strandedAct(ctx);
+    if (rescue && !ctx.enemy) act = rescue;
     // An enemy spike trap in my way with nobody in sight: shoot it out before walking on.
     if (!ctx.enemy && !act.shootAt && !act.build && !act.trap) {
       const spikes = this.trapInWay(ctx, act.dir);
@@ -752,24 +766,60 @@ export class Bot {
   }
 
   /**
-   * Stranded (on an island I can't walk home from, no hook, too few scaffolds to bridge home, and no island with a
-   * shop I can walk to): after STRANDED_SEC the only way out is the water: walk off toward home and respawn there.
-   * Returns that heading, or null.
+   * Cut off: on a node other than home that I can't walk home from, with no walkable route to any player island (so
+   * no shop) and too few scaffolds to bridge home. Tracks since when (strandedSince).
+   */
+  private cutOff(c: Ctx): boolean {
+    const me = c.me, node = this.nav.nodeAt(me.pos), home = c.home.index;
+    const cut = node >= 0 && node !== home && !c.homeReach && (me.inv.pieces.scaffold ?? 0) < this.scaffoldsTo(node, home) &&
+      !c.view.map.some((isl) => isl.index === node || this.nav.hop(node, isl.index) !== null);
+    if (!cut) this.strandedSince = null;
+    else this.strandedSince ??= c.view.now;
+    return cut;
+  }
+
+  /**
+   * Getting home when cut off, the way a strong player would: with a hook in hand, walk to my shore nearest home
+   * (hookPlan then hooks over: hookNode points home); without one, buy one from a seller on this island (they stock
+   * hooks) once I can afford it. Null: nothing to do but play on here (fight, collect: the center pays) until I can.
+   */
+  private strandedAct(c: Ctx): Act | null {
+    if (!this.cutOff(c)) return null;
+    const me = c.me, node = this.nav.nodes[this.nav.nodeAt(me.pos)];
+    if (!node) return null;
+    if ((me.inv.grapples ?? 0) > 0) {
+      if (me.hook || me.mv?.pull) return null;
+      const d = flat(sub(c.home.center, node.center)), l = Math.hypot(d.x, d.z) || 1;
+      const rim = add(node.center, scale(d, (node.radius - 0.7) / l));
+      return this.goTo(v3(rim.x, node.groundY, rim.z), 0.8);
+    }
+    if (me.inv.cash < GRAPPLE.price) return null;
+    const seller = (c.view.potionShops ?? []).find((s) => this.nav.nodeAt(s) === node.index);
+    if (!seller) return null;
+    if (dist2D(me.pos, seller) <= USE_RANGE) return { dir: null, face: seller, shop: 'grapple' };
+    return this.goTo(seller, USE_RANGE - 0.3);
+  }
+
+  /**
+   * The last resort: cut off for STRANDED_LAST_SEC with no hook and no way to get one here: walk off into the water
+   * toward home (the respawn puts me back there). Returns that heading, or null.
    */
   private strandedDitch(c: Ctx): Vec3 | null {
-    const me = c.me, now = c.view.now, node = this.nav.nodeAt(me.pos), home = c.home.index;
-    const stuck = node >= 0 && node !== home && !c.homeReach && !(me.inv.grapples ?? 0) && !me.hook &&
-      (me.inv.pieces.scaffold ?? 0) < this.scaffoldsTo(node, home) &&
-      !c.view.map.some((isl) => isl.index === node || this.nav.hop(node, isl.index) !== null);
-    if (!stuck) { this.strandedSince = null; return null; }
-    this.strandedSince ??= now;
-    if (now - this.strandedSince < STRANDED_SEC) return null;
+    const me = c.me;
+    const held = c.view.now - (this.strandedSince ?? Infinity);
+    if (!(held >= STRANDED_LAST_SEC) || me.hook || me.mv?.pull) return null;
+    // A hook in hand that never finds a hold home (out of reach from every shore): give it twice as long.
+    if ((me.inv.grapples ?? 0) > 0 && held < 2 * STRANDED_LAST_SEC) return null;
+    const node = this.nav.nodeAt(me.pos);
+    const seller = (c.view.potionShops ?? []).some((s) => this.nav.nodeAt(s) === node);
+    if (seller && me.inv.cash >= GRAPPLE.price) return null;
     return norm(flat(sub(c.home.center, me.pos)));
   }
 
   /** The node my goal wants me on when I can't walk there (null: walking, or no use for a hook). */
   private hookNode(c: Ctx): number | null {
     const g = this.goal, C = this.nav.centerNode;
+    if (this.strandedSince !== null) return c.home.index; // cut off: the hook's job is getting me home
     if (g === 'bridge') return c.bridgeTo;
     if ((g === 'attack' || g === 'seal') && c.rivalIsl && !c.reach) return c.rivalIsl.index;
     if ((g === 'contest' || g === 'storm') && C >= 0 && !c.centerReach) return C;
@@ -865,7 +915,7 @@ export class Bot {
       return {
         id: o.id,
         reach,
-        scaffolds: reach ? 0 : this.scaffoldsTo(home, o.island),
+        scaffolds: reach ? 0 : this.scaffoldsVia(view, src, home, o),
         dist: dist2D(me.pos, isl.center),
         respawning: !o.alive && o.respawnAt !== null,
         sinceDeath: now - (this.mem.diedAt.get(o.id) ?? -Infinity),
@@ -1007,13 +1057,67 @@ export class Bot {
    */
   private teamFocus(view: BotView, id: number): number {
     if (!view.allies) return 0;
+    // The push lead picks for the team (not herded onto whatever the defender or the rest happen to chase).
+    const lead = this.pushLead(view), leading = !!lead && lead.id === view.self.id;
     let n = 0;
     for (const a of view.allies) {
       if (a.eliminated) continue;
-      if (a.target === id) n++;
+      if (a.target === id && !a.defender && !leading) n++;
       if (a.hurtBy === id && view.now - a.hurtAt <= this.P.team.assistSec && dist2D(a.pos, view.self.pos) <= this.P.team.assistM) n++;
     }
-    return this.P.team.focus * Math.min(2, n);
+    const follow = lead && !leading && lead.target === id ? this.P.team.follow : 0;
+    return this.P.team.focus * Math.min(2, n) + follow;
+  }
+
+  /**
+   * Teams: who leads the push. The non-defender bot (me included) whose home is nearest an enemy island, lowest id on
+   * ties: the frontline. Everyone on the team gets the same answer from the same facts; the rest follow its rival.
+   */
+  private pushLead(view: BotView): { id: number; target: number | null } | null {
+    if (!view.allies) return null;
+    const enemyIsl = view.others.filter((o) => !o.eliminated).map((o) => view.map[o.island].center);
+    if (!enemyIsl.length) return null;
+    const front = (island: number) => Math.min(...enemyIsl.map((p) => dist2D(p, view.map[island].center)));
+    let best: { id: number; target: number | null } | null = null, bestD = Infinity;
+    const cands: { id: number; island: number; target: number | null }[] = view.allies
+      .filter((a) => a.isBot && !a.eliminated && !a.defender).map((a) => ({ id: a.id, island: a.island, target: a.target }));
+    if (!this.defender) cands.push({ id: view.self.id, island: view.self.island, target: this.targetId });
+    for (const a of cands) {
+      const d = front(a.island);
+      if (d < bestD - 1 || (Math.abs(d - bestD) <= 1 && best !== null && a.id < best.id)) { best = a; bestD = d; }
+    }
+    return best;
+  }
+
+  /**
+   * Teams: a teammate's island to bridge to on the way to `rival` (their home is nearer that island than mine and a
+   * shorter bridge from me, and they push that rival themselves, so they lay the rest): one team route, not one each.
+   */
+  private stageIsland(view: BotView, rival: { id: number; island: number }): number | null {
+    // The lead picks its rival on its own merits (staging through followers who copy its pick would loop back).
+    if (!view.allies || this.pushLead(view)?.id === view.self.id) return null;
+    const map = view.map, home = view.self.island, to = map[rival.island].center;
+    const mine = dist2D(map[home].center, to);
+    let best: number | null = null, bestN = this.scaffoldsTo(home, rival.island);
+    for (const a of view.allies) {
+      if (!a.isBot || a.eliminated || a.defender || a.target !== rival.id || a.island === home) continue;
+      if (dist2D(map[a.island].center, to) >= mine - 1) continue;
+      const n = this.scaffoldsTo(home, a.island);
+      if (n < bestN) { best = a.island; bestN = n; }
+    }
+    return best;
+  }
+
+  /** Decks I'd lay to reach rival o's island: in teams only as far as a teammate's island on the way (stageIsland). */
+  private scaffoldsVia(view: BotView, src: number, home: number, o: { id: number; island: number }): number {
+    const stage = this.stageIsland(view, o);
+    if (stage === null) return this.scaffoldsTo(home, o.island);
+    return src === stage || this.nav.hop(src, stage) !== null ? 0 : this.scaffoldsTo(home, stage);
+  }
+
+  /** Teams: one of my teammates' home islands (a bridge there is the team's road, not a push). */
+  private allyIsland(view: BotView, i: number): boolean {
+    return !!view.allies?.some((a) => a.island === i);
   }
 
   /** A teammate under fire close enough to help (the nearest one an enemy hurt lately), or null. */
@@ -1026,6 +1130,20 @@ export class Bot {
       if (d < bestD) { best = a; bestD = d; }
     }
     return best;
+  }
+
+  /**
+   * Standing on the same piece of land (an island, the center included). Two players out on bridges are not: they
+   * were counted as one "island" (-1) and traded shots at 70 m from deck to deck.
+   */
+  private sameGround(a: Vec3, b: Vec3): boolean {
+    const n = this.nav.nodeAt(a);
+    return n >= 0 && n === this.nav.nodeAt(b);
+  }
+
+  /** Teams: an enemy in my face (same island, or within engage range) keeps me in my own fight instead of helping. */
+  private ownFight(c: Ctx): boolean {
+    return !!c.enemy && (c.enemyDist < this.params.engageRange || this.sameGround(c.me.pos, c.enemy.pos));
   }
 
   /**
@@ -1064,7 +1182,8 @@ export class Bot {
     const mine = dist2D(c.me.pos, c.rivalIsl.center);
     let best: AllyStatus | null = null, bestD = Infinity;
     for (const a of c.view.allies) {
-      if (!a.alive || a.defender || a.target !== c.rival.id) continue;
+      // Only someone out on the push (off their home island): a teammate shopping at home is no one to catch up with.
+      if (!a.alive || a.defender || a.target !== c.rival.id || islandAt(c.view.map, a.pos) === a.island) continue;
       const d = dist2D(a.pos, c.me.pos);
       if (d <= T.regroupM || d > 2 * T.assistM || dist2D(a.pos, c.rivalIsl.center) >= mine) continue;
       if (d < bestD) { best = a; bestD = d; }
@@ -1072,10 +1191,38 @@ export class Bot {
     return best;
   }
 
+  /**
+   * Teams, the push lead at the bridge head (the rival island walkable, not on it yet): a teammate pushing the same
+   * rival still more than waitM further back is worth waiting for, up to waitSec per push (then a 30 s break), so
+   * we step onto their island together. Null when someone is with me already, I'm the defender, or the rival is down.
+   */
+  private waitFor(c: Ctx): AllyStatus | null {
+    const v = c.view, T = this.P.team;
+    if (!v.allies || this.defender || T.waitSec <= 0 || !c.rival || !c.rivalIsl || !c.reach || c.on === c.rivalIsl.index) return null;
+    // Their owner is down (respawn window): that's a race, not a wait.
+    if (!c.rival.alive) return null;
+    const mine = dist2D(c.me.pos, c.rivalIsl.center);
+    if (mine > c.rivalIsl.radius + WAIT_HEAD_M) return null;
+    const since = v.now - this.waitSince;
+    if (this.waitRival === c.rival.id && since > T.waitSec && since < T.waitSec + WAIT_BREAK_SEC) return null;
+    let best: AllyStatus | null = null, bestD = mine + WAIT_COMING_M;
+    for (const a of v.allies) {
+      if (!a.alive || a.defender || a.target !== c.rival.id) continue;
+      const d = dist2D(a.pos, c.rivalIsl.center);
+      if (d <= mine + T.waitM) return null;
+      if (d < bestD) { best = a; bestD = d; }
+    }
+    return best;
+  }
+
   private doRegroup(c: Ctx): Act {
     const a = this.regroupWith(c);
-    if (!a) { this.nextScoreAt = c.view.now; return IDLE; }
-    return this.goTo(a.pos, this.P.team.regroupM * 0.5);
+    if (a) return this.goTo(a.pos, this.P.team.regroupM * 0.5);
+    const w = this.waitFor(c);
+    if (!w || !c.rivalIsl || !c.rival) { this.nextScoreAt = c.view.now; return IDLE; }
+    const now = c.view.now;
+    if (this.waitRival !== c.rival.id || now - this.waitSince >= this.P.team.waitSec + WAIT_BREAK_SEC) { this.waitRival = c.rival.id; this.waitSince = now; }
+    return { dir: null, face: add(c.rivalIsl.center, v3(0, CHEST, 0)) };
   }
 
   /** Go to the teammate under fire (the fight layer shoots whoever shows up). */
@@ -1114,12 +1261,15 @@ export class Bot {
       if (!e.alive || e.invulnUntil > now) continue;
       const d = dist2D(e.pos, me.pos);
       if (e.equipped !== 'fists' && d < 35) armedNear++;
-      // Shoot first at whoever's bunker is sealed (their next death eliminates them), unless someone is much closer.
+      // Shoot first at whoever's bunker is sealed (their next death eliminates them), unless someone is much closer;
+      // teams: focus fire on whoever is hurting a teammate.
       const sealedFoe = !view.suddenDeath && view.sealed[e.island];
-      const dEff = sealedFoe ? d / this.P.drive.sealedFocus : d;
+      let dEff = sealedFoe ? d / this.P.drive.sealedFocus : d;
+      const onAlly = !!view.allies?.some((a) => a.hurtBy === e.id && view.now - a.hurtAt <= this.P.team.assistSec);
+      if (onAlly) dEff /= this.P.team.focusFire;
       const s = -dEff * P.tgtDist + (1 - e.hp / 100) * P.tgtLowHp + (e.id === shooter ? P.tgtShootingMe : 0) +
         (e.id === this.targetId ? P.tgtPlanTarget : 0) + (e.id === this.lastEnemy ? P.tgtKeep : 0) - (d > 60 ? 1 : 0) +
-        (sealedFoe ? 0.5 * (this.P.drive.sealedFocus - 1) : 0);
+        (sealedFoe ? 0.5 * (this.P.drive.sealedFocus - 1) : 0) + (onAlly ? 0.5 * (this.P.team.focusFire - 1) : 0);
       if (s > bestScore) { bestScore = s; enemy = e; enemyDist = d; }
     }
     this.lastEnemy = enemy?.id ?? null;
@@ -1132,10 +1282,14 @@ export class Bot {
     const C = this.nav.centerNode;
     const centerReach = C >= 0 && (node === C || this.nav.hop(src, C) !== null);
     let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
+    // Teams: bridge to the teammate whose island is on the way (they lay the rest); already linked to them, wait
+    // for their bridge instead of laying a second, longer one of my own.
+    const stage = bridgeTo !== null && rival ? this.stageIsland(view, rival) : null;
+    if (stage !== null) bridgeTo = node === stage || this.nav.hop(src, stage) !== null ? null : stage;
     // Center-minded: bridge to the center island first when it isn't much further than the rival. Anyone else
     // (but easy players) goes via the center when it's the shorter bridge: it's the hub to everyone, and the fights.
     const slack = this.centerMinded ? 2 : this.difficulty !== 'easy' ? 0 : -Infinity;
-    if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath && !(bridgeTo !== null && this.alt.has(bridgeTo)) &&
+    if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath && stage === null && !(bridgeTo !== null && this.alt.has(bridgeTo)) &&
         (bridgeTo === null ? this.centerMinded : this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
     // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
     if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
@@ -1398,7 +1552,7 @@ export class Bot {
         if (!c.enemy) return 0;
         // Someone across the water gets shot at anyway (aim/fire layer on every goal); only drop
         // everything to fight when they're close or on the same island.
-        const sameIsland = islandAt(view.map, c.enemy.pos) === islandAt(view.map, me.pos);
+        const sameIsland = this.sameGround(me.pos, c.enemy.pos);
         if (!sameIsland && c.enemyDist > P.engageRange) return 0.2;
         // Sudden death with no ammo left anywhere to buy it: fists are all there is.
         const sealedFoe = !view.suddenDeath && view.sealed[c.enemy.island] ? this.P.drive.sealedHunt : 0;
@@ -1446,18 +1600,21 @@ export class Bot {
         return s ? 0.25 + 0.1 * t.caution - dist2D(s, me.pos) / 150 : 0;
       }
       case 'assist': {
-        // Teams: help a teammate under fire nearby (no one in my own face, a gun, a way there).
-        if (!view.allies || c.enemy || !gun || trapped) return 0;
+        // Teams: help a teammate under fire nearby (no one in my own face, a gun, a way there); the lower they are,
+        // the sooner.
+        if (!view.allies || this.ownFight(c) || !gun || trapped) return 0;
         const a = this.allyInTrouble(c);
         if (!a || (islandAt(view.map, a.pos) !== c.on && !this.nav.routeTo(a.pos))) return 0;
-        return this.P.team.assistScore + 0.2 * t.aggression - (this.defender && islandAt(view.map, a.pos) !== home.index ? 0.3 : 0);
+        return this.P.team.assistScore + 0.2 * t.aggression + this.P.team.assistLowHp * (1 - Math.max(0, Math.min(100, a.hp)) / 100) -
+          (this.defender && islandAt(view.map, a.pos) !== home.index ? 0.3 : 0);
       }
       case 'regroup': {
-        // Teams: catch up with the teammate leading the push on our shared rival.
+        // Teams: catch up with the teammate leading the push on our shared rival, or (leading it) wait at the bridge
+        // head for them.
         if (!view.allies || c.enemy || !gun || trapped || !this.offensive(c)) return 0;
         const a = this.regroupWith(c);
-        if (!a || (islandAt(view.map, a.pos) !== c.on && !this.nav.routeTo(a.pos))) return 0;
-        return this.P.team.regroupScore;
+        if (a && (islandAt(view.map, a.pos) === c.on || this.nav.routeTo(a.pos))) return this.P.team.regroupScore;
+        return this.waitFor(c) ? this.P.team.regroupScore : 0;
       }
       case 'guard': {
         if (!c.homeReach || view.suddenDeath) return 0;
@@ -1508,7 +1665,7 @@ export class Bot {
         if (c.bridgeTo === null || have === 0 || view.now < this.bridgeHoldUntil) return 0;
         // Bridges are one-way (see Nav.bridge): don't finish one to a rival before carrying a full seal kit.
         const need = this.scaffoldsNeeded(c);
-        const toRival = c.bridgeTo !== this.nav.centerNode;
+        const toRival = c.bridgeTo !== this.nav.centerNode && !this.allyIsland(view, c.bridgeTo);
         if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return 0;
         // Already out over the water laying it: lay what I carry before turning back (a walk home and out again
         // costs more than the decks; with fast placing a trip often ends a deck or two short).
@@ -1685,7 +1842,7 @@ export class Bot {
       }
       case 'fight': {
         if (!c.enemy) return s;
-        const sameIsland = islandAt(view.map, c.enemy.pos) === c.on;
+        const sameIsland = this.sameGround(me.pos, c.enemy.pos);
         return !sameIsland && c.enemyDist > this.P.drive.plinkRange ? 0 : s;
       }
     }
@@ -1817,7 +1974,7 @@ export class Bot {
   private doBridge(c: Ctx): Act {
     if (c.bridgeTo === null) return IDLE;
     const to = c.bridgeTo, now = c.view.now;
-    const toRival = to !== this.nav.centerNode;
+    const toRival = to !== this.nav.centerNode && !this.allyIsland(c.view, to);
     // Main lane runs from my side (s grows toward them); the mirror lane (rivals only) is measured from their side.
     const mirror = toRival && this.alt.has(to);
     const m = mirror ? this.mirrorFrontier(to) : null;

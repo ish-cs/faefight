@@ -1,6 +1,6 @@
 import { AMMO_BOX, CHARGE, TRAP, GENERATOR_LEVELS, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, LOCK_PRICE_MULT, MEDKIT, PIECES, PLAYER, POTIONS, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
 import { addKind, canAdd, countOf, isHotbarItem, isPotionItem, removeIfEmpty, setGrapples, syncFromInventory } from './hotbar';
-import { SHOP_LABEL, shopFor, type ShopKind } from './potions';
+import { SHOP_LABEL, shopFor, soldAt, type ShopKind } from './potions';
 import type { GunKind, HotbarItem, Inventory, LockItem, PieceKind, PlayerState, PotionKind, ShopAction, ShopItem, VaultAction, WeaponKind } from './types';
 
 export type Result = { ok: true } | { ok: false; reason: string };
@@ -166,7 +166,7 @@ export function grantLockedGuns(player: PlayerState): void {
  */
 export function buyAt(player: PlayerState, at: ShopKind, action: ShopAction, genLevels?: number[]): Result {
   const sells = shopFor(action.buy);
-  if (sells !== at) return fail(`${SHOP_LABEL[action.buy] ?? action.buy} is only sold at ${sells === 'potion' ? 'the potion seller' : 'your home shop'}`);
+  if (!soldAt(action.buy, at)) return fail(`${SHOP_LABEL[action.buy] ?? action.buy} is only sold at ${sells === 'potion' ? 'the potion seller' : 'your home shop'}`);
   return buy(player, action, genLevels);
 }
 

@@ -198,6 +198,7 @@ describe('teams bot matches', () => {
     expect(r.pushTicks).toBeGreaterThan(0);
     expect(r.defendTicks).toBeGreaterThan(0);
     expect(r.regroupTicks).toBeGreaterThan(0);
+    expect(r.assistTicks).toBeGreaterThan(0);
     expect(r.violations).toEqual([]);
   }, 600_000);
 
@@ -205,6 +206,9 @@ describe('teams bot matches', () => {
     const r = await teamsBotMatch(1, 8, 22);
     expect(r.winner).not.toBeNull();
     expect(r.friendlyHits).toBe(0);
+    // Duos push one island together (the follower goes for the lead's rival) and help each other.
+    expect(r.pushTicks).toBeGreaterThan(0);
+    expect(r.assistTicks).toBeGreaterThan(0);
     expect(r.violations).toEqual([]);
   }, 600_000);
 });
