@@ -379,7 +379,7 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
 };
 
 export const HEAL: HealParams = {
-  stock: D(1, 1, 2, 2), stockAt: D(600, 350, 220, 200), stockPer: 350, stockMax: 3,
+  stock: D(1, 1, 2, 2), stockAt: D(1e9, 1e9, 1e9, 1e9), stockPer: 350, stockMax: 3,
   safeHp: D(40, 55, 65, 70), quietSec: 2.5,
   fightHp: D(25, 40, 50, 55), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
   reloadWeight: D(0, 0.4, 0.8, 1), reloadSlack: 0.3,
