@@ -269,6 +269,9 @@ export class QolHud {
   private compass = new Compass();
   private recap = new RecapTracker();
   private recapNode: HTMLElement | null = null;
+  /** Whose death the recap card is about (the local player, or the one being spectated). */
+  private recapFor = 0;
+  private endEl: HTMLElement | null = null;
   private ammo = el('div', 'qol-ammo');
   private net = el('div', 'qol-net glass');
   private health = new LinkHealth();
@@ -276,6 +279,8 @@ export class QolHud {
   private summaryKey = '';
   private map: IslandLayout[] = [];
   private humanId = 0;
+  /** The local player (humanId follows the viewed player while spectating). */
+  private ownId = 0;
   private myIsland = 0;
   lastBuy: ShopItem | null = null;
 
@@ -295,6 +300,7 @@ export class QolHud {
   setMap(map: IslandLayout[], humanId: number, island: number) {
     this.map = map;
     this.humanId = humanId;
+    this.ownId = humanId;
     this.myIsland = island;
     this.alerts.setMap(map, humanId);
   }
@@ -337,12 +343,36 @@ export class QolHud {
     this.alerts.frame(yaw, me, this.myIsland);
     this.updateNet(now);
     this.updateQuickBuy();
+    this.placeRecap();
+  }
+
+  /**
+   * Your own recap joins the end screen once you're out (between the subtitle and the summary / buttons,
+   * in the screen's flow, so nothing overlaps) and hides with it when you pick Spectate. During the killcam
+   * it stays on the HUD, moved aside by .killcam-on.
+   */
+  private placeRecap() {
+    const n = this.recapNode;
+    if (!n) return;
+    this.endEl ??= this.hudRoot.querySelector<HTMLElement>('.end-screen');
+    const end = this.endEl;
+    const inEnd = !!end?.dataset.key && this.recapFor === this.ownId && !this.hudRoot.classList.contains('killcam-on');
+    // A spectated player's recap never sits over the end screen.
+    const hide = !inEnd && end?.style.display === 'flex' ? 'none' : '';
+    if (n.style.display !== hide) n.style.display = hide;
+    const parent = inEnd ? end! : this.hudRoot;
+    if (n.parentElement === parent) return;
+    n.classList.toggle('in-end', inEnd);
+    if (inEnd) parent.insertBefore(n, parent.querySelector('.qol-summary') ?? parent.querySelector('.end-buttons'));
+    else parent.append(n);
   }
 
   private showRecap(r: Recap) {
     this.recapNode?.remove();
     this.recapNode = recapCard(r);
+    this.recapFor = this.humanId;
     this.hudRoot.append(this.recapNode);
+    this.placeRecap();
   }
 
   private updateAmmo(me: PlayerState, selected: number) {
