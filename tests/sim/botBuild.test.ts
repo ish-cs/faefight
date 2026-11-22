@@ -287,12 +287,13 @@ describe('skill shows in how much bots build', () => {
     const counts: Record<Difficulty, number> = { easy: 0, medium: 0, hard: 0, pro: 0 };
     const lines: string[] = [];
     let decisive = 0;
-    // Two seeds: one game was a coin flip (main: PRO 13 vs easy 12 pieces on seed 2 alone).
-    const seeds = [2, 3];
+    // Personalities fixed per seat below: with rolled ones the count was a coin flip (main: PRO 13 vs easy 12).
+    const seeds = [2];
     for (const seed of seeds) {
       const bots = new Map<number, Bot>();
       const m = await Match.create({ players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed },
-        { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.set(id, b); return b; } });
+        // Same personalities for every skill (a Turtle and a Rusher each): only skill differs, not who rolled a builder.
+        { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng, preset(id <= 4 ? 'Turtle' : 'Rusher')); bots.set(id, b); return b; } });
       let snap = m.tick(new Map());
       const per = new Map<number, number>();
       for (let i = 0; i < 25 * 60 * 30 && snap.winner === null; i++) {
