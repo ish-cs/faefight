@@ -34,6 +34,8 @@ const W = (x, z) => ({ x: home.center.x + x * Math.cos(yaw0) + z * Math.sin(yaw0
 await dbg('hp', 100000);
 const L = Math.hypot(home.center.x, home.center.z), ux = home.center.x / L, uz = home.center.z / L;
 const [at, to, pitch] = spot === 'props' ? [W(-8, -12), W(-1, -8), -0.32]
+  : spot === 'edge' ? [W(-15, 12), W(-25, 30), -0.12]
+  : spot === 'across' ? [W(-3, -15), W(-3, -80), -0.02]
   : spot === 'mid' ? [{ x: ux * L * 0.45, z: uz * L * 0.45 }, { x: 0, z: 0 }, 0]
     : [W(6, 13), W(14, 60), 0.02];
 await dbg('teleport', at.x, at.z);
