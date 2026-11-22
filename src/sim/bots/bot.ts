@@ -1340,10 +1340,11 @@ export class Bot {
         // in sudden death likewise.
         if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
         const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
-        // Low: back off from a real threat (hit just now, or someone close), not from a face across the water. Backing
-        // off whenever one shows up, then going back to the errand when it's gone, is a minute of pacing at the door
-        // (measured: ffa8-pro seed 20, 9 hp, a rival 45-60 m off who'd stopped shooting).
-        const threat = view.now - this.mem.lastHurtAt < 3 || (!!c.enemy && c.enemyDist < ENGAGE_RANGE);
+        // Low: back off from anyone in sight while out (heading home to heal). At home already, only from a real threat
+        // (hit just now, or someone close), not from a face across the water: backing off whenever one shows up, then
+        // back to the errand when it's gone, is a minute of pacing at the door (measured: ffa8-pro seed 20, 9 hp, a
+        // rival 45-60 m off who'd stopped shooting).
+        const threat = c.on !== home.index || view.now - this.mem.lastHurtAt < 3 || (!!c.enemy && c.enemyDist < ENGAGE_RANGE);
         if (hp < low && threat) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
