@@ -297,6 +297,7 @@ export class Renderer {
     this.world.syncHazards(snap.hz);
     this.traps.sync(snap.traps);
     this.world.syncDocks(snap.docks, snap.dockHurt);
+    this.world.syncBroken(snap.broken ?? [], snap.docks ?? [], snap.hz);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
     this.snapArrived = performance.now();
@@ -328,8 +329,10 @@ export class Renderer {
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
     if (e.type === 'shot' || e.type === 'explosion') this.world.debris.onEvent(e, this.camera.position);
     if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
-    if ((e.type === 'shot' || e.type === 'explosion') && this.curr)
-      this.world.impactEvent(e, { pieces: this.curr.pieces, players: this.curr.players, waterY: this.waterY, broken: this.curr.broken ?? [] });
+    // A killcam replay's shots land on the replay's pieces, not the live ones (a wall shot out since stays solid).
+    const view = this.replay?.snap ?? this.curr;
+    if ((e.type === 'shot' || e.type === 'explosion') && view)
+      this.world.impactEvent(e, { pieces: view.pieces, players: view.players, waterY: this.waterY, broken: view.broken ?? [] });
     if (e.type === 'pieceHit' || e.type === 'destroyed') {
       this.world.pieceEvent(e, this.curr?.players ?? []);
     } else if (e.type === 'cosmeticBroken') {

@@ -3,6 +3,8 @@ import { BroadcastTransport } from '../../src/net/broadcast';
 import type { HostRoom, Link } from '../../src/net/transport';
 
 // Node ships BroadcastChannel; separate instances in one process talk to each other like tabs.
+/** Short heartbeat timing so timeouts are quick to test (production: 1 s pings, 8 s dead). */
+const FAST = { pingMs: 100, deadMs: 600, stallMs: 300 };
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, ms = 10_000) {
   const end = Date.now() + ms;
@@ -105,12 +107,39 @@ describe('BroadcastTransport', () => {
       if (e.data?.k === 'join') ch.postMessage({ k: 'accept', to: e.data.from });
     };
     const joinedAt = Date.now();
-    const link = await new BroadcastTransport().join('QQQQQQ');
+    const link = await new BroadcastTransport(FAST).join('QQQQQQ');
     cleanup.push(() => link.close());
     let closedAt = 0;
     link.onClose(() => (closedAt = Date.now()));
     await until(() => closedAt > 0, 20_000);
-    // Never before the 3 s dead window (lower bound is load-independent).
-    expect(closedAt - joinedAt).toBeGreaterThanOrEqual(3000);
+    // Never before the dead window (lower bound is load-independent).
+    expect(closedAt - joinedAt).toBeGreaterThanOrEqual(FAST.deadMs);
+  }, 30_000);
+
+  test('a long frame on our own thread does not drop live links (host migration race under load)', async () => {
+    // Host and guest share this thread, like a tab whose main thread stalls on a long frame: the
+    // heartbeats queue up behind it. Before liveness.ts both sides timed each other out right after.
+    const t = new BroadcastTransport(FAST);
+    const room = await t.host();
+    cleanup.push(() => room.close());
+    const hostLinks: Link[] = [];
+    room.onJoin((l) => hostLinks.push(l));
+    const guest = await t.join(room.code);
+    cleanup.push(() => guest.close());
+    await until(() => hostLinks.length === 1);
+    let closes = 0;
+    guest.onClose(() => closes++);
+    hostLinks[0].onClose(() => closes++);
+    await wait(FAST.pingMs * 3);
+    const end = Date.now() + FAST.deadMs * 3;
+    while (Date.now() < end) { /* stalled frame */ }
+    await wait(FAST.deadMs / 2);
+    expect(closes).toBe(0);
+    // And messages still flow both ways.
+    const got: unknown[] = [];
+    guest.onMessage((m) => got.push(m));
+    hostLinks[0].send({ n: 1 });
+    await until(() => got.length === 1);
+    expect(closes).toBe(0);
   }, 30_000);
 });

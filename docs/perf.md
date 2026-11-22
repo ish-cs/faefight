@@ -72,7 +72,7 @@ pallets.dispose();                                // map teardown (unregisters)
 - A level can be `parts: null`, meaning nothing is drawn in that distance band.
 - `simplify: r` generates the level from level 0 asynchronously. Level 0 geometry shows until it's ready, so
   load never blocks on it.
-- Each chunk × level × part is one draw. 16 m chunks suit dense props. Use 32 m for sparse ones.
+- Drawing is batched: one `BatchedMesh` per level × part holds every chunk (instances culled per pass), and one impostor mesh holds every chunk's quads. A prop type costs one draw per part (+1 impostor) per pass, however many chunks are in view. Chunks still decide the LOD level; 16–128 m suits most props.
 
 ## Single objects: `registerLod` / `registerDistanceCull` (src/client/world/lod.ts)
 

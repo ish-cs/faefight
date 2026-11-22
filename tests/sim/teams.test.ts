@@ -3,7 +3,7 @@ import { Bot } from '../../src/sim/bots/bot';
 import { Match } from '../../src/sim/match';
 import type { MatchSetup } from '../../src/sim/matchApi';
 import { InvariantChecker } from '../../src/sim/invariants';
-import { TEAM_COLORS, isAlly, islandOrder, modeSeats, resolveTeams, sidesLeft } from '../../src/sim/teams';
+import { TEAM_COLORS, isAlly, islandOrder, modeSeats, resolveTeams, sidesLeft, soloBotCount } from '../../src/sim/teams';
 import type { Difficulty, Snapshot } from '../../src/sim/types';
 import { v3 } from '../../src/sim/vec';
 
@@ -211,4 +211,18 @@ describe('teams bot matches', () => {
     expect(r.assistTicks).toBeGreaterThan(0);
     expect(r.violations).toEqual([]);
   }, 600_000);
+});
+
+describe('solo bot count', () => {
+  // Regression: free-for-all computed (null ?? 0) - 1 = -1 (truthy), so every solo match had 1 bot whatever the
+  // menu said (the killcam spectate e2e, which needs 2 bots, broke on it).
+  test('free-for-all plays the menu count, a team mode fills its seats, ?bots=N overrides both', () => {
+    for (let n = 1; n <= 7; n++) expect(soloBotCount(n, 0)).toBe(n);
+    expect(soloBotCount(2, undefined)).toBe(2);
+    expect(soloBotCount(2, 1)).toBe((modeSeats(1) ?? 0) - 1);
+    expect(soloBotCount(2, 2)).toBe(5);
+    expect(soloBotCount(2, 0, 6)).toBe(6);
+    expect(soloBotCount(0, 0)).toBe(1);
+    expect(soloBotCount(12, 0)).toBe(7);
+  });
 });
