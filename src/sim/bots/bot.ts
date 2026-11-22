@@ -1342,7 +1342,8 @@ export class Bot {
         // Backing off low on health is a commitment: stay in cover until healed (drive caps it at reengageSec), not
         // back to the errand the moment they drop out of sight and back again when they show (measured: ffa8-pro
         // seed 20, 9 hp at the door, a minute of pacing between collect and backing off from a rival 45-60 m off).
-        const holding = this.goal === 'disengage' && this.retreatSince !== null && hp < low;
+        // A cover plan under way (a wall going up between us) is the commitment already: that comes first.
+        const holding = this.goal === 'disengage' && this.retreatSince !== null && hp < low && !this.cover;
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5 && !holding) return 0;
         // Outside the safe ring, getting in comes first (running from a gun into the storm kills just as well).
         if (view.storm && Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm)) return 0;
