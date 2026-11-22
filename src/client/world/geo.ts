@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { NO_SHADOW, registerDistanceCull, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
 import { chunkCoord } from './lodMath';
 import { stressMatrices } from './stress';
@@ -87,6 +87,9 @@ export const STATIC_CHUNKS = {
   minChunkTris: 16_000,
 };
 
+/** merged static meshes with at least this many vertices get an index (StaticBatch.build) */
+export const STATIC_INDEX_MIN_VERTS = 30_000;
+
 const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + g.getAttribute('position').count / 3, 0);
 
 type Bin = { material: THREE.Material; cast: boolean; receive: boolean; parts: THREE.BufferGeometry[] };
@@ -132,7 +135,11 @@ export class StaticBatch {
   build(parent: THREE.Object3D, name: string, opts: { chunked?: boolean } = {}): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
     const emit = (bin: Bin, parts: THREE.BufferGeometry[], suffix: string) => {
-      const mesh = new THREE.Mesh(merge(parts), bin.material);
+      let geo = merge(parts);
+      // heavy static meshes are drawn by the camera and every shadow cascade: index them so shared corners are
+      // shaded once (the vertex cache), not once per triangle — fewer vertex invocations in every pass
+      if (geo.getAttribute('position').count >= STATIC_INDEX_MIN_VERTS) geo = mergeVertices(geo, 1e-4);
+      const mesh = new THREE.Mesh(geo, bin.material);
       mesh.castShadow = bin.cast; mesh.receiveShadow = bin.receive;
       mesh.name = `${name}:${bin.material.name || 'mat'}${suffix}`;
       parent.add(mesh);
