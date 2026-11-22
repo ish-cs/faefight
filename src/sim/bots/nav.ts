@@ -29,6 +29,8 @@ const CORNER_REACHED = 0.6;
 /** Walk grid: cell size, and how far to keep the body from cover (player radius + margin). */
 const GRID_CELL = 0.5;
 const COVER_CLEARANCE = PLAYER.radius + 0.3;
+/** A prop whose top is at most this above the ground is stepped onto (the character controller's autostep), not walked round. */
+const PROP_STEP = 0.35;
 /** How long a planned path around cover is reused before re-planning. */
 const PATH_TTL = 1.0;
 
@@ -97,6 +99,31 @@ function segHitsRect(a: Vec3, b: Vec3, hx: number, hz: number): boolean {
   return true;
 }
 
+/**
+ * Bunker-local: the first corner on the shortest walk a → c round the bunker square (Dijkstra over a, the four
+ * corners and c; a leg counts when it clears the wall), c itself when it's in sight, or null when c can't be reached
+ * that way (it hugs the wall).
+ * `at`: the corner I'm standing on; I count as being there, so the next waypoint is the one after it.
+ */
+function route(a: Vec3, c: Vec3, corners: Vec3[], at: Vec3 | undefined): Vec3 | null {
+  const H = BUNKER_HALF + 0.05;
+  const pts = [at ?? a, ...corners, c], n = pts.length, goal = n - 1;
+  const d = new Array<number>(n).fill(Infinity), first = new Array<number>(n).fill(-1), done = new Array<boolean>(n).fill(false);
+  d[0] = 0;
+  for (;;) {
+    let u = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && d[i] < Infinity && (u < 0 || d[i] < d[u])) u = i;
+    if (u < 0 || u === goal) break;
+    done[u] = true;
+    for (let v = 1; v < n; v++) {
+      if (done[v] || pts[v] === pts[u] || segHitsSquare(pts[u], pts[v], H)) continue;
+      const w = d[u] + dist2D(pts[u], pts[v]);
+      if (w < d[v]) { d[v] = w; first[v] = u === 0 ? v : first[u]; }
+    }
+  }
+  return first[goal] > 0 ? pts[first[goal]] : null;
+}
+
 /** Next waypoint toward dest on one island: through doorways when entering/leaving the bunker, around it otherwise. */
 /** `open`: doorways a player can still walk through (a plugged one is skipped unless all are). */
 export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open: (d: Doorway) => boolean = () => true): Vec3 {
@@ -120,6 +147,13 @@ export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open
     // bots dither on it, their view flipping with each step).
     const at = corners.find((q) => dist2D(a, q) < CORNER_REACHED);
     if (at && !segHitsSquare(a, c, BUNKER_HALF + 0.05)) return dest;
+    // Shortest walk round the square: me → corners (along the sides) → dest, every leg clear of the wall. Pricing a
+    // corner as me→corner→dest without checking the corner→dest leg made a corner whose way on cuts back through
+    // the bunker look cheapest; standing on the corner it was skipped for the next one, a step later it was
+    // cheapest again: bots paced between two corners, their view flipping each step (botAim seed 1, seal walk).
+    const next = route(a, c, corners, at);
+    if (next === c) return dest;
+    if (next) return toWorld(b, next);
     let best: Vec3 | null = null, bestCost = Infinity;
     for (const corner of corners) {
       if (corner === at || segHitsSquare(a, corner, BUNKER_HALF + 0.05)) continue;
@@ -143,11 +177,22 @@ export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open
  * Per-node walk grid around built-in cover (0.5 m cells over the disc). Straight lines are used whenever
  * they clear every obstacle; otherwise A* over the grid, string-pulled to a few corner waypoints.
  */
+type Circle = { pos: Vec3; r: number };
+
+const norm2D = (p: Vec3): Vec3 => { const l = Math.hypot(p.x, p.z); return l > 1e-6 ? v3(p.x / l, 0, p.z / l) : v3(1, 0, 0); };
+
+/** Distance from p to the segment a→b (2D). */
+function segPointDist(a: Vec3, b: Vec3, p: Vec3): number {
+  const dx = b.x - a.x, dz = b.z - a.z, L2 = dx * dx + dz * dz;
+  const t = L2 < 1e-9 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / L2));
+  return Math.hypot(p.x - a.x - dx * t, p.z - a.z - dz * t);
+}
+
 export class WalkGrid {
   private readonly n: number;
   private readonly x0: number;
   private readonly z0: number;
-  private readonly blocked: Uint8Array;
+  private blocked: Uint8Array;
   private readonly boxes: Box[];
 
   constructor(readonly node: NavNode, statics: Box[]) {
@@ -164,6 +209,9 @@ export class WalkGrid {
 
   get hasObstacles() { return this.boxes.length > 0; }
 
+  /** Props on this node too tall to step over (footprint circles), for this view; set by Nav.within. */
+  props: readonly Circle[] = [];
+
   private cellPos(i: number, j: number): Vec3 {
     return v3(this.x0 + (i + 0.5) * GRID_CELL, this.node.groundY, this.z0 + (j + 0.5) * GRID_CELL);
   }
@@ -179,6 +227,7 @@ export class WalkGrid {
       const la = rotateY(sub(a, box.center), -box.rotY), lb = rotateY(sub(b, box.center), -box.rotY);
       if (segHitsRect(la, lb, box.half.x + COVER_CLEARANCE - 0.1, box.half.z + COVER_CLEARANCE - 0.1)) return false;
     }
+    for (const c of this.props) if (segPointDist(a, b, c.pos) < c.r + COVER_CLEARANCE - 0.1) return false;
     return true;
   }
 
@@ -211,6 +260,23 @@ export class WalkGrid {
   /** Waypoints from a to b around cover (excluding a, ending at b), or null when b can't be reached. */
   path(a: Vec3, b: Vec3): Vec3[] | null {
     if (this.clear(a, b)) return [b];
+    const n = this.n;
+    const base = this.blocked;
+    if (this.props.length) {
+      // Props move: rasterize the ones here into a copy of the cover grid for this search only.
+      const blocked = base.slice();
+      for (const c of this.props) {
+        const R = c.r + COVER_CLEARANCE;
+        const i0 = Math.max(0, Math.floor((c.pos.x - R - this.x0) / GRID_CELL)), i1 = Math.min(n - 1, Math.floor((c.pos.x + R - this.x0) / GRID_CELL));
+        const j0 = Math.max(0, Math.floor((c.pos.z - R - this.z0) / GRID_CELL)), j1 = Math.min(n - 1, Math.floor((c.pos.z + R - this.z0) / GRID_CELL));
+        for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (dist2D(this.cellPos(i, j), c.pos) <= R) blocked[i * n + j] = 1;
+      }
+      this.blocked = blocked;
+    }
+    try { return this.search(a, b); } finally { this.blocked = base; }
+  }
+
+  private search(a: Vec3, b: Vec3): Vec3[] | null {
     const s = this.freeNear(a), g = this.freeNear(b);
     if (s < 0 || g < 0) return null;
     const n = this.n;
@@ -427,9 +493,17 @@ export class Nav {
   within(i: number, me: Vec3, dest: Vec3): Vec3 {
     const node = this.nodeList[i];
     const pieces = this.view.pieces;
-    const wp = node.bunker ? withinIsland({ bunker: node.bunker }, me, dest, (d) => !doorBlocked(pieces, d)) : dest;
+    let wp = node.bunker ? withinIsland({ bunker: node.bunker }, me, dest, (d) => !doorBlocked(pieces, d)) : dest;
     const g = this.grids.get(i);
-    if (!g || !g.hasObstacles || g.clear(me, wp)) return wp;
+    if (g) g.props = (this.view.props ?? []).filter((p) => p.top - node.groundY > PROP_STEP && dist2D(p.pos, node.center) < node.radius + 1);
+    // A waypoint on a prop (a lane carrot, a spot by the rim) moves to just beside it: round it, not shoving it ahead.
+    if (g) for (const c of g.props) {
+      const d = dist2D(wp, c.pos), R = c.r + COVER_CLEARANCE;
+      if (d >= R) continue;
+      const away = d > 1e-3 ? v3((wp.x - c.pos.x) / d, 0, (wp.z - c.pos.z) / d) : norm2D(sub(me, c.pos));
+      wp = v3(c.pos.x + away.x * R, wp.y, c.pos.z + away.z * R);
+    }
+    if (!g || (!g.hasObstacles && !g.props.length) || g.clear(me, wp)) return wp;
     const now = this.view.now;
     const plan = this.planned;
     if (!plan || plan.node !== i || dist2D(plan.goal, wp) > 0.75 || now - plan.at > PATH_TTL) {

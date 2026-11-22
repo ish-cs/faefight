@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
@@ -20,7 +20,7 @@ import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane }
 import { DEFAULT_BOT_PARAMS, withTraits, type BotParams, type BrainKey, type BrainParams } from './params';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
-  TALL, bestGun, doorBlocked, doorPieces, fits, hasAmmo, isHard, junkSlot, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
+  GUNS, TALL, bestGun, doorBlocked, doorPieces, fits, hasAmmo, isHard, junkSlot, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
   shoppingPlan,
   type Needs, type ShopStyle,
 } from './plans';
@@ -546,7 +546,9 @@ export class Bot {
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
     } else if (foe && !((act.shootAt || act.lookFirst) && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
       // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
-      const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, rocketAtEnemy && foe === enemy ? 0.15 : CHEST, 0)), foe.id, cur);
+      // Only a head showing over a crate: aim for that (the body behind it would only put holes in the crate).
+      const aimY = view.peeking?.includes(foe.id) ? HEAD.y : rocketAtEnemy && foe === enemy ? 0.15 : CHEST;
+      const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, aimY, 0)), foe.id, cur);
       look = r;
       const foeDist = dist2D(foe.pos, me.pos);
       // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
@@ -1596,8 +1598,10 @@ export class Bot {
         // Nothing that can clear what's there (steel needs a charge): better to go buy one than stand at the door.
         const can = blockers.some((p) => this.canClear(c, p));
         if (view.sealed[home.index]) return (can ? 0.85 : 0.1) + 0.1 * t.caution;
-        // One plugged doorway is most of a seal: clear it before going out.
-        return c.homeReach && can ? 0.7 + 0.15 * t.caution : 0;
+        // One plugged doorway is most of a seal: clear it before going out. Out of ammo with the money for a box
+        // (vault too): fetch it first, punching sandbags out one by one takes a minute (ffa8-mixed seed 18: 61 s).
+        const restock = !ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) && me.inv.cash + me.vault.cash >= AMMO_BOX.price;
+        return c.homeReach && can ? (restock ? 0.5 : 0.7 + 0.15 * t.caution) : 0;
       }
       case 'heal': {
         // Health comes back slowly out of combat: low and away from home, go back and recover.
@@ -1669,7 +1673,8 @@ export class Bot {
         const kitShort = sealKit(me.inv) < Math.max(1, c.openDoors.length) && !view.suddenDeath;
         if (kitShort && (rivalDown || this.sealWindow(c) || this.endgame(c)) && plan.items.some((i) => i === 'wood' || i === 'metal' || i === 'steel'))
           return 0.95 - away;
-        const urgent = plan.items.includes('pistol') || plan.items.includes('charge');
+        // An empty gun is as good as none: restocking it is as urgent as buying one.
+        const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv));
         return (urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0) - away;
       }
       case 'bridge': {
