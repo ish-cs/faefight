@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { DECAL_CAP, DecalRing } from '../../src/client/world/impacts';
-import { harborGround, SURFACE_BURST, SURFACE_MARK, SurfaceMap } from '../../src/client/world/surfaces';
+import { harborGround, isPropOwner, OWNER_WORLD, ownCosmetic, ownDock, ownHazard, ownProp, propOfOwner, SURFACE_BURST, SURFACE_MARK, SurfaceMap } from '../../src/client/world/surfaces';
+import { PIECES } from '../../src/sim/constants';
 import { buildMapDef } from '../../src/sim/map';
 import { newPlayer } from '../../src/sim/player';
 import type { PieceState } from '../../src/sim/types';
@@ -121,5 +122,83 @@ describe('surface → mark mapping', () => {
     expect(h.point.x).toBeCloseTo(palm.pos.x - 0.2, 3);
     expect(h.normal.x).toBeCloseTo(-1, 3);
     expect(surf.propHits(v3(palm.pos.x - 10, palm.pos.y + 1.5, palm.pos.z), v3(palm.pos.x + 10, palm.pos.y + 1.5, palm.pos.z), new Set([palm.id])).some((x) => x.surface === 'bark' && Math.abs(x.point.z - palm.pos.z) < 0.01 && Math.abs(x.point.x - palm.pos.x + 0.2) < 0.01)).toBe(false);
+  });
+});
+
+describe('marks belong to what they sit on', () => {
+  test('dropping a surface removes only its marks (indexed, no scan); other owners and the world stay', () => {
+    const r = new DecalRing(50);
+    const wall = [r.add(7).slot, r.add(7).slot];
+    const dock = r.add(ownDock(3)).slot, crate = r.add(ownCosmetic(9)).slot, world = r.add(OWNER_WORLD).slot, other = r.add(8).slot;
+    expect([...r.owners()].sort()).toEqual([7, 8, ownDock(3), ownCosmetic(9)].sort());
+    expect(r.removeOwner(7).sort()).toEqual(wall.sort());
+    expect(r.slotsOf(7)).toBeUndefined();
+    for (const s of wall) expect(r.alpha(s)).toBe(0);
+    for (const s of [dock, crate, world, other]) expect(r.alpha(s)).toBe(1);
+    expect(r.removeOwner(ownDock(3))).toEqual([dock]);
+    expect(r.removeOwner(ownDock(3))).toEqual([]); // twice: nothing left
+    expect(r.live).toBe(3);
+    expect(r.clear().sort()).toEqual([crate, world, other].sort());
+    expect(r.live).toBe(0);
+    expect([...r.owners()]).toEqual([]);
+  });
+
+  test('an evicted slot leaves its old owner\'s index', () => {
+    const r = new DecalRing(2);
+    const a = r.add(5).slot;
+    r.add(6);
+    const c = r.add(OWNER_WORLD); // full: evicts the oldest (owner 5's mark)
+    expect(c.evicted).toBe(true);
+    expect(c.slot).toBe(a);
+    expect(r.slotsOf(5)).toBeUndefined();
+    expect(r.removeOwner(5)).toEqual([]);
+    expect(r.live).toBe(2);
+  });
+
+  test('owner namespaces never collide and stay int32', () => {
+    const ids = [0, 1, 999, 3_000_000];
+    const all = ids.flatMap((i) => [i, ownDock(i), ownCosmetic(i), ownHazard(i), ownProp(i)]);
+    expect(new Set(all).size).toBe(all.length);
+    for (const i of ids) {
+      expect(isPropOwner(ownProp(i))).toBe(true);
+      expect(propOfOwner(ownProp(i))).toBe(i);
+      expect(isPropOwner(ownHazard(i))).toBe(false);
+    }
+    for (const o of all) expect(o >= -(2 ** 31) && o < 2 ** 31).toBe(true);
+  });
+
+  const def = buildMapDef(2, 'harbor');
+  const surf = new SurfaceMap(def);
+  const view = { pieces: [] as PieceState[], players: [], waterY: 0 };
+
+  test('the shot that destroyed a wall leaves no world mark where the wall was', () => {
+    const isl = def.islands[0];
+    const at = add(isl.center, rotateY(v3(-8, 0, -10), isl.bunker.facingYaw));
+    const wall: PieceState = { id: 11, kind: 'wood', owner: 1, pos: v3(at.x, isl.groundY, at.z), rotY: 0, hp: 0 };
+    const from = v3(at.x, isl.groundY + 1.6, at.z + 6), to = v3(at.x, isl.groundY + 1.2, at.z + PIECES.wood.d / 2);
+    // The snapshot no longer lists the wall: without `gone` the shot fell through to a floating backdrop mark.
+    expect(surf.classify(from, to, 150, view)).not.toBeNull();
+    expect(surf.classify(from, to, 150, { ...view, gone: [wall] })).toBeNull();
+  });
+
+  test('pier planks are owned by their section; a broken section takes no marks', () => {
+    const d = def.docks![0];
+    const top = v3(d.center.x, d.center.y + d.half.y, d.center.z);
+    const h = surf.classify(v3(top.x + 3, top.y + 1.6, top.z + 3), top, 150, view)!;
+    expect(h.surface).toBe('wood');
+    expect(h.owner).toBe(ownDock(d.id));
+    const broken = new SurfaceMap(def);
+    broken.brokenDocks = new Set([d.id]);
+    expect(broken.boxAt(top)?.box.owner).not.toBe(ownDock(d.id));
+  });
+
+  test('cosmetic props own their marks; dynamic solids (props, hazards) win over the backdrop', () => {
+    const palm = def.cosmetics.find((c) => c.kind === 'palm')!;
+    const hits = surf.propHits(v3(palm.pos.x - 10, palm.pos.y + 1.5, palm.pos.z), v3(palm.pos.x + 10, palm.pos.y + 1.5, palm.pos.z), new Set());
+    expect(hits.find((x) => x.surface === 'bark')!.owner).toBe(ownCosmetic(palm.id));
+    const isl = def.islands[0];
+    const p = v3(isl.center.x, isl.groundY + 0.9, isl.center.z);
+    const solid = (q: { x: number; y: number; z: number }) => (q === p ? { surface: 'metal' as const, point: q, normal: v3(1, 0, 0), owner: ownHazard(4) } : null);
+    expect(surf.classify(v3(p.x + 4, p.y + 1, p.z), p, 150, { ...view, solid })!.owner).toBe(ownHazard(4));
   });
 });

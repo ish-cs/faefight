@@ -29,10 +29,30 @@ export const SURFACE_BURST: Record<WorldSurface, Burst> = {
   sand: 'sand', gravel: 'sand', grass: 'sand', water: 'splash',
 };
 
-export type SurfaceHit = { surface: WorldSurface; point: Vec3; normal: Vec3 };
-type SurfBox = Box & { surface: WorldSurface };
+/**
+ * Who a mark belongs to, so it goes when that thing goes: a built piece's id (>= 0), the static world (-1), or a
+ * namespaced pier section / cosmetic prop / hazard / gameplay prop id (all negative, disjoint).
+ */
+export const OWNER_WORLD = -1;
+const NS = 1 << 26;
+export const ownDock = (id: number) => -(NS + id);
+export const ownCosmetic = (id: number) => -(2 * NS + id);
+export const ownHazard = (id: number) => -(3 * NS + id);
+export const ownProp = (id: number) => -(4 * NS + id);
+export const isPropOwner = (o: number) => o <= -4 * NS;
+export const propOfOwner = (o: number) => -o - 4 * NS;
+
+/** `owner`: what the mark sits on (default: the static world). */
+export type SurfaceHit = { surface: WorldSurface; point: Vec3; normal: Vec3; owner?: number };
+type SurfBox = Box & { surface: WorldSurface; owner: number; dock?: number };
 
 const COSMETIC_SURFACE: Record<CosmeticKind, WorldSurface> = { palm: 'bark', crate: 'wood', fence: 'wood', barrel: 'metal', lamp: 'metal', bollard: 'metal' };
+
+/** What a shot's end is classified against. */
+export type ShotView = {
+  pieces: readonly PieceState[]; players: readonly PlayerState[]; waterY: number;
+  gone?: readonly PieceState[]; solid?: ((p: Vec3) => SurfaceHit | null) | null;
+};
 
 /** World → box-local (inverse of the sim's rotateY). */
 const toLocal = (p: Vec3, b: Box) => rotateY(v3(p.x - b.center.x, p.y - b.center.y, p.z - b.center.z), -b.rotY);
@@ -66,18 +86,21 @@ export class SurfaceMap {
 
   constructor(readonly def: MapDef) {
     const harbor = def.template === 'harbor';
-    for (const s of def.statics) this.boxes.push({ ...s, surface: s.look === 'container' ? 'container' : 'concrete' });
+    for (const s of def.statics) this.boxes.push({ ...s, surface: s.look === 'container' ? 'container' : 'concrete', owner: OWNER_WORLD });
     for (const isl of def.islands) {
-      for (const b of bunkerWallBoxes(isl.bunker, false)) this.boxes.push({ ...b, surface: 'concrete' });
+      for (const b of bunkerWallBoxes(isl.bunker, false)) this.boxes.push({ ...b, surface: 'concrete', owner: OWNER_WORLD });
       for (const key of ['generator', 'vault', 'shop'] as const) {
         const p = isl[key], h = PROP_HALF[key];
-        this.boxes.push({ center: v3(p.x, p.y + h.y, p.z), half: h, rotY: isl.bunker.facingYaw, surface: key === 'shop' ? 'wood' : 'metal' });
+        this.boxes.push({ center: v3(p.x, p.y + h.y, p.z), half: h, rotY: isl.bunker.facingYaw, surface: key === 'shop' ? 'wood' : 'metal', owner: OWNER_WORLD });
       }
     }
-    if (harbor) for (const b of harborCraneBoxes(def.islands)) this.boxes.push({ ...b, surface: 'metal' });
-    // Pier decks: planks (a broken section's water is below the box, so shots there never land in it).
-    for (const d of def.docks ?? []) this.boxes.push({ center: d.center, half: d.half, rotY: d.rotY, surface: 'wood' });
+    if (harbor) for (const b of harborCraneBoxes(def.islands)) this.boxes.push({ ...b, surface: 'metal', owner: OWNER_WORLD });
+    // Pier decks: planks, owned by their section (marks go when it breaks; a broken section is skipped).
+    for (const d of def.docks ?? []) this.boxes.push({ center: d.center, half: d.half, rotY: d.rotY, surface: 'wood', owner: ownDock(d.id), dock: d.id });
   }
+
+  /** Pier sections that are broken (snapshot `docks`): no longer solid for marks. */
+  brokenDocks: ReadonlySet<number> = new Set();
 
   /** Ground surface of the island under (x, z), or null when not over an island top. */
   groundAt(x: number, z: number): { surface: WorldSurface; y: number } | null {
@@ -96,6 +119,7 @@ export class SurfaceMap {
   /** The solid box containing p (with a little slack), and the face normal p sits on. */
   boxAt(p: Vec3, slack = 0.08): { box: SurfBox; normal: Vec3 } | null {
     for (const b of this.boxes) {
+      if (b.dock !== undefined && this.brokenDocks.has(b.dock)) continue;
       const l = toLocal(p, b);
       const ex = Math.abs(l.x) - b.half.x, ey = Math.abs(l.y) - b.half.y, ez = Math.abs(l.z) - b.half.z;
       if (ex > slack || ey > slack || ez > slack) continue;
@@ -108,9 +132,11 @@ export class SurfaceMap {
 
   /**
    * What the end of a shot hit, or null: a miss into the air (`to` at full range), a player, or a built piece
-   * (pieceFx marks those). `from` is the shooter's eye.
+   * (pieceFx marks those), including one the same snapshot removed (`gone`: the shot that destroyed it). `solid`:
+   * dynamic things the map doesn't know (gameplay props, hazards), whose hits carry their owner. `from` is the
+   * shooter's eye.
    */
-  classify(from: Vec3, to: Vec3, range: number, ctx: { pieces: readonly PieceState[]; players: readonly PlayerState[]; waterY: number }): SurfaceHit | null {
+  classify(from: Vec3, to: Vec3, range: number, ctx: ShotView): SurfaceHit | null {
     const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
     const len = Math.hypot(dx, dy, dz);
     if (len < 0.05 || len >= range - 0.05) return null;
@@ -119,13 +145,11 @@ export class SurfaceMap {
       if (!pl.alive) continue;
       if (Math.hypot(to.x - pl.pos.x, to.z - pl.pos.z) <= PLAYER.radius + 0.15 && to.y >= pl.pos.y - 0.1 && to.y <= pl.pos.y + PLAYER.height + 0.15) return null;
     }
-    for (const pc of ctx.pieces) {
-      const s = PIECES[pc.kind];
-      const l = rotateY(v3(to.x - pc.pos.x, to.y - pc.pos.y - s.h / 2, to.z - pc.pos.z), -pc.rotY);
-      if (Math.abs(l.x) <= s.w / 2 + 0.08 && Math.abs(l.y) <= s.h / 2 + 0.08 && Math.abs(l.z) <= s.d / 2 + 0.08) return null;
-    }
+    if (inPiece(to, ctx.pieces) || (ctx.gone && inPiece(to, ctx.gone))) return null;
+    const dyn = ctx.solid?.(to);
+    if (dyn) return dyn;
     const box = this.boxAt(to);
-    if (box) return { surface: box.box.surface, point: to, normal: box.normal };
+    if (box) return { surface: box.box.surface, point: to, normal: box.normal, owner: box.box.owner };
     const g = this.groundAt(to.x, to.z);
     if (g && Math.abs(to.y - g.y) < 0.15) return { surface: g.surface, point: v3(to.x, g.y, to.z), normal: v3(0, 1, 0) };
     if (to.y <= ctx.waterY + 0.25) return { surface: 'water', point: v3(to.x, ctx.waterY, to.z), normal: v3(0, 1, 0) };
@@ -170,5 +194,14 @@ function cylinderEntry(from: Vec3, dx: number, dy: number, dz: number, a: number
   const p = v3(from.x + dx * t, from.y + dy * t, from.z + dz * t);
   if (p.y < d.pos.y || p.y > d.pos.y + c.h) return null;
   const nx = p.x - d.pos.x, nz = p.z - d.pos.z, nl = Math.hypot(nx, nz) || 1;
-  return { surface: COSMETIC_SURFACE[d.kind], point: p, normal: v3(nx / nl, 0, nz / nl) };
+  return { surface: COSMETIC_SURFACE[d.kind], point: p, normal: v3(nx / nl, 0, nz / nl), owner: ownCosmetic(d.id) };
+}
+
+function inPiece(to: Vec3, pieces: readonly PieceState[]): boolean {
+  for (const pc of pieces) {
+    const s = PIECES[pc.kind];
+    const l = rotateY(v3(to.x - pc.pos.x, to.y - pc.pos.y - s.h / 2, to.z - pc.pos.z), -pc.rotY);
+    if (Math.abs(l.x) <= s.w / 2 + 0.08 && Math.abs(l.y) <= s.h / 2 + 0.08 && Math.abs(l.z) <= s.d / 2 + 0.08) return true;
+  }
+  return false;
 }
