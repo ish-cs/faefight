@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { CHARGE, DT, ECONOMY, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
+import { CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
@@ -110,8 +110,11 @@ const MEDKIT_AT: Record<Difficulty, number> = { easy: 35, medium: 45, hard: 55, 
 const BUNKER_OUT = SEAL.exitRadius + 0.8;
 /** Grappling hook: uses are weighed this often; a chosen one holds this long while I turn to fire it. */
 const HOOK_CHECK_SEC = 0.25, HOOK_HOLD_SEC = 1.2;
-/** Stranded this long with no way home: take to the water (respawn at home). */
-const STRANDED_SEC = 8;
+/**
+ * Cut off from home with no hook to buy and no way to bridge: hold out (fight, collect) this long before the last
+ * resort, the water (a death; the respawn puts me home).
+ */
+const STRANDED_LAST_SEC = 90;
 /** Goals that want me at home (hooked back to when I can't walk there). */
 const HOME_GOALS = new Set<Goal>(['shop', 'bank', 'collect', 'fortify', 'defend', 'guard', 'heal']);
 
@@ -384,6 +387,9 @@ export class Bot {
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
+    // Cut off from home: get a hook here and hook home (fighting comes first: enemies in sight keep the goal's act).
+    const rescue = this.strandedAct(ctx);
+    if (rescue && !ctx.enemy) act = rescue;
     // An enemy spike trap in my way with nobody in sight: shoot it out before walking on.
     if (!ctx.enemy && !act.shootAt && !act.build && !act.trap) {
       const spikes = this.trapInWay(ctx, act.dir);
@@ -609,24 +615,60 @@ export class Bot {
   }
 
   /**
-   * Stranded (on an island I can't walk home from, no hook, too few scaffolds to bridge home, and no island with a
-   * shop I can walk to): after STRANDED_SEC the only way out is the water: walk off toward home and respawn there.
-   * Returns that heading, or null.
+   * Cut off: on a node other than home that I can't walk home from, with no walkable route to any player island (so
+   * no shop) and too few scaffolds to bridge home. Tracks since when (strandedSince).
+   */
+  private cutOff(c: Ctx): boolean {
+    const me = c.me, node = this.nav.nodeAt(me.pos), home = c.home.index;
+    const cut = node >= 0 && node !== home && !c.homeReach && (me.inv.pieces.scaffold ?? 0) < this.scaffoldsTo(node, home) &&
+      !c.view.map.some((isl) => isl.index === node || this.nav.hop(node, isl.index) !== null);
+    if (!cut) this.strandedSince = null;
+    else this.strandedSince ??= c.view.now;
+    return cut;
+  }
+
+  /**
+   * Getting home when cut off, the way a strong player would: with a hook in hand, walk to my shore nearest home
+   * (hookPlan then hooks over: hookNode points home); without one, buy one from a seller on this island (they stock
+   * hooks) once I can afford it. Null: nothing to do but play on here (fight, collect: the center pays) until I can.
+   */
+  private strandedAct(c: Ctx): Act | null {
+    if (!this.cutOff(c)) return null;
+    const me = c.me, node = this.nav.nodes[this.nav.nodeAt(me.pos)];
+    if (!node) return null;
+    if ((me.inv.grapples ?? 0) > 0) {
+      if (me.hook || me.mv?.pull) return null;
+      const d = flat(sub(c.home.center, node.center)), l = Math.hypot(d.x, d.z) || 1;
+      const rim = add(node.center, scale(d, (node.radius - 0.7) / l));
+      return this.goTo(v3(rim.x, node.groundY, rim.z), 0.8);
+    }
+    if (me.inv.cash < GRAPPLE.price) return null;
+    const seller = (c.view.potionShops ?? []).find((s) => this.nav.nodeAt(s) === node.index);
+    if (!seller) return null;
+    if (dist2D(me.pos, seller) <= USE_RANGE) return { dir: null, face: seller, shop: 'grapple' };
+    return this.goTo(seller, USE_RANGE - 0.3);
+  }
+
+  /**
+   * The last resort: cut off for STRANDED_LAST_SEC with no hook and no way to get one here: walk off into the water
+   * toward home (the respawn puts me back there). Returns that heading, or null.
    */
   private strandedDitch(c: Ctx): Vec3 | null {
-    const me = c.me, now = c.view.now, node = this.nav.nodeAt(me.pos), home = c.home.index;
-    const stuck = node >= 0 && node !== home && !c.homeReach && !(me.inv.grapples ?? 0) && !me.hook &&
-      (me.inv.pieces.scaffold ?? 0) < this.scaffoldsTo(node, home) &&
-      !c.view.map.some((isl) => isl.index === node || this.nav.hop(node, isl.index) !== null);
-    if (!stuck) { this.strandedSince = null; return null; }
-    this.strandedSince ??= now;
-    if (now - this.strandedSince < STRANDED_SEC) return null;
+    const me = c.me;
+    const held = c.view.now - (this.strandedSince ?? Infinity);
+    if (!(held >= STRANDED_LAST_SEC) || me.hook || me.mv?.pull) return null;
+    // A hook in hand that never finds a hold home (out of reach from every shore): give it twice as long.
+    if ((me.inv.grapples ?? 0) > 0 && held < 2 * STRANDED_LAST_SEC) return null;
+    const node = this.nav.nodeAt(me.pos);
+    const seller = (c.view.potionShops ?? []).some((s) => this.nav.nodeAt(s) === node);
+    if (seller && me.inv.cash >= GRAPPLE.price) return null;
     return norm(flat(sub(c.home.center, me.pos)));
   }
 
   /** The node my goal wants me on when I can't walk there (null: walking, or no use for a hook). */
   private hookNode(c: Ctx): number | null {
     const g = this.goal, C = this.nav.centerNode;
+    if (this.strandedSince !== null) return c.home.index; // cut off: the hook's job is getting me home
     if (g === 'bridge') return c.bridgeTo;
     if ((g === 'attack' || g === 'seal') && c.rivalIsl && !c.reach) return c.rivalIsl.index;
     if ((g === 'contest' || g === 'storm') && C >= 0 && !c.centerReach) return C;

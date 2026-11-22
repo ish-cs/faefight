@@ -67,4 +67,27 @@ describe('bots and the grappling hook', () => {
     expect(worst).toBeLessThan(60);
     expect(snap.winner).toBe(1);
   }, 600_000);
+
+  test('cut off on the center with cash: buys a hook from the seller and hooks home, without dying', async () => {
+    let bot: Bot | null = null;
+    const m = await Match.create({ players: [{ name: '', isBot: true, difficulty: 'pro' }, { name: '', isBot: true, difficulty: 'easy' }], seed: 1 },
+      { makeBot: (id, d, rng) => (id === 1 ? (bot = new Bot(id, d, rng)) : { think: (v) => ({ ...NO_INPUT, yaw: v.self.yaw, pitch: v.self.pitch }) }) });
+    let snap: Snapshot = m.tick(new Map());
+    const c = m.def.center;
+    m.debugTeleport(1, { x: c.goldGen.x, y: c.goldGen.y + 0.1, z: c.goldGen.z });
+    m.debugGive(1, { cash: 400 });
+    const home = m.map[snap.players[0].island];
+    let bought = false, homeAt: number | null = null;
+    for (let i = 0; i < 90 * 30 && homeAt === null; i++) {
+      snap = m.tick(new Map());
+      const p = snap.players[0];
+      if ((p.inv.grapples ?? 0) > 0) bought = true;
+      if (p.alive && Math.hypot(p.pos.x - home.center.x, p.pos.z - home.center.z) < home.radius) homeAt = snap.time;
+    }
+    m.dispose();
+    console.log(`cut off on the center: bought a hook ${bought}, home at ${homeAt?.toFixed(1)} s, deaths ${snap.players[0].deaths}, last note ${bot!.hookNote?.text}`);
+    expect(bought).toBe(true);
+    expect(homeAt).not.toBeNull();
+    expect(snap.players[0].deaths).toBe(0);
+  }, 300_000);
 });
