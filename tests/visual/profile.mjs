@@ -97,6 +97,25 @@ if (await page.evaluate(() => typeof window.__faefight.lookProbe === 'function')
   lat = await dbg('latency');
   await dbg('lookProbe', false);
 }
+// draws per pass: tally the renderer's per-object draws by camera for 60 frames (main camera, each shadow camera, post quads)
+const passes = await page.evaluate(() => new Promise((res) => {
+  const r = window.__faefight.renderer, gpu = r.gpu, orig = gpu._renderObjectDirect;
+  const tally = new Map(), names = new Map();
+  let frames = 0;
+  gpu._renderObjectDirect = function (object, material, scene, camera, ...rest) {
+    const k = camera === r.camera ? (scene === r.scene ? 'camera' : 'camera:other-scene') : camera.isOrthographicCamera && scene === r.scene ? `shadow#${(names.has(camera) ? names : names.set(camera, names.size)).get(camera)}` : `post/other (${object.name || object.type})`;
+    const e = tally.get(k) ?? { draws: 0, tris: 0 };
+    e.draws++;
+    const g = object.geometry, n = g ? (g.index ? g.index.count : g.attributes.position?.count ?? 0) / 3 : 0;
+    e.tris += n * (object.isInstancedMesh ? object.count : g?.isInstancedBufferGeometry ? g.instanceCount : 1);
+    tally.set(k, e);
+    return orig.call(this, object, material, scene, camera, ...rest);
+  };
+  const tick = () => { if (++frames < 60) requestAnimationFrame(tick); else { gpu._renderObjectDirect = orig; res([...tally].map(([k, e]) => [k, Math.round(e.draws / 60), Math.round(e.tris / 60)])); } };
+  requestAnimationFrame(tick);
+}));
+console.log('-- draws / tris per pass (per frame, 60-frame mean) --');
+for (const [k, d, t] of passes) console.log(`${String(d).padStart(5)} ${String(Math.round(t / 1000)).padStart(6)}kt  ${k}`);
 // draw census at this view: visible meshes inside the camera frustum, grouped by name prefix
 const census = await page.evaluate(([full, sortTris]) => {
   const r = window.__faefight.renderer, cam = r.camera, scene = r.scene;
