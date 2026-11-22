@@ -4,7 +4,7 @@ import { MOVE } from '../movement';
 import type { Box, Bunker, CenterIsland, Doorway, IslandLayout, StaticBox } from '../map';
 import { doorBlocked } from './plans';
 import type { Vec3 } from '../types';
-import { add, dist2D, forward, right, rotateY, scale, sub, v3, yawOf } from '../vec';
+import { add, clone, dist2D, forward, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import type { BotView } from './view';
 
 /** Bridges run parallel to the node-to-node line, offset to the builder's right, clear of vault/shop/generator. */
@@ -26,6 +26,8 @@ const JUMP_STEP = 0.1;
 const BUNKER_HALF = MAP.bunker.interior / 2 + MAP.bunker.wall;
 /** Within this (m) of a bunker corner waypoint counts as having rounded it (withinIsland). */
 const CORNER_REACHED = 0.6;
+/** Going round a bunker, keep the corner I'm heading for unless another is this much shorter (m). */
+const CORNER_STICK = 1.0;
 /** Walk grid: cell size, and how far to keep the body from cover (player radius + margin). */
 const GRID_CELL = 0.5;
 const COVER_CLEARANCE = PLAYER.radius + 0.3;
@@ -99,7 +101,8 @@ function segHitsRect(a: Vec3, b: Vec3, hx: number, hz: number): boolean {
 
 /** Next waypoint toward dest on one island: through doorways when entering/leaving the bunker, around it otherwise. */
 /** `open`: doorways a player can still walk through (a plugged one is skipped unless all are). */
-export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open: (d: Doorway) => boolean = () => true): Vec3 {
+export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open: (d: Doorway) => boolean = () => true,
+  prefer: Vec3 | null = null): Vec3 {
   const b = isl.bunker;
   const inMe = insideBunker(b, me), inDest = insideBunker(b, dest);
   if (inMe === inDest) {
@@ -120,12 +123,17 @@ export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open
     // bots dither on it, their view flipping with each step).
     const at = corners.find((q) => dist2D(a, q) < CORNER_REACHED);
     if (at && !segHitsSquare(a, c, BUNKER_HALF + 0.05)) return dest;
-    let best: Vec3 | null = null, bestCost = Infinity;
+    let best: Vec3 | null = null, bestCost = Infinity, kept: Vec3 | null = null, keptCost = Infinity;
+    const was = prefer ? toLocal(b, prefer) : null;
     for (const corner of corners) {
       if (corner === at || segHitsSquare(a, corner, BUNKER_HALF + 0.05)) continue;
       const cost = dist2D(a, corner) + dist2D(corner, c);
       if (cost < bestCost) { bestCost = cost; best = corner; }
+      if (was && dist2D(was, corner) < 0.1) { kept = corner; keptCost = cost; }
     }
+    // Two corners about as far (dest roughly opposite, behind the bunker): re-picking each step flips between them,
+    // each step making the other one nearer, and the bot paces on the spot with its view swinging back and forth.
+    if (kept && keptCost <= bestCost + CORNER_STICK) best = kept;
     return best ? toWorld(b, best) : dest;
   }
   const usable = b.doorways.filter(open);
@@ -288,6 +296,8 @@ export class Nav {
   private nodesFor: IslandLayout[] | null = null;
   private grids = new Map<number, WalkGrid>();
   private planned: { node: number; goal: Vec3; at: number; pts: Vec3[] } | null = null;
+  /** The last within-island waypoint and what it was for (corner hysteresis, see withinIsland). */
+  private corner: { node: number; dest: Vec3; wp: Vec3 } | null = null;
   /** Finished bridges between node pairs, memoised for the current tick. */
   private bridges = new Map<number, Lane | null>();
 
@@ -427,7 +437,9 @@ export class Nav {
   within(i: number, me: Vec3, dest: Vec3): Vec3 {
     const node = this.nodeList[i];
     const pieces = this.view.pieces;
-    const wp = node.bunker ? withinIsland({ bunker: node.bunker }, me, dest, (d) => !doorBlocked(pieces, d)) : dest;
+    const prefer = this.corner && this.corner.node === i && dist2D(this.corner.dest, dest) < 0.75 ? this.corner.wp : null;
+    const wp = node.bunker ? withinIsland({ bunker: node.bunker }, me, dest, (d) => !doorBlocked(pieces, d), prefer) : dest;
+    this.corner = { node: i, dest: clone(dest), wp: clone(wp) };
     const g = this.grids.get(i);
     if (!g || !g.hasObstacles || g.clear(me, wp)) return wp;
     const now = this.view.now;
