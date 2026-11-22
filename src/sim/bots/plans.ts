@@ -1,5 +1,5 @@
 import { AMMO_BOX, CHARGE, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, MAP, MEDKIT, PIECES, TRAP, POTIONS, SEAL, WEAPONS } from '../constants';
-import { buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
+import { ammoPrice, buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
 import { canAdd, countOf } from '../hotbar';
 import { uselessReason } from '../potions';
 import type { Doorway } from '../map';
@@ -21,9 +21,9 @@ export const hasAmmo = (inv: Inventory, g: WeaponKind) => {
 export const ownsGun = (inv: Inventory) => GUNS.some((g) => hasAmmo(inv, g));
 export const isHard = (kind: PieceKind) => HARD.includes(kind);
 
-/** Best gun to hold at this range ('fists' if none has ammo). */
-export function bestGun(inv: Inventory, range: number): WeaponKind {
-  if (range < 8 && hasAmmo(inv, 'shotgun')) return 'shotgun';
+/** Best gun to hold at this range ('fists' if none has ammo); the shotgun inside `close` m. */
+export function bestGun(inv: Inventory, range: number, close = 8): WeaponKind {
+  if (range < close && hasAmmo(inv, 'shotgun')) return 'shotgun';
   return GUNS.find((g) => hasAmmo(inv, g)) ?? 'fists';
 }
 
@@ -107,7 +107,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   }
   if (needs.charge && inv.charges === 0) return cash >= CHARGE.price ? 'charge' : null;
   const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
-  if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= 20) return 'ammo';
+  if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= ammoPrice(p.equipped)) return 'ammo';
   const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
