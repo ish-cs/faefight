@@ -105,6 +105,7 @@ export class GameProps {
       mesh.castShadow = false; // the shadow batch below casts for every material at once
       mesh.receiveShadow = true;
       mesh.frustumCulled = false; // spans the map; perObjectFrustumCulled culls each instance instead
+      mesh.sortObjects = false; // per-pass depth sort of every instance (_updateDrawParameters) cost more than it saves
       this.root.add(mesh);
       for (const { kind, geometry, list } of group) {
         const gid = mesh.addGeometry(geometry);
@@ -137,6 +138,7 @@ export class GameProps {
     shadow.castShadow = true;
     shadow.layers.set(SHADOW_ONLY_FIRST_LAYER);
     shadow.frustumCulled = false;
+    shadow.sortObjects = false;
     this.root.add(shadow);
     for (const { geo, list } of merged) {
       const gid = shadow.addGeometry(geo);

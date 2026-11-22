@@ -102,6 +102,7 @@ export class Debris {
         m.receiveShadow = !shadow;
         m.layers.set(shadow ? SHADOW_ONLY_FIRST_LAYER : 0); // shadow batch: first cascade only, never drawn by the camera
         m.frustumCulled = false; // spans the map; perObjectFrustumCulled culls each instance
+        m.sortObjects = false; // per-pass depth sort of every instance cost more than the overdraw it saves
         for (const e of entries) {
           const gid = m.addGeometry(e.geo);
           for (const pi of e.ids) {
