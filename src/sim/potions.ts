@@ -14,6 +14,8 @@ export const SHOP_LABEL: Partial<Record<ShopItem, string>> = {
 };
 
 export const shopFor = (item: ShopItem): ShopKind => (isPotionItem(item) ? 'potion' : 'home');
+/** Sold at both counters: the grappling hook (a traveller's tool: the neutral seller stocks it too, so nobody is stuck out there). */
+export const soldAt = (item: ShopItem, at: ShopKind): boolean => shopFor(item) === at || item === 'grapple';
 
 /**
  * Where the potion sellers stand. TEMPORARY: until the neutral centre island lands (map work), one
