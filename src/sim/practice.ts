@@ -157,6 +157,9 @@ function startKit(): { inv: Inventory; hotbar: (HotbarItem | null)[] } {
     inv.pieces[k] = PRACTICE.pieces;
     addKind(hotbar, k);
   }
+  // The pistol everyone starts with, after the build slots so the 1-7 layout stays put.
+  inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag * PRACTICE.spareMags };
+  addKind(hotbar, 'pistol');
   return { inv, hotbar };
 }
 
@@ -183,6 +186,8 @@ export class PracticeRange {
       const id = Math.max(...s.players.keys()) + 1; // player ids (not entity ids): 2, 3, …
       const p = newPlayer(id, spec.name, true, 1, spec.post);
       p.inv = emptyInventory();
+      p.hotbar = emptyHotbar();
+      p.equipped = 'fists';
       p.yaw = spec.yaw;
       s.players.set(id, p);
       physics.addPlayer(id, p.pos);
