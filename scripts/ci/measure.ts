@@ -266,7 +266,7 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     proVsHard, ladder, placementByTier,
     shipCheck: { pass: null, checks: [] },
   };
-  // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%).
+  // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%; the ladder bar here is 80% per step, the steward hand-off rule).
   // The shipChecks comparisons against the hand-tuned params need a second series and are not run here.
   const checks: Check[] = [];
   if (scenario.startsWith('ffa8')) {
@@ -275,7 +275,7 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     checks.push({ name: 'nobody sits at home geared > 60 s', pass: s.longestHomeSitSec <= 60, value: `${s.longestHomeSitSec.toFixed(0)} s` });
   } else if (ladder) {
     const name = scenario === '1v1-pro-vs-hard' ? 'PRO beats hard' : `${ladder.higher} beats ${ladder.lower}`;
-    checks.push({ name: `${name} ≥ 70%`, pass: ladder.share >= 0.7, value: `${(100 * ladder.share).toFixed(0)}%` });
+    checks.push({ name: `${name} ≥ 80%`, pass: ladder.share >= 0.8, value: `${(100 * ladder.share).toFixed(0)}%` });
   }
   s.shipCheck = { pass: checks.length ? checks.every((c) => c.pass) : null, checks };
   return s;
