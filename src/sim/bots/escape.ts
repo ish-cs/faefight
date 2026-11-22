@@ -17,7 +17,7 @@ const BODY_TOP = 1.8;
 const OUT = SEAL.exitRadius + 0.4;
 /** A piece this close to a doorway's center stands in or right against it. */
 const DOOR_ZONE = 1.8;
-const STEPS: [number, number][] =[[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+const STEPS: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
 type Box = { center: Vec3; hx: number; hz: number; rotY: number; piece: PieceState | null };
 

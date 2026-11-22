@@ -1333,13 +1333,17 @@ export class Bot {
         return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression + (gun ? sealedFoe : 0);
       }
       case 'disengage': {
-        if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
+        const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
+        // Backing off low on health is a commitment: stay in cover until healed (drive caps it at reengageSec), not
+        // back to the errand the moment they drop out of sight and back again when they show (measured: ffa8-pro
+        // seed 20, 9 hp at the door, a minute of pacing between collect and backing off from a rival 45-60 m off).
+        const holding = this.goal === 'disengage' && this.retreatSince !== null && hp < low;
+        if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5 && !holding) return 0;
         // Outside the safe ring, getting in comes first (running from a gun into the storm kills just as well).
         if (view.storm && Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm)) return 0;
         // Final circle: nowhere left to run (backing off only buys regen, and the fight never ends); fists vs fists
         // in sudden death likewise.
         if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
-        const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
         if (hp < low) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&

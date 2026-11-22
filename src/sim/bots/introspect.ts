@@ -99,7 +99,7 @@ type Act = {
 type Planned = { node: number; goal: Vec3; at: number; pts: Vec3[] } | null;
 type Internals = {
   id: number; difficulty: Difficulty; personality: { archetype: string; traits: Traits };
-  t: Traits; style: ShopStyle; goal: Goal; targetId: number | null; hesitateUntil: number; nextScoreAt: number;
+  t: Traits; style: ShopStyle; goal: Goal; targetId: number | null; hesitateUntil: number; nextScoreAt: number; retreatSince: number | null;
   winded: boolean; centerMinded: boolean; view?: BotView; burstN: number; burstRestUntil: number;
   grid: unknown; lastScores: { goal: string; score: number }[];
   aim: { target: number; seenAt: number; lastSeen: number; err: Angles; p: AimProfile };
@@ -177,8 +177,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       };
     }
     case 'disengage': {
-      if (!c.enemy && now - I.mem.lastHurtAt > 1.5) return zero('not under fire');
       const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
+      const holding = I.goal === 'disengage' && I.retreatSince !== null && hp < low;
+      if (!c.enemy && now - I.mem.lastHurtAt > 1.5 && !holding) return zero('not under fire');
       if (hp < low) {
         return { f: [['low hp', 1.15], ['below bail line', low - hp]], why: `Down to ${Math.round(me.hp)} hp, under my bail-out line of ${Math.round(low * 100)}: backing off` };
       }
