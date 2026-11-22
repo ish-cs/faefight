@@ -137,6 +137,8 @@ const INSURANCE = WEAPONS.pistol.price + 25;
 const BUNKER_OUT = SEAL.exitRadius + 0.8;
 /** Grappling hook: uses are weighed this often; a chosen one holds this long while I turn to fire it. */
 const HOOK_CHECK_SEC = 0.25, HOOK_HOLD_SEC = 1.2;
+/** Stranded this long with no way home: take to the water (respawn at home). */
+const STRANDED_SEC = 8;
 /** Goals that want me at home (hooked back to when I can't walk there). */
 const HOME_GOALS = new Set<Goal>(['shop', 'bank', 'collect', 'fortify', 'defend', 'guard', 'heal']);
 
@@ -286,6 +288,8 @@ export class Bot {
   /** Grappling hook: what I'm about to use it for, when I next weigh it, and the last use (spectators). */
   private hookIntent: (HookIntent & { until: number }) | null = null;
   private nextHookCheck = 0;
+  /** When I noticed I'm stranded with no way home (strandedDitch). */
+  private strandedSince: number | null = null;
   hookNote: { t: number; text: string } | null = null;
   /** Blowing out a pier section under an enemy (or under the piece they hide behind): which, how, and why. */
   private dockPlan: { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number } | null = null;
@@ -422,6 +426,7 @@ export class Bot {
       this.perch = null;
       this.fightSince = null;
       this.hookIntent = null;
+      this.strandedSince = null;
       this.nextScoreAt = -Infinity;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
@@ -603,6 +608,9 @@ export class Bot {
       const back = this.nav.rescue(!!act.sprint);
       if (back) { dir = back; jump = false; }
     }
+    // Stranded with no way home at all: walk off into the water toward home (the respawn puts me back there).
+    const ditch = this.strandedDitch(ctx);
+    if (ditch) { dir = ditch; jump = false; act = { ...act, sprint: true }; }
     // Stuck means pushing and not moving; held back at an edge by safeDir isn't stuck (a hop there goes in the water).
     this.trackStuck(now, me, dir);
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
@@ -726,9 +734,37 @@ export class Bot {
       const why = yankReason(c.view, H, e, c.enemyDist, gun);
       if (why && this.rng() < H.yankRate * HOOK_CHECK_SEC) it = { why: 'yank', target: e.id, note: why };
     }
-    if (!it && !e && want !== null && this.nav.nodes[want]) it = crossTo(c.view, H, this.nav.nodes[want]);
+    if (it?.why === 'escape' && !this.canReturn(c, it.node)) it = null;
+    if (!it && !e && want !== null && this.nav.nodes[want] && this.canReturn(c, want)) it = crossTo(c.view, H, this.nav.nodes[want]);
     if (it) this.hookIntent = { ...it, until: now + HOOK_HOLD_SEC };
     return it;
+  }
+
+  /**
+   * Would hooking over to node `to` leave me a way home from there: it is home, a walkable bridge leads home, a
+   * hook stays in hand for the trip back (HookParams.keepForTravel, at least 1), or I carry the scaffolds to bridge it.
+   */
+  private canReturn(c: Ctx, to: number): boolean {
+    const home = c.home.index;
+    if (to === home || this.nav.hop(to, home) !== null) return true;
+    if ((c.me.inv.grapples ?? 0) - 1 >= Math.max(1, Math.round(this.P.hook.keepForTravel))) return true;
+    return (c.me.inv.pieces.scaffold ?? 0) >= this.scaffoldsTo(to, home);
+  }
+
+  /**
+   * Stranded (on an island I can't walk home from, no hook, too few scaffolds to bridge home, and no island with a
+   * shop I can walk to): after STRANDED_SEC the only way out is the water: walk off toward home and respawn there.
+   * Returns that heading, or null.
+   */
+  private strandedDitch(c: Ctx): Vec3 | null {
+    const me = c.me, now = c.view.now, node = this.nav.nodeAt(me.pos), home = c.home.index;
+    const stuck = node >= 0 && node !== home && !c.homeReach && !(me.inv.grapples ?? 0) && !me.hook &&
+      (me.inv.pieces.scaffold ?? 0) < this.scaffoldsTo(node, home) &&
+      !c.view.map.some((isl) => isl.index === node || this.nav.hop(node, isl.index) !== null);
+    if (!stuck) { this.strandedSince = null; return null; }
+    this.strandedSince ??= now;
+    if (now - this.strandedSince < STRANDED_SEC) return null;
+    return norm(flat(sub(c.home.center, me.pos)));
   }
 
   /** The node my goal wants me on when I can't walk there (null: walking, or no use for a hook). */
