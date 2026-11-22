@@ -30,17 +30,33 @@ async function join(t: LoopbackTransport, code: string, name: string) {
 }
 
 describe('pickBackup', () => {
-  test('lowest RTT wins, unknown RTTs last, ties to the lowest seat', () => {
+  test('the lowest seat (joined first) wins, whatever order the candidates come in', () => {
     expect(M.pickBackup([], null)).toBeNull();
-    expect(M.pickBackup([{ seat: 2, peerId: 'b', rtt: 40 }, { seat: 1, peerId: 'a', rtt: 90 }], null)).toBe(2);
-    expect(M.pickBackup([{ seat: 2, peerId: 'b', rtt: null }, { seat: 3, peerId: 'c', rtt: 200 }], null)).toBe(3);
-    expect(M.pickBackup([{ seat: 3, peerId: 'c', rtt: null }, { seat: 1, peerId: 'a', rtt: null }], null)).toBe(1);
-    expect(M.pickBackup([{ seat: 2, peerId: 'b', rtt: 50 }, { seat: 1, peerId: 'a', rtt: 50 }], null)).toBe(1);
+    expect(M.pickBackup([{ seat: 2, peerId: 'b' }, { seat: 1, peerId: 'a' }], null)).toBe(1);
+    expect(M.pickBackup([{ seat: 3, peerId: 'c' }, { seat: 2, peerId: 'b' }], null)).toBe(2);
+    const cands = [{ seat: 4, peerId: 'd' }, { seat: 2, peerId: 'b' }, { seat: 3, peerId: 'c' }];
+    for (let i = 0; i < cands.length; i++) expect(M.pickBackup([...cands.slice(i), ...cands.slice(0, i)], null)).toBe(2);
   });
   test('sticky while the current backup is still connected; re-picked once it leaves', () => {
-    const c = [{ seat: 1, peerId: 'a', rtt: 300 }, { seat: 2, peerId: 'b', rtt: 20 }];
-    expect(M.pickBackup(c, 1)).toBe(1);
-    expect(M.pickBackup(c.slice(1), 1)).toBe(2);
+    const c = [{ seat: 1, peerId: 'a' }, { seat: 2, peerId: 'b' }, { seat: 3, peerId: 'c' }];
+    expect(M.pickBackup(c, 2)).toBe(2);
+    expect(M.pickBackup(c.filter((x) => x.seat !== 2), 2)).toBe(1);
+  });
+  test('the host migrator plans the same backup whoever answers first (no RTT race)', () => {
+    for (const order of [['carol', 'bob'], ['bob', 'carol']]) {
+      const seatOf: Record<string, number> = { bob: 1, carol: 2 };
+      const sent: [string, HostMsg][] = [];
+      const mig = new M.HostMigrator({
+        guests: () => order.map((peerId) => ({ seat: seatOf[peerId], peerId })),
+        send: (peerId, m) => sent.push([peerId, m]),
+        requestCheckpoint: () => {},
+        meta: () => { throw new Error('unused'); },
+      }, () => 0);
+      mig.tick();
+      expect(mig.plan?.seat).toBe(1);
+      const plans = sent.filter(([, m]) => m.t === 'mplan').map(([p, m]) => [p, (m as Extract<HostMsg, { t: 'mplan' }>).seat]);
+      expect(new Map(plans as [string, number][])).toEqual(new Map([['bob', 1], ['carol', 1]]));
+    }
   });
 });
 

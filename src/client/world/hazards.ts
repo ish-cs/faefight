@@ -214,7 +214,9 @@ export class HazardLayer {
         m.castShadow = false; m.receiveShadow = receive; // the shadow batch below casts for every kind
         return m;
       });
-      shadowGeos.push({ geo: mergeGeometries(parts.map((x) => x.geometry), false)!, list });
+      const merged = mergeGeometries(parts.map((x) => x.geometry), false);
+      if (!merged) throw new Error(`[world/hazards] ${kind}: its parts have mismatched attributes; cannot build the shadow batch`);
+      shadowGeos.push({ geo: merged, list });
       list.forEach((d, i) => {
         const matrix = new THREE.Matrix4().compose(_p.set(d.pos.x, d.pos.y, d.pos.z), _q.setFromAxisAngle(_up, d.rotY), _one);
         for (const m of meshes) m.setMatrixAt(i, matrix);
