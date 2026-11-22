@@ -469,9 +469,11 @@ export class Bot {
       const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult && !hittingMe;
       // Not on my island and far: no drive-by shots across the water (close in and fight instead), unless they're on me
       // or they're the last rival standing (nobody else to give my position away to: a duel is won on first damage).
+      // Islands by nav node, so the center island counts as one (islandAt says -1 there, like water).
+      const myNode = this.nav.nodeAt(me.pos);
       const across = foeDist > this.P.drive.crossFire[this.difficulty] && !hittingMe &&
         view.others.some((o) => !o.eliminated && o.id !== foe.id) &&
-        (ctx.on < 0 || islandAt(view.map, foe.pos) !== ctx.on);
+        (myNode < 0 || this.nav.nodeAt(foe.pos) !== myNode);
       fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !across && !this.burstRest(now, me, foeDist);
       if (hook?.why === 'yank' && hook.target === foe.id && r.ready && r.onTarget) { grapple = true; fire = false; }
     } else if (nade) {
