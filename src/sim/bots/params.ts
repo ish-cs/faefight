@@ -34,7 +34,8 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  *   owner's death the camp holds without seeing them; siegeScore: attack score while camping.
  * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
  * - crossFire: hold fire at an enemy farther than this (m) who isn't on the island I stand on (across the water, or
- *   either of us on a bridge) unless that enemy is hitting me: no plinking in passing, the fights happen up close.
+ *   either of us on a bridge) unless that enemy is hitting me or is my last rival: no plinking in passing, the
+ *   fights happen up close.
  * - sealBonus: added to the seal goal (seals win games); sealedHunt: added to attack/fight against a rival whose
  *   bunker is sealed (each death of theirs eliminates them); sealedFocus: among visible enemies, one with a sealed
  *   bunker counts as this many times closer when choosing whom to shoot.

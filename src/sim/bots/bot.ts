@@ -448,8 +448,10 @@ export class Bot {
       const w = WEAPONS[me.equipped];
       const hittingMe = this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3;
       const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult && !hittingMe;
-      // Not on my island and far: no drive-by shots across the water (close in and fight instead), unless they're on me.
+      // Not on my island and far: no drive-by shots across the water (close in and fight instead), unless they're on me
+      // or they're the last rival standing (nobody else to give my position away to: a duel is won on first damage).
       const across = foeDist > this.P.drive.crossFire[this.difficulty] && !hittingMe &&
+        view.others.some((o) => !o.eliminated && o.id !== foe.id) &&
         (ctx.on < 0 || islandAt(view.map, foe.pos) !== ctx.on);
       fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !across && !this.burstRest(now, me, foeDist);
       if (hook?.why === 'yank' && hook.target === foe.id && r.ready && r.onTarget) { grapple = true; fire = false; }
@@ -1325,7 +1327,10 @@ export class Bot {
   }
 
   private pick(c: Ctx): Goal {
-    if (this.trapped(c)) { this.probe?.decided(c, null, 'defend'); return 'defend'; }
+    // Inside my own bunker with a doorway plugged: clearing it (or slipping out round it) comes first. Any other goal
+    // walks into the plug (measured: a PRO stood 260 s inside, its collect route running through its plugged door).
+    const walledIn = !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos) && this.blockers(c).some((p) => this.canClear(c, p));
+    if (this.trapped(c) || walledIn) { this.probe?.decided(c, null, 'defend'); return 'defend'; }
     const rows: ScoreRow[] | null = this.probe ? [] : null;
     let best: Goal = (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
