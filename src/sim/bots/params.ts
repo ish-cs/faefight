@@ -546,6 +546,8 @@ const ruleMatch = (pattern: string, key: string) => {
 /** [min, max] per tunable flat key; every default lies inside its box (tests/sim/botParams.test.ts checks). */
 /** Keys searched only within ±fraction of their hand-tuned default (clipped to their RANGE_RULES box). */
 const SEARCH_NEAR_DEFAULT: [string, number][] = [['aim.feel.*.spring', 0.25], ['aim.feel.*.damping', 0.25], ['aim.feel.*.maxAccel', 0.25], ['gunSkill.*.recoilComp', 0.15]];
+/** Trainer search limits tighter than RANGE_RULES (product decisions): PRO must not buy back long-range plinking. */
+const SEARCH_LIMIT: [string, [number, number]][] = [['drive.crossFire.pro', [15, 30]]];
 
 export const PARAM_RANGES: Readonly<Record<string, [number, number]>> = Object.freeze(Object.fromEntries(
   Object.keys(flattenParams(HAND_BOT_PARAMS)).flatMap((k): [string, [number, number]][] => {
@@ -553,6 +555,8 @@ export const PARAM_RANGES: Readonly<Record<string, [number, number]>> = Object.f
     if (brain) return [[k, [brain[0], brain[1]]]];
     const r = RANGE_RULES.find(([p]) => ruleMatch(p, k));
     if (!r) return [];
+    const lim = SEARCH_LIMIT.find(([p]) => ruleMatch(p, k))?.[1];
+    if (lim) return [[k, [Math.max(r[1][0], lim[0]), Math.min(r[1][1], lim[1])]]];
     // Feel keys (how a view spring moves) are searched only near their hand values: winning shouldn't buy extremes.
     const f = SEARCH_NEAR_DEFAULT.find(([p]) => ruleMatch(p, k))?.[1];
     if (f === undefined) return [[k, r[1]]];
