@@ -433,9 +433,6 @@ export class Bot {
     // Passing the potion seller short of heals or shields: step over and buy.
     const detour = !ctx.enemy && !heal && !act.shop && !act.build ? this.sellerDetour(ctx) : null;
     if (detour) act = detour;
-    // A low enemy just ducked out of sight (to heal): push them before it lands, like a strong player.
-    const chase = !ctx.enemy && heal?.act !== 'use' && !act.build && !act.shop ? this.chaseLow(ctx) : null;
-    if (chase) act = chase;
     const dropSlot = !ctx.enemy && heal?.act !== 'use' && !act.build && !act.shop ? this.healDrop(ctx) : null;
 
     // Aim: enemies first, then whatever the goal wants to look or shoot at, else along the walk.
@@ -2461,25 +2458,6 @@ export class Bot {
         const a = this.place(c, kind, add(me.pos, scale(to, d)), yawOf(to), face);
         if (a) return a;
       }
-    }
-    return null;
-  }
-
-  /**
-   * An enemy seen low (hp at or under heal.chaseHp) within heal.chaseM in the last heal.chaseSec, now out of sight,
-   * while I'm fit (hp + shield at least heal.punishHp): run at where they were (they're hiding to heal). Medium+.
-   */
-  private chaseLow(c: Ctx): Act | null {
-    const me = c.me, now = c.view.now, H = this.P.heal;
-    if (this.difficulty === 'easy' || me.hp + me.shield < H.punishHp || ['storm', 'defend', 'disengage'].includes(this.goal)) return null;
-    for (const o of c.view.others) {
-      if (o.eliminated) continue;
-      const s = this.mem.recent(o.id, now, H.chaseSec);
-      if (!s || s.t >= now || s.hp > H.chaseHp || dist2D(s.pos, me.pos) > H.chaseM) continue;
-      if (!this.sameGround(me.pos, s.pos) && !this.nav.routeTo(s.pos)) continue;
-      if (dist2D(s.pos, me.pos) < 1.5) continue;
-      this.healNote = { t: now, text: `@${o.id} ducked out of sight low (${Math.round(s.hp)} hp): pushing them` };
-      return { ...this.goTo(s.pos, 1.2), sprint: true, approach: true };
     }
     return null;
   }

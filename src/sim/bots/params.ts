@@ -242,8 +242,6 @@ export type GunSkill = { recoilComp: number; burstShots: number; burstPause: num
  *   reload + reloadSlack s).
  * - coverFirst: chance (per incident) to break line of sight before healing; hideSec: give up hiding after this long
  *   and heal in the open.
- * - chaseSec / chaseHp / chaseM: an enemy seen at or under chaseHp within chaseM m in the last chaseSec s, now out of
- *   sight (ducked out to heal): push to where they were (while my hp + shield is at least punishHp).
  * - hideM: cover this close (or a wall I can throw) is worth breaking line of sight for; farther, heal where I stand.
  * - reHealSec: after a mid-fight heal, no other one for this long unless a burst lands (one heal per exchange: fights end).
  * - pressLead: mid-fight, my hp + shield this far above the enemy in front of me: push the kill instead of healing.
@@ -257,7 +255,7 @@ export type HealParams = {
   fightHp: Record<Difficulty, number>; burst: number; burstHp: number; pressHp: number; openDist: number;
   reloadWeight: Record<Difficulty, number>; reloadSlack: number;
   coverFirst: Record<Difficulty, number>; hideSec: number;
-  reHealSec: number; pressLead: number; punishHp: number; hideM: number; chaseSec: number; chaseHp: number; chaseM: number;
+  reHealSec: number; pressLead: number; punishHp: number; hideM: number;
   detourM: number;
   slotValue: number;
   keep: { pistol: number; trap: number; ramp: number; speedPotion: number; grapple: number; sandbags: number; grenade: number };
@@ -387,7 +385,7 @@ export const HEAL: HealParams = {
   fightHp: D(25, 40, 50, 55), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
   reloadWeight: D(0, 0.4, 0.8, 1), reloadSlack: 0.3,
   coverFirst: D(0.2, 0.5, 0.85, 0.95), hideSec: 2.5,
-  reHealSec: 8, pressLead: 25, punishHp: 40, hideM: 4, chaseSec: 4, chaseHp: 50, chaseM: 25,
+  reHealSec: 8, pressLead: 25, punishHp: 40, hideM: 4,
   detourM: 18,
   slotValue: 0.5,
   keep: { pistol: 0.25, trap: 0.3, ramp: 0.35, speedPotion: 0.15, grapple: 0.45, sandbags: 0.4, grenade: 0.6 },
@@ -466,7 +464,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['heal.stock.*', [0, 3]], ['heal.stockAt.*', [100, 1200]], ['heal.stockPer', [150, 1000]], ['heal.stockMax', [1, 4]],
   ['heal.safeHp.*', [30, 95]], ['heal.quietSec', [0.5, 6]], ['heal.fightHp.*', [15, 90]], ['heal.burst', [15, 80]],
   ['heal.burstHp', [0, 50]], ['heal.pressHp', [0, 80]], ['heal.openDist', [15, 70]], ['heal.reloadWeight.*', [0, 1]],
-  ['heal.reloadSlack', [-0.5, 1]], ['heal.coverFirst.*', [0, 1]], ['heal.hideSec', [0.5, 6]], ['heal.reHealSec', [0, 20]], ['heal.pressLead', [0, 80]], ['heal.punishHp', [0, 100]], ['heal.hideM', [1, 10]], ['heal.chaseSec', [0, 10]], ['heal.chaseHp', [0, 100]], ['heal.chaseM', [5, 50]], ['heal.detourM', [0, 40]],
+  ['heal.reloadSlack', [-0.5, 1]], ['heal.coverFirst.*', [0, 1]], ['heal.hideSec', [0.5, 6]], ['heal.reHealSec', [0, 20]], ['heal.pressLead', [0, 80]], ['heal.punishHp', [0, 100]], ['heal.hideM', [1, 10]], ['heal.detourM', [0, 40]],
   ['heal.slotValue', [0, 1]], ['heal.keep.*', [0, 1]],
   ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
   ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
