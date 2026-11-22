@@ -251,6 +251,8 @@ export class Bot {
   /** This fight's rolls (coverFirst, reloadWeight), since when I've been breaking line of sight to heal. */
   private healRoll = { cover: true, reload: true };
   private healHideAt: number | null = null;
+  /** How I'd break line of sight to heal right now (cover close by or a wall to throw), or null: none at hand. */
+  private healHideAct: Act | null = null;
   /** When I last started a heal mid-fight (heal.reHealSec commitment). */
   private fightHealAt = -Infinity;
   /** Last heal decision (spectators), heals wanted (stock target), slots dropped to fit a heal (not looted back). */
@@ -427,7 +429,7 @@ export class Bot {
     if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) act = { ...act, ...this.escape(ctx) };
     // Healing (heal.ts), mid-fight included: low with them in my face, break line of sight first (cover, a wall, back off).
     const heal = this.healDecide(ctx);
-    if (ctx.enemy && this.healHideAt !== null && this.goal !== 'storm' && (heal?.act === 'hide' || heal?.act === 'wait')) act = this.healHide(ctx, ctx.enemy);
+    if (ctx.enemy && this.healHideAct && this.healHideAt !== null && this.goal !== 'storm' && (heal?.act === 'hide' || heal?.act === 'wait')) act = this.healHideAct;
     // Passing the potion seller short of heals or shields: step over and buy.
     const detour = !ctx.enemy && !heal && !act.shop && !act.build ? this.sellerDetour(ctx) : null;
     if (detour) act = detour;
@@ -2418,13 +2420,15 @@ export class Bot {
     }
     this.lastEff = eff;
     const e = c.enemy;
+    // Hiding only works with cover at hand (or a wall to throw): backing off across the map just drags the fight out.
+    this.healHideAct = e && eff <= H.fightHp[this.difficulty] + H.burstHp ? this.healHide(c, e) : null;
     const plan = healPlan({
       me, now, diff: this.difficulty,
       foe: e ? { dist: c.enemyDist, eff: e.hp + e.shield, reloadLeft: e.reloadUntil > now ? e.reloadUntil - now : 0 } : null,
       hurtAgo: now - this.mem.lastHurtAt, burst: now - this.burstAt <= 1.5 ? this.burst : 0,
       hidingFor: this.healHideAt === null ? null : now - this.healHideAt,
       // Racing the storm or near its edge: no hiding (backing off walks me out into it), heal where I am.
-      coverFirst: this.healRoll.cover && this.goal !== 'storm' && !this.nearStormEdge(c), useReload: this.healRoll.reload, sheltered: false,
+      coverFirst: this.healRoll.cover && !!this.healHideAct && this.goal !== 'storm' && !this.nearStormEdge(c), useReload: this.healRoll.reload, sheltered: false,
       sinceFightHeal: now - this.fightHealAt,
     }, H);
     if (plan?.act === 'hide') { this.healHideAt ??= now; this.healNote = { t: now, text: plan.why }; }
@@ -2439,13 +2443,13 @@ export class Bot {
     return !!st && Math.hypot(c.me.pos.x - st.x, c.me.pos.z - st.z) > this.stormSafeR(st) - 4;
   }
 
-  /** Low with an enemy in sight: get out of their line of sight to heal (cover nearby, a wall thrown down, or back off). */
-  private healHide(c: Ctx, e: PlayerState): Act {
+  /** Low with an enemy in sight: get out of their line of sight to heal (cover within heal.hideM, or a wall thrown down); null: none at hand. */
+  private healHide(c: Ctx, e: PlayerState): Act | null {
     const me = c.me, face = add(e.pos, v3(0, CHEST, 0));
     const got = this.coverWall(c, e.pos);
     if (got) return dist2D(me.pos, got.hide) > 0.35 ? { dir: norm(flat(sub(got.hide, me.pos))), face, sprint: true } : { dir: null, face };
     const spot = this.coverFrom(c, e);
-    if (spot && dist2D(spot, me.pos) < 8) return { ...this.goTo(spot, 0.4), face, sprint: true };
+    if (spot && dist2D(spot, me.pos) < this.P.heal.hideM) return { ...this.goTo(spot, 0.4), face, sprint: true };
     const kind = c.enemyDist >= 5 ? this.wallKind(c) : null;
     if (kind && !this.building(c, kind)) {
       const to = norm(flat(sub(e.pos, me.pos)));
@@ -2454,7 +2458,7 @@ export class Bot {
         if (a) return a;
       }
     }
-    return { dir: norm(flat(sub(me.pos, e.pos))), face, sprint: true };
+    return null;
   }
 
   /** A potion seller close by on this island while I'm short of heals it would sell me: walk over. */
