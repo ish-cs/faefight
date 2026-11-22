@@ -40,6 +40,9 @@ try {
   for (const spec of specs) {
     const [label, dir, port, extra = '', mode = 'dev'] = spec.split('|');
     if (!servers.has(port)) {
+      // a stale server (another agent's tree, IPv4 or IPv6) on this port would silently serve the wrong build
+      const busy = spawnSync('sh', ['-c', `lsof -nP -iTCP:${port} -sTCP:LISTEN -t`], { encoding: 'utf8' }).stdout.trim();
+      if (busy) { log(`[${label}] port ${port} already in use (pid ${busy.replace(/\n/g, ',')}): skipped, pick another port`); continue; }
       if (mode === 'prod') {
         const outDir = `/tmp/faefight-perf-build-${port}`;
         const b = spawnSync('npx', ['vite', 'build', '--outDir', outDir, '--emptyOutDir'], { cwd: dir, encoding: 'utf8' });

@@ -25,3 +25,14 @@ describe('endState', () => {
     expect(endState(null, 1, true, players)).toEqual({ state: 'lost', title: 'ELIMINATED', sub: 'Your bunker was sealed when you died.' });
   });
 });
+
+describe('endState in a teams match', () => {
+  const team = [{ id: 1, name: 'Me', team: 0 }, { id: 2, name: 'Foe', team: 1 }, { id: 3, name: 'Mate', team: 0 }];
+  test('your teammate surviving is your victory', () => {
+    expect(endState(3, 1, true, team)).toEqual({ state: 'won', title: 'VICTORY', sub: 'Your team is the last one standing.' });
+  });
+  test('the other team winning names the team', () => {
+    expect(endState(2, 1, true, team)).toEqual({ state: 'lost', title: 'ELIMINATED', sub: 'Team 2 wins.' });
+    expect(endState(2, 0, false, team)).toEqual({ state: 'draw', title: 'MATCH OVER', sub: 'Team 2 wins.' });
+  });
+});

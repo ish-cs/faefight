@@ -1,9 +1,9 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { BUILD, DT, ECONOMY, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
+import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
-import { islandSealed, killPlayer, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
+import { islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
@@ -14,6 +14,7 @@ import { Fire, fireZones, type FireCtx } from './fire';
 import { Traps, validateTrap } from './traps';
 import { DoorwayTracker } from './seal';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
+import { clearGrapple, fireGrapple, tickGrapple, type GrappleCtx } from './grapple';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
 import { PropSim } from './props';
@@ -26,18 +27,20 @@ import { newPlayer } from './player';
 import { MatchStats } from './stats';
 import { PracticeRange, practiceMapDef, type PracticeCmd } from './practice';
 import { isPlaceholderBotName, nickname } from './names';
-import type { BotView, FeedLine, HurtEvent, ShotSeen } from './bots/view';
+import type { AllyStatus, BotView, FeedLine, HurtEvent, ShotSeen, TeamSighting } from './bots/view';
 import { Bot } from './bots/bot';
 import { Banter } from './bots/banter';
 import { QUIP_SHOW_SEC, WheelLimiter, emoteEnd, isEmoteId, isQuipId, isWheelId, type WheelId } from './emotes';
 import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { clampSettings, resolveColors, type GameSettings } from './settings';
+import { TEAM_COLORS, isAlly, islandOrder, resolveTeams, sealBlocker } from './teams';
 import { clone, dist, dist2D, forward, norm, sub, v3 } from './vec';
 import { mulberry32, type Rng } from './rng';
 import { deepClone } from './replay/clone';
 
-export type BotBrain = { think(view: BotView): PlayerInput };
+/** currentTarget / teamDefender: what a bot tells its teammates (teams match; bots/bot.ts). */
+export type BotBrain = { think(view: BotView): PlayerInput; readonly currentTarget?: number | null; readonly teamDefender?: boolean };
 export type MatchOptions = { makeBot?: (id: number, difficulty: Difficulty, rng: () => number) => BotBrain };
 
 const MAX_PITCH = 1.4;
@@ -67,6 +70,8 @@ export class Match implements MatchApi {
   private supportDirty = false;
   private kills: { victim: number; killer: number | null }[] = [];
   private ctx: CombatCtx;
+  /** Grappling hooks' view of this match (grapple.ts); bound like ctx. */
+  private grappleCtx!: GrappleCtx;
   /** Public recent history a human would have on screen: hits, tracers, kill feed, scoreboard. */
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
@@ -95,6 +100,8 @@ export class Match implements MatchApi {
   private rewindT: number | null = null;
   /** Per player: a build request waiting for the busy time from the last placement to end (see applyInput). */
   private queuedBuild = new Map<number, { req: BuildRequest; until: number }>();
+  /** Teams: enemy ids each bot saw on its last think (shared with its teammates, teamView). */
+  private sightings = new Map<number, number[]>();
   /**
    * Snapshots are deep copies by default (callers may keep or mutate them). The worker turns this off:
    * postMessage copies the snapshot anyway, synchronously, so the extra copy is pure cost.
@@ -117,7 +124,12 @@ export class Match implements MatchApi {
     this.map = map;
     this.settings = clampSettings(setup.settings);
     def.settings = { ...this.settings };
-    def.colors = resolveColors(setup.players.map((p) => p.color));
+    // Teams (teams.ts): sides resolved from the lobby picks; teammates get neighbouring islands and their team's colour.
+    const teams = setup.practice ? setup.players.map(() => undefined) : resolveTeams(setup.players.map((p) => p.team), this.settings.teamMode);
+    const islandOf = islandOrder(teams);
+    const picked = resolveColors(setup.players.map((p) => p.color));
+    def.colors = map.map(() => 0);
+    islandOf.forEach((isl, i) => { def.colors![isl] = teams[i] === undefined ? picked[i] : TEAM_COLORS[teams[i]!]; });
     this.cosmetics = new Cosmetics(def.cosmetics);
     this.hazards = new Hazards(def.hazards);
     this.docks = new Docks(def.docks ?? []);
@@ -141,8 +153,10 @@ export class Match implements MatchApi {
     setup.players.forEach((cfg, i) => {
       const id = i + 1;
       const name = cfg.isBot && isPlaceholderBotName(cfg.name) ? nickname(nameRng, taken) : cfg.name;
-      const p = newPlayer(id, name, cfg.isBot, i, map[i].spawn, this.settings.startCash);
-      p.yaw = spawnYaw(map[i].bunker, p.pos);
+      const isl = islandOf[i];
+      const p = newPlayer(id, name, cfg.isBot, isl, map[isl].spawn, this.settings.startCash);
+      if (teams[i] !== undefined) p.team = teams[i];
+      p.yaw = spawnYaw(map[isl].bunker, p.pos);
       p.pitch = 0;
       this.s.players.set(id, p);
       physics.addPlayer(id, p.pos);
@@ -153,6 +167,7 @@ export class Match implements MatchApi {
     this.ctx = this.makeCtx();
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
     this.hazardHost = { ctx: this.ctx, loot: this.s.loot, seed: this.hazardSeed };
+    this.grappleCtx = this.makeGrappleCtx();
     if (setup.practice) {
       this.s.practice = true;
       this.practice = new PracticeRange({ s: this.s, physics: this.physics, removePiece: (id) => this.ctx.onPieceDestroyed(id) }, 1);
@@ -167,7 +182,23 @@ export class Match implements MatchApi {
     this.ctx = this.makeCtx();
     this.fireCtx = { ...this.ctx, cosmetics: this.cosmetics };
     this.hazardHost = { ctx: this.ctx, loot: this.s.loot, seed: this.hazardSeed };
+    this.grappleCtx = this.makeGrappleCtx();
     this.fire.nextId = () => this.s.nextId++;
+  }
+
+  private makeGrappleCtx(): GrappleCtx {
+    const s = this.s, physics = this.physics;
+    return {
+      players: s.players,
+      pieces: s.pieces,
+      get waterY() { return s.waterY; },
+      // The rope never threads a firing slit; aimed at players it is lag-compensated like a shot.
+      cast: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, false) : this.rewoundRay(o, d, max, shooter, this.rewindT, false)),
+      clear: (a, b) => {
+        const d = sub(b, a), l = Math.hypot(d.x, d.y, d.z);
+        return l < 1e-6 || physics.raycastStatic(a, norm(d), l, false) === null;
+      },
+    };
   }
 
   /** Combat's view of this match (callbacks bound to this instance: rebuilt by fork). */
@@ -248,7 +279,7 @@ export class Match implements MatchApi {
     const memo = new Map<unknown, unknown>([[this, m], [this.physics, physics]]);
     if (this.props) memo.set(this.props, this.props.clone(physics));
     const self = this as unknown as Record<string, unknown>, copy = m as unknown as Record<string, unknown>;
-    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx' && k !== 'hazardHost') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
+    for (const k of Object.keys(self)) if (k !== 'ctx' && k !== 'fireCtx' && k !== 'hazardHost' && k !== 'grappleCtx') copy[k] = deepClone(self[k], memo); // rebind() rebuilds them
     m.rebind();
     return m;
   }
@@ -278,6 +309,7 @@ export class Match implements MatchApi {
         // Dead: commands are consumed (acked) but do nothing.
         if (cmds?.length) (p.mv ??= newMoveState()).ack = cmds[cmds.length - 1].seq;
         if (p.emote) delete p.emote;
+        if (p.hook || p.mv?.pull) clearGrapple(this.grappleCtx, p, now);
         continue;
       }
       const bot = this.bots.get(p.id);
@@ -562,6 +594,7 @@ export class Match implements MatchApi {
     // Sights need a gun in hand and no reload; aiming rules out sprinting (see move).
     p.ads = input.ads && p.alive && p.equipped !== 'fists' && p.reloadUntil === 0;
     if (input.view !== undefined) p.view = input.view === 1 ? 1 : 0;
+    if (p.hook) this.events.push(...tickGrapple(this.grappleCtx, p, now));
 
     if (cmds) {
       for (const c of cmds) {
@@ -623,6 +656,10 @@ export class Match implements MatchApi {
     if (input.trap) this.events.push(...this.traps.place(this.physics, p, input.trap, now, () => this.s.nextId++));
     if (input.useMedkit) startMedkit(p, now);
     if (input.drink) startDrink(p, now);
+    if (input.grapple) {
+      this.rewindT = this.rewindTime(p, input, now);
+      try { this.events.push(...fireGrapple(this.grappleCtx, p, now)); } finally { this.rewindT = null; }
+    }
     const queued = this.queuedBuild.get(p.id);
     if (queued) {
       this.queuedBuild.delete(p.id);
@@ -647,8 +684,8 @@ export class Match implements MatchApi {
   }
 
   /** A shot ray against the world as it is now and every other player where they were at time t. */
-  private rewoundRay(o: Vec3, d: Vec3, maxDist: number, shooter: number, t: number): RayHit | null {
-    let best = this.physics.raycastStatic(o, d, maxDist);
+  private rewoundRay(o: Vec3, d: Vec3, maxDist: number, shooter: number, t: number, throughSlits = true): RayHit | null {
+    let best = this.physics.raycastStatic(o, d, maxDist, throughSlits);
     let lim = best ? best.dist : maxDist;
     const feet = v3();
     for (const q of this.s.players.values()) {
@@ -741,7 +778,7 @@ export class Match implements MatchApi {
         // Credit the seal to whoever placed the newest piece around that bunker (null in sudden death).
         let by: number | null = null, newest = -1;
         if (sealed && !this.s.forcedSeal)
-          for (const pc of this.s.pieces.values())
+          for (const pc of sealPieces(this.s, i))
             if (pc.id > newest && dist2D(pc.pos, isl.bunker.center) <= SEAL.half) { newest = pc.id; by = pc.owner; }
         this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i, owner, by } });
       }
@@ -749,7 +786,8 @@ export class Match implements MatchApi {
     });
     // Per-doorway threat for each owner's HUD: cached per bunker, recomputed only when blockers near it change.
     // Sealed always reads 3/3 (sudden death's forced seal too); short of that at most 2/3.
-    const doors = this.doors.update(this.s.pieces.values());
+    const owners = this.map.map((_, i) => [...this.s.players.values()].find((p) => p.island === i));
+    const doors = this.doors.update(this.s.pieces.values(), (i, pc) => sealBlocker(owners[i], this.s.players.get(pc.owner)));
     for (const p of this.s.players.values())
       p.doorsBlocked = this.sealed[p.island] ? 3 : Math.min(2, doors[p.island] ?? 0);
   }
@@ -774,19 +812,21 @@ export class Match implements MatchApi {
     const eye = eyePos(self);
     const enemies: PlayerState[] = [];
     for (const o of this.s.players.values()) {
-      if (o.id === self.id || !o.alive) continue;
+      if (o.id === self.id || !o.alive || isAlly(o, self)) continue;
       const chest = v3(o.pos.x, o.pos.y + 1.2, o.pos.z);
       const d = dist(eye, chest);
       if (d > SIGHT_RANGE) continue;
       const hit = this.physics.raycast(eye, norm(sub(chest, eye)), d + 0.5, self.id, true); // sight passes firing slits
       if (hit?.hit.type === 'player' && hit.hit.id === o.id) enemies.push(o);
     }
+    const team = self.team === undefined ? null : this.teamView(self, enemies);
     return {
       now: this.s.time,
       self,
       enemies,
-      others: [...this.s.players.values()].filter((o) => o.id !== self.id)
+      others: [...this.s.players.values()].filter((o) => !isAlly(o, self))
         .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills })),
+      ...(team ? { allies: team.allies, teamSeen: team.seen } : {}),
       map: this.map,
       center: { island: this.def.center, gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
       statics: this.def.statics,
@@ -811,6 +851,10 @@ export class Match implements MatchApi {
         const hz = this.hazards.ray(eye, dir, d + 0.5);
         return !hz || dist(add3(eye, dir, hz.dist), to) < 1;
       },
+      castHook: (dir) => {
+        const h = this.physics.raycast(eye, dir, GRAPPLE.range, self.id, false);
+        return h ? { point: h.point, dist: h.dist, player: h.hit.type === 'player' ? h.hit.id : null } : null;
+      },
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
       fires: fireZones(this.s.pieces.values(), this.fire.snapshotFires()),
@@ -822,6 +866,32 @@ export class Match implements MatchApi {
       traps: this.traps.list.filter((t) => dist(t.pos, eye) <= SIGHT_RANGE).map(({ on: _on, ...t }) => ({ ...t, pos: clone(t.pos) })),
       canTrap: (req, from) => validateTrap(this.physics, req, from ?? self.pos, this.traps.list),
     };
+  }
+
+  /**
+   * Teams: what a bot shares with its team. Each bot's sightings are kept (this tick for bots that already thought,
+   * else last tick: same order every run, so deterministic), and teammates' sightings come back as `teamSeen`.
+   */
+  private teamView(self: PlayerState, enemies: PlayerState[]): { allies: AllyStatus[]; seen: TeamSighting[] } {
+    this.sightings.set(self.id, enemies.map((e) => e.id));
+    const allies: AllyStatus[] = [];
+    const seen = new Map<number, TeamSighting>();
+    for (const a of this.s.players.values()) {
+      if (a.id === self.id || !isAlly(a, self)) continue;
+      let hurtAt = -Infinity, hurtBy: number | null = null;
+      for (const h of this.hits) if (h.target === a.id && h.by !== null && h.by !== a.id && h.t >= hurtAt) { hurtAt = h.t; hurtBy = h.by; }
+      const brain = this.bots.get(a.id);
+      allies.push({
+        id: a.id, island: a.island, isBot: a.isBot, alive: a.alive, eliminated: a.eliminated, pos: clone(a.pos), hp: a.hp,
+        hurtAt, hurtBy, target: brain?.currentTarget ?? null, defender: !!brain?.teamDefender,
+      });
+      if (!a.alive) continue;
+      for (const id of this.sightings.get(a.id) ?? []) {
+        const e = this.s.players.get(id);
+        if (e && e.alive && !seen.has(id)) seen.set(id, { id, pos: clone(e.pos), hp: e.hp, armed: e.equipped !== 'fists' });
+      }
+    }
+    return { allies, seen: [...seen.values()] };
   }
 
   private snapshot(): Snapshot {

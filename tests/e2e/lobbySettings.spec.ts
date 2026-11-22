@@ -88,7 +88,7 @@ test('game settings, ready-up and colours: host sets starting cash, guest sees i
   expect((await snap(b))!.players.find((p) => p.id === bId)!.inv.cash).toBe(300);
   // The match carries the settings and colours to the guest.
   const def = await dbg<{ settings: unknown; colors: number[] }>(b, 'mapDef');
-  expect(def.settings).toEqual({ startCash: 300, suddenDeathSec: 600, genMult: 1.5 });
+  expect(def.settings).toEqual({ startCash: 300, suddenDeathSec: 600, genMult: 1.5, teamMode: 0 });
   expect(def.colors).toEqual([5, 4]);
   expect(errors).toEqual([]);
 });

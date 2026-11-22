@@ -37,7 +37,8 @@ const HALF_W = 230; // px (bar is 460 wide)
 const DANGER_SEC = 3;
 
 /** `x` undefined = never placed yet (so the first place() always writes). */
-type Marker = { node: HTMLElement; label?: HTMLElement; x?: number | null };
+/** `v`: the value the label was last built from (teammate distance), so an unchanged label allocates nothing. */
+type Marker = { node: HTMLElement; label?: HTMLElement; x?: number | null; v?: number };
 
 class Compass {
   readonly root = el('div', 'qol-compass glass');
@@ -119,6 +120,21 @@ class Compass {
       m.node.classList.toggle('sealed', sealed && !out);
       setText(m.label!, `${owner.name}${out ? ' · OUT' : sealed ? ' · SEALED' : ''}`);
       at(key, isl.center);
+    }
+    // Teams: every living teammate gets a marker (shared team info: through walls, any distance).
+    const mine = snap.players.find((p) => p.island === myIsland);
+    for (const p of snap.players) {
+      const key = `ally${p.id}`;
+      if (mine?.team === undefined || p.id === mine.id || p.team !== mine.team || !p.alive) {
+        const old = this.markers.get(key);
+        if (old) this.place(old, null);
+        continue;
+      }
+      const m = this.marker(key, 'ally', '');
+      m.node.style.setProperty('--c', hex(islandColor(p.island)));
+      const d = Math.round(Math.hypot(p.pos.x - me.x, p.pos.z - me.z));
+      if (m.v !== d) { m.v = d; setText(m.label!, `${p.name} · ${d} m`); }
+      at(key, p.pos);
     }
     // Centre island, when the map has one (an island with no owner), and the potion seller(s).
     const owned = new Set(snap.players.map((p) => p.island));

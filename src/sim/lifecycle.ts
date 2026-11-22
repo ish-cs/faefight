@@ -1,10 +1,11 @@
-import { LIFECYCLE, MAP, PLAYER, SEAL, WEAPONS } from './constants';
+import { GRAPPLE, LIFECYCLE, MAP, PLAYER, SEAL, WEAPONS } from './constants';
 import { emptyInventory, grantLockedGuns, mergeInventory } from './economy';
 import { addKind, countOf, emptyHotbar, heldKinds, isGunItem, takeOut } from './hotbar';
 import { spawnYaw, type IslandLayout } from './map';
 import type { Physics } from './physics';
 import { refillStamina, STAMINA } from './movement';
 import { isSealed } from './seal';
+import { sealBlocker, sidesLeft } from './teams';
 import { newStorm, type StormCenter, type StormState } from './storm';
 import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState, Vec3 } from './types';
 import { clone, dist, dist2D, rotateY, v3 } from './vec';
@@ -56,7 +57,7 @@ const ev = (t: number, type: MatchEvent['type'], data: Record<string, unknown>):
 const PARKED = v3(0, -1000, 0);
 
 const isEmpty = (inv: Inventory) =>
-  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 && !inv.traps && Object.values(inv.potions).every((n) => !n) &&
+  inv.cash === 0 && inv.grenades === 0 && inv.charges === 0 && inv.medkits === 0 && !inv.traps && !inv.grapples && Object.values(inv.potions).every((n) => !n) &&
   Object.keys(inv.weapons).length === 0 && Object.values(inv.pieces).every((n) => !n);
 
 /**
@@ -106,6 +107,7 @@ export function killPlayer(
   p.hp = 0;
   p.alive = false;
   p.vel = v3();
+  delete p.yankedBy;
   p.deaths++;
   const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
   if (k) k.kills++;
@@ -140,10 +142,18 @@ export function islandSealed(s: MatchStateCore, map: IslandLayout[], island: num
   }
   let sealed = c.byIsland.get(island);
   if (sealed === undefined) {
-    sealed = isSealed(map[island].bunker, [...s.pieces.values()]);
+    sealed = isSealed(map[island].bunker, sealPieces(s, island));
     c.byIsland.set(island, sealed);
   }
   return sealed;
+}
+
+/** Pieces that count toward sealing this island's bunker: all but its owner's teammates' (teams.ts sealBlocker). */
+export function sealPieces(s: MatchStateCore, island: number): PieceState[] {
+  let owner: PlayerState | undefined;
+  for (const p of s.players.values()) if (p.island === island) { owner = p; break; }
+  const all = [...s.pieces.values()];
+  return owner?.team === undefined ? all : all.filter((pc) => sealBlocker(owner, s.players.get(pc.owner)));
 }
 
 /** The spawn point, or the nearest free spot inside the bunker if a piece sits on it. */
@@ -179,8 +189,13 @@ export function tickLifecycle(
     out.push(ev(now, 'suddenDeath', {}));
   }
 
-  for (const p of s.players.values())
-    if (p.alive && p.pos.y < s.waterY) out.push(...killPlayer(s, physics, p.id, now, true));
+  // Drowned: a grappling hook yank just before it makes it the yanker's kill ("X via grapple").
+  for (const p of s.players.values()) {
+    if (!p.alive || p.pos.y >= s.waterY) continue;
+    const y = p.yankedBy;
+    const by = y && now - y.at <= GRAPPLE.yankCreditSec && y.by !== p.id ? y.by : null;
+    out.push(...killPlayer(s, physics, p.id, now, true, by, undefined, by !== null ? 'grapple' : undefined));
+  }
 
   for (const p of s.players.values())
     if (p.alive && p.hp < PLAYER.hp && now - p.lastDamagedAt >= LIFECYCLE.regenDelaySec)
@@ -253,7 +268,8 @@ export function tickLifecycle(
 
   if (!s.practice && s.winner === null && s.players.size >= 2) {
     const left = [...s.players.values()].filter((p) => !p.eliminated);
-    if (left.length <= 1) {
+    // Last side standing: one player in free-for-all, one team in a teams match (winner = one of its players).
+    if (sidesLeft(left) <= 1) {
       s.winner = left[0]?.id ?? -1;
       out.push(ev(now, 'win', { winner: s.winner }));
     }

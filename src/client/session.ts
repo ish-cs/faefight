@@ -15,6 +15,7 @@ import type { Snapshot } from '../sim/types';
 import type { BrainDigest } from '../sim/bots/introspect';
 import type { ViewExtras } from '../net/protocol';
 import { clampSettings, DEFAULT_SETTINGS, type GameSettings } from '../sim/settings';
+import { isTeamMode, modeSeats } from '../sim/teams';
 import type { ToWorker } from './protocol';
 import { MONEY_MAX, MONEY_NOT_IN_MATCH, MONEY_USAGE, moneyGiven } from './commands';
 import { PING_EVERY_MS, PingTracker, TickMonitor, type HostTick } from './qol/netQuality';
@@ -187,15 +188,27 @@ export class HostSession {
   /** Host edits the game settings (lobby only); clamped here whatever the UI sent. */
   setSettings(x: Partial<GameSettings>) {
     if (this.started) return;
+    const was = this.gameSettings.teamMode;
     this.gameSettings = clampSettings({ ...this.gameSettings, ...x });
+    // Picking a team mode sizes the lobby for it (8 / 6 / 8 seats); open seats left at start become bots.
+    const seats = modeSeats(this.gameSettings.teamMode);
+    if (seats !== null && this.gameSettings.teamMode !== was) this.lobby.fitSeats(seats);
     this.broadcastLobby();
+  }
+  /** Host picks a team for a seat (its own; guests pick theirs with {t:'team'}). */
+  setTeam(seat: number, team: number) {
+    if (!this.started && this.lobby.setTeam(seat, team)) this.broadcastLobby();
   }
   /** Host picks a seat's colour (its own; guests pick theirs with {t:'color'}). */
   setColor(seat: number, color: number) {
     if (!this.started && this.lobby.setColor(seat, color)) this.broadcastLobby();
   }
   /** A guest's lobby-only message (ready / colour). True if it was one. */
-  private onLobbyMsg(peerId: string, seat: number, msg: { t: string; ready?: boolean; color?: number }): boolean {
+  private onLobbyMsg(peerId: string, seat: number, msg: { t: string; ready?: boolean; color?: number; team?: number }): boolean {
+    if (msg.t === 'team') {
+      if (!this.started && msg.team !== undefined && this.lobby.setTeam(seat, msg.team)) this.broadcastLobby();
+      return true;
+    }
     if (msg.t === 'ready') {
       if (!this.started && this.lobby.setReady(peerId, msg.ready === true)) this.broadcastLobby();
       return true;
@@ -222,7 +235,9 @@ export class HostSession {
   }
 
   canStart() {
-    return !this.started && this.lobby.playerCount() >= 2 && this.lobby.slots().every((x) => x.kind !== 'open');
+    // Teams mode: open seats are fine, bots take them at start.
+    const teams = isTeamMode(this.gameSettings.teamMode);
+    return !this.started && this.lobby.playerCount() >= 2 && (teams || this.lobby.slots().every((x) => x.kind !== 'open'));
   }
 
   /**
@@ -511,6 +526,7 @@ export class HostSession {
   }
 
   private freezeSeats(): { setup: MatchSetup; humanId: number } {
+    if (isTeamMode(this.gameSettings.teamMode)) this.lobby.fillOpen('medium');
     const setup = this.lobby.toMatchSetup();
     this.seatIds = this.lobby.playerIds();
     this.hostPlayerId = this.seatIds[0];

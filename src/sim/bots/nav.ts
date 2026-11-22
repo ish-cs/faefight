@@ -106,6 +106,12 @@ export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open
     const nearWall = Math.abs(a.x) < BUNKER_HALF + 0.4 && Math.abs(a.z) < BUNKER_HALF + 0.4;
     if (!segHitsSquare(a, c, nearWall ? BUNKER_HALF + 0.05 : BUNKER_HALF + 0.4)) return dest;
     const k = BUNKER_HALF + 1.3;
+    // Standing in a doorway (inside the wall square, not the room): no corner is reachable from here and a
+    // straight line cuts back through the room, so step straight out first (else bots dither on the threshold).
+    if (Math.abs(a.x) < BUNKER_HALF + 0.05 && Math.abs(a.z) < BUNKER_HALF + 0.05) {
+      const out = Math.abs(a.x) > Math.abs(a.z) ? v3(Math.sign(a.x) * k, 0, a.z) : v3(a.x, 0, Math.sign(a.z) * k);
+      return toWorld(b, out);
+    }
     let best: Vec3 | null = null, bestCost = Infinity;
     for (const corner of [v3(k, 0, k), v3(-k, 0, k), v3(k, 0, -k), v3(-k, 0, -k)]) {
       if (segHitsSquare(a, corner, BUNKER_HALF + 0.05)) continue;
@@ -450,6 +456,16 @@ export class Nav {
       l = this.nearestLane(me);
       if (!l) return null;
       sTarget = b >= 0 ? this.landS(l, b) : laneS(l, dest);
+      // Out on one bridge, heading for a spot on another (e.g. the tip of a pier on a new lane): back to the island
+      // both lanes hang off first, not straight at it across the water (that flip-flops on the deck forever).
+      // (Not in the storm: heading home first there is walking out into it.)
+      if (b < 0 && !this.view.storm) {
+        const ld = this.nearestLane(dest);
+        if (ld && !(ld.from === l.from && ld.to === l.to) && !(ld.from === l.to && ld.to === l.from)) {
+          const shared = [l.from, l.to].find((n) => n === ld.from || n === ld.to);
+          if (shared !== undefined) sTarget = this.landS(l, shared);
+        }
+      }
     } else {
       l = this.nearestLane(dest);
       if (!l || (l.from !== a && l.to !== a)) return null;

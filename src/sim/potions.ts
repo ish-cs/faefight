@@ -10,7 +10,7 @@ import { v3 } from './vec';
 export type ShopKind = 'home' | 'potion';
 export const POTION_SHOP_ITEMS: readonly PotionKind[] = POTION_KINDS;
 export const SHOP_LABEL: Partial<Record<ShopItem, string>> = {
-  shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
+  shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion', grapple: 'Grappling hook',
 };
 
 export const shopFor = (item: ShopItem): ShopKind => (isPotionItem(item) ? 'potion' : 'home');
