@@ -14,6 +14,7 @@ import { isRng, mulberry32 } from '../rng';
 import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
 import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
+import { crossTo, escapeFrom, hookReady, yankReason, type HookIntent } from './hook';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { DEFAULT_BOT_PARAMS, withTraits, type BotParams, type BrainKey, type BrainParams } from './params';
@@ -25,18 +26,18 @@ import {
 } from './plans';
 import { Brain, fightOdds, type BrainGoal, type BrainInput } from './brain';
 import { DODGE_SKILL, Dodger } from './tactics';
-import type { BotView, OtherStatus } from './view';
+import type { AllyStatus, BotView, OtherStatus } from './view';
 import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, type ScoreRow } from './introspect';
 
 export type Goal =
   | 'collect' | 'shop' | 'bank' | 'bridge' | 'attack' | 'seal' | 'defend' | 'guard' | 'cut' | 'loot' | 'raid'
-  | 'fight' | 'disengage' | 'storm' | 'heal' | 'potions' | 'cover' | 'fortify' | 'contest' | 'trap';
+  | 'fight' | 'disengage' | 'storm' | 'heal' | 'potions' | 'cover' | 'fortify' | 'contest' | 'trap' | 'assist' | 'regroup';
 const GOALS: Goal[] = [
   'storm', 'defend', 'disengage', 'cover', 'fight', 'guard', 'bank', 'seal', 'attack', 'cut', 'raid', 'loot', 'bridge',
-  'fortify', 'trap', 'shop', 'heal', 'potions', 'contest', 'collect',
+  'fortify', 'trap', 'shop', 'heal', 'potions', 'contest', 'collect', 'assist', 'regroup',
 ];
 /** Actions that may interrupt the brain's current step (reflexes and quick errands). */
-const REFLEXES = new Set<Goal>(['storm', 'defend', 'cover', 'fight', 'disengage', 'collect', 'loot', 'contest', 'fortify', 'trap']);
+const REFLEXES = new Set<Goal>(['storm', 'defend', 'cover', 'fight', 'disengage', 'collect', 'loot', 'contest', 'fortify', 'trap', 'assist', 'regroup']);
 /** How much the brain's current step outweighs those. */
 const STEP_BONUS = 0.4;
 const SAFE_STEPS = new Set<Goal>(['heal', 'attack', 'collect', 'bank']);
@@ -134,6 +135,10 @@ const INSURANCE = WEAPONS.pistol.price + 25;
  * escape countdown, so never hang around closer than this.
  */
 const BUNKER_OUT = SEAL.exitRadius + 0.8;
+/** Grappling hook: uses are weighed this often; a chosen one holds this long while I turn to fire it. */
+const HOOK_CHECK_SEC = 0.25, HOOK_HOLD_SEC = 1.2;
+/** Goals that want me at home (hooked back to when I can't walk there). */
+const HOME_GOALS = new Set<Goal>(['shop', 'bank', 'collect', 'fortify', 'defend', 'guard', 'heal']);
 
 export { DRIVE } from './params';
 /** Goals the watchdog keeps an eye on (DriveParams.stallSec; attack gets longer: it waits at doors). */
@@ -204,6 +209,8 @@ export class Bot {
   private readonly style: ShopStyle;
   private goal: Goal = 'collect';
   private targetId: number | null = null;
+  /** Teams: this bot is its team's home defender (one stays back while the others push). */
+  private defender = false;
   private hesitateUntil = -Infinity;
   private nextScoreAt = -Infinity;
   private lastNow = NaN;
@@ -276,6 +283,10 @@ export class Bot {
   private aimLost: { at: Vec3; until: number } | null = null;
   private barrelPlan: { id: number; until: number } | null = null;
   private nextBarrelRollAt = 0;
+  /** Grappling hook: what I'm about to use it for, when I next weigh it, and the last use (spectators). */
+  private hookIntent: (HookIntent & { until: number }) | null = null;
+  private nextHookCheck = 0;
+  hookNote: { t: number; text: string } | null = null;
   /** Blowing out a pier section under an enemy (or under the piece they hide behind): which, how, and why. */
   private dockPlan: { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number } | null = null;
   private nextDockRollAt = 0;
@@ -354,6 +365,8 @@ export class Bot {
       target: this.targetId, underFire: this.fireFrom !== null, enemy: this.lastEnemy, fightOdds: this.lastOdds,
     };
   }
+  /** Teams: stays home to defend while teammates push (told to teammates, shown to spectators). */
+  get teamDefender(): boolean { return this.defender; }
   /** Hazard id this bot is deliberately shooting to catch an enemy in the blast, if any. */
   get barrelTarget(): number | null { return this.barrelPlan?.id ?? null; }
   /** Pier section this bot is trying to blow out from under an enemy, if any. */
@@ -408,6 +421,7 @@ export class Bot {
       this.cover = null;
       this.perch = null;
       this.fightSince = null;
+      this.hookIntent = null;
       this.nextScoreAt = -Infinity;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
@@ -417,6 +431,7 @@ export class Bot {
     this.checkPurchase(me, now);
     // Came back from a death (bots aren't ticked while dead): note it for respawnCautionSec.
     if (me.deaths !== this.lastDeaths) { this.lastDeaths = me.deaths; this.respawnedAt = now; this.window = null; }
+    this.defender = this.isDefender(view);
     this.sealRace(view);
     const rescore = now >= this.nextScoreAt;
     const facts = rescore ? this.rivalFacts(view) : null;
@@ -478,9 +493,19 @@ export class Bot {
       return me.reloadUntil === 0 && me.busyUntil <= now && range <= WEAPONS[w].range * 0.95 && (w === 'fists' || !!ammo && ammo.mag > 0);
     };
     let throwGrenade = false;
+    // Grappling hook (hook.ts): get away, cross over, or yank an enemy; on my own rope, look where it pulls.
+    const hook = this.hookPlan(ctx, best);
+    const rope = me.mv?.pull && !me.mv.pull.yank ? me.mv.pull : null;
+    let grapple = false;
     const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
     const barrel = enemy && !dock ? this.barrelShot(ctx) : null;
-    if (dock?.weapon === 'rocket') {
+    if (hook && hook.why !== 'yank') {
+      const want = lookAt(eye, hook.to);
+      look = hand(want, TURN_RATE * 1.5);
+      grapple = angleBetween(look, want) < 0.02;
+    } else if (rope && !enemy) {
+      look = hand(lookAt(eye, rope), TURN_RATE);
+    } else if (dock?.weapon === 'rocket') {
       // Blow the planks out from under them: aim at the deck at their feet (the blast catches them too), held
       // over for the rocket's drop at that range.
       const tof = dist2D(eye, dock.at) / ROCKET.speed;
@@ -511,6 +536,7 @@ export class Bot {
       const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult &&
         !(this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3);
       fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !this.burstRest(now, me, foeDist);
+      if (hook?.why === 'yank' && hook.target === foe.id && r.ready && r.onTarget) { grapple = true; fire = false; }
     } else if (nade) {
       look = hand(nade, TURN_RATE);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
@@ -540,14 +566,15 @@ export class Bot {
 
     // Weapons: hold the best gun, reload when nobody is in sight.
     const ammo = me.equipped === 'fists' ? null : me.inv.weapons[me.equipped];
-    const slot = best !== me.equipped && (me.reloadUntil === 0 || !ammo || ammo.mag === 0) ? best : null;
+    const slot = !grapple && best !== me.equipped && (me.reloadUntil === 0 || !ammo || ammo.mag === 0) ? best : null;
     if (slot) fire = false;
     // An empty mag gets reloaded whoever is in sight (a full one only tops up when nobody is).
     const reload = !slot && !!ammo && me.reloadUntil === 0 && ammo.spare > 0 &&
       (ammo.mag === 0 || (!enemy && ammo.mag < WEAPONS[me.equipped].mag * 0.6));
 
     // Movement: stuck recovery, then never step toward water.
-    let dir = act.dir;
+    // Lining up a crossing: stand still for the shot (walking on would only take me off the edge).
+    let dir = hook?.why === 'cross' ? null : act.dir;
     let jump = !!act.jump;
     const dodge = this.dodgeBolt(me, view);
     if (dodge) { dir = dodge; act = { ...act, sprint: true }; }
@@ -580,6 +607,7 @@ export class Bot {
     this.trackStuck(now, me, dir);
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
     if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
+    if (rope || grapple) jump = false; // a jump lets go of the rope
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
@@ -601,6 +629,13 @@ export class Bot {
     if (act.build) {
       this.lastPieceAt = now;
     }
+    if (grapple) {
+      select = me.hotbar.indexOf('grapple');
+      useMedkit = false;
+      this.hookNote = { t: now, text: hook!.note };
+      this.hookIntent = null;
+      this.lastDidAt = now;
+    }
     this.probe?.acted(act, look, fire);
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
@@ -610,6 +645,7 @@ export class Bot {
         (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
       vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
+      ...(grapple ? { grapple: true, build: null, shop: null } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
@@ -620,7 +656,7 @@ export class Bot {
       return out;
     }
     // Shields: stock up at a potion seller, drink out of combat (see potionAction).
-    if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge) {
+    if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge && !grapple) {
       const atSeller = (view.potionShops ?? []).some((s) => dist2D(me.pos, s) <= USE_RANGE);
       const pot = potionAction(me, now, !!enemy, atSeller);
       if (pot && 'buy' in pot) out.shop = { buy: pot.buy };
@@ -669,6 +705,40 @@ export class Bot {
     const isl = islandAt(c.view.map, e.pos);
     const high = isl >= 0 && e.pos.y - c.view.map[isl].groundY > 1.2;
     return high || c.view.pieces.some((p) => COVER_KINDS.has(p.kind) && dist2D(p.pos, e.pos) < 2.5);
+  }
+
+  /**
+   * Grappling hook: what (if anything) to use it for now (hook.ts). Weighed every HOOK_CHECK_SEC; a choice holds
+   * HOOK_HOLD_SEC while I turn to fire. Order: escape when nearly dead, a yank that pays (keeping uses back for a
+   * crossing I still need), then a crossing (never with an enemy in sight).
+   */
+  private hookPlan(c: Ctx, gun: WeaponKind): HookIntent | null {
+    const me = c.me, now = c.view.now, H = this.P.hook;
+    if (!hookReady(me, now)) { this.hookIntent = null; return null; }
+    if (this.hookIntent && now < this.hookIntent.until) return this.hookIntent;
+    this.hookIntent = null;
+    if (now < this.nextHookCheck) return null;
+    this.nextHookCheck = now + HOOK_CHECK_SEC;
+    const e = c.enemy, want = this.hookNode(c);
+    let it: HookIntent | null = null;
+    if (e && c.enemyDist <= H.escapeNear && me.hp + me.shield < H.escapeHp) it = escapeFrom(c.view, H, e.pos, (p) => this.nav.nodeAt(p));
+    if (!it && e && (me.inv.grapples ?? 0) > (want !== null ? H.keepForTravel : 0)) {
+      const why = yankReason(c.view, H, e, c.enemyDist, gun);
+      if (why && this.rng() < H.yankRate * HOOK_CHECK_SEC) it = { why: 'yank', target: e.id, note: why };
+    }
+    if (!it && !e && want !== null && this.nav.nodes[want]) it = crossTo(c.view, H, this.nav.nodes[want]);
+    if (it) this.hookIntent = { ...it, until: now + HOOK_HOLD_SEC };
+    return it;
+  }
+
+  /** The node my goal wants me on when I can't walk there (null: walking, or no use for a hook). */
+  private hookNode(c: Ctx): number | null {
+    const g = this.goal, C = this.nav.centerNode;
+    if (g === 'bridge') return c.bridgeTo;
+    if ((g === 'attack' || g === 'seal') && c.rivalIsl && !c.reach) return c.rivalIsl.index;
+    if ((g === 'contest' || g === 'storm') && C >= 0 && !c.centerReach) return C;
+    if (HOME_GOALS.has(g) && !c.homeReach) return c.home.index;
+    return null;
   }
 
   /**
@@ -819,7 +889,7 @@ export class Bot {
     let best: number | null = null, bestScore = -Infinity, cur = -Infinity;
     for (const f of facts) {
       const s = rivalScore(f, this.params, this.P.drive.sealAwayTarget) + (this.rng() - 0.5) * NOISE[this.difficulty] -
-        ((this.targetBan.get(f.id) ?? -Infinity) > this.view.now ? 1.5 : 0);
+        ((this.targetBan.get(f.id) ?? -Infinity) > this.view.now ? 1.5 : 0) + this.teamFocus(this.view, f.id);
       if (f.id === this.targetId) cur = s;
       if (s > bestScore) { bestScore = s; best = f.id; }
     }
@@ -880,6 +950,105 @@ export class Bot {
   private wantShields(me: PlayerState): boolean {
     const n = (me.inv.potions?.shieldBig ?? 0) + (me.inv.potions?.shieldSmall ?? 0);
     return n < 2 && me.inv.cash + this.spendable(me) >= 300;
+  }
+
+  // ---------------------------------------------------------------- teams
+
+  /**
+   * One bot per team stays home once the team has P.team.defendMin players left: the lowest-id bot still in
+   * (everyone on the team reaches the same answer from the same facts, so exactly one defends).
+   */
+  private isDefender(view: BotView): boolean {
+    if (!view.allies) return false;
+    const left = view.allies.filter((a) => !a.eliminated);
+    if (left.length + 1 < this.P.team.defendMin) return false;
+    return left.every((a) => !a.isBot || a.id > this.id);
+  }
+
+  /**
+   * Teams: rival-choice bonus. Teammates already after this rival pull me onto them too (focus one target, push
+   * one island together); someone who just hurt a teammate near me is the one to go for.
+   */
+  private teamFocus(view: BotView, id: number): number {
+    if (!view.allies) return 0;
+    let n = 0;
+    for (const a of view.allies) {
+      if (a.eliminated) continue;
+      if (a.target === id) n++;
+      if (a.hurtBy === id && view.now - a.hurtAt <= this.P.team.assistSec && dist2D(a.pos, view.self.pos) <= this.P.team.assistM) n++;
+    }
+    return this.P.team.focus * Math.min(2, n);
+  }
+
+  /** A teammate under fire close enough to help (the nearest one an enemy hurt lately), or null. */
+  private allyInTrouble(c: Ctx): AllyStatus | null {
+    const view = c.view;
+    let best: AllyStatus | null = null, bestD = this.P.team.assistM;
+    for (const a of view.allies ?? []) {
+      if (!a.alive || a.hurtBy === null || view.now - a.hurtAt > this.P.team.assistSec) continue;
+      const d = dist2D(a.pos, c.me.pos);
+      if (d < bestD) { best = a; bestD = d; }
+    }
+    return best;
+  }
+
+  /**
+   * Teams: my team role on top of the solo scores. The defender holds home (guard/fortify/cut/defend up, the push
+   * down); everyone else pushes harder where a teammate already is (group push on one island).
+   */
+  private teamDrive(g: Goal, c: Ctx, s: number): number {
+    if (!c.view.allies) return s;
+    const T = this.P.team;
+    if (this.defender) {
+      if (g === 'guard' || g === 'fortify' || g === 'cut' || g === 'defend') return s > 0 ? s + T.defendBias : s;
+      if (g === 'bridge' || g === 'attack' || g === 'seal') return s - T.defendBias;
+      return s;
+    }
+    if ((g === 'bridge' || g === 'attack' || g === 'seal') && s > 0 && c.rivalIsl) {
+      // Push together: teammates already on that island, or going after the same rival, pull me along.
+      const rivalIsl = c.rivalIsl.index, rivalId = c.rival?.id ?? null;
+      let n = 0;
+      for (const a of c.view.allies) {
+        if (!a.alive) continue;
+        if (islandAt(c.view.map, a.pos) === rivalIsl) n += 1;
+        else if (rivalId !== null && a.target === rivalId && !a.defender) n += 0.5;
+      }
+      return s + T.groupPush * Math.min(2, n);
+    }
+    return s;
+  }
+
+  /**
+   * Teams, on offense: the nearest teammate pushing the same rival who is ahead of me (nearer their island) and more
+   * than regroupM away, so we arrive together; null when I'm with them already (or alone, or the defender).
+   */
+  private regroupWith(c: Ctx): AllyStatus | null {
+    if (!c.view.allies || this.defender || !c.rival || !c.rivalIsl) return null;
+    const T = this.P.team;
+    const mine = dist2D(c.me.pos, c.rivalIsl.center);
+    let best: AllyStatus | null = null, bestD = Infinity;
+    for (const a of c.view.allies) {
+      if (!a.alive || a.defender || a.target !== c.rival.id) continue;
+      const d = dist2D(a.pos, c.me.pos);
+      if (d <= T.regroupM || d > 2 * T.assistM || dist2D(a.pos, c.rivalIsl.center) >= mine) continue;
+      if (d < bestD) { best = a; bestD = d; }
+    }
+    return best;
+  }
+
+  private doRegroup(c: Ctx): Act {
+    const a = this.regroupWith(c);
+    if (!a) { this.nextScoreAt = c.view.now; return IDLE; }
+    return this.goTo(a.pos, this.P.team.regroupM * 0.5);
+  }
+
+  /** Go to the teammate under fire (the fight layer shoots whoever shows up). */
+  private doAssist(c: Ctx): Act {
+    const a = this.allyInTrouble(c);
+    if (!a) { this.nextScoreAt = c.view.now; return IDLE; }
+    const walk = this.goTo(a.pos, 3);
+    const s = a.hurtBy === null ? undefined : this.mem.seen.get(a.hurtBy);
+    return walk.dir ? walk : { dir: null, face: s ? add(s.pos, v3(0, CHEST, 0)) : add(a.pos, v3(0, CHEST, 0)) };
   }
 
   // ---------------------------------------------------------------- context
@@ -984,6 +1153,9 @@ export class Bot {
       medkits: total >= this.params.nadeRich * RICH_MULT[this.difficulty] ? (skilled ? 2 : 1) : 0,
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
+      // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
+      grapple: c.bridgeTo !== null && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c) && total >= this.P.hook.crossBuyAt[this.difficulty] ? 'cross'
+        : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
     };
@@ -1140,7 +1312,7 @@ export class Bot {
   private raidIsland(c: Ctx): IslandLayout | null {
     const now = c.view.now;
     for (const i of [c.on, c.reach && c.rivalIsl ? c.rivalIsl.index : -1]) {
-      if (i < 0 || i === c.home.index || c.view.generators[i] < this.params.raidAt) continue;
+      if (i < 0 || i === c.home.index || c.view.generators[i] < this.params.raidAt || c.view.allies?.some((a) => a.island === i)) continue;
       const owner = c.view.others.find((o) => o.island === i);
       const guarded = owner && owner.alive && this.mem.recent(owner.id, now, 6)?.island === i;
       if (!guarded) return c.view.map[i];
@@ -1236,6 +1408,20 @@ export class Bot {
         if (view.suddenDeath || c.enemy || !this.wantShields(me)) return 0;
         const s = this.nearestSeller(c);
         return s ? 0.25 + 0.1 * t.caution - dist2D(s, me.pos) / 150 : 0;
+      }
+      case 'assist': {
+        // Teams: help a teammate under fire nearby (no one in my own face, a gun, a way there).
+        if (!view.allies || c.enemy || !gun || trapped) return 0;
+        const a = this.allyInTrouble(c);
+        if (!a || (islandAt(view.map, a.pos) !== c.on && !this.nav.routeTo(a.pos))) return 0;
+        return this.P.team.assistScore + 0.2 * t.aggression - (this.defender && islandAt(view.map, a.pos) !== home.index ? 0.3 : 0);
+      }
+      case 'regroup': {
+        // Teams: catch up with the teammate leading the push on our shared rival.
+        if (!view.allies || c.enemy || !gun || trapped || !this.offensive(c)) return 0;
+        const a = this.regroupWith(c);
+        if (!a || (islandAt(view.map, a.pos) !== c.on && !this.nav.routeTo(a.pos))) return 0;
+        return this.P.team.regroupScore;
       }
       case 'guard': {
         if (!c.homeReach || view.suddenDeath) return 0;
@@ -1412,7 +1598,7 @@ export class Bot {
       // A step whose own situational score is nil (e.g. "heal up" while already home) still runs: walking home,
       // hanging around the generator or the target's door is harmless.
       const raw = this.score(g, c);
-      const base = Math.max(this.drive(g, c, raw), g === step && SAFE_STEPS.has(g) ? 0.05 : 0);
+      const base = Math.max(this.teamDrive(g, c, this.drive(g, c, raw)), g === step && SAFE_STEPS.has(g) ? 0.05 : 0);
       if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
       const bias = GOAL_BIAS[g];
       // The storm outranks any plan step: staying inside the ring is survival. Early on a keen builder's home
@@ -1519,6 +1705,8 @@ export class Bot {
       case 'trap': return this.doTrap(c);
       case 'storm': return this.doStorm(c);
       case 'contest': return this.doContest(c);
+      case 'assist': return this.doAssist(c);
+      case 'regroup': return this.doRegroup(c);
     }
   }
 
@@ -2356,6 +2544,11 @@ export class Bot {
     return { dir: null, face, trap: req };
   }
 
+  /** Teams: my team when `id` is a teammate (their traps are friendly), else undefined. */
+  private allyTeam(view: BotView, id: number): number | undefined {
+    return view.allies?.some((a) => a.id === id) ? view.self.team : undefined;
+  }
+
   /** Fires plus every enemy spike trap I can see, as circles to keep out of. */
   private avoidZones(view: BotView, me: PlayerState): { pos: Vec3; r: number }[] {
     const fires = view.fires ?? [];
@@ -2363,7 +2556,7 @@ export class Bot {
     if (!traps?.length) return fires;
     const r = TRAP.half + PLAYER.radius + this.P.trap.avoidPad;
     const out = [...fires];
-    for (const t of traps) if (!friendly(t.owner, me)) {
+    for (const t of traps) if (!friendly(t.owner, me, this.allyTeam(view, t.owner))) {
       const c = trapCenter(t);
       out.push({ pos: t.wall ? add(c, scale(forward(t.rotY), TRAP.zone / 2)) : v3(c.x, t.pos.y, c.z), r: t.wall ? r + TRAP.zone / 2 : r });
     }
@@ -2380,7 +2573,7 @@ export class Bot {
     const me = c.me, R = this.P.trap.shootRange;
     let best: Vec3 | null = null, bestD = Infinity;
     for (const t of traps) {
-      if (friendly(t.owner, me)) continue;
+      if (friendly(t.owner, me, this.allyTeam(c.view, t.owner))) continue;
       const at = trapCenter(t);
       const d = dist2D(at, me.pos);
       if (d > R || d >= bestD || Math.abs(at.y - me.pos.y) > 3) continue;

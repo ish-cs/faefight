@@ -1,4 +1,4 @@
-import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, TRAP, WEAPONS } from '../sim/constants';
+import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, TRAP, WEAPONS } from '../sim/constants';
 import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
 import type { CenterIsland, IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem, isPotionItem } from '../sim/hotbar';
@@ -22,6 +22,7 @@ const LABEL: Record<string, string> = {
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
   ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit', trap: 'Spike trap',
   shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
+  grapple: 'Grappling hook',
 };
 
 function supplyPrompt(c: Snapshot['center']): string {
@@ -77,6 +78,7 @@ function detailsOf(item: ShopItem, price: number, genLevel: number, me: PlayerSt
   }
   if (item === 'grenade') return `Grenade · ${GRENADE.dmg} dmg in a ${GRENADE.radius} m blast · $${price}`;
   if (item === 'charge') return `Breach charge · cracks walls and sealed doors · $${price}`;
+  if (item === 'grapple') return `Grappling hook · ${GRAPPLE.uses} uses · ${GRAPPLE.range} m · hook a wall to swing to it, a player to yank them to you · Space lets go · $${price}`;
   if (item === 'trap') return `Spike trap · set on a floor or wall; ${TRAP.dmg} dmg to enemies who step in, never you · max ${TRAP.maxPerPlayer} out · $${price}`;
   if (item === 'medkit') return `Medkit · heals ${MEDKIT.heal} HP over ${MEDKIT.useSec}s · $${price}`;
   return `${name} · $${price}`;
@@ -108,7 +110,7 @@ const SHORT: Record<HotbarItem, string> = {
   pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
   grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit', trap: 'Trap',
-  shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed',
+  shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', grapple: 'Hook',
 };
 
 export type HudContext = {
@@ -963,7 +965,7 @@ export class Hud {
       } else {
         section('Weapons', [...GUNS, 'ammo']);
         section('Building', PIECE_ORDER);
-        section('Gear', ['grenade', 'charge', 'trap', 'medkit']);
+        section('Gear', ['grenade', 'charge', 'trap', 'medkit', 'grapple']);
         // Lock cards only show up once you own (or have locked) that gun.
         section('Upgrades', ['genUpgrade', ...GUNS.map(lockItem)]);
       }

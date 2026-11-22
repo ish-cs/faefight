@@ -106,6 +106,12 @@ export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open
     const nearWall = Math.abs(a.x) < BUNKER_HALF + 0.4 && Math.abs(a.z) < BUNKER_HALF + 0.4;
     if (!segHitsSquare(a, c, nearWall ? BUNKER_HALF + 0.05 : BUNKER_HALF + 0.4)) return dest;
     const k = BUNKER_HALF + 1.3;
+    // Standing in a doorway (inside the wall square, not the room): no corner is reachable from here and a
+    // straight line cuts back through the room, so step straight out first (else bots dither on the threshold).
+    if (Math.abs(a.x) < BUNKER_HALF + 0.05 && Math.abs(a.z) < BUNKER_HALF + 0.05) {
+      const out = Math.abs(a.x) > Math.abs(a.z) ? v3(Math.sign(a.x) * k, 0, a.z) : v3(a.x, 0, Math.sign(a.z) * k);
+      return toWorld(b, out);
+    }
     let best: Vec3 | null = null, bestCost = Infinity;
     for (const corner of [v3(k, 0, k), v3(-k, 0, k), v3(k, 0, -k), v3(-k, 0, -k)]) {
       if (segHitsSquare(a, corner, BUNKER_HALF + 0.05)) continue;
@@ -457,8 +463,7 @@ export class Nav {
         const ld = this.nearestLane(dest);
         if (ld && !(ld.from === l.from && ld.to === l.to) && !(ld.from === l.to && ld.to === l.from)) {
           const shared = [l.from, l.to].find((n) => n === ld.from || n === ld.to);
-          if (shared === undefined) return null;
-          sTarget = this.landS(l, shared);
+          if (shared !== undefined) sTarget = this.landS(l, shared);
         }
       }
     } else {

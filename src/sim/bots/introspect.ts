@@ -8,7 +8,7 @@
  *
  * Player references inside text are written `@<id>` and turned into names by the client.
  */
-import { AMMO_BOX, CHARGE, GRENADE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, GRAPPLE, GRENADE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
 import type { Doorway, IslandLayout } from '../map';
 import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
 import { dist2D } from '../vec';
@@ -20,7 +20,7 @@ import type { BotParams, BrainParams } from './params';
 import type { Traits } from './personality';
 import { BUILD_TUNING as BT } from './build';
 import { ownsGun, plugFor, plugSpot, sealKit, type Needs, type ShopStyle } from './plans';
-import type { BotView, OtherStatus } from './view';
+import type { AllyStatus, BotView, OtherStatus } from './view';
 
 /**
  * One goal's line in the utility table: `raw` from Bot.score, `base` after Bot.drive (the win-seeking push of
@@ -51,11 +51,15 @@ export type BrainDigest = {
   target: { id: number; why: string } | null;
   /** Pushing a dead rival's bunker in their respawn window: [id, seconds left], or null. */
   window: [number, number] | null;
+  /** Teams match: its role (defender stays home, the rest push) and the teammates going after the same target. */
+  team?: { role: 'defend' | 'push'; focus: number[] };
   /** Rivals as it weighs them: [id, score]. */
   rivals: [number, number][];
   plan: string[]; planAt: number;
   shop: { items: ShopItem[]; why: string; cost: number } | null;
   build: { kind: PieceKind; x: number; y: number; z: number; rotY: number; why: string } | null;
+  /** Grappling hook: on a rope now, or its last use (a few seconds), or what it carries it for; absent when none. */
+  hook?: string;
   /** Route ahead: [x, y, z] points from its feet. */
   path: [number, number, number][];
   /** Where it's aiming / shooting at, and whether it fired this tick. */
@@ -107,6 +111,8 @@ type Internals = {
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
+  defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
+  hookNote: { t: number; text: string } | null;
   params: BrainParams; P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
@@ -206,6 +212,25 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const low = 0.35 + 0.25 * t.caution - 0.15 * t.aggression;
       if (hp >= low) return zero('healthy enough');
       return { f: [['hurt away', 0.75], ['hp gap', low - hp]], why: `${Math.round(me.hp)} hp, away from home and no medkit: going back to recover` };
+    }
+    case 'assist': {
+      if (!view.allies) return zero('no team');
+      if (c.enemy) return zero('in my own fight');
+      if (!gun) return zero('no gun');
+      const a = I.allyInTrouble(c);
+      if (!a) return zero('no teammate under fire nearby');
+      const f: [string, number][] = [['teammate hit', 0.9], ['aggression', 0.2 * t.aggression]];
+      if (I.defender && a.island !== home.index) f.push(['defender', -0.3]);
+      return { f, why: `Teammate @${a.id} is being shot${a.hurtBy !== null ? ` by @${a.hurtBy}` : ''} ${Math.round(dist2D(a.pos, me.pos))} m away: going to help` };
+    }
+    case 'regroup': {
+      if (!view.allies) return zero('no team');
+      if (c.enemy) return zero('in my own fight');
+      if (!gun) return zero('no gun');
+      if (!I.offensive(c)) return zero('not on offense');
+      const a = I.regroupWith(c);
+      if (!a) return zero(I.defender ? 'defender: holding home' : 'with my team already (or pushing alone)');
+      return { f: [['regroup', I.P.team.regroupScore]], why: `@${a.id} leads the push on ${rivalName(c)} ${Math.round(dist2D(a.pos, me.pos))} m ahead: catching up so we hit together` };
     }
     case 'guard': {
       if (!c.homeReach) return zero("can't walk home");
@@ -530,7 +555,7 @@ function invValue(inv: Inventory): number {
   for (const [k, a] of Object.entries(inv.weapons)) if (k !== 'fists') v += (WEAPONS[k as WeaponKind]?.price ?? 0) + (a && a.spare > 0 ? AMMO_BOX.price * Math.min(1, a.spare / 30) : 0);
   for (const [k, n] of Object.entries(inv.pieces)) v += (PIECES[k as PieceKind]?.price ?? 0) * (n ?? 0);
   for (const [k, n] of Object.entries(inv.potions ?? {})) v += (POTIONS[k as keyof typeof POTIONS]?.price ?? 0) * (n ?? 0);
-  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price + inv.traps * TRAP.price);
+  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price + inv.traps * TRAP.price + ((inv.grapples ?? 0) * GRAPPLE.price) / GRAPPLE.uses);
 }
 
 /** Steps of the current goal, and which one it's on (from what it did this tick). */
@@ -549,6 +574,8 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
     case 'guard': return two('Get to the bunker front', 'Watch where the intruder was');
     case 'cut': return two('Walk to the shore', 'Shoot the incoming deck');
     case 'contest': return two('Walk to the centre stations', 'Grab gold / pieces');
+    case 'assist': return two('Run to the teammate under fire', 'Shoot whoever is on them');
+    case 'regroup': return two('Catch up with the push leader', 'Push in together');
     case 'storm': return { steps: ['Get inside the ring', 'Hold position'], at: moving ? 0 : 1 };
     case 'cover': return { steps: ['Get to the cover spot', 'Place a wall', 'Fight from behind it'], at: a?.build ? 1 : moving ? 0 : 2 };
     case 'fortify': return { steps: ['Walk to the next fort slot', 'Build it', 'Next slot'], at: a?.build ? 1 : moving ? 0 : 1 };
@@ -650,8 +677,10 @@ export function debugBrain(bot: Bot): BrainDigest {
     seen: seen.slice(0, 8), hurt: hurt.slice(0, 4), grudge,
     target: p.target, rivals: p.rivals.slice(0, 7),
     window: I.respawnWindow ? [I.respawnWindow.id, r1(I.respawnWindow.left)] : null,
+    ...(view?.allies ? { team: { role: I.defender ? 'defend' as const : 'push' as const, focus: view.allies.filter((x) => !x.eliminated && x.target !== null && x.target === I.targetId).map((x) => x.id) } } : {}),
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
+    ...hookLine(I, me, now),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
     st: {
@@ -665,6 +694,18 @@ export function debugBrain(bot: Bot): BrainDigest {
     },
   };
   return fitDigest(d);
+}
+
+/** The brain panel's grappling hook line. */
+function hookLine(I: Internals, me: PlayerState | undefined, now: number): { hook?: string } {
+  if (!me?.alive) return {};
+  const note = I.hookNote && now - I.hookNote.t < 4 ? I.hookNote.text : null;
+  if (me.mv?.pull?.yank) return { hook: 'Being yanked by an enemy hook' };
+  if (me.mv?.pull) return { hook: `On the rope${note ? `: ${note}` : ''}` };
+  if (me.hook) return { hook: note ?? 'Hook out' };
+  if (note) return { hook: note };
+  const n = me.inv.grapples ?? 0;
+  return n > 0 ? { hook: `Carrying one (${n} use${n === 1 ? '' : 's'}): for crossing gaps, getting away, yanking` } : {};
 }
 
 function nearest(es: PlayerState[], p: Vec3): PlayerState | null {

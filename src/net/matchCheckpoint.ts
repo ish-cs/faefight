@@ -48,9 +48,9 @@ const REBUILT: Record<string, (o: Record<string, unknown>) => unknown[]> = {
   BunkerGrid: (g) => [g.bunker, g.blockers],
 };
 /** Closures the bots keep from their last BotView (Nav.view): replaced on the next think(), never called before. */
-const STALE_FNS = new Set(['groundAt', 'canPlace', 'canTrap', 'nextId', 'clearShot']);
+const STALE_FNS = new Set(['groundAt', 'canPlace', 'canTrap', 'nextId', 'clearShot', 'castHook']);
 /** Match fields rebuilt on restore instead of saved: combat callbacks bound to the instance, the native world, the bot factory. */
-const SKIP = new Set(['ctx', 'fireCtx', 'hazardHost', 'physics', 'makeBot']);
+const SKIP = new Set(['ctx', 'fireCtx', 'hazardHost', 'grappleCtx', 'physics', 'makeBot']);
 
 type J = null | boolean | number | string | J[] | { [k: string]: J };
 

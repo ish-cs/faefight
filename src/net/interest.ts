@@ -3,13 +3,14 @@ import { emptyInventory } from '../sim/economy';
 import { bunkerWallBoxes, type Box, type IslandLayout } from '../sim/map';
 import type { MatchEvent, PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
 import { add, rotateY, v3 } from '../sim/vec';
+import { isAlly } from '../sim/teams';
 import type { NetPlayer, NetSnapshot } from './snapshotCodec';
 
 /**
  * Per-client interest management (anti-ESP): the host only tells each remote client what that
  * client's player could plausibly perceive. See docs/superpowers/specs/2026-11-20-anti-cheat.md.
  *
- * - Enemies are revealed when within earshot, in line of sight (bunker walls + placed pieces occlude,
+ * - Teammates (teams mode) are always revealed. Enemies are revealed when within earshot, in line of sight (bunker walls + placed pieces occlude,
  *   tested generously: several eye/body sample points, 0.25 s of lookahead), or when they just hurt
  *   you. A reveal lasts `graceSec` past the last positive test so nothing pops at corners.
  * - Unrevealed enemies stay in the list (names, alive/eliminated for HUD + kill feed) with a frozen
@@ -146,7 +147,8 @@ export class InterestManager {
 
     for (const p of s.players) {
       if (p.id === viewerId || p.id === target) continue;
-      if (omniscient || this.perceives(me, eye, p) || (watched && this.perceives(watched, watchedEye!, p))) seen.set(p.id, s.time);
+      // Teammates are always known (teams mode: shared team info, through-walls markers).
+      if (omniscient || isAlly(me, p) || this.perceives(me, eye, p) || (watched && this.perceives(watched, watchedEye!, p))) seen.set(p.id, s.time);
     }
 
     // You know who just shot at / hurt you.
@@ -247,6 +249,9 @@ export class InterestManager {
       } else if (e.type === 'hit') {
         // A dead spectator sees the hits of the player they follow, and the hits on them (their hit markers / arcs).
         if (d.target === viewerId || d.by === viewerId || revealed(d.target) || (watched !== null && (d.by === watched || d.target === watched))) out.push(e);
+      } else if (e.type === 'grapple') {
+        // Hook sounds: only from players this client can perceive (or aimed at it).
+        if (d.by === viewerId || d.target === viewerId || revealed(d.by)) out.push(e);
       } else if (e.type === 'dry') {
         if (revealed(d.by)) out.push(e);
       } else if (e.type === 'pieceHit' && !revealed(d.by)) {
@@ -265,8 +270,9 @@ export class InterestManager {
       pos = b ? v3(b.x, this.map[p.island].groundY, b.z) : v3(0, -50, 0);
       sent.set(p.id, pos);
     }
+    const { hook: _hook, hookReadyAt: _ready, ...rest } = p;
     return {
-      ...p, pos, vel: v3(), yaw: 0, pitch: 0, hp: PLAYER.hp, equipped: 'fists', selected: 0, healAt: null,
+      ...rest, pos, vel: v3(), yaw: 0, pitch: 0, hp: PLAYER.hp, equipped: 'fists', selected: 0, healAt: null,
       reloadUntil: 0, nextFireAt: 0, busyUntil: 0, invulnUntil: 0, lastDamagedAt: 0, breakoutUntil: null,
       shield: 0, drinking: null, healLeft: 0, speedUntil: 0, reloadSec: 0, reloadMag: 0, ads: false,
     };

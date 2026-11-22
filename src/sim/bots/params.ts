@@ -273,6 +273,46 @@ export function withTraits(base: Readonly<BrainParams>, t: Traits): BrainParams 
 }
 
 /**
+ * Teams play (teams matches only; free-for-all never reads these).
+ * - focus: rival-choice bonus per teammate already going after that rival, and for whoever just hurt a teammate near
+ *   me (focus one target: the team converges on one enemy island).
+ * - groupPush: bridge/attack/seal bonus per teammate already on my target's island (half for one going after the same
+ *   rival): the team pushes one island together.
+ * - assistM / assistSec / assistScore: go help a teammate an enemy hurt within assistSec, if they're within assistM.
+ * - regroupM / regroupScore: on offense, a pusher more than regroupM behind a teammate who goes after the same rival
+ *   (and is nearer their island) catches up first (goal 'regroup'), so the team arrives together.
+ * - defendMin: from this many players left on my team, one bot (the lowest id) stays home as the defender.
+ * - defendBias: the defender's guard/fortify/cut/defend bonus, also taken off its bridge/attack/seal.
+ */
+export type TeamParams = {
+  focus: number; groupPush: number;
+  assistM: number; assistSec: number; assistScore: number;
+  regroupM: number; regroupScore: number;
+  defendMin: number; defendBias: number;
+};
+
+/**
+ * Grappling hook (sim/grapple.ts): when to buy one and when to use it.
+ * - buyAt: cash (carried + banked) from which this skill carries a hook (Infinity = never).
+ * - crossBuyAt: with a crossing to make (a bridge I'd otherwise build), a hook comes before scaffolds from this much cash.
+ * - crossMax: hook over to an island I want but can't walk to once its near edge is this close to my eye.
+ * - crossInset: aim this far in from that island's edge (so I land on it, not on the cliff face).
+ * - escapeHp: hp + shield under this with an enemy in sight within escapeNear: hook away (at least escapeMin m).
+ * - yankMin / yankMax: yank an enemy in this distance band when it pays: open water between us (they drop in), they
+ *   hold high ground (yankHigh m above me), or my gun wants them closer (past yankFalloff × its falloff start).
+ * - yankRate: yank tries per second while one would pay (seeded rng: not every chance).
+ * - keepForTravel: uses held back for crossing while my target island is out of walking reach.
+ */
+export type HookParams = {
+  buyAt: Record<Difficulty, number>;
+  crossBuyAt: Record<Difficulty, number>;
+  crossMax: number; crossInset: number;
+  escapeHp: number; escapeNear: number; escapeMin: number;
+  yankMin: number; yankMax: number; yankHigh: number; yankFalloff: number; yankRate: number;
+  keepForTravel: number;
+};
+
+/**
  * Spike traps (sim/traps.ts).
  * - carry: traps to own (standing + carried) by skill, once `rich` cash (carried + banked) is in hand.
  * - setScore: goal score for setting one at home (doorways first, then the wall beside the front door) in calm times.
@@ -307,7 +347,7 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
  */
 export type GunSkill = { recoilComp: number; burstShots: number; burstPause: number; sprayRange: number };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; brain: BrainParams };
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; brain: BrainParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -375,6 +415,22 @@ export const BUILD_TUNING: BuildTuning = {
   coverScore: 1.05, fortifyScore: 0.5,
 };
 
+export const TEAM: TeamParams = {
+  focus: 0.45, groupPush: 0.3,
+  assistM: 45, assistSec: 4, assistScore: 0.9,
+  regroupM: 12, regroupScore: 1.1,
+  defendMin: 3, defendBias: 0.45,
+};
+
+export const HOOK: HookParams = {
+  buyAt: D(1200, 450, 350, 300),
+  crossBuyAt: D(Infinity, 160, 600, 110),
+  crossMax: 39, crossInset: 2.5,
+  escapeHp: 45, escapeNear: 20, escapeMin: 12,
+  yankMin: 8, yankMax: 30, yankHigh: 2.5, yankFalloff: 1.2, yankRate: 0.6,
+  keepForTravel: 1,
+};
+
 export const TRAP_TUNING: TrapTuning = { carry: D(0, 1, 2, 3), rich: 350, setScore: 0.45, avoidPad: 0.35, shootRange: 9 };
 
 export const AIM_PARAMS: AimParams = {
@@ -397,7 +453,7 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
 };
 
 /** The hand-tuned tables (what the bots did before training). */
-export const HAND_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, brain: HAND_BRAIN });
+export const HAND_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, brain: HAND_BRAIN });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: Readonly<BotParams> = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -455,10 +511,16 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['buildTuning.slotBackoffSec', [10, 90]], ['buildTuning.pushLead', [0, 80]], ['buildTuning.bridgeRetrySec', [0.2, 2]],
   ['buildTuning.bridgeStuckSec', [1, 10]], ['buildTuning.bridgeHoldSec', [5, 60]], ['buildTuning.freeSlots', [1, 4]],
   ['buildTuning.coverScore', [0.5, 1.5]], ['buildTuning.fortifyScore', [0.1, 1]],
+  ['hook.buyAt.*', [150, 1500]], ['hook.crossBuyAt.*', [90, 600]], ['hook.crossMax', [20, 40]], ['hook.crossInset', [1, 6]],
+  ['hook.escapeHp', [0, 120]], ['hook.escapeNear', [8, 35]], ['hook.escapeMin', [6, 30]],
+  ['hook.yankMin', [3, 15]], ['hook.yankMax', [15, 40]], ['hook.yankHigh', [1, 6]], ['hook.yankFalloff', [0.5, 3]],
+  ['hook.yankRate', [0, 3]], ['hook.keepForTravel', [0, 2]],
   ['trap.carry.*', [0, 3]], ['trap.rich', [100, 1200]], ['trap.setScore', [0.1, 1]], ['trap.avoidPad', [0, 1.5]], ['trap.shootRange', [3, 20]],
   ['aim.feel.*.spring', [6, 45]], ['aim.feel.*.damping', [0.55, 1.2]], ['aim.feel.*.maxAccel', [40, 600]],
   ['aim.feel.*.driftHz', [0.5, 8]], ['aim.feel.*.holdSec', [0, 2]], ['aim.commitSec', [0, 2]], ['aim.switchRatio', [0.3, 1]],
   ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
+  ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
+  ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
 ];
 const ruleMatch = (pattern: string, key: string) => {
   const a = pattern.split('.'), b = key.split('.');

@@ -1,4 +1,4 @@
-import { AMMO_BOX, CHARGE, GENERATOR_MAX_LEVEL, GRENADE, MAP, MEDKIT, PIECES, TRAP, POTIONS, SEAL, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, MAP, MEDKIT, PIECES, TRAP, POTIONS, SEAL, WEAPONS } from '../constants';
 import { buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
 import { HOTBAR_ITEMS, canAdd, countOf, takeOut } from '../hotbar';
 import { uselessReason } from '../potions';
@@ -68,6 +68,8 @@ export type Needs = {
   /** A rival's base is wooden: worth a rocket launcher to set it on fire (medium+ bots, when rich). */
   rocket?: boolean;
   scaffolds: number; kit: number; charge: boolean; grenades?: number; medkits?: number; steel?: boolean; genLevel?: number;
+  /** Carry a grappling hook: 'cross' (a crossing to make: bought before scaffolds), 'rich' (spare cash). */
+  grapple?: 'cross' | 'rich';
   /** Spike traps to carry (on top of the ones standing). */
   traps?: number;
   /** Pieces wanted for building (fortifications, combat cover, bridge walls) on top of the seal kit. */
@@ -153,6 +155,7 @@ function choosePurchase(p: PlayerState, needs: Needs, difficulty: Difficulty, st
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
   const room = (k: HotbarItem) => countOf(inv, k) > 0 || canAdd(p.hotbar, k);
   if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
+  if (needs.grapple === 'cross' && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
     if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price) return 'steel';
@@ -167,6 +170,7 @@ function choosePurchase(p: PlayerState, needs: Needs, difficulty: Difficulty, st
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
   if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && room('smg') && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && room('rifle') && cash >= WEAPONS.rifle.price) return 'rifle';
+  if (needs.grapple && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if (needs.rocket && !inv.weapons.rocket && canAdd(p.hotbar, 'rocket') && cash >= WEAPONS.rocket.price + 200) return 'rocket';
   // Extras only when there's a hotbar slot for them (a full hotbar makes the shop refuse: retrying every tick).
   if (inv.grenades < (needs.grenades ?? 0) && room('grenade')) return cash >= GRENADE.price ? 'grenade' : null;

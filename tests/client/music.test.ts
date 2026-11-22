@@ -44,6 +44,13 @@ describe('MusicDirector: calm → tense → intense', () => {
     expect(director().update(snap(1, [['shot', { by: ME, weapon: 'fists', from: v(0), to: v(0) }]]))).toBe('calm');
   });
 
+  it('teams: a hit between teammates is not a fight; a hit from an enemy is', () => {
+    const mates = [{ ...player(ME, v(0)), team: 0 }, { ...player(BOT, v(30)), team: 0 }];
+    expect(director().update(snap(1, [['hit', { target: ME, by: BOT, amount: 10 }]], { players: mates }))).toBe('calm');
+    const foes = [{ ...player(ME, v(0)), team: 0 }, { ...player(BOT, v(30)), team: 1 }];
+    expect(director().update(snap(1, [['hit', { target: ME, by: BOT, amount: 10 }]], { players: foes }))).toBe('tense');
+  });
+
   it('tension holds for COMBAT_HOLD seconds after the last shot, then relaxes', () => {
     const d = director();
     d.update(snap(1, [['hit', { target: ME, by: BOT, amount: 10 }]]));

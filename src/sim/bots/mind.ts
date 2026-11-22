@@ -51,6 +51,9 @@ export class Memory {
     }
     for (const e of view.enemies)
       this.seen.set(e.id, { pos: clone(e.pos), t: now, hp: e.hp, armed: e.equipped !== 'fists', island: islandAt(view.map, e.pos) });
+    // Teams: what my teammates see counts as seen (shared team info).
+    for (const e of view.teamSeen ?? [])
+      if (!view.enemies.some((x) => x.id === e.id)) this.seen.set(e.id, { pos: clone(e.pos), t: now, hp: e.hp, armed: e.armed, island: islandAt(view.map, e.pos) });
 
     let top = this.doneHurt;
     for (const h of view.hurt) {
