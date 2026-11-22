@@ -95,7 +95,7 @@ const STORM_PREP_SEC = 150;
 const STORM_SPARE_DECKS = 2, STORM_SHOP_GRACE = 45;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Walls a bot throws down for cover, best first (sandbags go up two high). */
-const WALLS: PieceKind[] = ['wood', 'metal', 'steel'];
+const WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
 /** Walls for holding a spot (home, a long hold, replacing a cracked wall): toughest first. */
 const STRONG_WALLS: PieceKind[] = ['steel', 'metal', 'wood'];
 /** Generator cash worth grabbing on the way out, and the level at which it is about to be wasted at the cap. */
@@ -2388,7 +2388,7 @@ export class Bot {
     if (by === null || by === me.id || now - this.mem.lastHurtAt > 1.0) return;
     if (view.suddenDeath || insideBunker(c.home.bunker, me.pos)) return;
     // On land (my island, a rival's, or the centre island), not out on a bridge deck.
-    if (c.on < 0 && this.nav.nodeAt(me.pos) < 0) return;
+    if (c.on < 0) return;
     const from = this.threatPos(c, by);
     if (!from) return;
     if (this.cover?.threatId === by) { this.cover.threat = from; this.cover.lastContact = now; return; }
