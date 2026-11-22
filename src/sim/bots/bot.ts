@@ -65,6 +65,8 @@ const CONTEST_AT = 150;
 const RESCORE_SEC: Record<Difficulty, number> = { easy: 1.6, medium: 1.0, hard: 0.5, pro: 0.3 };
 const HESITATE_SEC: Record<Difficulty, number> = { easy: 1.2, medium: 0.6, hard: 0.15, pro: 0.05 };
 const STICKY = 0.1;
+/** Each bot's brain weights with its personality folded in (see Bot.params). */
+const BRAIN_CACHE = new WeakMap<object, BrainParams>();
 /** Misjudgement in goal/target scores (decision mistakes). */
 const NOISE: Record<Difficulty, number> = { easy: 0.3, medium: 0.15, hard: 0.08, pro: 0.03 };
 const BUY_GAP: Record<Difficulty, number> = { easy: 3, medium: 1.5, hard: 0.6, pro: 0.35 };
@@ -310,8 +312,15 @@ export class Bot {
   private burstRestUntil = -Infinity;
   private seenShotAt = -Infinity;
   private view!: BotView;
-  /** Strategy/tactics weights: the trained defaults with this bot's personality folded in. */
-  readonly params: BrainParams;
+  /**
+   * Strategy/tactics weights: the trained defaults with this bot's personality folded in. Derived from P.brain and
+   * the traits, cached outside the instance so match checkpoints don't carry a copy per bot (bandwidth budget).
+   */
+  get params(): BrainParams {
+    let p = BRAIN_CACHE.get(this);
+    if (!p) { p = withTraits(this.P.brain, this.t); BRAIN_CACHE.set(this, p); }
+    return p;
+  }
   private readonly brain: Brain;
   private lastOdds: number | null = null;
   private farRef: { pos: Vec3; t: number } | null = null;
@@ -340,7 +349,6 @@ export class Bot {
     this.personality = personality ?? rollPersonality(rng);
     this.t = this.personality.traits;
     const t = this.t;
-    this.params = withTraits(P.brain, t);
     this.brain = new Brain(rng);
     this.dodger = new Dodger(rng, DODGE_SKILL[difficulty]);
     this.style = {
@@ -1814,13 +1822,14 @@ export class Bot {
       const base = Math.max(this.teamDrive(g, c, this.drive(g, c, raw)), g === step && SAFE_STEPS.has(g) ? 0.05 : 0);
       if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
       const bias = GOAL_BIAS[g];
-      // The storm outranks any plan step: staying inside the ring is survival. Early on a keen builder's home
+      // The storm outranks any plan step (staying inside the ring is survival), and so does a teammate under fire
+      // close by (teams: help first). Early on a keen builder's home
       // fortification does too, except a bank step (two seconds at the vault; walking off to fortify would undo
       // "the vault is right here" and the step order would ping-pong).
       const earlyFort = g === 'fortify' && step !== 'bank' && this.t.builder > 0.6 && c.view.now < this.params.turtleUntil;
       const noise = (this.rng() - 0.5) * NOISE[this.difficulty], sticky = g === this.goal ? STICKY : 0;
       // Brain terms (trained per-goal bias, the current step's push) count as part of the base for the inspector.
-      const planned = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' || g === 'cover' || earlyFort ? STEP_BONUS + this.params.stepPush : 0);
+      const planned = base + (bias ? this.params[bias] : 0) + (g === step || g === 'storm' || g === 'cover' || g === 'assist' || earlyFort ? STEP_BONUS + this.params.stepPush : 0);
       const s = planned + noise + sticky;
       rows?.push({ goal: g, raw, base: planned, noise, sticky, score: s });
       scored.push({ goal: g, score: s });

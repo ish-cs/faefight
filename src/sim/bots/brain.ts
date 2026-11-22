@@ -130,6 +130,9 @@ const pct = (x: number) => `${Math.round(100 * x)}%`;
 /** Seconds a retreat or a heal-at-home may last before the bot goes back in (a human doesn't hide forever). */
 const REENGAGE_SEC = 20;
 
+/** Brain events kept for the debug overlay (match checkpoints carry them: keep it short). */
+const HISTORY_MAX = 12;
+
 export class Brain {
   goal: BrainGoal | null = null;
   private pending: BrainEvent[] = [];
@@ -150,7 +153,7 @@ export class Brain {
   notify(e: BrainEvent, now: number) {
     this.pending.push(e);
     this.history.push({ t: now, event: e });
-    if (this.history.length > 50) this.history.shift();
+    if (this.history.length > HISTORY_MAX) this.history.shift();
   }
 
   /** The tick-level action of the current step (null when the goal has no step left). */
