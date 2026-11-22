@@ -263,7 +263,7 @@ export function buildMapDef(playerCount: number, template: MapTemplate = 'harbor
     template, name: MAP_NAMES[template], seed,
     waterY: MAP.waterY,
     islands, center, statics, cosmetics, hazards,
-    props: placeProps({ islands, center, statics, cosmetics, seed, avoid: hazards.map((h) => h.pos) }),
+    props: [], // ABLATION: no props
     docks: buildDocks(islands, center),
   };
 }
