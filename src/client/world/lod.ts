@@ -14,6 +14,13 @@ import { LOD_QUALITY_SCALE, type QualityName, selectLod } from './lodMath';
 export const SMALL_CASTER_LAYER = 4;
 /** Tiny moving casters (gameplay props, debris): drawn by the camera, cast into the first shadow cascade only. */
 export const TINY_CASTER_LAYER = 5;
+/**
+ * Shadow-only stand-ins (geo.ts): per-cell copies of a map-wide static mesh, never drawn by the camera. The camera
+ * draws the one merged mesh; each shadow cascade draws only the cells inside its own frustum. SHADOW_ONLY_LAYER
+ * casts into every cascade, SHADOW_ONLY_FIRST_LAYER into the first only (stand-ins of small parts).
+ */
+export const SHADOW_ONLY_LAYER = 6;
+export const SHADOW_ONLY_FIRST_LAYER = 7;
 
 export interface LodTarget {
   /** Re-pick levels for a camera at `cam`; `scale` multiplies every registered distance. */

@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { registerDistanceCull, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
+import { registerDistanceCull, SHADOW_ONLY_FIRST_LAYER, SHADOW_ONLY_LAYER, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
 import { chunkCoord } from './lodMath';
 import { stressMatrices } from './stress';
 
@@ -87,6 +87,37 @@ export const STATIC_CHUNKS = {
   minChunkTris: 16_000,
 };
 
+/**
+ * Shadow stand-ins for map-wide static meshes: a merged mesh spanning the map is one cheap camera draw, but every
+ * shadow cascade then rasterises all of it (realism3's dock wood/galv/frond bins: ~800k tris into cascade 0, whose
+ * frustum covers ~20 m). Such a mesh stops casting; per-`grid` copies of its parts on a shadow-only layer cast
+ * instead, so each cascade draws only the cells its frustum touches.
+ */
+export const SHADOW_STANDINS = { minRadius: 60, minTris: 20_000, grid: 48 };
+
+function shadowStandIns(mesh: THREE.Mesh, parts: THREE.BufferGeometry[], material: THREE.Material, firstOnly: boolean, parent: THREE.Object3D) {
+  const g = mesh.geometry;
+  if (!g.boundingSphere) g.computeBoundingSphere();
+  if (g.boundingSphere!.radius < SHADOW_STANDINS.minRadius || trisOf(parts) < SHADOW_STANDINS.minTris) return;
+  const cells = new Map<string, THREE.BufferGeometry[]>();
+  for (const p of parts) {
+    if (!p.boundingSphere) p.computeBoundingSphere();
+    const c = p.boundingSphere!.center, k = `${chunkCoord(c.x, SHADOW_STANDINS.grid)},${chunkCoord(c.z, SHADOW_STANDINS.grid)}`;
+    let e = cells.get(k);
+    if (!e) cells.set(k, (e = []));
+    e.push(p);
+  }
+  mesh.castShadow = false;
+  for (const [k, e] of cells) {
+    const s = new THREE.Mesh(merge(e), material);
+    s.name = `${mesh.name}:shadow@${k}`;
+    s.castShadow = true;
+    s.receiveShadow = false;
+    s.layers.set(firstOnly ? SHADOW_ONLY_FIRST_LAYER : SHADOW_ONLY_LAYER);
+    parent.add(s);
+  }
+}
+
 const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + g.getAttribute('position').count / 3, 0);
 
 type Bin = { material: THREE.Material; cast: boolean; receive: boolean; parts: THREE.BufferGeometry[] };
@@ -136,6 +167,7 @@ export class StaticBatch {
       mesh.name = `${name}:${bin.material.name || 'mat'}${suffix}`;
       parent.add(mesh);
       out.push(mesh);
+      if (opts.chunked && bin.cast) shadowStandIns(mesh, parts, bin.material, suffix === '@small:sparse', parent);
       return mesh;
     };
     for (const bin of this.bins.values()) {
