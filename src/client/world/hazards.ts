@@ -7,6 +7,9 @@ import { SHADOW_ONLY_FIRST_LAYER } from './lod';
 import { mats } from './materials';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Particles } from './particles';
+import type { SolidHit } from './impacts';
+import { ownHazard } from './surfaces';
+import { v3 } from '../../sim/vec';
 
 /**
  * Explosive barrels, propane tanks and supply crates (MapDef.hazards; sim state in snapshot `hz`).
@@ -171,6 +174,15 @@ const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quatern
 /** depth-only material of the hazards' shared shadow batch (never drawn by the camera) */
 const SHADOW_MAT = new THREE.MeshBasicNodeMaterial();
 
+/** Whether `p` sits on hazard `d` (the sim's hit cylinder, within `slack`): the hit with its face normal, or null. */
+export function hazardSolidHit(d: HazardDef, p: Vec3, slack: number): SolidHit | null {
+  const s = HAZARD[d.kind];
+  const dx = p.x - d.pos.x, dz = p.z - d.pos.z, rad = Math.hypot(dx, dz);
+  if (rad > s.r + slack || p.y < d.pos.y - slack || p.y > d.pos.y + s.h + slack) return null;
+  const top = p.y > d.pos.y + s.h - 0.03 || rad < 1e-6;
+  return { surface: d.kind === 'crate' ? 'wood' : 'metal', point: v3(p.x, p.y, p.z), normal: top ? v3(0, 1, 0) : v3(dx / rad, 0, dz / rad), owner: ownHazard(d.id) };
+}
+
 export class HazardLayer {
   readonly root = new THREE.Group();
   /**
@@ -231,6 +243,16 @@ export class HazardLayer {
       this.shadow = sh;
       this.root.add(sh);
     }
+  }
+
+  /** The standing hazard a shot's end point `p` sits on (the sim's hit cylinder, a little slack), or null. */
+  hitAt(p: Vec3, slack = 0.1): SolidHit | null {
+    for (const [id, slot] of this.slots) {
+      if (!this.shown.get(id)) continue;
+      const h = hazardSolidHit(slot.def, p, slack);
+      if (h) return h;
+    }
+    return null;
   }
 
   /** Snapshot state: hide gone ones, show respawned ones, start the fuse fx for late-seen fusing ones. */

@@ -808,13 +808,6 @@ export class Match implements MatchApi {
     this.feed = keep(this.feed, FEED_SEC);
   }
 
-  /** Props' footprints for the bots (BotView.props), worked out once per tick. */
-  private propFeet: { t: number; list: NonNullable<BotView['props']> } | null = null;
-  private propFootprints(): NonNullable<BotView['props']> {
-    if (this.propFeet?.t !== this.s.time) this.propFeet = { t: this.s.time, list: this.props?.footprints() ?? [] };
-    return this.propFeet.list;
-  }
-
   private botView(self: PlayerState): BotView {
     const eye = eyePos(self);
     const enemies: PlayerState[] = [];
@@ -856,7 +849,7 @@ export class Match implements MatchApi {
       hazards: this.hazards.list.filter((h) => h.st !== 2 && dist(h.pos, eye) <= SIGHT_RANGE).map((h) => ({
         id: h.def.id, kind: h.def.kind, pos: clone(h.pos), center: this.hazards.center(h), radius: isExplosive(h.def.kind) ? HAZARD[h.def.kind].radius : 0, fusing: h.st === 1,
       })),
-      ...(this.props ? { props: this.propFootprints() } : {}),
+      ...(this.props ? { props: () => this.props!.footprints() } : {}),
       ...(peeking ? { peeking } : {}),
       docks: this.docks.standing(),
       clearShot: (to) => {
