@@ -415,11 +415,12 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       return { f, why: `A loot bag ${m(dist2D(bag, me.pos))} away${gun ? '' : ', maybe a gun'}: picking it up` };
     }
     case 'cover': {
-      const cv = (I as unknown as { cover: unknown }).cover;
+      const cv = (I as unknown as { cover: { threatId: number; placed: number; phase: string; peeks: number } | null }).cover;
       if (!cv) return zero('no cover planned');
       if (c.enemy && c.enemyDist < 5) return zero('enemy too close to build');
       if (c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield - BT.pushLead) return zero('winning the trade: pushing');
-      return { f: [['base', BT.coverScore], ['builder', 0.1 * t.builder]], why: c.enemy ? `Under fire from @${c.enemy.id}: throwing up cover` : 'Throwing up cover' };
+      const state = cv.placed ? `${cv.placed} wall${cv.placed > 1 ? 's' : ''} up, ${cv.phase === 'hide' ? 'hiding' : 'peeking'} (peek ${cv.peeks})` : 'throwing up a wall';
+      return { f: [['base', BT.coverScore], ['builder', 0.1 * t.builder]], why: `Under fire from @${cv.threatId}: ${state}` };
     }
     case 'fortify': {
       if (view.suddenDeath) return zero('sudden death');
@@ -549,7 +550,8 @@ export class BrainProbe {
     this.fire = fire;
     const b = act.build;
     if (b) {
-      const why = act.build!.kind === 'scaffold' ? 'next bridge deck' : inside(this.bot).goal === 'seal' ? 'plugging a doorway' : 'cover from fire';
+      const I = inside(this.bot) as Internals & { buildWhy?: string | null };
+      const why = I.buildWhy ?? (b.kind === 'scaffold' ? 'next bridge deck' : I.goal === 'seal' ? 'plugging a doorway' : I.goal === 'fortify' ? 'fortifying home' : 'cover from fire');
       this.lastBuild = { b: { kind: b.kind, x: r1(b.pos.x), y: r1(b.pos.y), z: r1(b.pos.z), rotY: r2(b.rotY), why }, t: inside(this.bot).view?.now ?? 0 };
     }
   }
