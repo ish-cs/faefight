@@ -446,9 +446,12 @@ export class Bot {
       // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
       // unless they're the one shooting at me.
       const w = WEAPONS[me.equipped];
-      const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult &&
-        !(this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3);
-      fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !this.burstRest(now, me, foeDist);
+      const hittingMe = this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3;
+      const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult && !hittingMe;
+      // Not on my island and far: no drive-by shots across the water (close in and fight instead), unless they're on me.
+      const across = foeDist > this.P.drive.crossFire[this.difficulty] && !hittingMe &&
+        (ctx.on < 0 || islandAt(view.map, foe.pos) !== ctx.on);
+      fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !across && !this.burstRest(now, me, foeDist);
       if (hook?.why === 'yank' && hook.target === foe.id && r.ready && r.onTarget) { grapple = true; fire = false; }
     } else if (nade) {
       look = hand(nade, TURN_RATE);

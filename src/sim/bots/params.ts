@@ -33,6 +33,8 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  * - siegeDist: camping a sealed bunker this far out from its weakest doorway; siegeAfterDeath: how long after the
  *   owner's death the camp holds without seeing them; siegeScore: attack score while camping.
  * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
+ * - crossFire: hold fire at an enemy farther than this (m) who isn't on the island I stand on (across the water, or
+ *   either of us on a bridge) unless that enemy is hitting me: no plinking in passing, the fights happen up close.
  * - sealBonus: added to the seal goal (seals win games); sealedHunt: added to attack/fight against a rival whose
  *   bunker is sealed (each death of theirs eliminates them); sealedFocus: among visible enemies, one with a sealed
  *   bunker counts as this many times closer when choosing whom to shoot.
@@ -74,6 +76,7 @@ export type DriveParams = {
   stallDist: number;
   stallBanSec: number;
   fireRangeMult: number;
+  crossFire: Record<Difficulty, number>;
   sealBonus: number;
   sealedHunt: number;
   sealedFocus: number;
@@ -246,6 +249,8 @@ export const DRIVE: DriveParams = {
   stallDist: 2.5,
   stallBanSec: 20,
   fireRangeMult: 2,
+  // PRO only (measured: ~80% of 8-PRO FFA hits were drive-by shots across water at ~40 m while bridging/sealing).
+  crossFire: D(Infinity, Infinity, Infinity, 25),
   sealBonus: 0.35,
   sealedHunt: 0.6,
   sealedFocus: 1.6,
@@ -365,7 +370,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sealAway', [0, 0.8]], ['drive.sealAwayTarget', [0, 1.5]], ['drive.emptyHomeSec', [3, 20]],
   ['drive.sealRaceM', [10, 120]], ['drive.windowSlackSec', [0, 6]], ['drive.windowPush', [0, 1.5]],
   ['drive.respawnCautionSec', [0, 30]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
-  ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]],
+  ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]], ['drive.crossFire.*', [15, 60]],
   ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedFocus', [1, 3]],
   ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
