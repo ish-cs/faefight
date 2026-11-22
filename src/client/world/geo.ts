@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { NO_SHADOW, registerDistanceCull, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
 import { chunkCoord } from './lodMath';
 import { stressMatrices } from './stress';
@@ -9,9 +9,16 @@ const ATTRS = ['position', 'normal', 'uv', 'color', 'pc'] as const;
 /**
  * Normalise a geometry for merging: non-indexed, exactly position/normal/uv/color, transformed by `m`.
  * `col` fills the vertex colour (used as a per-part tint; materials multiply it with their map).
+ * An indexed source also keeps an indexed twin (`userData.indexed`, same attributes) so StaticBatch can emit heavy
+ * meshes indexed without re-welding vertices (mergeVertices on millions of vertices cost seconds of load).
  */
 export function part(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation = 0xffffff): THREE.BufferGeometry {
-  const g = geo.index ? geo.toNonIndexed() : geo.clone();
+  const g = normalise(geo.index ? geo.toNonIndexed() : geo.clone(), m, col);
+  if (geo.index) g.userData.indexed = normalise(geo.clone(), m, col);
+  return g;
+}
+
+function normalise(g: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation): THREE.BufferGeometry {
   if (!g.getAttribute('normal')) g.computeVertexNormals();
   const n = g.getAttribute('position').count;
   if (!g.getAttribute('uv')) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(n * 2), 2));
@@ -24,6 +31,7 @@ export function part(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: TH
   for (const k of Object.keys(g.attributes)) if (!(ATTRS as readonly string[]).includes(k)) g.deleteAttribute(k);
   g.morphAttributes = {};
   g.clearGroups();
+  g.userData = {};
   if (m) g.applyMatrix4(m);
   // part centre per vertex: lets a chunk's material shrink each part to its centre with distance (lod.ts)
   g.computeBoundingSphere();
@@ -135,10 +143,11 @@ export class StaticBatch {
   build(parent: THREE.Object3D, name: string, opts: { chunked?: boolean } = {}): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
     const emit = (bin: Bin, parts: THREE.BufferGeometry[], suffix: string) => {
-      let geo = merge(parts);
-      // heavy static meshes are drawn by the camera and every shadow cascade: index them so shared corners are
-      // shaded once (the vertex cache), not once per triangle — fewer vertex invocations in every pass
-      if (geo.getAttribute('position').count >= STATIC_INDEX_MIN_VERTS) geo = mergeVertices(geo, 1e-4);
+      // heavy static meshes are drawn by the camera and every shadow cascade: emit them indexed (from the parts'
+      // indexed twins) so shared corners are shaded once per pass, not once per triangle
+      const twins = trisOf(parts) * 3 >= STATIC_INDEX_MIN_VERTS && parts.every((p) => p.userData.indexed) ? parts.map((p) => p.userData.indexed as THREE.BufferGeometry) : null;
+      const geo = twins ? merge(twins) : merge(parts);
+      if (twins) for (const p of parts) p.dispose();
       const mesh = new THREE.Mesh(geo, bin.material);
       mesh.castShadow = bin.cast; mesh.receiveShadow = bin.receive;
       mesh.name = `${name}:${bin.material.name || 'mat'}${suffix}`;
