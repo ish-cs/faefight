@@ -18,6 +18,7 @@ import { Traps } from '../sim/traps';
 import { WheelLimiter } from '../sim/emotes';
 import { Banter } from '../sim/bots/banter';
 import { mulberry32, isRng, type Rng } from '../sim/rng';
+import { Leaper } from '../sim/bots/parkour';
 import { gunzip, gzip } from './checkpoint';
 
 /**
@@ -35,7 +36,7 @@ import { gunzip, gzip } from './checkpoint';
  */
 
 const MAGIC = 0x31434646; // "FFC1" little-endian
-const CLASSES: Record<string, { prototype: object }> = { Match, MatchStats, Cosmetics, HitboxHistory, Bot, Aim, Nav, WalkGrid, Memory, BunkerGrid, DoorwayTracker, Fire, BrainProbe, WheelLimiter, Banter, Hazards, Traps, Docks };
+const CLASSES: Record<string, { prototype: object }> = { Match, MatchStats, Cosmetics, HitboxHistory, Bot, Aim, Nav, WalkGrid, Memory, BunkerGrid, DoorwayTracker, Fire, BrainProbe, WheelLimiter, Banter, Hazards, Traps, Docks, Leaper };
 const TAG_OF = new Map<object, string>(Object.entries(CLASSES).map(([k, c]) => [c.prototype, k]));
 const TYPED: Record<string, new (b: ArrayBuffer) => ArrayBufferView> = { Float64Array, Float32Array, Int32Array, Uint32Array, Int16Array, Uint16Array, Int8Array, Uint8Array };
 /**

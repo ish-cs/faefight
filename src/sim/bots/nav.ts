@@ -297,7 +297,8 @@ export class Nav {
   /** Widest gap (m) a bridge scan may jump (0: none, the strict scan), highest step up onto the far side. */
   private leapMax = 0;
   private leapUp = 0;
-  private leapBanned: (key: string) => boolean = () => false;
+  /** Gap key → until when it's off (Leaper.banned: gaps I balked at). Plain data: checkpoints save bots' minds. */
+  private leapBans: ReadonlyMap<string, number> = new Map();
   /** This tick's route goes over a gap or up a ledge right ahead (parkour.ts Leaper carries it out). */
   leapHint: LeapHint | null = null;
 
@@ -321,12 +322,12 @@ export class Nav {
 
   /**
    * Let bridge scans (frontier, bridge, route, scaffoldsTo) jump gaps up to `max` m (0: no jumps) landing at most
-   * `up` m higher; `banned(key)`: gaps I balked at lately (decked over instead). Bots set this per tick from skill
-   * and risk.
+   * `up` m higher; `bans`: gap key → until when it's off (gaps I balked at lately: decked over instead). Bots set
+   * this per tick from skill and risk.
    */
-  setLeap(max: number, up: number, banned: (key: string) => boolean) {
+  setLeap(max: number, up: number, bans: ReadonlyMap<string, number>) {
     if (max !== this.leapMax || up !== this.leapUp) { this.leapMax = max; this.leapUp = up; this.bridges.clear(); }
-    this.leapBanned = banned;
+    this.leapBans = bans;
   }
   get leapLimit(): number { return this.leapMax; }
 
@@ -373,7 +374,7 @@ export class Nav {
    * leapMax, solid (and level, across the body's width) for LAND_RUN m, and no higher than leapUp; null if none.
    */
   private landing(l: Lane, s0: number, y0: number): number | null {
-    if (this.leapBanned(Nav.gapKey(l, s0))) return null;
+    if ((this.leapBans.get(Nav.gapKey(l, s0)) ?? -Infinity) > this.view.now) return null;
     const side = v3(-l.dir.z * PLAYER.radius, 0, l.dir.x * PLAYER.radius);
     for (let s = s0 + 2 * SCAN_STEP; s <= s0 + this.leapMax; s += SCAN_STEP) {
       const p = laneAt(l, s);

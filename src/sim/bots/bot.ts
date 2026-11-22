@@ -640,7 +640,7 @@ export class Bot {
     max = Math.min(max, jumpReach(speed, 0) / tune.margin - pk.slop - LAND_PAD - 0.12);
     // Steps of 0.5 m: stamina ticking up and down mustn't re-plan the route every tick.
     max = max < 1 ? 0 : Math.floor(max * 2) / 2;
-    this.nav.setLeap(max, Math.min(pk.climbUp, 0.6), (k) => this.leaper.isBanned(k, now));
+    this.nav.setLeap(max, Math.min(pk.climbUp, 0.6), this.leaper.banned);
   }
 
   /** The jump in progress (or the route's next one) as this tick's movement; null: walk as usual. */
