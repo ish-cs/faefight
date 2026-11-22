@@ -20,7 +20,7 @@ import { islandAt } from './nav';
 import type { Traits } from './personality';
 import { BUILD_TUNING as BT } from './build';
 import type { BotParams } from './params';
-import { ownsGun, plugFor, plugSpot, sealKit, type Needs, type ShopStyle } from './plans';
+import { GUNS, ownsGun, plugFor, plugSpot, sealKit, type Needs, type ShopStyle } from './plans';
 import type { AllyStatus, BotView, OtherStatus } from './view';
 
 /**
@@ -210,6 +210,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
         };
       }
       if (!(c.homeReach && can)) return zero(can ? "can't walk home" : `can't clear ${kinds}`);
+      if (!ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) && me.inv.cash + me.vault.cash >= AMMO_BOX.price) {
+        return { f: [['plugged door, gun empty', 0.5]], why: `${kinds} in my doorway and my gun is empty: ammo first, then I shoot it out` };
+      }
       return { f: [['plugged door', 0.7], ['caution', 0.15 * t.caution]], why: `${bl.length === 1 ? 'A' : bl.length} ${kinds} in my doorway: clearing it with ${how} before heading out` };
     }
     case 'heal': {
@@ -306,12 +309,12 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (blocked > now) return zero(`${plan.items[0]} buy failed, waiting`);
       const list = shopList(plan.items);
       if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return { f: [['at the shop', 0.9]], why: `At the shop: buying ${list}` };
-      const urgent = plan.items.includes('pistol') || plan.items.includes('charge');
+      const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv));
       const v = urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0;
       if (!v) return zero('saving up');
       const f: [string, number][] = [[urgent ? 'urgent buy' : 'kit affordable', v]];
       if (away) f.push(['away', -away]);
-      return { f, why: `Off to buy ${list} ($${Math.round(plan.spent)})${urgent ? `: I need a ${plan.items.includes('pistol') ? 'gun' : 'charge'}` : ''}` };
+      return { f, why: `Off to buy ${list} ($${Math.round(plan.spent)})${urgent ? `: I need ${plan.items.includes('pistol') ? 'a gun' : plan.items.includes('charge') ? 'a charge' : 'ammo'}` : ''}` };
     }
     case 'bridge': {
       const have = me.inv.pieces.scaffold ?? 0;
