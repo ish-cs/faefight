@@ -239,9 +239,12 @@ describe('8 bots and the storm', () => {
     expect(snap.winner, 'match ended').not.toBeNull();
     expect(stormKills).toBeLessThanOrEqual(1);
     const w = snap.players.find((p) => p.id === snap.winner)!;
-    expect(w.alive).toBe(true);
-    expect(Math.hypot(w.pos.x - c.center.x, w.pos.z - c.center.z)).toBeLessThan(snap.storm!.r);
-    expect(w.pos.y).toBeGreaterThan(snap.waterY + 1); // on land or a deck, not in the sea
+    // In sudden death a death is final once its respawn timer runs out, so the last one to die can win while still
+    // down (e.g. dragged into the sea by a grapple from a player who died just before). Otherwise: alive, in the ring.
+    if (w.alive) {
+      expect(Math.hypot(w.pos.x - c.center.x, w.pos.z - c.center.z)).toBeLessThan(snap.storm!.r);
+      expect(w.pos.y).toBeGreaterThan(snap.waterY + 1); // on land or a deck, not in the sea
+    } else expect(snap.players.every((p) => p.id === w.id || p.eliminated)).toBe(true);
     // Someone actually bridged onto the center island.
     expect(snap.pieces.filter((p) => p.kind === 'scaffold' && Math.hypot(p.pos.x - c.center.x, p.pos.z - c.center.z) < c.radius + 4).length).toBeGreaterThan(0);
   }, 300_000);
