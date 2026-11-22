@@ -235,7 +235,7 @@ function movesOf(games: GameOut[]): NonNullable<ScenarioSummary['moves']> {
   const alive = seats.reduce((a, x) => a + x.aliveSec, 0) || 1;
   const pk = (k: string) => seats.reduce((a, x) => a + (x.parkour?.[k] ?? 0), 0) / n;
   return {
-    jumps: pk('jumps'), fails: pk('fails'), balks: pk('balks'), climbs: pk('climbs'), decksSaved: pk('decksSaved'), rushes: pk('rushes'),
+    jumps: pk('jumps'), fails: pk('fails'), airDeaths: pk('airDeaths'), balks: pk('balks'), climbs: pk('climbs'), decksSaved: pk('decksSaved'), rushes: pk('rushes'),
     drowns: seats.reduce((a, x) => a + (x.drowns ?? 0), 0) / n,
     enemyIslandMedianSec: median(seats.map((x) => x.enemyIslandAt).filter((t): t is number => t !== null && t !== undefined)),
     highPct: (100 * seats.reduce((a, x) => a + (x.highSec ?? 0), 0)) / alive,
@@ -254,7 +254,7 @@ export type ScenarioSummary = {
   /** FFAs with more than one tier: mean final placement per tier (1 = won), its 95% CI and number of seats. */
   placementByTier: Partial<Record<Difficulty, { mean: number; ci95: number; n: number }>> | null;
   /** Movement per game (sums over seats): parkour counts, uncaused drownings, median first time on an enemy island, high-ground share of alive time. */
-  moves?: { jumps: number; fails: number; balks: number; climbs: number; decksSaved: number; rushes: number; drowns: number; enemyIslandMedianSec: number | null; highPct: number };
+  moves?: { jumps: number; fails: number; airDeaths: number; balks: number; climbs: number; decksSaved: number; rushes: number; drowns: number; enemyIslandMedianSec: number | null; highPct: number };
   shipCheck: { pass: boolean | null; checks: Check[] };
 };
 
@@ -327,11 +327,11 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '',
     '### Movement (per game)',
     '',
-    '| scenario | jumps | jump fails | balks | climbs | decks saved | ramp-rushes | drownings | median first on an enemy island | high ground |',
-    '|---|---|---|---|---|---|---|---|---|---|',
+    '| scenario | jumps | jump fails | died mid-air | balks | climbs | decks saved | ramp-rushes | drownings | median first on an enemy island | high ground |',
+    '|---|---|---|---|---|---|---|---|---|---|---|',
     ...sums.map((s) => {
       const mv = s.moves, f = (x: number | undefined) => (x === undefined ? '-' : x.toFixed(2));
-      return `| ${s.scenario} | ${f(mv?.jumps)} | ${f(mv?.fails)} | ${f(mv?.balks)} | ${f(mv?.climbs)} | ${f(mv?.decksSaved)} | ${f(mv?.rushes)} | ${f(mv?.drowns)} | ${secs(mv?.enemyIslandMedianSec ?? null)} | ${mv ? `${mv.highPct.toFixed(1)}%` : '-'} |`;
+      return `| ${s.scenario} | ${f(mv?.jumps)} | ${f(mv?.fails)} | ${f(mv?.airDeaths)} | ${f(mv?.balks)} | ${f(mv?.climbs)} | ${f(mv?.decksSaved)} | ${f(mv?.rushes)} | ${f(mv?.drowns)} | ${secs(mv?.enemyIslandMedianSec ?? null)} | ${mv ? `${mv.highPct.toFixed(1)}%` : '-'} |`;
     }),
     '',
     '### Ship-check details',

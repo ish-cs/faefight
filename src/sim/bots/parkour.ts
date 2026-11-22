@@ -62,12 +62,14 @@ export type ParkourStats = {
   fails: number;
   /** Reached the edge and didn't trust the flight: stopped and backed off (recoverable, no harm). */
   balks: number;
+  /** Died while a jump was in the air (shot down, or into the water). */
+  airDeaths: number;
   /** Bridge/pier gaps (distinct) left open because jumping them was enough, and the decks that saved. */
   gapsSkipped: number; decksSaved: number;
   /** Ramp-rush chains started, ramps placed in them. */
   rushes: number; rushRamps: number;
 };
-export const newStats = (): ParkourStats => ({ jumps: 0, climbs: 0, fails: 0, balks: 0, gapsSkipped: 0, decksSaved: 0, rushes: 0, rushRamps: 0 });
+export const newStats = (): ParkourStats => ({ jumps: 0, climbs: 0, fails: 0, balks: 0, airDeaths: 0, gapsSkipped: 0, decksSaved: 0, rushes: 0, rushRamps: 0 });
 
 type Plan = LeapHint & { early: number; phase: 'run' | 'backup' | 'air'; startY: number; at: number };
 export type LeapMove = { dir: Vec3; jump: boolean; sprint: boolean; note: string };
@@ -184,9 +186,12 @@ export class Leaper {
     return { dir: steer(1), jump: false, sprint: true, note: this.say(p, 'run-up') };
   }
 
-  /** Died while a jump was in the air: it went into the water. */
-  died(now: number) {
-    if (this.plan?.phase === 'air') { this.stats.fails++; this.banned.set(this.plan.key, now + BALK_BAN_SEC); }
+  /**
+   * Died (dead bots aren't ticked: this is seen on respawn). A death mid-flight is counted apart from fails: it's
+   * mostly being shot out of the air; a jump into the water shows as an uncaused drowning in measurement.
+   */
+  died() {
+    if (this.plan?.phase === 'air') this.stats.airDeaths++;
     this.plan = null;
   }
 

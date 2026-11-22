@@ -386,7 +386,7 @@ export class Bot {
       this.hookIntent = null;
       this.strandedSince = null;
       this.nextScoreAt = -Infinity;
-      this.leaper.died(now);
+      this.leaper.died();
       this.climb = null;
       this.rush = null;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
@@ -396,7 +396,7 @@ export class Bot {
     this.setLeap(me, now);
     this.checkPurchase(me, now);
     // Came back from a death (bots aren't ticked while dead): note it for respawnCautionSec.
-    if (me.deaths !== this.lastDeaths) { this.lastDeaths = me.deaths; this.respawnedAt = now; this.window = null; }
+    if (me.deaths !== this.lastDeaths) { this.lastDeaths = me.deaths; this.respawnedAt = now; this.window = null; this.leaper.died(); this.climb = null; this.rush = null; }
     this.defender = this.isDefender(view);
     this.sealRace(view);
     if (now >= this.nextScoreAt) this.chooseTarget(view);
