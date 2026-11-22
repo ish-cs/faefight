@@ -1,5 +1,6 @@
 import { newInviteCode, normalizeCode } from './code';
 import { LinkBase } from './linkBase';
+import { Liveness } from './liveness';
 import type { HostRoom, Link, Transport } from './transport';
 
 /**
@@ -14,13 +15,16 @@ import type { HostRoom, Link, Transport } from './transport';
  *   either → {k:'bye', from, to}                        (to:'*' = host closed the whole room)
  *   either → {k:'ping', from}  every 1 s                (host pings once for everyone)
  *
- * A link ends on a bye, or when nothing has been heard from the other side for 3 s (tab killed,
- * crashed, or frozen). Tabs send their byes on `pagehide`.
+ * A link ends on a bye, or when nothing has been heard from the other side for 8 s (tab killed,
+ * crashed, or frozen; same as PeerJS). Our own stalled frames don't count (liveness.ts): under load a
+ * tab's main thread can stall for seconds (shader compiles at match start), and a 3 s timeout used to
+ * drop every guest mid-match. Tabs send their byes on `pagehide`.
  */
 
 const HOST_ID = 'host';
-const PING_MS = 1000;
-const DEAD_MS = 3000;
+/** Heartbeat and liveness timing; tests shrink them. */
+export type BroadcastTiming = { pingMs: number; deadMs: number; stallMs: number };
+const TIMING: BroadcastTiming = { pingMs: 1000, deadMs: 8000, stallMs: 2500 };
 const JOIN_TIMEOUT_MS = 3000;
 
 type Frame =
@@ -47,15 +51,17 @@ function onPageHide(cb: () => void): () => void {
 }
 
 class BroadcastLink extends LinkBase {
-  lastSeen = Date.now();
+  private live: Liveness;
 
   constructor(
     peerId: string,
     private readonly selfId: string,
     private readonly ch: BroadcastChannel,
     private readonly onTeardown: () => void,
+    timing: BroadcastTiming,
   ) {
     super(peerId);
+    this.live = new Liveness(Date.now(), timing.deadMs, timing.stallMs);
   }
 
   protected transmit(msg: unknown): void {
@@ -69,13 +75,13 @@ class BroadcastLink extends LinkBase {
 
   /** Frame from the other side of this link. */
   receive(f: Frame): void {
-    this.lastSeen = Date.now();
+    this.live.heard(Date.now());
     if (f.k === 'data') this.deliver(f.msg);
     else if (f.k === 'bye') this.ended();
   }
 
   checkAlive(now: number): void {
-    if (now - this.lastSeen > DEAD_MS) {
+    if (this.live.dead(now)) {
       console.warn(`[net] local link to ${this.peerId} timed out`);
       this.ended();
     }
@@ -100,10 +106,10 @@ class BroadcastRoom implements HostRoom {
   private unhookPageHide: () => void;
   private closed = false;
 
-  constructor(readonly code: string) {
+  constructor(readonly code: string, private readonly timing: BroadcastTiming) {
     this.ch = new BroadcastChannel(channelName(code));
     this.ch.onmessage = (e) => this.onFrame(asFrame(e.data));
-    this.timer = setInterval(() => this.heartbeat(), PING_MS);
+    this.timer = setInterval(() => this.heartbeat(), timing.pingMs);
     this.unhookPageHide = onPageHide(() => this.close());
   }
 
@@ -129,7 +135,7 @@ class BroadcastRoom implements HostRoom {
     if (f.k === 'join') {
       if (this.links.has(f.from)) return;
       const id = f.from;
-      const link = new BroadcastLink(id, HOST_ID, this.ch, () => this.links.delete(id));
+      const link = new BroadcastLink(id, HOST_ID, this.ch, () => this.links.delete(id), this.timing);
       this.links.set(id, link);
       this.ch.postMessage({ k: 'accept', to: id } satisfies Frame);
       if (this.joinCbs.length === 0) this.waiting.push(link);
@@ -149,10 +155,15 @@ class BroadcastRoom implements HostRoom {
 }
 
 export class BroadcastTransport implements Transport {
+  private readonly timing: BroadcastTiming;
+  constructor(timing: Partial<BroadcastTiming> = {}) {
+    this.timing = { ...TIMING, ...timing };
+  }
+
   async host(code?: string): Promise<HostRoom> {
     if (code !== undefined && normalizeCode(code) !== code) throw new Error(`Bad room code ${code}`);
     // 31^6 codes; collisions between a handful of local tabs are not a practical concern.
-    return new BroadcastRoom(code ?? newInviteCode());
+    return new BroadcastRoom(code ?? newInviteCode(), this.timing);
   }
 
   join(rawCode: string): Promise<Link> {
@@ -183,12 +194,12 @@ export class BroadcastTransport implements Transport {
         if (!link) {
           if (f.k !== 'accept' || f.to !== selfId) return;
           clearTimeout(joinTimer);
-          link = new BroadcastLink(HOST_ID, selfId, ch, shutdown);
+          link = new BroadcastLink(HOST_ID, selfId, ch, shutdown, this.timing);
           const l = link;
           timer = setInterval(() => {
             ch.postMessage({ k: 'ping', from: selfId } satisfies Frame);
             l.checkAlive(Date.now());
-          }, PING_MS);
+          }, this.timing.pingMs);
           unhookPageHide = onPageHide(() => l.close());
           resolve(l);
           return;
