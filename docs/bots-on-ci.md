@@ -21,14 +21,9 @@ scripts/gh-measure.sh my-branch all 20
 scripts/gh-measure.sh my-branch ffa8-pro 20 tests/fixtures/run2-params.json
 ```
 
-Scenarios: `1v1-hard`, `1v1-pro-vs-hard` (PRO seat alternates by seed, as botSeries), `1v1-hard-vs-medium`,
-`1v1-medium-vs-easy` (higher tier seat 1 on odd seeds), `ladder` (the three 1v1 steps + `ffa8-mixed`, with mean
-placement by tier: the bot ladder gate), `ffa8-pro`, `ffa8-hard`,
+Scenarios: `1v1-hard`, `1v1-pro-vs-hard` (PRO seat alternates by seed, as botSeries), `ffa8-pro`, `ffa8-hard`,
 `ffa8-mixed` (pro/hard/medium/easy ×2), `all`. Seeds are 1..N. Games are sharded over up to 20 parallel
 jobs; 20 full 8-bot FFAs take **~2.5 min wall** (one FFA ≈ 1–2 min on a runner, 2.5 ms/tick).
-
-Every game also records combat building per seat (fights, pieces per fight, win % with/without building,
-bullets stopped by the bot's own pieces, hits from high ground, piece kinds), tabled by skill under "Combat building".
 
 It prints a markdown table (also in the run's job summary) and saves `.measure/<run id>/measure-summary.json`:
 decisive-before-sudden-death count, median eliminations before 15:00, median engagement distance, attack %,
@@ -38,7 +33,6 @@ home %, median first-seal time, PRO-vs-Hard win share with 95% CI, and ship chec
 |---|---|
 | ffa8-* | decisive < 15:00 in ≥ 60% of games · median engagement < 25 m · nobody sits at home geared > 60 s (tests/sim/shipChecks.test.ts FFA gate, minus the vs-hand comparisons) |
 | 1v1-pro-vs-hard | PRO win share ≥ 70% (tests/sim/botSeries.test.ts bar) |
-| 1v1-hard-vs-medium, 1v1-medium-vs-easy | higher tier win share ≥ 80% |
 | 1v1-hard | n/a (numbers only) |
 
 Exit code: 0 pass / n/a, 2 ship check failed, 1 the run broke. Metrics are computed by `scripts/ci/measure.ts`

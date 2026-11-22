@@ -3,7 +3,7 @@
 # Zero local CPU: the games run on up to 20 ubuntu runners.
 #
 #   scripts/gh-measure.sh <ref> <scenario> [seeds=20] [params-json-path-in-ref]
-#   scenario: 1v1-hard | 1v1-pro-vs-hard | 1v1-hard-vs-medium | 1v1-medium-vs-easy | ffa8-pro | ffa8-hard | ffa8-mixed | ladder | all
+#   scenario: 1v1-hard | 1v1-pro-vs-hard | ffa8-pro | ffa8-hard | ffa8-mixed | all
 #
 # <ref> must be pushed to origin (a branch, tag or SHA). Env: WORKFLOW_REF (branch holding the workflow,
 # default main), OUT (download dir, default .measure/<run id>). Exit code 0 = ship checks pass or n/a, 2 = fail.
