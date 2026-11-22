@@ -118,6 +118,14 @@ const passes = await page.evaluate(() => new Promise((res) => {
 }));
 console.log('-- draws / tris per pass (per frame, 60-frame mean) --');
 for (const [k, d, t] of passes) console.log(`${String(d).padStart(5)} ${String(Math.round(t / 1000)).padStart(6)}kt  ${k}`);
+const graph = await page.evaluate(() => {
+  const sc = window.__faefight.renderer.scene;
+  let all = 0, meshes = 0, auto = 0, autoW = 0, visible = 0;
+  sc.traverse((o) => { all++; if (o.isMesh || o.isSprite || o.isPoints || o.isLine) meshes++; if (o.matrixAutoUpdate) auto++; if (o.matrixWorldAutoUpdate) autoW++; });
+  sc.traverseVisible(() => { visible++; });
+  return { all, meshes, visible, matrixAutoUpdate: auto, matrixWorldAutoUpdate: autoW };
+});
+console.log(`-- scene graph: ${JSON.stringify(graph)} --`);
 // draw census at this view: visible meshes inside the camera frustum, grouped by name prefix
 const census = await page.evaluate(([full, sortTris]) => {
   const r = window.__faefight.renderer, cam = r.camera, scene = r.scene;
