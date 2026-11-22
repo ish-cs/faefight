@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { type ImpostorAtlas, impostorQuad, impostors } from './impostor';
-import { lods, type LodTarget, shrinkMaterial, simplifyGeometry, SMALL_CASTER_LAYER } from './lod';
+import { lods, type LodTarget, shrinkMaterial, simplifyGeometry, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
 import { chunkCoord, chunkKey, distToSphere, LOD_HYSTERESIS, selectLod } from './lodMath';
 
 /**
@@ -26,6 +26,8 @@ export type ChunkedSpec = {
   levels: LodLevelSpec[];
   /** small props: shadows from the near cascades only */
   small?: boolean;
+  /** prop-sized (≤ ~1.2 m: crates, barrels, bollards): shadows from the first cascade only, like the gameplay props */
+  tiny?: boolean;
   /** grid size in metres (default 16) */
   chunk?: number;
 };
@@ -153,7 +155,8 @@ export class ChunkedInstances implements LodTarget {
           m.computeBoundingSphere();
           m.castShadow = !!p.cast;
           m.receiveShadow = p.receive ?? true;
-          if (spec.small) m.layers.set(SMALL_CASTER_LAYER);
+          if (spec.tiny) m.layers.set(TINY_CASTER_LAYER);
+          else if (spec.small) m.layers.set(SMALL_CASTER_LAYER);
           m.name = `${this.root.name}:${p.material.name || 'mat'}:L${li}`;
           g.add(m);
           return m;

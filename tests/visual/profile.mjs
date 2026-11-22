@@ -37,7 +37,7 @@ const L = Math.hypot(home.center.x, home.center.z), ux = home.center.x / L, uz =
 const [at, to, pitch] = spot === 'props' ? [W(-8, -12), W(-1, -8), -0.32]
   : spot === 'edge' ? [W(-15, 12), W(-25, 30), -0.12]
   : spot === 'across' ? [W(-3, -15), W(-3, -80), -0.02]
-  : spot === 'mid' ? [{ x: ux * L * 0.45, z: uz * L * 0.45 }, { x: 0, z: 0 }, 0]
+  : spot === 'mid' ? [{ x: ux * 6, z: uz * 6 }, { x: ux * 6 - uz * 50, z: uz * 6 + ux * 50 }, 0]
     : [W(6, 13), W(14, 60), 0.02];
 await dbg('teleport', at.x, at.z);
 await page.evaluate(([y, p]) => { window.__faefight.input.yaw = y; window.__faefight.input.pitch = p; }, [Math.atan2(-(to.x - at.x), -(to.z - at.z)), pitch]);
