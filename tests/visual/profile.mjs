@@ -98,7 +98,7 @@ if (await page.evaluate(() => typeof window.__faefight.lookProbe === 'function')
   await dbg('lookProbe', false);
 }
 // draw census at this view: visible meshes inside the camera frustum, grouped by name prefix
-const census = await page.evaluate((full) => {
+const census = await page.evaluate(([full, sortTris]) => {
   const r = window.__faefight.renderer, cam = r.camera, scene = r.scene;
   const m = cam.projectionMatrix.clone().multiply(cam.matrixWorldInverse);
   const e = m.elements, planes = [[e[3] + e[0], e[7] + e[4], e[11] + e[8], e[15] + e[12]], [e[3] - e[0], e[7] - e[4], e[11] - e[8], e[15] - e[12]], [e[3] + e[1], e[7] + e[5], e[11] + e[9], e[15] + e[13]], [e[3] - e[1], e[7] - e[5], e[11] - e[9], e[15] - e[13]], [e[3] + e[2], e[7] + e[6], e[11] + e[10], e[15] + e[14]], [e[3] - e[2], e[7] - e[6], e[11] - e[10], e[15] - e[14]]];
@@ -109,24 +109,29 @@ const census = await page.evaluate((full) => {
       let inside = true;
       if (o.frustumCulled !== false && o.geometry) {
         if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
-        const bs = o.geometry.boundingSphere, c = bs.center.clone().applyMatrix4(o.matrixWorld), rad = bs.radius * o.matrixWorld.getMaxScaleOnAxis();
+        if (o.isInstancedMesh && !o.boundingSphere) o.computeBoundingSphere();
+        const bs = o.isInstancedMesh ? o.boundingSphere : o.geometry.boundingSphere, c = bs.center.clone().applyMatrix4(o.matrixWorld), rad = bs.radius * o.matrixWorld.getMaxScaleOnAxis();
         for (const p of planes) { const n = Math.hypot(p[0], p[1], p[2]); if ((p[0] * c.x + p[1] * c.y + p[2] * c.z + p[3]) / n < -rad) { inside = false; break; } }
       }
       if (inside && !(o.isInstancedMesh && o.count === 0)) {
         const nm = o.name || o.parent?.name || o.type;
         const k = full ? nm.replace(/\d+/g, '#').split(':').slice(0, 3).join(':') : nm.split(/[:#\d]/)[0] || o.type;
         const mats = Array.isArray(o.material) ? o.material.length : 1;
-        out[k] = (out[k] ?? 0) + mats;
+        const g = o.geometry, n = g ? (g.index ? g.index.count : g.attributes.position?.count ?? 0) / 3 : 0;
+        const inst = o.isInstancedMesh ? o.count : (g?.isInstancedBufferGeometry ? g.instanceCount : 1);
+        const e = (out[k] ??= [0, 0]); e[0] += mats; e[1] += n * inst;
       }
     }
     for (const ch of o.children) visit(ch);
   };
   visit(scene);
-  return Object.entries(out).sort((a, b) => b[1] - a[1]).slice(0, full ? 60 : 25);
-}, arg('census', '') === 'full');
+  return Object.entries(out).sort((a, b) => (sortTris ? b[1][1] - a[1][1] : b[1][0] - a[1][0])).slice(0, full ? 60 : 25);
+}, [arg('census', '') !== '', arg('census', '') === 'tris']);
 await browser.close();
-console.log('-- camera draws by group (approx) --');
-for (const [k, v] of census) console.log(`${String(v).padStart(5)}  ${k}`);
+console.log('-- camera draws / triangles by group (approx; --census=full|tris) --');
+const totT = census.reduce((a, [, v]) => a + v[1], 0);
+console.log(`(listed: ${census.reduce((a, [, v]) => a + v[0], 0)} draws, ${(totT / 1e6).toFixed(2)} M tris)`);
+for (const [k, v] of census) console.log(`${String(v[0]).padStart(5)} ${String(Math.round(v[1] / 1000)).padStart(6)}kt  ${k}`);
 
 console.log(`\n== ${label} (${preset}, ${spot}, dpr ${dpr}, ${secs}s, ${frames.n} frames) ==`);
 console.log(`fps ${(1000 / frames.avg).toFixed(1)} · avg ${frames.avg.toFixed(2)} ms · p99 ${frames.p99.toFixed(2)} ms · hitches>25ms ${frames.hitches} · main-thread work ${frames.cpuAvg.toFixed(2)} ms/frame · gpu ${(gpu.avg ?? 0).toFixed(2)} ms · draws ${info.drawCalls} · tris ${(info.triangles / 1e6).toFixed(2)}M`);
