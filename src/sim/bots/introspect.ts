@@ -60,6 +60,8 @@ export type BrainDigest = {
   build: { kind: PieceKind; x: number; y: number; z: number; rotY: number; why: string } | null;
   /** Grappling hook: on a rope now, or its last use (a few seconds), or what it carries it for; absent when none. */
   hook?: string;
+  /** Weapon it wants in hand and why ("rocket: reload it between fights"); absent when dead or not yet decided. */
+  weapon?: string;
   /** Route ahead: [x, y, z] points from its feet. */
   path: [number, number, number][];
   /** Where it's aiming / shooting at, and whether it fired this tick. */
@@ -116,6 +118,7 @@ type Internals = {
   pushLead(view: BotView): { id: number; target: number | null } | null; allyIsland(view: BotView, i: number): boolean;
   sieging(c: Ctx): boolean; nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null;
   hookNote: { t: number; text: string } | null;
+  weaponIntent: { want: string; why: string } | null;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
@@ -702,6 +705,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     ...hookLine(I, me, now),
+    ...(me?.alive && I.weaponIntent ? { weapon: I.weaponIntent.why } : {}),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
     st: {
