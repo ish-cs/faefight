@@ -63,6 +63,17 @@ describe('bot healing decisions (heal.ts)', () => {
     expect(healPlan(sit(p, { foe: foe(10), hurtAgo: 0.2 }), HEAL)).toBeNull();
   });
 
+  test('commitment: one heal per exchange (unless a burst lands), and no heal while clearly ahead', () => {
+    const p = give(give(player(), 'medkit'), 'healPotion');
+    p.hp = 40;
+    const s = sit(p, { foe: null, hurtAgo: 0.5, sinceFightHeal: HEAL.reHealSec - 1 });
+    expect(healPlan(s, HEAL)).toMatchObject({ act: 'wait', why: expect.stringMatching(/healed a moment ago/) });
+    expect(healPlan({ ...s, burst: HEAL.burst + 1 }, HEAL)).toMatchObject({ act: 'use' });
+    expect(healPlan({ ...s, sinceFightHeal: HEAL.reHealSec + 1 }, HEAL)).toMatchObject({ act: 'use' });
+    // They're far lower: push, don't heal.
+    expect(healPlan(sit(p, { foe: foe(12, 40 - HEAL.pressLead), hurtAgo: 0.2 }), HEAL)).toMatchObject({ act: 'wait', why: expect.stringMatching(/press/) });
+  });
+
   test('a burst of damage triggers a heal a little above fightHp', () => {
     const p = give(player(), 'healPotion');
     p.hp = HEAL.fightHp.pro + 10;

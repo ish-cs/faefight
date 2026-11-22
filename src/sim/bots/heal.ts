@@ -27,6 +27,8 @@ export type HealSituation = {
   hidingFor: number | null;
   /** This incident's rolls: hide before healing (coverFirst), use enemy reload windows (reloadWeight). */
   coverFirst: boolean; useReload: boolean;
+  /** Seconds since my last heal mid-fight (Infinity: none yet). */
+  sinceFightHeal?: number;
   /** Behind something solid from the threat (the cover peek's hide phase): as good as out of their sight. */
   sheltered?: boolean;
 };
@@ -79,8 +81,13 @@ export function healPlan(s: HealSituation, H: HealParams): HealPlan | null {
     const sh = (['shieldBig', 'shieldSmall'] as const).find((k) => usable(me, k, now));
     return use(me, sh ?? null, 'topping up shield');
   }
-  const low = eff <= H.fightHp[s.diff] || (s.burst >= H.burst && eff <= H.fightHp[s.diff] + H.burstHp);
+  const burst = s.burst >= H.burst;
+  const low = eff <= H.fightHp[s.diff] || (burst && eff <= H.fightHp[s.diff] + H.burstHp);
   if (!low) return null;
+  // Commitment: one heal per exchange. Healed a moment ago: trade (or get out) instead, unless a burst just landed.
+  if ((s.sinceFightHeal ?? Infinity) < H.reHealSec && !burst) return { act: 'wait', why: 'healed a moment ago: trading instead' };
+  // Clearly ahead of the one in front of me: push the kill, don't give them time.
+  if (foe && foe.eff + H.pressLead <= eff) return { act: 'wait', why: `pressing: I'm ahead (${Math.round(eff)} vs ${Math.round(foe.eff)})` };
   if (!foe || s.sheltered) return use(me, pickHeal(me, now, true), s.sheltered ? 'behind cover: healing mid-fight' : 'out of their sight: healing mid-fight');
   if (foe.eff <= H.pressHp && foe.eff <= eff) return { act: 'wait', why: `pressing: they're on ${Math.round(foe.eff)}` };
   if (foe.dist >= H.openDist) return use(me, pickHeal(me, now, true), 'they are far: healing');

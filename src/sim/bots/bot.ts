@@ -251,6 +251,8 @@ export class Bot {
   /** This fight's rolls (coverFirst, reloadWeight), since when I've been breaking line of sight to heal. */
   private healRoll = { cover: true, reload: true };
   private healHideAt: number | null = null;
+  /** When I last started a heal mid-fight (heal.reHealSec commitment). */
+  private fightHealAt = -Infinity;
   /** Last heal decision (spectators), heals wanted (stock target), slots dropped to fit a heal (not looted back). */
   private healNote: { t: number; text: string } | null = null;
   private healWant = 0;
@@ -585,6 +587,7 @@ export class Bot {
       select = heal.slot; fire = false; throwGrenade = false;
       if (heal.item === 'medkit') useMedkit = true; else drink = true;
       this.healNote = { t: now, text: heal.why };
+      if (enemy || now - this.mem.lastHurtAt < this.P.heal.quietSec) this.fightHealAt = now;
     }
     // Stamina (movement.ts): like a human, stop sprinting around when winded and keep the rest for getting away.
     if (me.stamina < 30) this.winded = true; else if (me.stamina > 70) this.winded = false;
@@ -1502,11 +1505,12 @@ export class Bot {
         if (!c.homeReach) return 0;
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
-        // Topping up heals alone is no reason for a trip home once I hold one, nor with the storm coming in.
-        if (plan.items.every((i) => i === 'medkit') && (hpHealsHeld(me) > 0 || this.stormPrep(view))) return 0;
         if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return 0.9;
-        const urgent = plan.items.includes('pistol') || plan.items.includes('charge');
-        return (urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0) - away;
+        // Topping up heals is no reason for a trip home once I hold one (they're bought on the next visit anyway).
+        const items = hpHealsHeld(me) > 0 ? plan.items.filter((i) => i !== 'medkit') : plan.items;
+        if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
+        const urgent = items.includes('pistol') || items.includes('charge');
+        return (urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0) - away;
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
@@ -2283,6 +2287,12 @@ export class Bot {
       this.strafeFlipAt = now + 0.6 + this.rng() * 0.8;
     }
     const to = norm(flat(sub(e.pos, me.pos)));
+    // They're healing (hands busy for a second or two) and I'm fit to fight: rush them before it lands.
+    if ((e.healAt !== null || e.drinking) && me.hp + me.shield >= this.P.heal.punishHp && this.difficulty !== 'easy') {
+      this.healNote = { t: now, text: `@${e.id} is healing: rushing them` };
+      const wp = this.sameGround(me.pos, e.pos) ? null : this.nav.routeTo(e.pos);
+      if (this.sameGround(me.pos, e.pos) || wp) return { dir: norm(flat(sub(wp ?? e.pos, me.pos))), sprint: true, approach: true };
+    }
     const gun = bestGun(me.inv, c.enemyDist);
     const pref = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
     // Skilled players close in rather than trade shots from afar.
@@ -2415,6 +2425,7 @@ export class Bot {
       hidingFor: this.healHideAt === null ? null : now - this.healHideAt,
       // Racing the storm or near its edge: no hiding (backing off walks me out into it), heal where I am.
       coverFirst: this.healRoll.cover && this.goal !== 'storm' && !this.nearStormEdge(c), useReload: this.healRoll.reload, sheltered: false,
+      sinceFightHeal: now - this.fightHealAt,
     }, H);
     if (plan?.act === 'hide') { this.healHideAt ??= now; this.healNote = { t: now, text: plan.why }; }
     else if (plan?.act !== 'wait' || !e) this.healHideAt = null;
@@ -2446,7 +2457,7 @@ export class Bot {
     return { dir: norm(flat(sub(me.pos, e.pos))), face, sprint: true };
   }
 
-  /** A potion seller close by on this island while I'm short of heals or shields it would sell me: walk over. */
+  /** A potion seller close by on this island while I'm short of heals it would sell me: walk over. */
   private sellerDetour(c: Ctx): Act | null {
     const me = c.me, H = this.P.heal;
     if (H.detourM <= 0 || c.view.suddenDeath || ['storm', 'disengage', 'defend', 'cover'].includes(this.goal)) return null;
@@ -2454,8 +2465,9 @@ export class Bot {
     if (node < 0) return null;
     const s = (c.view.potionShops ?? []).find((p) => dist2D(p, me.pos) <= H.detourM && this.nav.nodeAt(p) === node);
     if (!s || dist2D(me.pos, s) <= USE_RANGE - 0.3) return null;
+    // Only for heals (shields are bought when at the counter anyway, not worth a detour).
     const buy = potionAction(me, c.view.now, false, true, this.healWant);
-    if (!buy || !('buy' in buy)) return null;
+    if (!buy || !('buy' in buy) || buy.buy !== 'healPotion') return null;
     return this.goTo(s, USE_RANGE - 0.3);
   }
 
