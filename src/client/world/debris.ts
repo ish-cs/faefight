@@ -5,7 +5,7 @@ import { DEBRIS_KINDS, DEBRIS_SPEC, type DebrisKind, placeDebris } from './debri
 import { DebrisSim } from './debrisSim';
 import { merge, part } from './geo';
 import { boxTape, faceLabel, labelMaterial } from './labels';
-import { TINY_CASTER_LAYER } from './lod';
+import { SHADOW_ONLY_FIRST_LAYER } from './lod';
 import { mats } from './materials';
 import type { Quality } from './sky';
 import { movingVariant } from './weathering';
@@ -45,19 +45,22 @@ function overlayFor(kind: DebrisKind): THREE.BufferGeometry | null {
   ]);
 }
 
+/** depth-only material for the debris' shadow batch (never drawn by the camera) */
+const SHADOW_MAT = new THREE.MeshBasicNodeMaterial();
+
 export class Debris {
   readonly root = new THREE.Group();
   sim: DebrisSim | null = null;
-  private meshes = new Map<DebrisKind, { mesh: THREE.InstancedMesh; ids: number[]; overlay: THREE.InstancedMesh | null }>();
-  /** prop index → (kind mesh + overlay, instance slot) */
-  private slot: { mesh: THREE.InstancedMesh; overlay: THREE.InstancedMesh | null; i: number }[] = [];
+  /** one BatchedMesh per material across kinds (+ labels, + one shadow-only batch): ~4 + 1 draws instead of ~9 + 2 */
+  private batches: THREE.BatchedMesh[] = [];
+  /** prop index → its instance in each batch it appears in (body, overlay, shadow) */
+  private slot: { mesh: THREE.BatchedMesh; id: number }[][] = [];
   private building: Promise<void> | null = null;
   private gen = 0;
   private m4 = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private p = new THREE.Vector3();
   private one = new THREE.Vector3(1, 1, 1);
-  private zero = new THREE.Vector3(0, 0, 0);
   /** weathered in object space (they tumble): instance colour tints, instance hash varies wear */
   private mats = {
     // Shared with the gameplay props (same moving variants, same vertex layout via part()): no debris-only pipelines.
@@ -83,37 +86,45 @@ export class Debris {
       const byKind = new Map<DebrisKind, number[]>();
       sim.props.forEach((p, i) => { let a = byKind.get(p.spawn.kind); if (!a) byKind.set(p.spawn.kind, a = []); a.push(i); });
       const col = new THREE.Color();
+      const matOf = (kind: DebrisKind) => kind === 'bottle' || kind === 'can' ? this.mats.shiny : kind === 'box' ? this.mats.cardboard : kind === 'plank' ? this.mats.wood : this.mats.plastic;
+      const label = movingVariant(labelMaterial());
+      const geos = new Map<DebrisKind, { body: THREE.BufferGeometry; overlay: THREE.BufferGeometry | null; ids: number[] }>();
       for (const kind of DEBRIS_KINDS) {
         const ids = byKind.get(kind);
-        if (!ids) continue;
-        const mat = kind === 'bottle' || kind === 'can' ? this.mats.shiny : kind === 'box' ? this.mats.cardboard : kind === 'plank' ? this.mats.wood : this.mats.plastic;
-        const mesh = new THREE.InstancedMesh(part(geometryFor(kind), null), mat, ids.length);
-        mesh.name = `debris:${kind}`;
-        mesh.castShadow = kind === 'box' || kind === 'cone';
-        mesh.layers.set(TINY_CASTER_LAYER); // first shadow cascade only
-        mesh.receiveShadow = true;
-        mesh.frustumCulled = false; // spans the map
-        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        const og = overlayFor(kind);
-        let overlay: THREE.InstancedMesh | null = null;
-        if (og) {
-          overlay = new THREE.InstancedMesh(og, movingVariant(labelMaterial()), ids.length);
-          overlay.name = `debris:${kind}:labels`;
-          overlay.frustumCulled = false;
-          overlay.layers.set(TINY_CASTER_LAYER);
-          overlay.receiveShadow = true;
-          overlay.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-          this.root.add(overlay);
-        }
-        ids.forEach((pi, i) => {
-          this.slot[pi] = { mesh, overlay, i };
-          mesh.setColorAt(i, col.setHex(sim.props[pi].spawn.tint));
-        });
-        this.meshes.set(kind, { mesh, ids, overlay });
-        this.root.add(mesh);
+        if (ids) geos.set(kind, { body: part(geometryFor(kind), null), overlay: overlayFor(kind), ids });
       }
+      sim.props.forEach((_, pi) => { this.slot[pi] = []; });
+      const batch = (name: string, material: THREE.Material, entries: { geo: THREE.BufferGeometry; ids: number[]; tint: boolean }[], shadow = false) => {
+        if (!entries.length) return;
+        const m = new THREE.BatchedMesh(entries.reduce((n, e) => n + e.ids.length, 0), entries.reduce((n, e) => n + e.geo.getAttribute('position').count, 0), 0, material);
+        m.name = name;
+        m.castShadow = shadow;
+        m.receiveShadow = !shadow;
+        m.layers.set(shadow ? SHADOW_ONLY_FIRST_LAYER : 0); // shadow batch: first cascade only, never drawn by the camera
+        m.frustumCulled = false; // spans the map; perObjectFrustumCulled culls each instance
+        for (const e of entries) {
+          const gid = m.addGeometry(e.geo);
+          for (const pi of e.ids) {
+            const id = m.addInstance(gid);
+            if (e.tint) m.setColorAt(id, col.setHex(sim.props[pi].spawn.tint));
+            this.slot[pi].push({ mesh: m, id });
+          }
+        }
+        this.batches.push(m);
+        this.root.add(m);
+      };
+      const byMat = new Map<THREE.Material, { geo: THREE.BufferGeometry; ids: number[]; tint: boolean }[]>();
+      for (const [kind, g] of geos) {
+        const e = byMat.get(matOf(kind)) ?? [];
+        e.push({ geo: g.body, ids: g.ids, tint: true });
+        byMat.set(matOf(kind), e);
+      }
+      for (const [mat, entries] of byMat) batch(`debris:${mat.name}`, mat, entries);
+      batch('debris:labels', label, [...geos.values()].filter((g) => g.overlay).map((g) => ({ geo: g.overlay!, ids: g.ids, tint: false })));
+      // only boxes and cones cast (the rest are too small to matter)
+      batch('debris:shadow', SHADOW_MAT, [...geos].filter(([k]) => k === 'box' || k === 'cone').map(([, g]) => ({ geo: g.body, ids: g.ids, tint: false })), true);
       this.writeMatrices(true);
-      console.info(`[debris] ${sim.props.length} props in ${this.meshes.size} kinds, cap ${sim.cap} bodies (${Math.round(performance.now() - t0)} ms)`);
+      console.info(`[debris] ${sim.props.length} props in ${geos.size} kinds (${this.batches.length} batches), cap ${sim.cap} bodies (${Math.round(performance.now() - t0)} ms)`);
     }, (err) => console.error('[debris] physics world failed; debris disabled', err));
     return this.building;
   }
@@ -121,18 +132,13 @@ export class Debris {
   private writeMatrices(all: boolean) {
     const sim = this.sim;
     if (!sim) return;
-    const touched = new Set<THREE.InstancedMesh>();
     sim.props.forEach((p, pi) => {
       if (!all && !p.dirty) return;
       p.dirty = false;
-      const s = this.slot[pi], o = p.pose;
-      this.m4.compose(this.p.set(o.x, o.y, o.z), this.q.set(o.qx, o.qy, o.qz, o.qw), p.sunk ? this.zero : this.one);
-      s.mesh.setMatrixAt(s.i, this.m4);
-      touched.add(s.mesh);
-      if (s.overlay) { s.overlay.setMatrixAt(s.i, this.m4); touched.add(s.overlay); }
+      const o = p.pose;
+      this.m4.compose(this.p.set(o.x, o.y, o.z), this.q.set(o.qx, o.qy, o.qz, o.qw), this.one);
+      for (const sl of this.slot[pi]) { sl.mesh.setMatrixAt(sl.id, this.m4); sl.mesh.setVisibleAt(sl.id, !p.sunk); }
     });
-    for (const m of touched) m.instanceMatrix.needsUpdate = true;
-    if (all) for (const { mesh } of this.meshes.values()) if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
 
   /** Per frame: step the cosmetic world, push moved poses to the GPU. */
@@ -165,8 +171,8 @@ export class Debris {
     this.gen++;
     this.sim?.dispose();
     this.sim = null;
-    for (const { mesh, overlay } of this.meshes.values()) for (const m of overlay ? [mesh, overlay] : [mesh]) { m.geometry.dispose(); m.removeFromParent(); m.dispose(); }
-    this.meshes.clear();
+    for (const m of this.batches) { m.removeFromParent(); m.dispose(); }
+    this.batches = [];
     this.slot = [];
   }
 }
