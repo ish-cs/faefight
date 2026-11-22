@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
+import { CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
@@ -459,7 +459,9 @@ export class Bot {
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
     } else if (foe && !((act.shootAt || act.lookFirst) && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
       // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
-      const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, CHEST, 0)), foe.id, cur);
+      // Only a head showing over a crate: aim for that (the body behind it would only put holes in the crate).
+      const aimY = view.peeking?.includes(foe.id) ? HEAD.y : CHEST;
+      const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, aimY, 0)), foe.id, cur);
       look = r;
       const foeDist = dist2D(foe.pos, me.pos);
       // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,

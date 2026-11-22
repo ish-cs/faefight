@@ -9,7 +9,7 @@ import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield,
 import { Cosmetics } from './cosmetics';
 import { Docks, overDock } from './docks';
 import { Hazards, isExplosive, type HazardHost } from './hazards';
-import { HAZARD } from './constants';
+import { HAZARD, HEAD } from './constants';
 import { Fire, fireZones, type FireCtx } from './fire';
 import { Traps, validateTrap } from './traps';
 import { DoorwayTracker } from './seal';
@@ -818,13 +818,19 @@ export class Match implements MatchApi {
   private botView(self: PlayerState): BotView {
     const eye = eyePos(self);
     const enemies: PlayerState[] = [];
+    let peeking: number[] | undefined;
     for (const o of this.s.players.values()) {
       if (o.id === self.id || !o.alive || isAlly(o, self)) continue;
       const chest = v3(o.pos.x, o.pos.y + 1.2, o.pos.z);
       const d = dist(eye, chest);
       if (d > SIGHT_RANGE) continue;
       const hit = this.physics.raycast(eye, norm(sub(chest, eye)), d + 0.5, self.id, true); // sight passes firing slits
-      if (hit?.hit.type === 'player' && hit.hit.id === o.id) enemies.push(o);
+      if (hit?.hit.type === 'player' && hit.hit.id === o.id) { enemies.push(o); continue; }
+      // Body behind a crate or a drum: the head above it is still in plain sight (and the one thing to shoot at).
+      if (hit?.hit.type !== 'prop') continue;
+      const head = v3(o.pos.x, o.pos.y + HEAD.y, o.pos.z), dh = dist(eye, head);
+      const over = this.physics.raycast(eye, norm(sub(head, eye)), dh + 0.5, self.id, true);
+      if (over?.hit.type === 'player' && over.hit.id === o.id) { enemies.push(o); (peeking ??= []).push(o.id); }
     }
     const team = self.team === undefined ? null : this.teamView(self, enemies);
     return {
@@ -851,6 +857,7 @@ export class Match implements MatchApi {
         id: h.def.id, kind: h.def.kind, pos: clone(h.pos), center: this.hazards.center(h), radius: isExplosive(h.def.kind) ? HAZARD[h.def.kind].radius : 0, fusing: h.st === 1,
       })),
       ...(this.props ? { props: this.propFootprints() } : {}),
+      ...(peeking ? { peeking } : {}),
       docks: this.docks.standing(),
       clearShot: (to) => {
         const d = dist(eye, to);
