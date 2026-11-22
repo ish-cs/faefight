@@ -6,6 +6,7 @@ import { bunkerSlitBoxes, bunkerWallBoxes, harborCraneBoxes, type IslandLayout, 
 import { defaultPotionShops } from './potions';
 import { propColliderDesc, type PropSpawn } from './props';
 import type { PieceState, Vec3 } from './types';
+import { stepWorld } from './rapierStep';
 import { v3 } from './vec';
 
 /** `prop`: a tier A gameplay prop (props.ts): solid for players and shots, never ground for building or support. */
@@ -282,7 +283,7 @@ export class Physics {
 
   private sync() {
     if (!this.dirty) return;
-    this.world.step();
+    stepWorld(this.world);
     this.dirty = false;
   }
 

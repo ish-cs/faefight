@@ -12,7 +12,7 @@ import { HostSession, type HostEvents } from './session';
 /**
  * Host migration: if the host leaves mid-match, a guest (the "backup") takes over and the match goes on.
  *
- * - The host picks a backup (pickBackup: sticky; else lowest RTT, then lowest seat) and every few seconds
+ * - The host picks a backup (pickBackup: sticky; else the lowest seat = joined first) and every few seconds
  *   sends it a full checkpoint of the authoritative match (matchCheckpoint.ts: state, bots, rng, Rapier
  *   world; gzipped, ~30–50 KB) plus the seating/tokens (SessionMeta). Every guest gets the plan
  *   ('mplan'): which seat takes over and the room code it will open.
@@ -37,17 +37,21 @@ const CHECKPOINT_STUCK_MS = 10_000;
 export const checkpointDelayMs = (bytes: number) =>
   Math.min(CHECKPOINT.maxSec, Math.max(CHECKPOINT.minSec, bytes / CHECKPOINT.budgetBps)) * 1000;
 
-export type BackupCandidate = { seat: number; peerId: string; rtt: number | null };
+export type BackupCandidate = { seat: number; peerId: string };
 
 /**
  * Which guest becomes host if the host is lost. Sticky: the current backup keeps the job while it is
- * connected (every change rotates the key and costs a fresh checkpoint). Otherwise the lowest known RTT
- * to the host (a proxy for a good connection), unknown RTTs last, ties to the lowest seat (joined first).
+ * connected (every change rotates the key and costs a fresh checkpoint). Otherwise the lowest seat (the
+ * guest who joined first). Deliberately not RTT: RTT samples jitter with frame stalls under load, so the
+ * choice depended on whose pong happened to land first, and a backup picked that way could flip just
+ * before the host left (the new backup has no checkpoint yet: the migration fails). Seat order is stable
+ * and the same answer on every host that would compute it.
  */
 export function pickBackup(cands: BackupCandidate[], current: number | null): number | null {
   if (current !== null && cands.some((c) => c.seat === current)) return current;
-  const best = [...cands].sort((a, b) => (a.rtt ?? Infinity) - (b.rtt ?? Infinity) || a.seat - b.seat)[0];
-  return best?.seat ?? null;
+  let best: number | null = null;
+  for (const c of cands) if (best === null || c.seat < best) best = c.seat;
+  return best;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -88,7 +92,7 @@ export class HostMigrator {
       this.told.clear();
       this.nextDue = 0;
       this.backup = b ? { seat: b.seat, peerId: b.peerId, code: newInviteCode(), key: newCheckpointKey(), alone } : null;
-      if (b) console.info(`[migrate] backup host: seat ${b.seat} (rtt ${b.rtt ?? '?'} ms)${alone ? ', only guest: holds the key itself' : ''}`);
+      if (b) console.info(`[migrate] backup host: seat ${b.seat}${alone ? ', only guest: holds the key itself' : ''}`);
     }
     const bk = this.backup;
     if (!bk) return;

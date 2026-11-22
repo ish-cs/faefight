@@ -1,6 +1,7 @@
 import Peer, { type DataConnection, type PeerOptions } from 'peerjs';
 import { newInviteCode, normalizeCode } from './code';
 import { LinkBase } from './linkBase';
+import { Liveness } from './liveness';
 import type { HostRoom, Link, Transport } from './transport';
 
 /**
@@ -8,7 +9,8 @@ import type { HostRoom, Link, Transport } from './transport';
  * Invite code K7Q2MX ⇄ host peer id `faefight-K7Q2MX`.
  *
  * Liveness: WebRTC can take ~30 s to notice a killed tab, so each side sends a tiny heartbeat
- * frame every second and drops the link after DEAD_MS of silence. Tabs also close their
+ * frame every second and drops the link after DEAD_MS of silence (our own stalled frames don't count:
+ * liveness.ts). Tabs also close their
  * connections on `pagehide` so normal tab closes are noticed immediately.
  */
 
@@ -17,6 +19,8 @@ const HOST_TRIES = 3;
 const CONNECT_TIMEOUT_MS = 10_000;
 const PING_MS = 1000;
 const DEAD_MS = 8000;
+/** A heartbeat check this late means our own main thread was stalled (liveness.ts). */
+const STALL_MS = 2500;
 /** Heartbeat frame. App messages are objects with a `t` field, so this key can't collide. */
 const HB_KEY = '__faefightHb';
 
@@ -46,7 +50,7 @@ function onPageHide(cb: () => void): () => void {
 }
 
 class PeerLink extends LinkBase {
-  private lastSeen = Date.now();
+  private live = new Liveness(Date.now(), DEAD_MS, STALL_MS);
   private timer: ReturnType<typeof setInterval>;
 
   constructor(
@@ -56,7 +60,7 @@ class PeerLink extends LinkBase {
   ) {
     super(peerId);
     conn.on('data', (d) => {
-      this.lastSeen = Date.now();
+      this.live.heard(Date.now());
       if (!isHeartbeat(d)) this.deliver(d);
     });
     conn.on('close', () => this.ended());
@@ -65,7 +69,7 @@ class PeerLink extends LinkBase {
       if (!conn.open) this.ended();
     });
     this.timer = setInterval(() => {
-      if (Date.now() - this.lastSeen > DEAD_MS) {
+      if (this.live.dead(Date.now())) {
         console.warn(`[net] connection to ${peerId} timed out`);
         this.ended();
         return;

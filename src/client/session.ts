@@ -90,13 +90,10 @@ export class HostSession {
   private gameSettings: GameSettings = { ...DEFAULT_SETTINGS };
   /** Host migration: backup choice, plans and checkpoints for it (migration.ts). */
   readonly migrator = new HostMigrator({
-    guests: () => {
-      const now = performance.now();
-      return [...this.links.keys()].flatMap((peerId) => {
-        const seat = this.lobby.seatOf(peerId);
-        return seat === null || this.idOf(seat) === null ? [] : [{ seat, peerId, rtt: this.pings.get(peerId, now) }];
-      });
-    },
+    guests: () => [...this.links.keys()].flatMap((peerId) => {
+      const seat = this.lobby.seatOf(peerId);
+      return seat === null || this.idOf(seat) === null ? [] : [{ seat, peerId }];
+    }),
     send: (peerId, m) => { const l = this.links.get(peerId); if (l) this.send(l, m); },
     requestCheckpoint: () => this.worker?.postMessage({ type: 'checkpoint' }),
     meta: () => {
