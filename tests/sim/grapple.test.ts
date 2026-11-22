@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { GRAPPLE, PLAYER } from '../../src/sim/constants';
-import { buy, vaultTransfer } from '../../src/sim/economy';
+import { buy, buyAt, vaultTransfer } from '../../src/sim/economy';
 import { takeOut } from '../../src/sim/hotbar';
 import { Match } from '../../src/sim/match';
 import { newPlayer } from '../../src/sim/player';
@@ -20,6 +20,15 @@ describe('grappling hook item', () => {
     expect(p.inv.grapples).toBe(GRAPPLE.uses * 2);
     expect(p.hotbar.filter((k) => k === 'grapple')).toHaveLength(1);
     expect(buy(p, { buy: 'grapple' }).ok).toBe(false);
+  });
+
+  test('sold at the home shop and at the neutral potion seller (nobody is stuck out there)', () => {
+    const p = newPlayer(1, 'p', false, 0, v3());
+    p.inv.cash = GRAPPLE.price * 2;
+    expect(buyAt(p, 'potion', { buy: 'grapple' }).ok).toBe(true);
+    expect(buyAt(p, 'home', { buy: 'grapple' }).ok).toBe(true);
+    expect(p.inv.grapples).toBe(GRAPPLE.uses * 2);
+    expect(buyAt(p, 'potion', { buy: 'medkit' }).ok).toBe(false);
   });
 
   test('drops as one item with every use; vaults by count', () => {

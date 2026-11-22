@@ -962,6 +962,7 @@ export class Hud {
       };
       if (this.panelKind === 'potions') {
         section('Potions', [...POTION_KINDS]);
+        section('Gear', ['grapple']);
       } else {
         section('Weapons', [...GUNS, 'ammo']);
         section('Building', PIECE_ORDER);
