@@ -28,11 +28,12 @@ export class ReplayControls {
   private playBtn = document.createElement('button');
   private range = document.createElement('input');
   private time = document.createElement('span');
-  private speedSel = document.createElement('select');
-  private followSel = document.createElement('select');
+  private speedSeg = document.createElement('div');
+  private followSeg = document.createElement('div');
   private warn = document.createElement('div');
   private dragging = false;
   private playing = false;
+  private followVal = '';
 
   constructor(parent: HTMLElement, private o: Opts) {
     const r = this.root;
@@ -73,30 +74,32 @@ export class ReplayControls {
     this.time.className = 'replay-time';
     this.time.dataset.testid = 'replay-time';
 
-    for (const s of SPEEDS) {
-      const op = document.createElement('option');
-      op.value = String(s);
-      op.textContent = `${s}×`;
-      op.selected = s === 1;
-      this.speedSel.append(op);
-    }
-    this.speedSel.className = 'replay-select';
-    this.speedSel.dataset.testid = 'replay-speed';
-    this.speedSel.onchange = () => o.speed(Number(this.speedSel.value));
-
-    const free = document.createElement('option');
-    free.value = '';
-    free.textContent = 'Free camera';
-    this.followSel.append(free);
-    for (const p of o.players) {
-      const op = document.createElement('option');
-      op.value = String(p.id);
-      op.textContent = `Follow ${p.name}`;
-      this.followSel.append(op);
-    }
-    this.followSel.className = 'replay-select';
-    this.followSel.dataset.testid = 'replay-follow';
-    this.followSel.onchange = () => o.follow(this.followSel.value ? Number(this.followSel.value) : null);
+    // Segmented controls (no dropdowns, docs/ui-style.md). Each button carries its value in data-value.
+    const seg = (el: HTMLDivElement, testid: string, items: { value: string; text: string }[], pick: (v: string) => void) => {
+      el.className = 'ui-seg replay-seg';
+      el.dataset.testid = testid;
+      for (const it of items) {
+        const b = document.createElement('button');
+        b.textContent = it.text;
+        b.dataset.value = it.value;
+        b.onclick = () => { this.mark(el, it.value); pick(it.value); };
+        el.append(b);
+      }
+    };
+    seg(this.speedSeg, 'replay-speed', SPEEDS.map((s) => ({ value: String(s), text: `${s}×` })), (v) => o.speed(Number(v)));
+    this.mark(this.speedSeg, '1');
+    seg(this.followSeg, 'replay-follow', [{ value: '', text: 'Free' }, ...o.players.map((p) => ({ value: String(p.id), text: p.name }))],
+      (v) => o.follow(v ? Number(v) : null));
+    this.mark(this.followSeg, '');
+    const labelled = (text: string, el: HTMLElement) => {
+      const g = document.createElement('div');
+      g.className = 'replay-group';
+      const l = document.createElement('span');
+      l.className = 'replay-label';
+      l.textContent = text;
+      g.append(l, el);
+      return g;
+    };
 
     this.warn.className = 'replay-warn';
     this.warn.dataset.testid = 'replay-diverged';
@@ -104,12 +107,21 @@ export class ReplayControls {
 
     const row = document.createElement('div');
     row.className = 'replay-row';
-    row.append(this.playBtn, this.time, track, this.speedSel, this.followSel, btn('Exit replay', 'replay-exit', o.exit));
-    r.append(row, this.warn);
+    row.append(this.playBtn, this.time, track, btn('Exit replay', 'replay-exit', o.exit));
+    const opts = document.createElement('div');
+    opts.className = 'replay-row replay-opts';
+    opts.append(labelled('Speed', this.speedSeg), labelled('Camera', this.followSeg));
+    r.append(row, opts, this.warn);
     // Clicks here must not reach the game canvas (pointer lock / spectator follow-cycling).
     r.addEventListener('mousedown', (e) => e.stopPropagation());
     parent.append(r);
     this.paintTime(1);
+  }
+
+  /** Highlight the button whose data-value is v (none if no match). */
+  private mark(el: HTMLElement, v: string) {
+    if (el === this.followSeg) this.followVal = v;
+    for (const b of el.querySelectorAll('button')) b.classList.toggle('on', b.dataset.value === v);
   }
 
   private paintTime(tick: number) {
@@ -128,7 +140,8 @@ export class ReplayControls {
 
   /** The camera stopped following (player died, or WASD took over). */
   setFollow(id: number | null) {
+    // Called every frame: only touch the DOM when the target changed.
     const v = id === null ? '' : String(id);
-    if (this.followSel.value !== v) this.followSel.value = v;
+    if (v !== this.followVal) this.mark(this.followSeg, v);
   }
 }
