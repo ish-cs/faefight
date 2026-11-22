@@ -491,11 +491,16 @@ export class Nav {
 
   /** Next waypoint toward dest on node i: bunker doorways, then around built-in cover. */
   within(i: number, me: Vec3, dest: Vec3): Vec3 {
+    // The props on the grid are for this call only (kept out of the bot's state: match checkpoints carry it).
+    try { return this.withinGrid(i, me, dest); } finally { const g = this.grids.get(i); if (g) g.props = []; }
+  }
+
+  private withinGrid(i: number, me: Vec3, dest: Vec3): Vec3 {
     const node = this.nodeList[i];
     const pieces = this.view.pieces;
     let wp = node.bunker ? withinIsland({ bunker: node.bunker }, me, dest, (d) => !doorBlocked(pieces, d)) : dest;
     const g = this.grids.get(i);
-    if (g) g.props = (this.view.props ?? []).filter((p) => p.top - node.groundY > PROP_STEP && dist2D(p.pos, node.center) < node.radius + 1);
+    if (g) g.props = (this.view.props?.() ?? []).filter((p) => p.top - node.groundY > PROP_STEP && dist2D(p.pos, node.center) < node.radius + 1);
     // A waypoint on a prop (a lane carrot, a spot by the rim) moves to just beside it: round it, not shoving it ahead.
     if (g) for (const c of g.props) {
       const d = dist2D(wp, c.pos), R = c.r + COVER_CLEARANCE;

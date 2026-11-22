@@ -69,9 +69,9 @@ export type BotView = {
   /**
    * Gameplay props (crates, drums, IBC tanks, reels, tyres; props.ts) where they are now, as footprints: centre,
    * radius, and the top's height. Too tall to step over ones are walked round (Nav), not shoved along the way.
-   * Absent in hand-made views.
+   * A function (worked out when asked; kept out of match checkpoints). Absent in hand-made views.
    */
-  props?: { pos: Vec3; r: number; top: number }[];
+  props?(): { pos: Vec3; r: number; top: number }[];
   /** Enemies (ids, in `enemies`) whose body is hidden behind a prop but whose head shows over it. */
   peeking?: number[];
   /** Wooden pier sections still standing (public: anyone sees them); explosions break them. Absent in hand-made views. */
