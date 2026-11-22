@@ -1285,7 +1285,10 @@ export class Bot {
   /** Shopping plan counting what's in the vault too (it can be withdrawn on the way). */
   private plan(c: Ctx) {
     const me = c.me;
-    const total = { ...me, inv: { ...me.inv, cash: me.inv.cash + this.spendable(me) } };
+    // The banked rebuy money is for exactly this: an empty gun gets restocked from it (else the plan is empty and I sit
+    // at home with fists; ffa8-mixed seed 11: 62 s).
+    const vault = ownsGun(me.inv) ? this.spendable(me) : me.vault.cash;
+    const total = { ...me, inv: { ...me.inv, cash: me.inv.cash + vault } };
     return shoppingPlan(total, this.needs(c), this.difficulty, this.style);
   }
 
