@@ -124,12 +124,13 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (needs.grapple === 'cross' && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
-    if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price) return 'steel';
+    // (A kind the hotbar has no room for is skipped: the shop would refuse it.)
+    if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price && room('steel')) return 'steel';
     const skilled = difficulty === 'hard' || difficulty === 'pro';
     const wantMetal = skilled ? cash >= PIECES.metal.price
       : (difficulty === 'medium' || style.metal) && cash >= 2 * PIECES.metal.price;
-    if (wantMetal) return 'metal';
-    return cash >= PIECES.wood.price ? 'wood' : null;
+    if (wantMetal && room('metal')) return 'metal';
+    if (room('wood')) return cash >= PIECES.wood.price ? 'wood' : null;
   }
   if (heals < (needs.medkits ?? 0) && room('medkit') && cash >= MEDKIT.price) return 'medkit';
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
@@ -145,7 +146,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (inv.traps < (needs.traps ?? 0) && room('trap') && cash >= TRAP.price) return 'trap';
   if (style.closeGun && !inv.weapons.shotgun && room('shotgun') && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
-  if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
+  if (tall < needs.kit + style.coverWood && room('wood') && cash >= PIECES.wood.price) return 'wood';
   // Rich: invest in the generator, then lock the favourite gun so a death doesn't leave me unarmed.
   if (genPrice !== null && cash >= 3 * genPrice) return 'genUpgrade';
   const fav = GUNS.find((g) => inv.weapons[g]);

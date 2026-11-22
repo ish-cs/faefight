@@ -421,7 +421,7 @@ export class Bot {
     if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) act = { ...act, ...this.escape(ctx) };
     // Healing (heal.ts), mid-fight included: low with them in my face, break line of sight first (cover, a wall, back off).
     const heal = this.healDecide(ctx);
-    if (ctx.enemy && this.healHideAt !== null && (heal?.act === 'hide' || heal?.act === 'wait')) act = this.healHide(ctx, ctx.enemy);
+    if (ctx.enemy && this.healHideAt !== null && this.goal !== 'storm' && (heal?.act === 'hide' || heal?.act === 'wait')) act = this.healHide(ctx, ctx.enemy);
     // Passing the potion seller short of heals or shields: step over and buy.
     const detour = !ctx.enemy && !heal && !act.shop && !act.build ? this.sellerDetour(ctx) : null;
     if (detour) act = detour;
@@ -2356,7 +2356,8 @@ export class Bot {
       foe: e ? { dist: c.enemyDist, eff: e.hp + e.shield, reloadLeft: e.reloadUntil > now ? e.reloadUntil - now : 0 } : null,
       hurtAgo: now - this.mem.lastHurtAt, burst: now - this.burstAt <= 1.5 ? this.burst : 0,
       hidingFor: this.healHideAt === null ? null : now - this.healHideAt,
-      coverFirst: this.healRoll.cover, useReload: this.healRoll.reload, sheltered: false,
+      // Racing the storm: no hiding (that walks me back out), heal on the move.
+      coverFirst: this.healRoll.cover && this.goal !== 'storm', useReload: this.healRoll.reload, sheltered: false,
     }, H);
     if (plan?.act === 'hide') { this.healHideAt ??= now; this.healNote = { t: now, text: plan.why }; }
     else if (plan?.act !== 'wait' || !e) this.healHideAt = null;
