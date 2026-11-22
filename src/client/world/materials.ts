@@ -4,6 +4,7 @@ import { MAP } from '../../sim/constants';
 import { lightU } from './lightUniforms';
 import { applyPbr, pbrMaterial, pbrSample, worldNoise } from './pbr';
 import { weather } from './weathering';
+import { NO_SHADOW } from './lod';
 import { awningTex, barkTex, chainTex, frondTex, leafBlobTex, seawallTex } from './textures';
 
 type Opts = ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0];
@@ -133,7 +134,10 @@ function rockMaterial() {
 
 /** Shared static-world materials. All use vertex colours as a per-part tint (white = untinted). */
 export function mats() {
-  if (!M) M = make();
+  if (!M) {
+    M = make();
+    for (const m of [M.lit, M.lamp, M.glow]) NO_SHADOW.add(m); // self-lit inserts: no visible shadow, one draw per cascade
+  }
   return M;
 }
 

@@ -19,6 +19,11 @@ export const TINY_CASTER_LAYER = 5;
  * stand in for several camera meshes (gameProps.ts: one shadow draw for every prop material).
  */
 export const SHADOW_ONLY_FIRST_LAYER = 6;
+/**
+ * Materials whose static parts never cast shadows (StaticBatch.add drops `cast`): self-lit panels, LEDs and lamp
+ * lenses sit on or inside other surfaces, so their shadow is invisible but each is one more draw per cascade.
+ */
+export const NO_SHADOW = new WeakSet<THREE.Material>();
 
 export interface LodTarget {
   /** Re-pick levels for a camera at `cam`; `scale` multiplies every registered distance. */

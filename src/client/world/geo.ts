@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { registerDistanceCull, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
+import { NO_SHADOW, registerDistanceCull, shrinkMaterial, TINY_CASTER_LAYER } from './lod';
 import { chunkCoord } from './lodMath';
 import { stressMatrices } from './stress';
 
@@ -107,6 +107,7 @@ export class StaticBatch {
   }
 
   add(material: THREE.Material, geo: THREE.BufferGeometry, m: THREE.Matrix4 | null = null, col: THREE.ColorRepresentation = 0xffffff, cast = true, receive = true) {
+    if (NO_SHADOW.has(material)) cast = false;
     const key = `${material.uuid}:${+cast}${+receive}`;
     let bin = this.bins.get(key);
     if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
