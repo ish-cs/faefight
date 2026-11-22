@@ -3,6 +3,7 @@ import { CHARGE, GRENADE, PLAYER, ROCKET, WEAPONS } from './constants';
 import type { CenterIsland, IslandLayout } from './map';
 import type { Physics, PropPush } from './physics';
 import { boxesOverlap, type NoBuildZone } from './propZones';
+import { stepWorld } from './rapierStep';
 import type { MatchEvent, PieceState, PlayerState, Vec3, WeaponKind } from './types';
 import { add, dist2D, v3 } from './vec';
 import { inBunkerArea, PROP_KINDS, PROPS, type PropKind, type PropPose, type PropSpawn, propZones, type Quat } from './propPlace';
@@ -109,7 +110,7 @@ export class PropSim {
       this.byHandle.set(col.handle, l);
     }
     // Settle onto the ground once at match start: the rest pose is where each prop really lies.
-    for (let i = 0; i < SETTLE_STEPS; i++) this.world.step();
+    for (let i = 0; i < SETTLE_STEPS; i++) stepWorld(this.world);
     for (const l of this.live) {
       l.rest = this.poseOf(l.body);
       l.body.setLinvel({ x: 0, y: 0, z: 0 }, false);
@@ -217,7 +218,7 @@ export class PropSim {
     world.gravity = { x: 0, y: 0, z: 0 };
     for (const l of this.live) { l.body.wakeUp(); l.body.setLinvel({ x: 0, y: 0, z: 0 }, false); l.body.setAngvel({ x: 0, y: 0, z: 0 }, false); }
     for (let k = 0; k < PRIME_STEPS; k++) {
-      world.step();
+      stepWorld(world);
       for (const l of this.live) { l.body.setLinvel({ x: 0, y: 0, z: 0 }, false); l.body.setAngvel({ x: 0, y: 0, z: 0 }, false); }
     }
     world.gravity = { x: 0, y: -9.81, z: 0 };
@@ -317,7 +318,7 @@ export class PropSim {
     for (const [pos, r] of st.blasts) this.blast(pos, r);
     for (const [from, to, w] of st.shots) this.shot(from, to, w);
     this.water(now, waterY);
-    this.world.step();
+    stepWorld(this.world);
     const alive = [...this.playerBodies.values()].map((b) => b.translation());
     for (const l of this.live) {
       if (!l.body.isSleeping()) l.lastActive = now;
@@ -337,8 +338,12 @@ export class PropSim {
 
   private inZone(l: Live, pos: Vec3) {
     const e = PROP_KINDS[l.spawn.kind].ext;
-    const half = v3(e.x, e.y, e.z);
-    return this.zones.some((z) => boxesOverlap(pos, half, 0, z));
+    const half = v3(e.x, e.y, e.z), r = Math.hypot(e.x, e.z);
+    // Exact early-out (boxesOverlap is a full separating-axis test per zone, for every prop every tick): boxes whose
+    // Y ranges or bounding circles don't touch can't overlap, so only the near zones get the real test.
+    return this.zones.some((z) => Math.abs(pos.y - z.center.y) < half.y + z.half.y
+      && Math.hypot(pos.x - z.center.x, pos.z - z.center.z) <= r + Math.hypot(z.half.x, z.half.z) + 1e-6
+      && boxesOverlap(pos, half, 0, z));
   }
 
   private displaced(l: Live): boolean {
