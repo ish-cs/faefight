@@ -188,9 +188,13 @@ export const LIFECYCLE = {
    * Death to respawn (2026-11-21: 3 → 5 s, the user's call). CI, 20 seeds: 8-bot FFAs about the same as 3 s,
    * Hard 1v1 decided before sudden death 14 → 19/20, PRO vs Hard 75 → 85 %. 10 s gave 1-2/20 more decided
    * FFAs but cut PRO-vs-Hard 1v1s to a 4.6 min average (16/20 under 5 min).
+   * 2026-11-22: 5 → 10 s, the user's call ("when you die, respawn wait time 10 seconds").
    */
-  respawnSec: 5,
-  /** Respawning into a sealed bunker: break out within this long or you're eliminated. */
+  respawnSec: 10,
+  /**
+   * Bunker sealed while you were dead: you respawn inside and must break out within this long or you're
+   * eliminated. Sealed at the moment you die: eliminated on the spot (killPlayer).
+   */
   breakoutSec: 10,
   invulnSec: 3,
   /** Spawn protection: lasts while inside your bunker (max this long), then invulnSec after leaving. */

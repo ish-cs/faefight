@@ -233,7 +233,7 @@ export class Match implements MatchApi {
         const env = killer === null && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
         // A barrel / tank someone set off: the feed says "X via barrel".
         const via = cause === 'barrel' || cause === 'propane' || cause === 'trap' ? cause : undefined;
-        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env, via));
+        this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env, via, this.map));
       },
       // Spike traps ride the hazard hooks with negative ids (bullets and fists stop at the nearer of the two).
       castHazard: (o, d, max) => {
@@ -569,7 +569,7 @@ export class Match implements MatchApi {
 
   /** Debug: kill a player, optionally credited to `killer` (e2e: killcam / kill feed). */
   debugKill(playerId: number, killer: number | null = null): void {
-    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false, killer));
+    this.debugEvents.push(...killPlayer(this.s, this.physics, playerId, this.s.time, false, killer, undefined, undefined, this.map));
   }
 
   /** Kill (if alive) and eliminate for good: no respawn. The win check runs on the next tick. */

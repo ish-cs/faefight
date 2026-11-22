@@ -6,6 +6,7 @@ import { plugSpot } from '../../src/sim/bots/plans';
 import { aimDir, eyePos } from '../../src/sim/combat';
 import { buy, vaultTransfer } from '../../src/sim/economy';
 import { syncFromInventory } from '../../src/sim/hotbar';
+import { DEFAULT_BOT_PARAMS, withParams, type BotParams } from '../../src/sim/bots/params';
 import { ARCHETYPES, preset, rollPersonality, type Archetype } from '../../src/sim/bots/personality';
 import type { BotView, OtherStatus } from '../../src/sim/bots/view';
 import { ECONOMY, GRENADE, LIFECYCLE, PIECES, SEAL, TICK_HZ, WEAPONS } from '../../src/sim/constants';
@@ -295,6 +296,22 @@ describe('game sense', () => {
     // Right in front of a steel plug, from outside the bunker.
     expect(Math.min(...pieces.map((p) => dist2D(p.pos, at)))).toBeLessThan(2.2);
     expect(insideBunker(map[0].bunker, at)).toBe(false);
+  });
+
+  test('own bunker sealed (dying now = out): unsealing outranks hunting a sealed rival, unless an enemy is on me', () => {
+    const scores = (P: BotParams, enemyAt: number | null) => {
+      const self = armed(0, 0, onIsland(0, 14));
+      const enemies = enemyAt === null ? [] : [armed(1, 1, onIsland(0, 14 + enemyAt))];
+      const view = makeView(self, { enemies, pieces: plugs(0, 'wood'), sealed: [true, true, false, false] });
+      const bot = new Bot(0, 'hard', mulberry32(21), preset('Turtle'), P);
+      bot.think(view);
+      return { goal: bot.currentGoal, defend: bot.planScores.find((r) => r.goal === 'defend')?.score ?? 0 };
+    };
+    const on = scores(DEFAULT_BOT_PARAMS, null), off = scores(withParams({ 'drive.sealedHome': 0 }), null);
+    expect(on.goal).toBe('defend');
+    expect(on.defend - off.defend).toBeCloseTo(DEFAULT_BOT_PARAMS.drive.sealedHome, 5);
+    // Someone 5 m away: no bonus (turning my back to break a door loses the fight).
+    expect(scores(DEFAULT_BOT_PARAMS, 5).defend).toBeCloseTo(scores(withParams({ 'drive.sealedHome': 0 }), 5).defend, 5);
   });
 
   test('one of my doorways gets plugged: clears it before heading out to bridge', () => {

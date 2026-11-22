@@ -27,7 +27,7 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  * - sealAway: seal bonus for a rival seen away from home, or not seen on their island for emptyHomeSec while I'm
  *   on it (their bunker is empty); sealAwayTarget: rival-choice
  *   bonus for such a rival while I carry a full kit and can walk to their island.
- * - Respawn window (5 s): a dead rival whose bunker is within sealRaceM m and that I can sprint to before they're
+ * - Respawn window (LIFECYCLE.respawnSec, read live from the rival's respawnAt): a dead rival whose bunker is within sealRaceM m and that I can sprint to before they're
  *   back (+ windowSlackSec) gets pushed: seal it with a kit (windowPush added to seal), else hold their door
  *   (half of it added to attack). respawnCautionSec: right after my own respawn no pushes or offense (re-gear).
  * - siegeDist: camping a sealed bunker this far out from its weakest doorway; siegeAfterDeath: how long after the
@@ -39,6 +39,8 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  * - sealBonus: added to the seal goal (seals win games); sealedHunt: added to attack/fight against a rival whose
  *   bunker is sealed (each death of theirs eliminates them); sealedFocus: among visible enemies, one with a sealed
  *   bunker counts as this many times closer when choosing whom to shoot.
+ * - sealedHome: added to defend (clear my plugged doorway) while my own bunker is sealed and no enemy is within
+ *   SEALED_HOME_CLEAR m: dying sealed is an instant elimination, so unseal before picking fights.
  * Wooden piers (sim/docks.ts):
  * - dockShot: odds, per roll (every dockRollSec while it's on), of blowing out the pier section an enemy stands on
  *   (or the one under the piece they hide behind) with a rocket or grenade instead of shooting them;
@@ -80,6 +82,7 @@ export type DriveParams = {
   crossFire: Record<Difficulty, number>;
   sealBonus: number;
   sealedHunt: number;
+  sealedHome: number;
   sealedFocus: number;
   dockShot: Record<Difficulty, number>;
   dockDefend: number;
@@ -272,6 +275,7 @@ export const DRIVE: DriveParams = {
   crossFire: D(Infinity, Infinity, Infinity, 25),
   sealBonus: 0.35,
   sealedHunt: 0.6,
+  sealedHome: 0.4,
   sealedFocus: 1.6,
   dockShot: D(0.15, 0.45, 0.65, 0.85),
   dockDefend: 0.3,
@@ -393,7 +397,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sealRaceM', [10, 120]], ['drive.windowSlackSec', [0, 6]], ['drive.windowPush', [0, 1.5]],
   ['drive.respawnCautionSec', [0, 30]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]], ['drive.crossFire.*', [15, 60]],
-  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedFocus', [1, 3]],
+  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome', [0, 1.2]], ['drive.sealedFocus', [1, 3]],
   ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],

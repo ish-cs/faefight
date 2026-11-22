@@ -56,6 +56,8 @@ const STUCK_SEC = 2, STUCK_DIST = 0.5, UNSTICK_SEC = 0.6;
 const TURN_RATE = 8;
 /** Beyond this, an enemy on another island isn't worth abandoning the current goal for. */
 const ENGAGE_RANGE = 25;
+/** My bunker sealed: clear it first unless an enemy is closer than this (then fight; turning my back loses). */
+const SEALED_HOME_CLEAR = 12;
 const CHEST = 1.2;
 /** Net forward progress of one scaffold laid end-to-end. */
 const SCAFFOLD_STEP = 3.8;
@@ -1405,7 +1407,8 @@ export class Bot {
         if (!blockers.length) return 0;
         // Nothing that can clear what's there (steel needs a charge): better to go buy one than stand at the door.
         const can = blockers.some((p) => this.canClear(c, p));
-        if (view.sealed[home.index]) return (can ? 0.85 : 0.1) + 0.1 * t.caution;
+        // Dying while sealed is an instant elimination: unseal before anything else unless someone is on top of me.
+        if (view.sealed[home.index]) return (can ? 0.85 + (this.sealedHomeCalm(c) ? this.P.drive.sealedHome : 0) : 0.1) + 0.1 * t.caution;
         // One plugged doorway is most of a seal: clear it before going out.
         return c.homeReach && can ? 0.7 + 0.15 * t.caution : 0;
       }
@@ -1565,6 +1568,11 @@ export class Bot {
         return 0.2 + 0.45 * t.greed + Math.min(view.generators[isl.index], 500) / 1000 - (c.on === isl.index ? 0 : 0.15);
       }
     }
+  }
+
+  /** My bunker is sealed and no enemy is close enough to punish me for turning to clear it. */
+  private sealedHomeCalm(c: Ctx): boolean {
+    return !c.enemy || c.enemyDist > SEALED_HOME_CLEAR;
   }
 
   /** Inside my own sealed bunker (respawned into it, or sealed in alive): getting out is all that matters. */

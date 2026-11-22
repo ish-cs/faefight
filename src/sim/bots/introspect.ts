@@ -109,7 +109,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
@@ -201,7 +201,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const how = me.inv.charges > 0 ? 'a charge' : gun ? 'my gun' : 'my fists';
       if (view.sealed[home.index]) {
         return {
-          f: [[can ? 'can clear' : 'cannot clear', can ? 0.85 : 0.1], ['caution', 0.1 * t.caution]],
+          f: [[can ? 'can clear' : 'cannot clear', can ? 0.85 : 0.1], ...(can && I.sealedHomeCalm(c) ? [['sealed home: death = out', I.P.drive.sealedHome] as [string, number]] : []), ['caution', 0.1 * t.caution]],
           why: can ? `My bunker is sealed (${kinds}): clearing it with ${how}` : `My bunker is sealed (${kinds}) and nothing I carry gets through`,
         };
       }

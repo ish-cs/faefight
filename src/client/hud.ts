@@ -8,6 +8,9 @@ import { PIECE_ORDER } from './input';
 import { STAMINA } from '../sim/movement';
 import { islandColor, islandName } from './colors';
 import { endState } from './endState';
+
+/** Why someone is out (the sim's `eliminated` event reason), for the kill feed. */
+const ELIM_WHY: Record<string, string> = { sealed: ': bunker sealed', trapped: ': trapped in sealed bunker', suddenDeath: ': sudden death' };
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
 import { dragOutcome } from './hotbarDrag';
@@ -770,7 +773,7 @@ export class Hud {
         const isl = e.data.island as number | undefined;
         this.addFeed(`${isl === this.me?.island ? 'Your' : `${islandName(isl ?? 0)}'s`} bunker reopened`);
       } else if (e.type === 'eliminated') {
-        this.addFeed(`${name(e.data.player ?? e.data.id) ?? 'Someone'} eliminated`, true);
+        this.addFeed(`${name(e.data.player ?? e.data.id) ?? 'Someone'} eliminated${ELIM_WHY[e.data.reason as string] ?? ''}`, true);
       } else if (e.type === 'suddenDeath') {
         this.addFeed('Sudden death: generators stopped, the storm is closing in', true);
         this.stormWarnUntil = performance.now() + 4000;

@@ -85,6 +85,11 @@ export function killPlayer(
   cause?: string,
   /** What set it off when it wasn't the killer's own weapon (e.g. 'barrel'): the feed says "X via barrel". */
   via?: string,
+  /**
+   * The island layout. When given, a victim whose own bunker is sealed at the moment of death is eliminated on the
+   * spot (no respawn). Only unit tests that don't care about seals leave it out.
+   */
+  map?: IslandLayout[],
 ): MatchEvent[] {
   const p = s.players.get(victimId);
   if (!p) throw new Error(`killPlayer: no player ${victimId}`);
@@ -111,14 +116,17 @@ export function killPlayer(
   p.deaths++;
   const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
   if (k) k.kills++;
-  if (p.breakoutUntil !== null) {
-    // Died while trapped in a sealed bunker: no more respawns.
+  // Out for good: died while trapped in a sealed bunker, or died while your bunker is sealed (2026-11-22, the
+  // user's rule). Sudden death (forcedSeal) keeps its own path: eliminated when the respawn comes due.
+  const reason = p.breakoutUntil !== null ? 'trapped'
+    : map && !s.practice && !s.forcedSeal && islandSealed(s, map, p.island) ? 'sealed' : null;
+  if (reason) {
     p.breakoutUntil = null;
     p.respawnAt = null;
     p.eliminated = true;
     physics.setPlayerPos(victimId, PARKED);
     const kill = { victim: victimId, killer, inWater, ...(cause ? { cause } : {}), ...(via ? { via } : {}) };
-    return [ev(now, 'kill', kill), ev(now, 'eliminated', { player: victimId })];
+    return [ev(now, 'kill', kill), ev(now, 'eliminated', { player: victimId, reason })];
   }
   p.respawnAt = now + LIFECYCLE.respawnSec;
   physics.setPlayerPos(victimId, PARKED);
@@ -194,7 +202,7 @@ export function tickLifecycle(
     if (!p.alive || p.pos.y >= s.waterY) continue;
     const y = p.yankedBy;
     const by = y && now - y.at <= GRAPPLE.yankCreditSec && y.by !== p.id ? y.by : null;
-    out.push(...killPlayer(s, physics, p.id, now, true, by, undefined, by !== null ? 'grapple' : undefined));
+    out.push(...killPlayer(s, physics, p.id, now, true, by, undefined, by !== null ? 'grapple' : undefined, map));
   }
 
   for (const p of s.players.values())
@@ -216,7 +224,7 @@ export function tickLifecycle(
     // Sudden death seals every bunker for good (nothing to break): no respawn at all.
     if (s.forcedSeal) {
       p.eliminated = true;
-      out.push(ev(now, 'eliminated', { player: p.id }));
+      out.push(ev(now, 'eliminated', { player: p.id, reason: 'suddenDeath' }));
       continue;
     }
     // Physically sealed: respawn inside anyway, with a short window to break out.
@@ -262,7 +270,7 @@ export function tickLifecycle(
       p.breakoutUntil = null;
       out.push(ev(now, 'escaped', { player: p.id }));
     } else if (now >= p.breakoutUntil) {
-      out.push(...killPlayer(s, physics, p.id, now, false));
+      out.push(...killPlayer(s, physics, p.id, now, false, null, undefined, undefined, map));
     }
   }
 
