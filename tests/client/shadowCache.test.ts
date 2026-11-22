@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'vitest';
-import { cascadeToRefresh, newCacheState, SHADOW_CACHE } from '../../src/client/world/shadowCache';
+import { cascadeToRefresh, nearCascadeDue, newCacheState, SHADOW_CACHE } from '../../src/client/world/shadowCache';
+
+describe('staggered near cascades', () => {
+  test('cascade 0 renders every frame, the other near cascades every second frame', () => {
+    const r = (i: number) => [0, 1, 2, 3].map((f) => nearCascadeDue(i, f));
+    expect(r(0)).toEqual([true, true, true, true]);
+    expect(r(1)).toEqual([true, false, true, false]);
+  });
+});
 
 describe('cached far shadow cascades', () => {
   test('first frames render every far cascade once, one per frame', () => {

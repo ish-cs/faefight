@@ -7,6 +7,8 @@ import { mat, StaticBatch, strut } from './geo';
 import { mats } from './materials';
 import { pbrSample, worldNoise } from './pbr';
 import type { Scatter } from './scatter';
+import { boxTape, faceLabel, labelMaterial } from './labels';
+import { merge, part } from './geo';
 import { makeRng, signTex } from './textures';
 
 /** Ground spots under the harbor street lamps' heads (world), for the night light pools (dayNight.ts). Reset per map build. */
@@ -61,7 +63,7 @@ export function defineDetailKinds(sc: Scatter) {
   const pebble = jitterGeo(new THREE.IcosahedronGeometry(1, 0), 0.25, 3);
   pebble.scale(1, 0.55, 1);
   sc.define('pebble', { geo: pebble, material: M.gravel, far: 26, density: all(0.25, 0.7) });
-  sc.define('rubble', { geo: jitterGeo(new THREE.BoxGeometry(1, 0.7, 0.8, 1, 1, 1).toNonIndexed(), 0.18, 7), material: M.concrete, far: 45, density: all(0.35, 0.8), cast: true });
+  sc.define('rubble', { geo: jitterGeo(new THREE.BoxGeometry(1, 0.7, 0.8, 1, 1, 1).toNonIndexed(), 0.18, 7), material: M.concrete, far: 45, density: all(0.35, 0.8) });
   // bottle: body + shoulder + neck (lathe), lying or standing
   const bottle = new THREE.LatheGeometry([0, 0.033, 0.035, 0.035, 0.03, 0.014, 0.013, 0.015, 0].map((r, i) => new THREE.Vector2(r, [0, 0, 0.005, 0.15, 0.18, 0.21, 0.26, 0.265, 0.265][i])), 8);
   sc.define('bottle', { geo: bottle, material: shiny, far: 22, density: all(0, 0.7) });
@@ -73,7 +75,12 @@ export function defineDetailKinds(sc: Scatter) {
     card.computeVertexNormals();
   }
   sc.define('cardboard', { geo: card, material: matte, far: 35, density: all(0.2, 0.8) });
-  sc.define('box', { geo: new THREE.BoxGeometry(0.45, 0.35, 0.4).translate(0, 0.175, 0), material: matte, far: 45, density: all(0.3, 0.9), cast: true });
+  sc.define('box', { geo: new THREE.BoxGeometry(0.45, 0.35, 0.4).translate(0, 0.175, 0), material: M.matte, far: 45, density: all(0.3, 0.9), blob: 0.34 });
+  // tape + shipping label on every scatter box (placed alongside each 'box', same transform)
+  sc.define('boxLabel', {
+    geo: merge([...boxTape(0.225, 0.175, 0.2).map((g) => part(g.translate(0, 0.175, 0), null)), part(faceLabel(0.15, 0.15, new THREE.Vector3(0.06, 0.15, 0.2), new THREE.Vector3(0, 0, 1), 2), null)]),
+    material: labelMaterial(), far: 30, density: all(0.3, 0.9), follows: 'box',
+  });
   const shell = new THREE.SphereGeometry(1, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.4, 1.25);
   sc.define('shell', { geo: shell, material: matte, far: 16, density: all(0, 0.6) });
   const weed = new THREE.PlaneGeometry(0.08, 0.6, 1, 4).rotateX(-Math.PI / 2).translate(0, 0.012, 0);
@@ -200,11 +207,18 @@ function chain(b: StaticBatch, B: THREE.Matrix4, n: number, rng: Rng) {
   }
 }
 
+/** One material per sign text (shared by every island): a new material per call made each island's copy its own draw. */
+const signMats = new Map<string, THREE.MeshStandardNodeMaterial>();
+
 function sign(b: StaticBatch, B: THREE.Matrix4, text: string, bg: string) {
   const M = mats();
   b.add(M.galv, new THREE.CylinderGeometry(0.03, 0.03, 2.2, 6), at(B, mat(0, 1.1, 0)));
-  const sm = new THREE.MeshStandardNodeMaterial({ map: signTex(text, bg), roughness: 0.6, vertexColors: true });
-  sm.name = `sign:${text}`;
+  let sm = signMats.get(`${text}|${bg}`);
+  if (!sm) {
+    sm = new THREE.MeshStandardNodeMaterial({ map: signTex(text, bg), roughness: 0.6, vertexColors: true });
+    sm.name = `sign:${text}`;
+    signMats.set(`${text}|${bg}`, sm);
+  }
   b.add(sm, new THREE.PlaneGeometry(1.4, 0.18), at(B, mat(0, 2.05, -0.035)), 0xffffff, false);
   b.add(M.dark, new THREE.BoxGeometry(1.42, 0.2, 0.02), at(B, mat(0, 2.05, -0.015)), 0x303438);
 }

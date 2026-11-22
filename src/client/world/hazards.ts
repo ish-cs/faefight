@@ -3,7 +3,9 @@ import { HAZARD } from '../../sim/constants';
 import type { HazardDef, HazardKind } from '../../sim/map';
 import type { HazardNet, MatchEvent, Vec3 } from '../../sim/types';
 import { boxUV, mat, StaticBatch } from './geo';
+import { SHADOW_ONLY_FIRST_LAYER } from './lod';
 import { mats } from './materials';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Particles } from './particles';
 
 /**
@@ -161,13 +163,21 @@ const MODELS: Record<HazardKind, (b: StaticBatch) => void> = { barrel: barrelMod
 
 // ---------------------------------------------------------------- layer
 
-type Slot = { def: HazardDef; meshes: THREE.InstancedMesh[]; index: number; matrix: THREE.Matrix4 };
+type Slot = { def: HazardDef; meshes: THREE.InstancedMesh[]; index: number; matrix: THREE.Matrix4; shadowId: number };
 type Fuse = { slot: Slot; start: number; end: number; nextFlash: number; jet: THREE.Vector3 };
 
 const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _one = new THREE.Vector3(1, 1, 1), _up = new THREE.Vector3(0, 1, 0);
 
+/** depth-only material of the hazards' shared shadow batch (never drawn by the camera) */
+const SHADOW_MAT = new THREE.MeshBasicNodeMaterial();
+
 export class HazardLayer {
   readonly root = new THREE.Group();
+  /**
+   * Shadows: one shadow-only batch of every hazard (each kind's parts merged), first cascade only like the gameplay
+   * props, instead of one shadow draw per kind x material in every cascade (~13 shadow draws -> 1).
+   */
+  private shadow: THREE.BatchedMesh | null = null;
   private slots = new Map<number, Slot>();
   private shown = new Map<number, boolean>();
   private fusing = new Map<number, Fuse>();
@@ -181,22 +191,43 @@ export class HazardLayer {
       if (!MODELS[d.kind]) { console.warn(`[world/hazards] unknown hazard kind ${String(d.kind)} (id ${d.id})`); continue; }
       (byKind.get(d.kind) ?? byKind.set(d.kind, []).get(d.kind)!).push(d);
     }
+    const shadowGeos: { geo: THREE.BufferGeometry; list: HazardDef[] }[] = [];
     for (const [kind, list] of byKind) {
       const b = new StaticBatch();
       MODELS[kind](b);
-      const meshes = b.take().map(({ material, geometry, receive }) => {
+      const parts = b.take();
+      const meshes = parts.map(({ material, geometry, receive }) => {
         const m = new THREE.InstancedMesh(geometry, material, list.length);
         m.name = `hazard:${kind}:${material.name}`;
-        m.castShadow = true; m.receiveShadow = receive;
+        m.castShadow = false; m.receiveShadow = receive; // the shadow batch below casts for every kind
         return m;
       });
+      shadowGeos.push({ geo: mergeGeometries(parts.map((x) => x.geometry), false)!, list });
       list.forEach((d, i) => {
         const matrix = new THREE.Matrix4().compose(_p.set(d.pos.x, d.pos.y, d.pos.z), _q.setFromAxisAngle(_up, d.rotY), _one);
         for (const m of meshes) m.setMatrixAt(i, matrix);
-        this.slots.set(d.id, { def: d, meshes, index: i, matrix });
+        this.slots.set(d.id, { def: d, meshes, index: i, matrix, shadowId: -1 });
         this.shown.set(d.id, true);
       });
       for (const m of meshes) { m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); this.root.add(m); }
+    }
+    if (shadowGeos.length) {
+      const sh = new THREE.BatchedMesh(shadowGeos.reduce((n, x) => n + x.list.length, 0), shadowGeos.reduce((n, x) => n + x.geo.getAttribute('position').count, 0), 0, SHADOW_MAT);
+      sh.name = 'hazard:shadow';
+      sh.castShadow = true;
+      sh.layers.set(SHADOW_ONLY_FIRST_LAYER);
+      sh.frustumCulled = false; // spans the map; perObjectFrustumCulled culls each instance
+      sh.sortObjects = false;
+      for (const { geo, list } of shadowGeos) {
+        const gid = sh.addGeometry(geo);
+        for (const d of list) {
+          const slot = this.slots.get(d.id)!;
+          slot.shadowId = sh.addInstance(gid);
+          sh.setMatrixAt(slot.shadowId, slot.matrix);
+        }
+      }
+      this.shadow = sh;
+      this.root.add(sh);
     }
   }
 
@@ -217,6 +248,7 @@ export class HazardLayer {
     if (this.shown.get(slot.def.id) === visible) return;
     this.shown.set(slot.def.id, visible);
     for (const m of slot.meshes) { m.setMatrixAt(slot.index, visible ? slot.matrix : ZERO); m.instanceMatrix.needsUpdate = true; }
+    if (this.shadow && slot.shadowId >= 0) this.shadow.setVisibleAt(slot.shadowId, visible);
   }
 
   private startFuse(slot: Slot, now: number, sec: number) {
@@ -366,6 +398,7 @@ export class HazardLayer {
 
   dispose() {
     for (const m of new Set([...this.slots.values()].flatMap((v) => v.meshes))) { m.geometry.dispose(); m.dispose(); }
+    this.shadow?.dispose();
     while (this.scorches.length) this.dropScorch(0);
     this.root.removeFromParent();
   }

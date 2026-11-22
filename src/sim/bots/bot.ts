@@ -556,9 +556,11 @@ export class Bot {
       const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult && !hittingMe;
       // Not on my island and far: no drive-by shots across the water (close in and fight instead), unless they're on me
       // or they're the last rival standing (nobody else to give my position away to: a duel is won on first damage).
+      // Islands by nav node, so the center island counts as one (islandAt says -1 there, like water).
+      const myNode = this.nav.nodeAt(me.pos);
       const across = foeDist > this.P.drive.crossFire[this.difficulty] && !hittingMe &&
         view.others.some((o) => !o.eliminated && o.id !== foe.id) &&
-        (ctx.on < 0 || islandAt(view.map, foe.pos) !== ctx.on);
+        (myNode < 0 || this.nav.nodeAt(foe.pos) !== myNode);
       fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !across && !this.burstRest(now, me, foeDist);
       if (hook?.why === 'yank' && hook.target === foe.id && r.ready && r.onTarget) { grapple = true; fire = false; }
     } else if (nade) {
@@ -840,11 +842,16 @@ export class Bot {
   private aimTarget(view: BotView, nearest: PlayerState | null, now: number): PlayerState | null {
     const me = view.self, A = this.P.aim;
     let cur = this.aimId === null ? null : view.enemies.find((e) => e.id === this.aimId && e.alive) ?? null;
-    if (!cur && this.aimId !== null) {
+    if (!cur && this.aimId !== null && !this.aimLost) {
+      // Just lost sight: keep them as my target for the hold (a blink behind a crate or a post brings them back
+      // into my sights, not onto someone else and back).
       const alive = view.others.find((o) => o.id === this.aimId)?.alive ?? false;
       this.aimLost = alive && this.aimAt ? { at: this.aimAt, until: now + A.feel[this.difficulty].holdSec } : null;
-      this.aimId = null;
+      if (!this.aimLost) this.aimId = null;
     }
+    if (!cur && this.aimLost && now >= this.aimLost.until) { this.aimLost = null; this.aimId = null; }
+    // While holding on someone I just lost, only a clearly closer enemy takes my eyes off where they were.
+    if (!cur && this.aimLost && nearest && dist2D(nearest.pos, me.pos) >= A.switchRatio * dist2D(this.aimLost.at, me.pos)) nearest = null;
     if (cur && nearest && nearest.id !== cur.id && now - this.aimSince >= A.commitSec &&
         dist2D(nearest.pos, me.pos) < A.switchRatio * dist2D(cur.pos, me.pos)) cur = null;
     if (!cur && nearest) { cur = nearest; this.aimId = nearest.id; this.aimSince = now; }

@@ -96,10 +96,13 @@ export class Renderer {
   private fadeMeshes: THREE.Mesh[] = [];
   private boomGeo = new THREE.SphereGeometry(1, 20, 12);
   /** Level pips above each island's generator (lit = reached), by island. */
-  private genPips: THREE.Mesh[][] = [];
+  /** Generator level pips, every island in ONE instanced draw (was a mesh each: 32 draws); lit = level reached. */
+  private genPips: THREE.InstancedMesh | null = null;
   private pipGeo = new THREE.BoxGeometry(0.18, 0.18, 0.18);
-  private pipOn = new THREE.MeshBasicNodeMaterial({ color: boosted(0xffd23d) });
-  private pipOff = new THREE.MeshBasicNodeMaterial({ color: 0x4a525c });
+  private pipMat = new THREE.MeshBasicNodeMaterial({ color: 0xffffff });
+  private pipOn = boosted(0xffd23d);
+  private pipOff = new THREE.Color(0x4a525c);
+  private pipLevels: number[] = [];
 
   /** Sudden-death weather: storm wall, rain, telegraph markers, lightning (world/storm.ts). */
   storm!: StormFx;
@@ -140,8 +143,8 @@ export class Renderer {
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
     r.scene.add(r.traps.root);
-    r.dayNight = new DayNight(r.world.sky, r.gpu, r.scene);
-    r.storm = new StormFx(r.world.sky, r.gpu, r.scene, r.dayNight.base);
+    r.dayNight = new DayNight(r.world.sky);
+    r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
     // a body killed in the air ragdolls down onto the island under it, or the sea
     r.characters.floorAt = (x, z) => r.world.impacts.surf?.groundAt(x, z)?.y ?? r.waterY;
     r.characters.onThud = (pos, speed) => {
@@ -182,22 +185,30 @@ export class Renderer {
     this.storm.setMap(map, def.center);
     this.dayNight.setCycle(def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt);
     this.gunFx.warmUp([this.boomMat]);
-    for (const pips of this.genPips) for (const m of pips) this.scene.remove(m);
+    if (this.genPips) { this.scene.remove(this.genPips); this.genPips.dispose(); }
     const h = PROP_HALF.generator;
-    this.genPips = map.map((isl) => {
+    const pips = new THREE.InstancedMesh(this.pipGeo, this.pipMat, map.length * GENERATOR_MAX_LEVEL);
+    pips.name = 'genPips';
+    const o = new THREE.Object3D();
+    map.forEach((isl, k) => {
       // A row across the line from the island centre, so it faces whoever walks up from home.
       const g = isl.generator, dx = g.x - isl.center.x, dz = g.z - isl.center.z, d = Math.hypot(dx, dz) || 1;
       const ax = -dz / d, az = dx / d;
-      return Array.from({ length: GENERATOR_MAX_LEVEL }, (_, i) => {
-        const m = new THREE.Mesh(this.pipGeo, i === 0 ? this.pipOn : this.pipOff);
+      for (let i = 0; i < GENERATOR_MAX_LEVEL; i++) {
         const off = (i - (GENERATOR_MAX_LEVEL - 1) / 2) * 0.36;
-        m.position.set(g.x + ax * off, g.y + h.y * 2 + 0.2, g.z + az * off);
-        m.rotation.y = Math.atan2(ax, az);
-        m.name = `genPip:${isl.index}:${i + 1}`;
-        this.scene.add(m);
-        return m;
-      });
+        o.position.set(g.x + ax * off, g.y + h.y * 2 + 0.2, g.z + az * off);
+        o.rotation.set(0, Math.atan2(ax, az), 0);
+        o.updateMatrix();
+        pips.setMatrixAt(k * GENERATOR_MAX_LEVEL + i, o.matrix);
+        pips.setColorAt(k * GENERATOR_MAX_LEVEL + i, i === 0 ? this.pipOn : this.pipOff);
+      }
     });
+    pips.instanceMatrix.needsUpdate = true;
+    pips.instanceColor!.needsUpdate = true;
+    pips.computeBoundingSphere();
+    this.pipLevels = map.map(() => 1);
+    this.genPips = pips;
+    this.scene.add(pips);
   }
 
   /** Every snapshot as soon as it arrives (before any event delay): drives player interpolation. */
@@ -282,16 +293,25 @@ export class Renderer {
     }
     this.world.syncPieces(this.predicted.length ? snap.pieces.concat(this.predicted) : snap.pieces, snap.fires);
     this.world.syncCosmetics(snap.broken ?? []);
+    this.world.syncProps(snap.props);
     this.world.syncHazards(snap.hz);
     this.traps.sync(snap.traps);
     this.world.syncDocks(snap.docks, snap.dockHurt);
     this.syncLoot(snap);
     this.gunFx.syncProjectiles(snap.projectiles ?? []);
     this.snapArrived = performance.now();
-    this.genPips.forEach((pips, island) => {
-      const level = snap.genLevels?.[island] ?? 1;
-      pips.forEach((m, i) => { m.material = i < level ? this.pipOn : this.pipOff; });
-    });
+    const pips = this.genPips;
+    if (pips) {
+      let dirty = false;
+      this.pipLevels.forEach((was, island) => {
+        const level = snap.genLevels?.[island] ?? 1;
+        if (level === was) return;
+        this.pipLevels[island] = level;
+        for (let i = 0; i < GENERATOR_MAX_LEVEL; i++) pips.setColorAt(island * GENERATOR_MAX_LEVEL + i, i < level ? this.pipOn : this.pipOff);
+        dirty = true;
+      });
+      if (dirty) pips.instanceColor!.needsUpdate = true;
+    }
     this.potionSellers.sync(snap.potionShops);
     this.storm.sync(snap.storm, snap.suddenDeath);
     for (const e of snap.events) this.onEvent(e);
@@ -306,6 +326,7 @@ export class Renderer {
   private onEvent(e: MatchEvent) {
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.characters.onEvent(e);
     if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.gunFx.onEvent(e, this.humanId);
+    if (e.type === 'shot' || e.type === 'explosion') this.world.debris.onEvent(e, this.camera.position);
     if (e.type === 'shot' || e.type === 'explosion') this.world.critterEvent(e);
     if ((e.type === 'shot' || e.type === 'explosion') && this.curr)
       this.world.impactEvent(e, { pieces: this.curr.pieces, players: this.curr.players, waterY: this.waterY, broken: this.curr.broken ?? [] });

@@ -3,6 +3,7 @@ import { overDock } from '../../sim/docks';
 import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
 import { bunkerSlitBoxes, bunkerWallBoxes, harborBackdropFrame, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { registerDistanceCull } from './lod';
 import { buildCenter, paintedTopMaterial } from './center';
 import { boxUV, mat, StaticBatch } from './geo';
@@ -13,6 +14,8 @@ import { ISLAND_DECOR } from './decor';
 import { buildBeach, dressHarbor, dressIslandDetail, scatterHarbor, scatterIsland } from './detail';
 import { dressBackdrop, dressIsland } from './dressing';
 import type { Scatter } from './scatter';
+import { centerPlacements, islandPlacements, quayClusters, quayFrame } from './clusters';
+import type { PropLayer } from './propLayer';
 import { pbrAlbedo, pbrSample, worldNoise } from './pbr';
 import { applyWet } from './wetness';
 import { type Footprint, islandSurface, makeRng, yardTopTex } from './textures';
@@ -104,7 +107,7 @@ export function islandMask(isl: IslandLayout) {
   return { data: s.maskData, size: s.maskSize, R: isl.radius };
 }
 
-export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatter): IslandsOut {
+export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatter, dock?: PropLayer): IslandsOut {
   const map = def.islands;
   const yard = def.template === 'yard';
   const root = new THREE.Group();
@@ -128,21 +131,16 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   }
   const topGeo = new THREE.CircleGeometry(R, 128).rotateX(-Math.PI / 2);
 
+  const tops: THREE.BufferGeometry[] = [], walls: THREE.BufferGeometry[] = [];
   for (const isl of map) {
     const yaw = isl.bunker.facingYaw;
     const L = new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, 0, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
     const rng = makeRng(101 + isl.index * 977);
 
     // --- playable disc: exactly the sim's flat cylinder (radius R, top at groundY)
-    const top = new THREE.Mesh(topGeo, topMat);
-    top.position.set(isl.center.x, groundY, isl.center.z);
-    top.rotation.y = yaw;
-    top.receiveShadow = true;
-    const wall = new THREE.Mesh(wallGeo, wallMat);
-    wall.position.set(isl.center.x, (groundY - QUAY_DEPTH) / 2, isl.center.z);
-    wall.receiveShadow = true;
-    root.add(top, wall);
-    collidables.push(top, wall);
+    // every island's slab and quay wall merge into one mesh each (built after the loop): 2 draws instead of 2 × n
+    tops.push(topGeo.clone().applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, groundY, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1))));
+    walls.push(wallGeo.clone().translate(isl.center.x, (groundY - QUAY_DEPTH) / 2, isl.center.z));
 
     // fenders hang on the outside of the wall (outside the disc): rubber blocks (harbor) or tyres (yard).
     // The mooring bollards on the coping are breakable cosmetics now (cosmetics.ts).
@@ -187,11 +185,10 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
       const DF = BL.clone().multiply(mat(0, 0, 0, 0, d, 0));
       for (const sx of [-1, 1]) dress.add(M.paint, new THREE.PlaneGeometry(1.3, 0.22).rotateY(Math.PI), DF.clone().multiply(mat(sx * 1.6, 1.95, -2.305)), team, false);
     }
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.3, 0.05), new THREE.MeshStandardNodeMaterial({ color: team, roughness: 0.5 }));
+    // team plate: into the shared paint bin with the team colour as vertex tint (was its own material + draw)
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-    plate.position.set(b.center.x, groundY + 2.4, b.center.z).addScaledVector(fwd, 2.33);
-    plate.rotation.y = yaw;
-    root.add(plate);
+    const pp = new THREE.Vector3(b.center.x, groundY + 2.4, b.center.z).addScaledVector(fwd, 2.33);
+    dress.add(M.paint, new THREE.BoxGeometry(1.2, 0.3, 0.05), new THREE.Matrix4().compose(pp, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1)), team, false);
 
     // --- gameplay props: detailed visuals + invisible exact-size collision proxies
     const props = [
@@ -216,6 +213,14 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
     }
 
     if (scatter) scatterIsland(scatter, isl);
+    if (dock) {
+      // dense dock clusters (clusters.ts): low clutter on the playable disc, full clusters on the backdrop quay
+      const G = L.clone().multiply(mat(0, groundY, 0));
+      for (const p of islandPlacements(def, isl)) dock.place(p, G, dress);
+      const qf = quayFrame(def, isl);
+      const Q = L.clone().multiply(mat(0, qf.top, 0));
+      for (const p of quayClusters(qf, 31 + isl.index * 7919)) dock.place(p, Q, dress);
+    }
     dressIslandDetail(dress, L, isl);
     if (yard) {
       buildYardBackdrop(dress, L, rng, isl, n);
@@ -244,12 +249,30 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   });
 
   buildCenter(def, root, dress, collidables, wallMat, QUAY_DEPTH, labelSprite);
+  if (dock) {
+    const C = mat(def.center.center.x, def.center.groundY, def.center.center.z);
+    for (const p of centerPlacements(def)) dock.place(p, C, dress);
+  }
   if (yard) gapCranes(dress, map, groundY, def.center);
   distantIslands(dress, map);
 
+  const slabs: THREE.Mesh[] = [];
+  {
+    const top = new THREE.Mesh(mergeGeometries(tops, false)!, topMat);
+    top.name = 'islandTops';
+    top.receiveShadow = true;
+    const wall = new THREE.Mesh(mergeGeometries(walls, false)!, wallMat);
+    wall.name = 'quayWalls';
+    wall.receiveShadow = true;
+    root.add(top, wall);
+    slabs.push(top, wall);
+  }
   const bunkers = solid.build(root, 'bunkers', { chunked: true });
-  // camera/aim rays test raycast-only per-cell splits, not the one map-wide draw (raycastProxy.ts)
-  for (const m of bunkers) for (const p of raycastProxies(m, 24)) { if (p !== m) root.add(p); collidables.push(p); }
+  // camera/aim rays test raycast-only per-cell splits, not the map-wide merged draws (raycastProxy.ts): the merged
+  // island tops/walls (8 × 384 tris) and bunker walls (3.5k) were tested whole by 2–3 rays every frame
+  for (const m of [...slabs, ...bunkers]) {
+    for (const p of raycastProxies(m, 24)) { if (p !== m) root.add(p); collidables.push(p); }
+  }
   dress.build(root, 'dressing', { chunked: true });
   return { collidables, root };
 }
@@ -354,7 +377,8 @@ function jungleHill(b: StaticBatch, { at, z1, hw, top }: Frame, rng: Rng, isl: I
   g.computeVertexNormals();
   const hillZ = z1 - 4 + D / 2;
   b.add(M.terrain, g, at(0, top - 0.25, hillZ), 0xffffff, false);
-  const blob = new THREE.IcosahedronGeometry(1, 2);
+  // detail 1 (80 tris): backdrop canopy seen from 60 m+; detail 2 was 356k tris map-wide for no visible gain
+  const blob = new THREE.IcosahedronGeometry(1, 1);
   {
     const bp = blob.getAttribute('position');
     for (let i = 0; i < bp.count; i++) {

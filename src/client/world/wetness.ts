@@ -40,14 +40,23 @@ export function wetOverride(): number | null {
 
 let puddleNoise: F | null = null;
 
+export type WetOpts = { porosity?: number; puddles?: boolean; rgba?: boolean };
+/**
+ * A material's nodes from before applyWet, plus its options: a later layer that rebuilds colour / roughness (the
+ * weathering, weathering.ts) starts from the dry nodes and re-applies the wet on top, so rain still darkens and
+ * smooths rust and grime instead of being painted over by them.
+ */
+export const DRY = new WeakMap<THREE.Material, { color: THREE.Node; rough: THREE.Node; normal: THREE.Node | null; opts: WetOpts }>();
+
 /**
  * Make a material's colour / roughness / normal respond to `wetness`. `porosity` scales the darkening (1 = sand,
  * concrete; low for metal and paint), `puddles` lets standing water collect on its flat, up-facing parts.
  * Call after the material's colorNode / roughnessNode (and normalNode, for puddles) are set; `rgba` when colorNode
  * is a vec4.
  */
-export function applyWet(m: THREE.MeshStandardNodeMaterial, o: { porosity?: number; puddles?: boolean; rgba?: boolean } = {}) {
+export function applyWet(m: THREE.MeshStandardNodeMaterial, o: WetOpts = {}) {
   if (!m.colorNode || !m.roughnessNode) throw new Error(`[world/wetness] ${m.name}: set colorNode and roughnessNode before applyWet`);
+  DRY.set(m, { color: m.colorNode, rough: m.roughnessNode, normal: m.normalNode, opts: o });
   const up = normalWorldGeometry.y.clamp(0, 1);
   // rain soaks what faces the sky; walls only get the run-off
   const w = wetness.mul(mix(float(0.35), float(1), up));

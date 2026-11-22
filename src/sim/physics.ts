@@ -1,13 +1,17 @@
 import * as dm from './dmath';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { HEAD, PIECES, PLAYER } from './constants';
+import { HEAD, PIECES, PLAYER, TICK_HZ } from './constants';
 import { generatorZone, islandNoBuildZones, potionZone, type NoBuildZone } from './building';
 import { bunkerSlitBoxes, bunkerWallBoxes, harborCraneBoxes, type IslandLayout, type MapDef } from './map';
 import { defaultPotionShops } from './potions';
+import { propColliderDesc, type PropSpawn } from './props';
 import type { PieceState, Vec3 } from './types';
 import { v3 } from './vec';
 
-export type HitTarget = { type: 'player'; id: number } | { type: 'piece'; id: number } | { type: 'world' };
+/** `prop`: a tier A gameplay prop (props.ts): solid for players and shots, never ground for building or support. */
+export type HitTarget = { type: 'player'; id: number } | { type: 'piece'; id: number } | { type: 'prop'; id: number } | { type: 'world' };
+/** A player walked into a prop this tick (Physics.movePlayer records these for PropSim). */
+export type PropPush = { prop: number; player: number; dir: Vec3; speed: number; feetY: number };
 /** `part`: for player hits, whether the ray went through the head sphere (HEAD) or just the body. */
 export type RayHit = { dist: number; point: Vec3; hit: HitTarget; part?: 'head' | 'body' };
 /** Physics.save(): collider handles by entity, and the Rapier world snapshot. */
@@ -25,6 +29,10 @@ export type PhysicsSave = {
   anchors?: number[];
   zones?: [string, NoBuildZone[]][];
   dirty: boolean;
+  /** gameplay props' query colliders (props.ts), push recording */
+  props?: [number, number, PropSpawn][];
+  recordPushes?: boolean;
+  pushes?: PropPush[];
 };
 
 /** Distance along a unit ray to a sphere, or null if it misses. */
@@ -42,6 +50,8 @@ let initPromise: Promise<void> | null = null;
 const ensureInit = () => (initPromise ??= RAPIER.init());
 
 const ISLAND_DEPTH = 12;
+/** Sim ticks per second: movePlayer's `desired` is one tick of motion. */
+const PUSH_HZ = TICK_HZ;
 const CAPSULE_HALF = (PLAYER.height - 2 * PLAYER.radius) / 2;
 const quatY = (r: number) => ({ x: 0, y: dm.sin(r / 2), z: 0, w: dm.cos(r / 2) });
 
@@ -65,6 +75,11 @@ export class Physics {
   /** Collider handles of static structures that anchor pieces built against them (cranes). */
   private readonly anchors = new Set<number>();
   private players = new Map<number, RAPIER.Collider>();
+  /** Tier A props: fixed mirror colliders posed from the sim's prop world (or the snapshot, on clients). */
+  private props = new Map<number, { c: RAPIER.Collider; spawn: PropSpawn }>();
+  /** The sim turns this on (PropSim): movePlayer then records pushes into props. */
+  recordPushes = false;
+  private pushes: PropPush[] = [];
   /** Standing pier sections (MapDef.docks) by dock id; a broken one is removed. */
   private docks = new Map<number, RAPIER.Collider>();
   private dirty = true;
@@ -99,6 +114,9 @@ export class Physics {
     for (const [id, y] of this.pieceBaseY) ph.pieceBaseY.set(id, y);
     for (const h of this.anchors) ph.anchors.add(h);
     for (const [g, z] of this.zones) ph.zones.set(g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } })));
+    for (const [id, x] of this.props) ph.props.set(id, { c: same(x.c), spawn: x.spawn });
+    ph.recordPushes = this.recordPushes;
+    ph.pushes = this.pushes.map((p) => ({ ...p, dir: { ...p.dir } }));
     ph.dirty = this.dirty;
     return ph;
   }
@@ -117,6 +135,9 @@ export class Physics {
       anchors: [...this.anchors],
       zones: [...this.zones].map(([g, z]) => [g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } }))]),
       dirty: this.dirty,
+      props: [...this.props].map(([id, x]) => [id, x.c.handle, x.spawn]),
+      recordPushes: this.recordPushes,
+      pushes: this.pushes.map((x) => ({ ...x, dir: { ...x.dir } })),
     };
   }
 
@@ -136,6 +157,9 @@ export class Physics {
     for (const [id, k] of s.pieceKinds) ph.pieceKinds.set(id, k);
     for (const [id, h] of s.players) ph.players.set(id, col(h));
     for (const h of s.slits) ph.slits.add(h);
+    for (const [id, h, spawn] of s.props ?? []) ph.props.set(id, { c: col(h), spawn });
+    ph.recordPushes = s.recordPushes ?? false;
+    ph.pushes = (s.pushes ?? []).map((x) => ({ ...x, dir: { ...x.dir } }));
     for (const [id, h] of s.docks ?? []) ph.docks.set(id, col(h));
     for (const [id, y] of s.pieceBaseY ?? []) ph.pieceBaseY.set(id, y);
     for (const h of s.anchors ?? []) ph.anchors.add(h);
@@ -193,7 +217,61 @@ export class Physics {
     // Harbor cranes: solid, and anchors (a piece touching one is supported, like one on the ground).
     if (Array.isArray(mapOrIslands) || mapOrIslands.template === 'harbor')
       for (const b of harborCraneBoxes(def.islands)) ph.anchors.add(ph.addStaticBox(b.center, b.half, b.rotY).handle);
+    for (const s of (Array.isArray(mapOrIslands) ? [] : mapOrIslands.props ?? [])) ph.addProp(s);
     return ph;
+  }
+
+  /** A prop's mirror collider at its spawn pose. */
+  addProp(s: PropSpawn): void {
+    const desc = propColliderDesc(s.kind).setTranslation(s.pos.x, s.pos.y, s.pos.z)
+      .setRotation({ x: s.rot[0], y: s.rot[1], z: s.rot[2], w: s.rot[3] });
+    this.props.set(s.id, { c: this.track(this.world.createCollider(desc), { type: 'prop', id: s.id }), spawn: s });
+  }
+
+  /** Move prop `id`'s mirror collider (sim: after each prop step; client: from snapshots). */
+  setPropPose(id: number, pos: Vec3, rot: { x: number; y: number; z: number; w: number }): void {
+    const p = this.props.get(id);
+    if (!p) return;
+    const t = p.c.translation(), r = p.c.rotation();
+    if (t.x === pos.x && t.y === pos.y && t.z === pos.z && r.x === rot.x && r.y === rot.y && r.z === rot.z && r.w === rot.w) return;
+    p.c.setTranslation(pos);
+    p.c.setRotation(rot);
+    this.dirty = true;
+  }
+
+  /** Client: pose every prop from a snapshot's `props` (displaced ones); the rest go back to their spawn. */
+  setPropPoses(poses: { id: number; p: [number, number, number]; q: [number, number, number, number] }[] | undefined): void {
+    const moved = new Set<number>();
+    for (const x of poses ?? []) { moved.add(x.id); this.setPropPose(x.id, v3(x.p[0], x.p[1], x.p[2]), { x: x.q[0], y: x.q[1], z: x.q[2], w: x.q[3] }); }
+    for (const [id, p] of this.props) if (!moved.has(id)) {
+      const s = p.spawn;
+      this.setPropPose(id, s.pos, { x: s.rot[0], y: s.rot[1], z: s.rot[2], w: s.rot[3] });
+    }
+  }
+
+  /** Pushes recorded since the last call (PropSim drains these every tick). */
+  /** Whether the query world must step before the next query (checkpoint restore puts it back after PropSim replays). */
+  get syncPending(): boolean { return this.dirty; }
+  set syncPending(d: boolean) { this.dirty = d; }
+
+  takePushes(): PropPush[] {
+    const out = this.pushes;
+    this.pushes = [];
+    return out;
+  }
+
+  /** Every static world collider (islands, bunkers, slit plugs, cover, stations): PropSim copies them. */
+  forEachStaticCollider(f: (shape: RAPIER.Shape, pos: Vec3, rot: RAPIER.Rotation) => void): void {
+    this.world.forEachCollider((c) => {
+      if (this.entities.get(c.handle)?.type !== 'world') return;
+      const t = c.translation();
+      f(c.shape, v3(t.x, t.y, t.z), c.rotation());
+    });
+  }
+
+  /** A placed piece's collider (PropSim mirrors pieces into its own world). */
+  pieceCollider(id: number): RAPIER.Collider | undefined {
+    return this.pieces.get(id);
   }
 
   private track(c: RAPIER.Collider, t: HitTarget) {
@@ -317,10 +395,27 @@ export class Physics {
     this.cc.computeColliderMovement(c, desired);
     const m = this.cc.computedMovement();
     const t = c.translation();
+    if (this.recordPushes && this.props.size) this.notePushes(id, t, desired);
     const next = { x: t.x + m.x, y: t.y + m.y, z: t.z + m.z };
     c.setTranslation(next);
     this.dirty = true;
     return { pos: v3(next.x, next.y - PLAYER.height / 2, next.z), grounded: this.cc.computedGrounded() };
+  }
+
+  private notePushes(id: number, t: Vec3, desired: Vec3) {
+    const h = Math.hypot(desired.x, desired.z);
+    if (h < 1e-3) return;
+    const dir = v3(desired.x / h, 0, desired.z / h);
+    for (let i = 0; i < this.cc.numComputedCollisions(); i++) {
+      const col = this.cc.computedCollision(i);
+      const hit = col?.collider ? this.entities.get(col.collider.handle) : undefined;
+      if (hit?.type !== 'prop' || this.pushes.some((p) => p.prop === hit.id && p.player === id)) continue;
+      const pc = col!.collider!.translation();
+      const tx = pc.x - t.x, tz = pc.z - t.z, tl = Math.hypot(tx, tz) || 1;
+      if ((tx * dir.x + tz * dir.z) / tl < 0.2) continue;
+      // desired is per tick; speed in m/s at the sim's fixed step
+      this.pushes.push({ prop: hit.id, player: id, dir, speed: h * PUSH_HZ, feetY: t.y - PLAYER.height / 2 });
+    }
   }
 
   /** Like movePlayer, but leaves the collider where it was (client render-time extrapolation). */
@@ -388,7 +483,7 @@ export class Physics {
     const ray = new RAPIER.Ray({ x, y: yFrom, z }, { x: 0, y: -1, z: 0 });
     const own = ignorePiece !== undefined ? this.pieces.get(ignorePiece) : undefined;
     const h = this.world.castRay(ray, maxDrop, solid, undefined, undefined, own, undefined,
-      (c) => this.entities.get(c.handle)?.type !== 'player');
+      (c) => { const t = this.entities.get(c.handle)?.type; return t !== 'player' && t !== 'prop'; }); // props are never ground
     if (!h) return null;
     return { y: yFrom - h.timeOfImpact, hit: this.entities.get(h.collider.handle) ?? { type: 'world' } };
   }

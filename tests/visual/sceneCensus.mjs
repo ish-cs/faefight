@@ -7,7 +7,7 @@ const url = process.env.GAME_URL ?? 'http://localhost:5299';
 const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync'] });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
 page.setDefaultTimeout(180_000);
-await page.addInitScript((q) => { localStorage.setItem('faefight.settings.v1', JSON.stringify({ video: { quality: q, dynamicResolution: false } })); }, quality);
+await page.addInitScript((q) => { localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q, dynamicResolution: false } })); }, quality);
 await page.goto(`${url}/?debug=1&bots=7${process.env.STRESS ? `&stress=${process.env.STRESS}` : ''}`);
 await page.getByTestId('play-easy').click();
 await page.waitForFunction(() => !window.__faefightLoading?.visible() && window.__faefight?.snapshot?.(), null, { timeout: 180_000 });

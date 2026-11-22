@@ -53,6 +53,11 @@ const SCENARIOS: Record<string, Setup> = {
   'a container across a doorway (the others plugged with wood)': (m) => {
     plug(m, 0, 'container'); plug(m, 1, 'wood'); plug(m, 2, 'wood');
   },
+  // Not a seal (a sandbag is below SEAL.blockHeight), but nobody gets over it either: standing on it puts the head
+  // above the lintel. A pistol can't touch metal, so the sandbag has to be shot out (ffa8-pro seed 17: 81 s sit).
+  'metal in two doorways and a lone sandbag in the third (pistol only)': (m) => {
+    plug(m, 0, 'metal'); plug(m, 2, 'metal'); plug(m, 1, 'sandbags');
+  },
 };
 
 describe('escaping my own bunker (real physics)', () => {

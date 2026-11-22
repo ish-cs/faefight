@@ -12,6 +12,18 @@ import { LOD_QUALITY_SCALE, type QualityName, selectLod } from './lodMath';
 
 /** Small shadow casters live on this layer: they cast into the near cascades only (sky.ts sets the far masks). */
 export const SMALL_CASTER_LAYER = 4;
+/** Tiny moving casters (gameplay props, debris): drawn by the camera, cast into the first shadow cascade only. */
+export const TINY_CASTER_LAYER = 5;
+/**
+ * Shadow-only casters (never drawn by the camera) for the first shadow cascade: one merged shadow batch can
+ * stand in for several camera meshes (gameProps.ts: one shadow draw for every prop material).
+ */
+export const SHADOW_ONLY_FIRST_LAYER = 6;
+/**
+ * Materials whose static parts never cast shadows (StaticBatch.add drops `cast`): self-lit panels, LEDs and lamp
+ * lenses sit on or inside other surfaces, so their shadow is invisible but each is one more draw per cascade.
+ */
+export const NO_SHADOW = new WeakSet<THREE.Material>();
 
 export interface LodTarget {
   /** Re-pick levels for a camera at `cam`; `scale` multiplies every registered distance. */

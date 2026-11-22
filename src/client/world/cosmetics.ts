@@ -16,9 +16,17 @@ const MODELS: Record<CosmeticKind, { build: (b: StaticBatch) => void; cast: bool
 };
 // No red: red drums are the explosive ones (hazards.ts).
 const BARREL_COLORS = [0x1f5fa8, 0x6b6448, 0x46505a, 0x2f6b3a];
+const GRIME = new THREE.Color(0x5e5244), CHALK = new THREE.Color(0xc8c4b8);
+/** Sun-faded / grimy paint per barrel (instance tint; the weathered paint material adds rust and chips on top). */
+function fadedBarrel(c: THREE.Color, id: number) {
+  const h = ((id * 2654435761) >>> 0) / 4294967296, h2 = ((id * 40503 + 17) % 97) / 97;
+  c.lerp(GRIME, 0.12 + 0.3 * h); // dirt and oil
+  c.lerp(CHALK, 0.08 + 0.18 * h2); // chalky UV fade
+  return c;
+}
 /** Per-instance tint so a row of drums / crates doesn't look cloned. */
 const tint = (d: CosmeticDef, c: THREE.Color) => {
-  if (d.kind === 'barrel') return c.setHex(BARREL_COLORS[d.id % BARREL_COLORS.length]);
+  if (d.kind === 'barrel') return fadedBarrel(c.setHex(BARREL_COLORS[d.id % BARREL_COLORS.length]), d.id);
   if (d.kind === 'crate') return c.setScalar(0.82 + ((d.id * 37) % 7) * 0.04);
   return c.setScalar(1);
 };
@@ -63,6 +71,7 @@ export class CosmeticLayer {
         name: `cosmetic:${kind}`,
         levels: [{ parts, maxDist: IMPOSTOR_FROM }, { parts: null, impostor: { views: 8, cell: tall ? 128 : 64 }, maxDist: 4000 }],
         small: !tall,
+        tiny: !tall, // crates, barrels, fences, bollards: first-cascade shadows like the gameplay props
         chunk: CHUNK,
       });
       for (const d of list) {
