@@ -919,11 +919,13 @@ export class Bot {
   /**
    * Teams, the push lead at the bridge head (the rival island walkable, not on it yet): a teammate pushing the same
    * rival still more than waitM further back is worth waiting for, up to waitSec per push (then a 30 s break), so
-   * we step onto their island together. Null when someone is with me already, or I'm the defender.
+   * we step onto their island together. Null when someone is with me already, I'm the defender, or the rival is down.
    */
   private waitFor(c: Ctx): AllyStatus | null {
     const v = c.view, T = this.P.team;
     if (!v.allies || this.defender || T.waitSec <= 0 || !c.rival || !c.rivalIsl || !c.reach || c.on === c.rivalIsl.index) return null;
+    // Their owner is down (respawn window): that's a race, not a wait.
+    if (!c.rival.alive) return null;
     const mine = dist2D(c.me.pos, c.rivalIsl.center);
     if (mine > c.rivalIsl.radius + WAIT_HEAD_M) return null;
     const since = v.now - this.waitSince;
