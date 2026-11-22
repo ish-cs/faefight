@@ -6,6 +6,7 @@ import { nextPurchase, PLAIN_STYLE, shoppingPlan } from '../../src/sim/bots/plan
 import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type PlayerInput } from '../../src/sim/types';
 import { add, forward, scale, v3 } from '../../src/sim/vec';
+import { unarmed } from './unarmed';
 
 const player = (cash = 0, island = 0) => {
   const p = newPlayer(1, 'p', false, island, v3());
@@ -154,6 +155,7 @@ describe('gun lock', () => {
 
   test('in a match: lock a pistol, die, respawn with it in slot 1; lost on death as normal', async () => {
     const m = await Match.create(humans1v1);
+    unarmed(m);
     const yaw = m.map[0].bunker.facingYaw;
     m.debugGive(1, { cash: 1000 });
     m.debugTeleport(1, add(m.map[0].shop, scale(forward(yaw), 1.5)));
