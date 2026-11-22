@@ -65,6 +65,9 @@ type SeatOut = {
   difficulty: Difficulty; kills: number; deaths: number; aliveSec: number; attackSec: number;
   idleHome: number; longestHomeIdle: number; hitDists: number[]; eliminatedAt: number | null;
   archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
+  /** Movement: water deaths nobody caused; first time on another player's island (s); alive time ≥ 1 m above the
+   *  ground of the land under me (s); Bot.parkourStats where the ref has it (jumps, fails, balks, climbs, decksSaved, rushes). */
+  drowns?: number; enemyIslandAt?: number | null; highSec?: number; parkour?: Record<string, number>;
 };
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
@@ -91,7 +94,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const { diffs } = seatsFor(scenario, seed);
   // MEASURE_MAX_SEC: cut games short (smoke tests of this script only; real measurements never set it).
   const maxSec = Number(process.env.MEASURE_MAX_SEC) || seatsFor(scenario, seed).maxSec;
-  type Brain = { currentGoal?: string; personality?: { archetype: string; traits: Record<string, number> } };
+  type Brain = { currentGoal?: string; personality?: { archetype: string; traits: Record<string, number> }; parkourStats?: Record<string, number> };
   const brains: Brain[] = [];
   const BotCtor = Bot as unknown as new (...a: unknown[]) => Brain;
   const pers = await import('../../src/sim/bots/personality') as unknown as { ARCHETYPES: readonly string[]; PRESETS: Record<string, Record<string, number>> };
@@ -111,7 +114,15 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const seats: SeatOut[] = diffs.map((d, i) => ({
     difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
     archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0,
+    drowns: 0, enemyIslandAt: null, highSec: 0,
   }));
+  // Land under a point: player islands (their index) and the center island (-1); null over water or a bridge.
+  const ctr = (m as unknown as { def?: { center?: { center: { x: number; z: number }; radius: number; groundY: number } } }).def?.center;
+  const landAt = (x: number, z: number): { index: number; g: number } | null => {
+    for (const i of m.map) if (Math.hypot(x - i.center.x, z - i.center.z) <= i.radius - 0.1) return { index: i.index, g: i.groundY };
+    if (ctr && Math.hypot(x - ctr.center.x, z - ctr.center.z) <= ctr.radius - 0.1) return { index: -1, g: ctr.groundY };
+    return null;
+  };
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, firstSeal: number | null = null;
@@ -127,6 +138,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (!p.alive || p.breakoutUntil !== null) continue;
         const s = seats[p.id - 1];
         s.aliveSec += dt;
+        const land = landAt(p.pos.x, p.pos.z);
+        if (land && land.index >= 0 && land.index !== p.island && s.enemyIslandAt === null) s.enemyIslandAt = snap.time;
+        if (land && p.pos.y - land.g >= 1) s.highSec! += dt;
         const goal = brains[p.id - 1]?.currentGoal;
         if (goal && ATTACK_GOALS.has(goal)) s.attackSec += dt;
         const b = bunkers[p.island];
@@ -151,6 +165,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       } else if (e.type === 'kill') {
         const v = e.data.victim as number, k = e.data.killer as number | null;
         seats[v - 1].deaths++;
+        if (e.data.inWater && e.data.killer == null && !e.data.cause) seats[v - 1].drowns!++;
         if (k != null && k !== v) seats[k - 1].kills++;
       } else if (e.type === 'sealed') {
         const by = e.data.by as number | null | undefined;
@@ -166,6 +181,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
     }
   }
   const msPerTick = (performance.now() - w0) / Math.max(1, ticks);
+  seats.forEach((x, i) => { const st = brains[i]?.parkourStats; if (st) x.parkour = { ...st }; });
   // Rapier worlds live in WASM memory and are never garbage collected.
   (m as unknown as { physics?: { world?: { free?: () => void } } }).physics?.world?.free?.();
   const winner = snap.winner !== null && snap.winner > 0 ? snap.winner : null;
@@ -214,6 +230,18 @@ export function placements(g: GameOut): number[] {
 
 type Check = { name: string; pass: boolean; value: string };
 type Share = { share: number; ci95: number; games: number };
+function movesOf(games: GameOut[]): NonNullable<ScenarioSummary['moves']> {
+  const seats = games.flatMap((g) => g.seats), n = Math.max(1, games.length);
+  const alive = seats.reduce((a, x) => a + x.aliveSec, 0) || 1;
+  const pk = (k: string) => seats.reduce((a, x) => a + (x.parkour?.[k] ?? 0), 0) / n;
+  return {
+    jumps: pk('jumps'), fails: pk('fails'), balks: pk('balks'), climbs: pk('climbs'), decksSaved: pk('decksSaved'), rushes: pk('rushes'),
+    drowns: seats.reduce((a, x) => a + (x.drowns ?? 0), 0) / n,
+    enemyIslandMedianSec: median(seats.map((x) => x.enemyIslandAt).filter((t): t is number => t !== null && t !== undefined)),
+    highPct: (100 * seats.reduce((a, x) => a + (x.highSec ?? 0), 0)) / alive,
+  };
+}
+
 export type ScenarioSummary = {
   scenario: Scenario; games: number; seeds: number[]; decisive: number; noWinner: number;
   winsByDifficulty: Record<string, number>; medianPreSdElims: number | null; medianEngagementM: number | null;
@@ -225,6 +253,8 @@ export type ScenarioSummary = {
   ladder: (Share & { higher: Difficulty; lower: Difficulty }) | null;
   /** FFAs with more than one tier: mean final placement per tier (1 = won), its 95% CI and number of seats. */
   placementByTier: Partial<Record<Difficulty, { mean: number; ci95: number; n: number }>> | null;
+  /** Movement per game (sums over seats): parkour counts, uncaused drownings, median first time on an enemy island, high-ground share of alive time. */
+  moves?: { jumps: number; fails: number; balks: number; climbs: number; decksSaved: number; rushes: number; drowns: number; enemyIslandMedianSec: number | null; highPct: number };
   shipCheck: { pass: boolean | null; checks: Check[] };
 };
 
@@ -263,7 +293,7 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     avgMinutes: games.reduce((a, g) => a + g.time, 0) / Math.max(1, games.length) / 60,
     msPerTick: games.reduce((a, g) => a + g.msPerTick, 0) / Math.max(1, games.length),
     maxWallSec: Math.max(0, ...games.map((g) => g.wallSec)),
-    proVsHard, ladder, placementByTier,
+    proVsHard, ladder, placementByTier, moves: movesOf(games),
     shipCheck: { pass: null, checks: [] },
   };
   // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%; the ladder bar here is 80% per step, the steward hand-off rule).
@@ -294,6 +324,15 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '| scenario | games | decisive < 15:00 | median elims < 15:00 | median engagement | attack | home | median first seal | higher tier wins (95% CI) | avg length | ship check |',
     '|---|---|---|---|---|---|---|---|---|---|---|',
     ...sums.map((s) => `| ${s.scenario} | ${s.games} | ${s.decisive}/${s.games} | ${s.medianPreSdElims ?? '-'} | ${s.medianEngagementM ?? '-'} m | ${pct(s.attackPct)} | ${pct(s.homePct)} | ${secs(s.medianFirstSealSec)} (${s.gamesWithSeal}/${s.games} games) | ${s.ladder ? `${(100 * s.ladder.share).toFixed(0)}% ± ${(100 * s.ladder.ci95).toFixed(0)}` : '-'} | ${s.avgMinutes.toFixed(1)} min | ${s.shipCheck.pass === null ? 'n/a' : s.shipCheck.pass ? '✅ pass' : '❌ fail'} |`),
+    '',
+    '### Movement (per game)',
+    '',
+    '| scenario | jumps | jump fails | balks | climbs | decks saved | ramp-rushes | drownings | median first on an enemy island | high ground |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+    ...sums.map((s) => {
+      const mv = s.moves, f = (x: number | undefined) => (x === undefined ? '-' : x.toFixed(2));
+      return `| ${s.scenario} | ${f(mv?.jumps)} | ${f(mv?.fails)} | ${f(mv?.balks)} | ${f(mv?.climbs)} | ${f(mv?.decksSaved)} | ${f(mv?.rushes)} | ${f(mv?.drowns)} | ${secs(mv?.enemyIslandMedianSec ?? null)} | ${mv ? `${mv.highPct.toFixed(1)}%` : '-'} |`;
+    }),
     '',
     '### Ship-check details',
     ...sums.flatMap((s) => s.shipCheck.checks.map((c) => `- ${s.scenario}: ${c.pass ? '✅' : '❌'} ${c.name} (${c.value})`)),
