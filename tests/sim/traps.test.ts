@@ -92,6 +92,28 @@ describe('spike traps', () => {
     expect(kill.data).toMatchObject({ victim: 2, killer: 1, via: 'trap' });
   });
 
+  test('teams: a teammate walks over your trap untouched (it does not fire); an enemy does not', async () => {
+    // 2v2v2v2 with 3 players = three teams of one, so pick: players 1 and 2 on team 0, player 3 on team 1.
+    const m = await Match.create({
+      players: [{ name: 'p1', isBot: false, team: 0 }, { name: 'p2', isBot: false, team: 0 }, { name: 'p3', isBot: false, team: 1 }],
+      map: 'harbor', seed: 1, settings: { startCash: 50, suddenDeathSec: 900, genMult: 1, teamMode: 2 },
+    });
+    expect(friendly(1, { id: 2, team: 0 }, 0)).toBe(true);
+    expect(friendly(1, { id: 3, team: 1 }, 0)).toBe(false);
+    const spot = openSpot(m);
+    m.debugGive(1, { traps: 1 });
+    stand(m, 1, v3(spot.x + 2, spot.y, spot.z));
+    act(m, 1, { trap: placeReq(spot) });
+    stand(m, 1, v3(spot.x + 3, spot.y, spot.z));
+    stand(m, 2, spot);
+    const mate = ticks(m, TRAP.armSec + 1);
+    expect(mate.events.filter((e) => e.type === 'hit' || (e.type === 'trap' && e.data.what === 'fired'))).toHaveLength(0);
+    stand(m, 2, v3(spot.x - 3, spot.y, spot.z));
+    stand(m, 3, spot);
+    const foe = ticks(m, 0.5);
+    expect(foe.events.some((e) => e.type === 'hit' && e.data.target === 3 && e.data.weapon === 'trap')).toBe(true);
+  });
+
   test('limit per player, spacing, and only flat reachable floors', async () => {
     const m = await match();
     const ph = physicsOf(m);

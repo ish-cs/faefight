@@ -445,10 +445,10 @@ export class Physics {
 
   /** Like raycast, but players are ignored (only the world and pieces): lag compensation tests them itself. */
   /** Shots against everything but players (lag-compensated hits test players separately); passes firing slits. */
-  raycastStatic(origin: Vec3, dir: Vec3, maxDist: number): RayHit | null {
+  raycastStatic(origin: Vec3, dir: Vec3, maxDist: number, throughSlits = true): RayHit | null {
     this.sync();
     const h = this.world.castRay(new RAPIER.Ray(origin, dir), maxDist, true, undefined, undefined, undefined, undefined,
-      (c) => this.entities.get(c.handle)?.type !== 'player' && !this.slits.has(c.handle));
+      (c) => this.entities.get(c.handle)?.type !== 'player' && !(throughSlits && this.slits.has(c.handle)));
     if (!h) return null;
     const t = h.timeOfImpact;
     return { dist: t, point: v3(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t), hit: this.entities.get(h.collider.handle) ?? { type: 'world' } };

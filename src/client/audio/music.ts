@@ -7,6 +7,7 @@
 //   per note, so playing music costs no garbage and no graph churn; changing mood only moves gains.
 
 import type { Snapshot, Vec3 } from '../../sim/types';
+import { isAlly } from '../../sim/teams';
 
 export type Mood = 'off' | 'calm' | 'tense' | 'intense';
 
@@ -43,6 +44,9 @@ export class MusicDirector {
             || (!!d.to && d2(d.to as Vec3, me.pos) < NEAR_IMPACT);
         } else if (e.type === 'hit') {
           fight = d.target === me.id || d.by === me.id;
+          // Teams: damage between teammates isn't a fight (none happens with friendly fire off; defence in depth).
+          const by = s.players.find((p) => p.id === d.by), target = s.players.find((p) => p.id === d.target);
+          if (fight && by && target && by.id !== target.id && isAlly(by, target)) fight = false;
         } else if (e.type === 'explosion') {
           fight = !!d.pos && d2(d.pos as Vec3, me.pos) < EXPLOSION_RADIUS;
         }

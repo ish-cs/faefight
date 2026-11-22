@@ -56,7 +56,9 @@ const DICT = [
   'action', 'goal', 'reason', 'steps', 'step', 'fightOdds', 'thought',
   'burning', 'fire', 'view',
   'emote', 'quip', 'wheel',
-  // appended (keep earlier indices stable): gameplay props
+  'team',
+  'hook', 'st', 't0', 'tgt', 'pc', 'hookReadyAt', 'pull', 'left', 'yank', 'grapple', 'grapples', 'phase',
+  // appended after main's keys (keep earlier indices stable): gameplay props
   'pr', 'p', 'q',
 ];
 

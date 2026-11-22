@@ -30,6 +30,7 @@ export class InputAccumulator {
     if (input.moveSlot) p.moveSlot = input.moveSlot;
     if (input.useMedkit) p.useMedkit = true;
     if (input.drink) p.drink = true;
+    if (input.grapple) { p.grapple = true; if (input.viewT !== undefined) p.viewT = input.viewT; }
     if (input.trap) p.trap = input.trap;
   }
 
@@ -37,7 +38,7 @@ export class InputAccumulator {
     const { trap: _held, ...held } = this.held; // one-shot: only from pending
     const input: PlayerInput = {
       ...held, reload: false, interact: false, throwGrenade: false, placeCharge: false,
-      slot: null, build: null, shop: null, vault: null, drop: null, moveSlot: null, useMedkit: false, drink: false, ...this.pending,
+      slot: null, build: null, shop: null, vault: null, drop: null, moveSlot: null, useMedkit: false, drink: false, grapple: false, ...this.pending,
     };
     this.pending = {};
     return input;

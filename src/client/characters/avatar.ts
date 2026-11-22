@@ -94,6 +94,8 @@ export type AvatarFrame = {
   shield: number;
   /** Sights up (holds the aim pose). */
   ads?: boolean;
+  /** On a grappling hook rope (own hook out): arms up along the aim. */
+  grapple?: boolean;
   /** Reload choreography for this frame (null when not reloading). */
   reload?: ReloadPose | null;
   /** Emote playing, `t` s in (sim clock); null/absent = none. */
@@ -223,6 +225,7 @@ export class Avatar {
   private flash: THREE.Mesh;
   private flashUntil = 0;
   private tag: THREE.Sprite | null = null;
+  private allyTag = false;
   private shieldTag: ReturnType<typeof shieldBar> | null = null;
   private shownShield = 0;
   private bubble: ReturnType<typeof speechBubble> | null = null;
@@ -300,6 +303,19 @@ export class Avatar {
       this.group.add(this.shieldTag.sprite);
     }
     this.materials.push(this.hitbox.material as THREE.Material);
+  }
+
+  /** Teams: a teammate's name tag draws through walls (where they are, always). No-op when unchanged. */
+  allyMarker(on: boolean) {
+    if (!this.tag || this.allyTag === on) return;
+    this.allyTag = on;
+    for (const sp of [this.tag, this.shieldTag?.sprite]) {
+      if (!sp) continue;
+      const mat = sp.material as THREE.SpriteNodeMaterial;
+      mat.depthTest = !on;
+      mat.needsUpdate = true;
+      sp.renderOrder = on ? 9 : 6;
+    }
   }
 
   private buildModel(assets: CharacterAssets, p: PlayerState, color: number) {
@@ -427,6 +443,13 @@ export class Avatar {
     this.ragdoll.restore();
     this.ragdoll = null;
     if (this.blob) this.blob.visible = true;
+  }
+
+  /** World position of the right hand (where a grappling rope starts); null before the model loads or hidden. */
+  handPoint(out: THREE.Vector3): THREE.Vector3 | null {
+    if (!this.hand || !this.group.visible) return null;
+    this.hand.updateWorldMatrix(true, false);
+    return out.setFromMatrixPosition(this.hand.matrixWorld);
   }
 
   /** World position of this avatar's muzzle or ejection port (null with fists / hidden). */
@@ -603,6 +626,8 @@ export class Avatar {
       if (this.lowReady > 0.01) this.bend(this.upperArm, -LOW_READY_RAD * this.lowReady);
       // Off hand drops to the magazine during the swap.
       if (r && r.hand > 0) this.bend(this.upperArmL, -0.45 * r.hand);
+      // Grappling: both arms up along the rope (the spine already carries the look pitch).
+      if (f.grapple) { this.bend(this.upperArm, 1.45); this.bend(this.upperArmL, 1.2); }
       // Breathing (deeper after running) and the additive flinch: lean back + twist, springing out.
       this.effort += ((speed > 4 ? 1 : 0) - this.effort) * Math.min(1, dt * (speed > 4 ? 0.5 : 0.15));
       this.bend(this.chest, breath(now / 1000, this.effort));
@@ -719,6 +744,10 @@ export class CharacterSystem {
     return this.avatars.get(id)?.gunPoint(which, out) ?? null;
   }
 
+  handPoint(id: number, out: THREE.Vector3): THREE.Vector3 | null {
+    return this.avatars.get(id)?.handPoint(out) ?? null;
+  }
+
   onEvent(e: MatchEvent) {
     const now = performance.now();
     // echo = the host confirming a shot we already showed (client shot prediction): animated once.
@@ -774,11 +803,13 @@ export class CharacterSystem {
       this.frustum.setFromProjectionMatrix(_proj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     }
     const simNow = simTime + Math.min(0.1, (now - this.snapAt) / 1000);
+    const myTeam = players.find((p) => p.id === humanId)?.team;
     for (const p of players) {
       // Not perceivable (interest management): keep the avatar, just don't show it — rebuilding a skinned
       // model each time someone steps round a corner is a frame hitch.
       if (hidden?.includes(p.id)) { const h = this.avatars.get(p.id); if (h) { h.group.visible = false; h.alive = false; } continue; }
       const a = this.avatar(p, humanId);
+      a.allyMarker(myTeam !== undefined && p.team === myTeam && p.id !== humanId);
       if (cam) {
         const pos = a.group.position;
         a.lodDist = cam.position.distanceTo(pos);
@@ -793,6 +824,7 @@ export class CharacterSystem {
         pos: m.pos, vel: m.vel, yaw: p.id === humanId ? localYaw : m.yaw, pitch: m.pitch, alive: p.alive, equipped: p.equipped,
         blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0, shield: p.shield ?? 0,
         ads: p.ads,
+        grapple: !!p.hook && p.hook.st !== 3,
         emote: p.emote ? { id: p.emote.id, t: simNow - p.emote.at } : null,
         quip: p.quip && simNow - p.quip.at < QUIP_SHOW_SEC ? p.quip.id : null,
         reload: (() => {

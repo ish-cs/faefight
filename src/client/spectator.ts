@@ -31,9 +31,11 @@ export function flyStep(pos: Vec3, yaw: number, pitch: number, k: FlyKeys, dt: n
   };
 }
 
-/** Who number keys / clicks cycle through: living players other than you, by id. */
-export function followOrder(players: { id: number; alive: boolean }[], humanId: number): number[] {
-  return players.filter((p) => p.alive && p.id !== humanId).map((p) => p.id).sort((a, b) => a - b);
+/** Who number keys / clicks cycle through: living players other than you, by id (teams: your teammates first). */
+export function followOrder(players: { id: number; alive: boolean; team?: number }[], humanId: number): number[] {
+  const mine = players.find((p) => p.id === humanId)?.team;
+  const rank = (p: { team?: number }) => (mine !== undefined && p.team !== mine ? 1 : 0);
+  return players.filter((p) => p.alive && p.id !== humanId).sort((a, b) => rank(a) - rank(b) || a.id - b.id).map((p) => p.id);
 }
 
 type Frame = {

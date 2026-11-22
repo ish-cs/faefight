@@ -13,7 +13,8 @@ import type { WheelId } from '../sim/emotes';
 export type Slot =
   | { kind: 'open' }
   /** ready: a guest's Ready toggle (the host is always ready). color: palette index they picked (unique per lobby). */
-  | { kind: 'human'; name: string; peerId: string; isHost: boolean; spectator?: boolean; ready?: boolean; color?: number }
+  /** team: the side they picked for a teams match (lobby.ts seatTeams balances everyone else). */
+  | { kind: 'human'; name: string; peerId: string; isHost: boolean; spectator?: boolean; ready?: boolean; color?: number; team?: number }
   | { kind: 'bot'; difficulty: Difficulty; name?: string };
 
 export const MAX_PLAYERS = 8;
@@ -46,6 +47,8 @@ export type ClientMsg =
   | { t: 'ready'; ready: boolean }
   /** Lobby: the palette colour the guest wants (host refuses one another player picked). */
   | { t: 'color'; color: number }
+  /** Lobby, teams mode: the team the guest wants (kept while it has room). */
+  | { t: 'team'; team: number }
   /** My ghost / open panel (ViewExtras), for friends spectating me. */
   | { t: 'view'; v: ViewExtras }
   /** Emote / quick-chat wheel pick (sim/emotes.ts); the host rate-limits it to one per 2 s. */
@@ -79,4 +82,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 21; // 21: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 20 (destructible docks)
+export const NET_VERSION = 24; // 24: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 23 (grappling hook)

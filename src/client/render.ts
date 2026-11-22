@@ -21,6 +21,7 @@ import { wetness } from './world/wetness';
 import { playSfx } from './audio/api';
 import type { Surface } from './audio/events';
 import { LootView, lootWarmObjects } from './lootView';
+import { Ropes } from './ropes';
 export { lods } from './world/lod';
 export { pbrStats } from './world/pbr';
 
@@ -74,6 +75,10 @@ export class Renderer {
   readonly traps = new TrapLayer();
   /** Animated shop keepers (characters/npcs.ts). */
   readonly npcs = new NpcSystem(this.scene);
+  /** Grappling hook ropes, one instanced draw (ropes.ts). */
+  private ropes = new Ropes(this.scene);
+  private ropeFrom = new THREE.Vector3();
+  private ropeTo = new THREE.Vector3();
   private pieceGeo = new Map<PieceKind, THREE.BufferGeometry>();
   private fx: Fx[] = [];
   private ghost: THREE.Mesh | null = null;
@@ -541,6 +546,7 @@ export class Renderer {
     }
 
     this.gunFx.update((now - this.snapArrived) / 1000);
+    if (snap) this.drawRopes(snap, motion);
     let nf = 0;
     if (snap) for (const p of snap.players) {
       if (!p.alive || nf >= this.feet.length || snap.hidden?.includes(p.id)) continue;
@@ -557,6 +563,36 @@ export class Renderer {
     this.npcs.frame(dt, this.camera, feet);
     this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
+  }
+
+  /** Every grappling rope out this frame: from the thrower's hand (first person: just below the camera) to its claw. */
+  private drawRopes(snap: Snapshot, motion: (id: number, out: Motion) => Motion | null) {
+    const r = this.ropes;
+    r.begin();
+    const t = this.playT ?? snap.time;
+    for (const p of snap.players) {
+      const h = p.hook;
+      if (!h || !p.alive || snap.hidden?.includes(p.id)) continue;
+      let from = this.characters.handPoint(p.id, this.ropeFrom);
+      if (!from) {
+        if (p.id === this.humanId && !this.replay) {
+          // First person: from the right hand under the camera.
+          from = this.ropeFrom.set(0.22, -0.28, -0.35).applyQuaternion(this.camera.quaternion).add(this.camera.position);
+        } else {
+          const m = motion(p.id, this.motion);
+          if (!m) continue;
+          from = this.ropeFrom.set(m.pos.x, m.pos.y + PLAYER.height * 0.7, m.pos.z);
+        }
+      }
+      let target: THREE.Vector3 | null = null;
+      if (h.st === 2 && h.tgt !== undefined) {
+        const m = motion(h.tgt, this.motion);
+        if (m) target = this.ropeTo.copy(m.pos);
+        else for (const q of snap.players) if (q.id === h.tgt) target = this.ropeTo.set(q.pos.x, q.pos.y, q.pos.z);
+      }
+      r.add(from, h, t, target);
+    }
+    r.end();
   }
 
   /** This frame's totals (world + post + viewmodel); call after the frame's last render. */

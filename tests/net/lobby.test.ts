@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { Lobby } from '../../src/net/lobby';
+import { Lobby, seatTeams } from '../../src/net/lobby';
 import { MAX_PLAYERS } from '../../src/net/protocol';
 
 describe('Lobby', () => {
@@ -205,5 +205,37 @@ describe('bot nicknames in the lobby', () => {
     for (let i = 1; i < 8; i++) l.setSeat(i, { kind: 'bot', difficulty: 'medium' });
     const names = l.slots().map((s) => (s.kind === 'bot' ? s.name : s.kind === 'human' ? s.name : ''));
     expect(new Set(names).size).toBe(8);
+  });
+});
+
+describe('Lobby: teams mode', () => {
+  test('fitSeats grows to the mode with open seats and trims bots, never humans; fillOpen makes bots', () => {
+    const l = new Lobby('Ann', 'p-ann');
+    l.addHuman('Bob', 'p-bob');
+    expect(l.fitSeats(8)).toBe(true);
+    expect(l.slots().length).toBe(8);
+    l.setSeat(7, { kind: 'bot', difficulty: 'hard' });
+    expect(l.fitSeats(6)).toBe(true);
+    expect(l.slots().length).toBe(6);
+    expect(l.slots().filter((s) => s.kind === 'human').length).toBe(2);
+    l.fillOpen('medium');
+    expect(l.slots().filter((s) => s.kind === 'open').length).toBe(0);
+    expect(l.toMatchSetup().players.length).toBe(6);
+  });
+
+  test('team picks reach the setup and seatTeams shows the balanced teams', () => {
+    const l = new Lobby('Ann', 'p-ann');
+    l.addHuman('Bob', 'p-bob');
+    l.fitSeats(6);
+    expect(l.setTeam(1, 0)).toBe(true);
+    expect(l.setTeam(2, 0)).toBe(false); // open seat
+    expect(l.setTeam(1, 9)).toBe(false);
+    l.fillOpen('easy');
+    expect(l.toMatchSetup().players[1].team).toBe(0);
+    // 3v3: Ann auto, Bob picked 0, four bots balance.
+    const teams = seatTeams(l.slots(), 2);
+    expect(teams[1]).toBe(0);
+    expect([0, 1].map((t) => teams.filter((x) => x === t).length)).toEqual([3, 3]);
+    expect(seatTeams(l.slots(), 0).every((t) => t === null)).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 import { CHARGE, CRATE_LOOT, GRENADE, HAZARD, MAP, ROCKET, WEAPONS } from './constants';
 import * as dm from './dmath';
-import { applyPlayerDamage, hitPiece, nearestOnBody, nearestOnPiece, type CombatCtx } from './combat';
+import { applyPlayerDamage, friendlyFire, hitPiece, nearestOnBody, nearestOnPiece, type CombatCtx } from './combat';
 import { emptyInventory } from './economy';
 import { hash01 } from './gunplay';
 import type { CenterIsland, HazardDef, HazardKind, MapDef, StaticBox } from './map';
@@ -298,7 +298,7 @@ export class Hazards {
       }
       const f = (1 - d / R) * shield;
       out.push(...applyPlayerDamage(ctx, pl, s.dmg * f, by, now, { pos: { x: r2(point.x), y: r2(point.y), z: r2(point.z) }, weapon: kind }));
-      if (pl.alive && ctx.onKnockback) {
+      if (pl.alive && ctx.onKnockback && !friendlyFire(ctx, by, pl)) {
         const away = norm(sub(v3(pl.pos.x, pl.pos.y + 0.9, pl.pos.z), c));
         ctx.onKnockback(pl.id, v3(away.x * HAZARD.knock * f, HAZARD.knockUp * f, away.z * HAZARD.knock * f));
       }

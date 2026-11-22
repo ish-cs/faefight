@@ -4,7 +4,8 @@ import type { Difficulty } from '../sim/types';
 import { MAP_NAMES, MAP_TEMPLATES, type MapChoice } from '../sim/map';
 import { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 import { seatSlider, slotToStop, stopToSlot } from './seatSlider';
-import { seatColors } from '../net/lobby';
+import { seatColors, seatTeams } from '../net/lobby';
+import { TEAM_COLORS, TEAM_MODES, isTeamMode } from '../sim/teams';
 import { DEFAULT_SETTINGS, type GameSettings } from '../sim/settings';
 import { GameSettingsPanel } from './gameSettingsUi';
 import { isMuted, toggleMute } from './chatMute';
@@ -17,6 +18,8 @@ export type LobbyActions = {
   setMap(choice: MapChoice): void;
   /** The host's own colour (seat 0). */
   setColor(color: number): void;
+  /** The host's own team (seat 0, teams mode). */
+  setTeam(team: number): void;
   setSettings(s: GameSettings): void;
   start(): void;
   back(): void;
@@ -30,7 +33,7 @@ const diffTag = (d: Difficulty) => (d === 'pro' ? 'PRO' : d);
 const choiceName = (c: MapChoice) => (c === 'random' ? 'Random' : MAP_NAMES[c]);
 
 /** A joined guest's lobby controls. */
-export type GuestActions = { setReady(ready: boolean): void; setColor(color: number): void };
+export type GuestActions = { setReady(ready: boolean): void; setColor(color: number): void; setTeam(team: number): void };
 
 /** Offline-rendered map thumbnail (public/maps, made by tests/visual/mapThumbs.mjs); Random has none. */
 export const mapThumbUrl = (c: MapChoice): string | null => (c === 'random' ? null : `${import.meta.env.BASE_URL}maps/${c}.jpg`);
@@ -103,6 +106,9 @@ export class LobbyUi {
   private feed = el('div', 'lobby-feed');
   private thumb = el('div', 'map-thumb');
   private swatches = el('div', 'swatches');
+  private colorRow = el('div', 'color-row');
+  private teamRow = el('div', 'color-row team-row');
+  private teamBtns = el('div', 'map-picker');
   private readyBtn: HTMLButtonElement | null = null;
   private ready = false;
   private settingsPanel: GameSettingsPanel;
@@ -157,11 +163,15 @@ export class LobbyUi {
     }
     this.settingsPanel = new GameSettingsPanel(DEFAULT_SETTINGS, actions ? (st) => actions.setSettings(st) : null, 'lobby-settings');
     this.swatches.dataset.testid = 'color-swatches';
-    const colorRow = el('div', 'color-row');
+    const colorRow = this.colorRow;
     colorRow.append(el('span', 'label', 'Your colour'), this.swatches);
+    // Teams mode: pick a team instead of a colour (team colours are fixed).
+    this.teamBtns.dataset.testid = 'team-picker';
+    this.teamRow.append(el('span', 'label', 'Your team'), this.teamBtns);
+    this.teamRow.style.display = 'none';
     // Wide screens: seats on the left, map / colour / game settings on the right (the card stays as tall as before).
     const side = el('div', 'lobby-side');
-    side.append(this.mapRow, colorRow, this.settingsPanel.root);
+    side.append(this.mapRow, colorRow, this.teamRow, this.settingsPanel.root);
     const body = el('div', 'lobby-body');
     body.append(this.list, side);
     this.card.append(el('h1', '', 'Lobby'), title, codeRow, hint, body, this.status, this.footer);
@@ -193,8 +203,14 @@ export class LobbyUi {
     this.renderThumb(map);
     this.settingsPanel.value = settings;
     this.settingsPanel.disabled = false;
-    const colors = seatColors(slots);
+    const teamMode = isTeamMode(settings.teamMode);
+    const teams = seatTeams(slots, settings.teamMode);
+    // Teams: every seat shows its team's colour.
+    const colors = teamMode ? teams.map((t) => (t === null ? null : TEAM_COLORS[t])) : seatColors(slots);
     this.renderSwatches(slots, you, colors[you] ?? null);
+    this.colorRow.style.display = teamMode ? 'none' : '';
+    this.teamRow.style.display = teamMode ? '' : 'none';
+    if (teamMode) this.renderTeams(TEAM_MODES[settings.teamMode].teams, teams[you] ?? null);
     const me = slots[you];
     this.ready = me?.kind === 'human' && !!me.ready;
     if (this.readyBtn) {
@@ -228,6 +244,7 @@ export class LobbyUi {
         if (s.isHost) name.append(el('span', 'tagpill', 'host'));
         if (spectator) name.append(Object.assign(el('span', 'tagpill spectator', 'spectator'), { title: 'Hosts the match without playing' }));
         if (i === you) name.append(el('span', 'tagpill you', 'you'));
+        if (teamMode && teams[i] !== null) name.append(Object.assign(el('span', 'tagpill team', `team ${teams[i]! + 1}`), { title: ISLAND_NAMES[TEAM_COLORS[teams[i]!]] }));
         if (!s.isHost) {
           const pill = el('span', s.ready ? 'tagpill ready' : 'tagpill not-ready', s.ready ? 'ready' : 'not ready');
           pill.dataset.testid = `seat-ready-${i}`;
@@ -235,10 +252,11 @@ export class LobbyUi {
         }
       } else if (s.kind === 'bot') {
         name.append(el('span', 'nick', s.name ?? 'Bot'));
+        if (teamMode && teams[i] !== null) name.append(el('span', 'tagpill team', `team ${teams[i]! + 1}`));
         // The host's slider already shows the difficulty.
         name.append(el('span', 'tagpill', a ? 'bot' : `bot · ${diffTag(s.difficulty)}`));
       }
-      else { name.textContent = 'Open'; name.classList.add('open'); }
+      else { name.textContent = teamMode && teams[i] !== null ? `Open · team ${teams[i]! + 1}` : 'Open'; name.classList.add('open'); }
       row.append(dot, name);
       if (a && i > 0 && s.kind !== 'human') {
         const stop = slotToStop(s);
@@ -283,9 +301,11 @@ export class LobbyUi {
       const open = slots.filter((s) => s.kind === 'open').length;
       const players = slots.filter((s) => !(s.kind === 'human' && s.spectator)).length;
       const notReady = slots.filter((s) => s.kind === 'human' && !s.isHost && !s.ready).length;
-      this.startBtn.disabled = players < 2 || open > 0;
+      // Teams mode: open seats are fine, bots take them at start.
+      this.startBtn.disabled = players < 2 || (open > 0 && !teamMode);
       this.startBtn.textContent = startLabel(notReady);
-      this.status.textContent = open > 0 ? `${open} open seat${open > 1 ? 's' : ''} — wait for friends or fill with bots`
+      this.status.textContent = open > 0 && teamMode ? `${open} open seat${open > 1 ? 's' : ''} — bots fill them at start`
+        : open > 0 ? `${open} open seat${open > 1 ? 's' : ''} — wait for friends or fill with bots`
         : players < 2 ? 'Add a seat: you are spectating, so at least 2 other players are needed'
         : notReady > 0 ? `${notReady} not ready${players < slots.length ? ' · you are spectating' : ''}`
         : `${players} players ready${players < slots.length ? ' · you are spectating' : ''}`;
@@ -316,6 +336,22 @@ export class LobbyUi {
     img.onerror = () => { console.warn(`[lobby] map thumbnail missing: ${url}`); img.remove(); };
     this.thumb.title = choiceName(map);
     this.thumb.replaceChildren(img);
+  }
+
+  /** Teams mode: Team 1…k buttons, yours highlighted. */
+  private renderTeams(k: number, mine: number | null) {
+    const pick = this.actions ? this.actions.setTeam : this.guest?.setTeam;
+    this.teamBtns.replaceChildren(...Array.from({ length: k }, (_, t) => {
+      const b = el('button', 'map-opt', `Team ${t + 1}`);
+      b.type = 'button';
+      b.style.borderColor = hex(ISLAND_COLORS[TEAM_COLORS[t]]);
+      b.dataset.testid = `team-${t}`;
+      b.classList.toggle('selected', t === mine);
+      b.setAttribute('aria-pressed', String(t === mine));
+      b.disabled = !pick;
+      if (pick) b.onclick = () => { if (t !== mine) pick(t); };
+      return b;
+    }));
   }
 
   /** Your colour: 8 swatches; ones another human picked are greyed out. `mine` = the colour you play now. */
