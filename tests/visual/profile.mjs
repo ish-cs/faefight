@@ -108,7 +108,7 @@ const { passes, groups: passGroups } = await page.evaluate((byGroup) => new Prom
   gpu._renderObjectDirect = function (object, material, scene, camera, ...rest) {
     const k = camera === r.camera ? (scene === r.scene ? 'camera' : 'camera:other-scene') : camera.isOrthographicCamera && scene === r.scene ? `shadow#${(names.has(camera) ? names : names.set(camera, names.size)).get(camera)}` : `post/other (${object.name || object.type})`;
     if (byGroup && (k === 'camera' || k.startsWith('shadow'))) {
-      const nm = (object.name || object.parent?.name || object.type).replace(/\d+/g, '#').split(':').slice(0, 2).join(':');
+      const nm = (object.name || object.parent?.name || object.type).replace(/\d+/g, '#').split(':').slice(0, byGroup === 'full' ? 4 : 2).join(':');
       const gk = `${k}|${nm}`;
       groups.set(gk, (groups.get(gk) ?? 0) + 1);
     }
@@ -121,7 +121,7 @@ const { passes, groups: passGroups } = await page.evaluate((byGroup) => new Prom
   };
   const tick = () => { if (++frames < 60) requestAnimationFrame(tick); else { gpu._renderObjectDirect = orig; res({ passes: [...tally].map(([k, e]) => [k, Math.round(e.draws / 60), Math.round(e.tris / 60)]), groups: [...groups].map(([k, n]) => [k, +(n / 60).toFixed(1)]).sort((a, b) => b[1] - a[1]) }); } };
   requestAnimationFrame(tick);
-}), arg('groups', '') === '1');
+}), arg('groups', '') === 'full' ? 'full' : arg('groups', '') === '1');
 console.log('-- draws / tris per pass (per frame, 60-frame mean) --');
 for (const [k, d, t] of passes) console.log(`${String(d).padStart(5)} ${String(Math.round(t / 1000)).padStart(6)}kt  ${k}`);
 if (passGroups.length) { console.log('-- draws per frame by pass|group (--groups=1) --'); for (const [k, n] of passGroups) console.log(`${String(n).padStart(6)}  ${k}`); }
