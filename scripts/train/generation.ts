@@ -3,10 +3,14 @@
  * earlier champions from the hall of fame, and the frozen pre-training bot), score, and step the optimizer.
  * Everyone plays at PRO skill so fitness measures strategy, not aim luck.
  */
+import type { Difficulty } from '../../src/sim/types';
 import { decode, encode, type FlatParams } from '../../src/sim/bots/params';
 import { mulberry32, sample, update, type EsConfig, type EsState } from './es';
 import { imitationPenalty, seatStats, type HumanTarget } from './hooks';
 import { seatFitness, type MatchResult, type MatchSpec, type SeatSpec } from './runMatch';
+
+/** Run 7 on: half the FFAs at PRO, half at hard (hard's attack share regressed in run 6 while only PRO was trained). */
+export const DEFAULT_TIERS: Difficulty[] = ['pro', 'hard'];
 
 export type TrainConfig = {
   es: EsConfig;
@@ -20,6 +24,8 @@ export type TrainConfig = {
   /** 1v1s per generation against the frozen pre-training bot (the endgame and the human-vs-bot case), and their weight. */
   duels?: number;
   duelWeight?: number;
+  /** Skills the FFAs rotate through (default DEFAULT_TIERS); duels stay PRO. */
+  tiers?: Difficulty[];
   /** Optional: pull play statistics toward human data (fitness −= weight × imitation penalty). */
   imitation?: { weight: number; target: HumanTarget };
 };
@@ -80,13 +86,17 @@ export async function runGeneration(
     plans.push(d % 2 ? [{ field: 'legacy' }, { cand: c }] : [{ cand: c }, { field: 'legacy' }]);
   }
   const hallPick = plans.map(() => (hall.length ? hall[Math.floor(rng() * hall.length)] : champion));
+  // Run 7: some FFAs are played at other skills (whole game at one skill, field included), so the attack-share and
+  // close-fight terms reward params that keep hard bots active too, not only PRO.
+  const tiers: Difficulty[] = cfg.tiers?.length ? cfg.tiers : DEFAULT_TIERS;
+  const tierOf = (g: number): Difficulty => (g < nFfa ? tiers[g % tiers.length] : 'pro');
   const specs: MatchSpec[] = plans.map((seats, g) => ({
     seed: cfg.seed * 100003 + st.gen * 1009 + (g < nFfa ? g : 500 + Math.floor((g - nFfa) / 2)),
     maxSec: g < nFfa ? cfg.maxSec : Math.max(cfg.maxSec, 25 * 60),
     seats: seats.map((s): SeatSpec => {
-      if ('cand' in s) return { kind: 'new', params: cands[s.cand], difficulty: 'pro' };
-      if (s.field === 'legacy') return { kind: 'legacy', difficulty: 'pro' };
-      return { kind: 'new', params: s.field === 'champion' ? champion : hallPick[g], difficulty: 'pro' };
+      if ('cand' in s) return { kind: 'new', params: cands[s.cand], difficulty: tierOf(g) };
+      if (s.field === 'legacy') return { kind: 'legacy', difficulty: tierOf(g) };
+      return { kind: 'new', params: s.field === 'champion' ? champion : hallPick[g], difficulty: tierOf(g) };
     }),
   }));
   const results = await run(specs);
