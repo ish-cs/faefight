@@ -2431,7 +2431,7 @@ export class Bot {
   /** Patching up behind cover with the shooter still in sight takes nerve: Hard and PRO (buildSkill.reinforce > 0.5). */
   skilledHealer(): boolean { return this.P.buildSkill[this.difficulty].reinforce > 0.5; }
 
-  /** Situational wall material and cover on the centre island: Hard and PRO (buildSkill.reinforce > 0.5). */
+  /** Situational wall material: Hard and PRO (buildSkill.reinforce > 0.5). */
   private coverSkilled(): boolean { return this.P.buildSkill[this.difficulty].reinforce > 0.5; }
 
   /** Behind something solid from whoever is shooting at me (heals are safe here even with them in sight). */
@@ -2468,8 +2468,7 @@ export class Bot {
     const by = this.mem.lastHurtBy;
     if (by === null || by === me.id || now - this.mem.lastHurtAt > 1.0) return;
     if (view.suddenDeath || insideBunker(c.home.bunker, me.pos)) return;
-    // On land (my island, a rival's, or the centre island), not out on a bridge deck.
-    if (c.on < 0 && (!this.coverSkilled() || this.nav.nodeAt(me.pos) < 0)) return;
+    if (c.on < 0) return;
     const from = this.threatPos(c, by);
     if (!from) return;
     if (this.cover?.threatId === by) { this.cover.threat = from; this.cover.lastContact = now; return; }
