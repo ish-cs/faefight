@@ -79,14 +79,18 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   if (LIFECYCLE.suddenDeathAt !== SD) throw new Error(`measure: sudden death is at ${LIFECYCLE.suddenDeathAt}s, script assumes ${SD}s — update SD`);
   let params: unknown = undefined;
   if (paramsPath) {
-    let mod: { sanitize: (p: Record<string, number>) => unknown };
+    let mod: { sanitize?: (p: Record<string, number>) => Record<string, number>; toBotParams?: (p: Record<string, number>) => unknown; withParams?: (p: Record<string, number>) => unknown };
     // Variable specifier: params.ts exists only on refs with the trainable bot (tsc must pass on refs without it).
     const paramsModule = '../../src/sim/bots/params';
     try { mod = await import(/* @vite-ignore */ paramsModule); } catch (e) {
       throw new Error(`measure: --params given but this ref has no src/sim/bots/params.ts (${(e as Error).message})`);
     }
     const j = JSON.parse(fs.readFileSync(paramsPath, 'utf8')) as { params?: Record<string, number> } & Record<string, number>;
-    params = mod.sanitize(j.params ?? j);
+    const flat = j.params ?? j;
+    // Trainer refs: clamp into the search box, then build the BotParams a Bot takes. Others: flat overrides as given.
+    if (mod.sanitize && mod.toBotParams) params = mod.toBotParams(mod.sanitize(flat));
+    else if (mod.withParams) params = mod.withParams(flat);
+    else throw new Error('measure: --params given but params.ts here has neither sanitize/toBotParams nor withParams');
   }
   const { diffs } = seatsFor(scenario, seed);
   // MEASURE_MAX_SEC: cut games short (smoke tests of this script only; real measurements never set it).
