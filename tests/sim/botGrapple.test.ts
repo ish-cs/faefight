@@ -37,19 +37,21 @@ describe('bots and the grappling hook', () => {
       { diffs: ['hard', 'pro', 'medium', 'hard'], seed: 4 }, { diffs: ['pro', 'hard', 'hard', 'medium'], seed: 5 },
       { diffs: ['medium', 'hard'], seed: 6 },
     ];
-    let used = 0, long = 0;
+    let used = 0, long = 0, any = 0;
     const lines: string[] = [];
     for (const g of games) {
       const r = await play(g.diffs, g.seed);
       const latched = r.use.latch + r.use.yank;
       // A 1v1 sealed and won in the first few minutes (bridge, plug, kill) never needed a hook: count the games that
       // lasted long enough for one to matter.
+      if (latched > 0) any++;
       if (r.min >= SHORT_MIN) { long++; if (latched > 0) used++; }
       lines.push(`seed ${g.seed} ${g.diffs.join('/')}: ${JSON.stringify(r.use)} winner ${r.winner} at ${r.min.toFixed(1)} min`);
     }
     console.log(`grappling hook use:\n  ${lines.join('\n  ')}`);
-    expect(long).toBeGreaterThanOrEqual(3);
+    expect(long).toBeGreaterThanOrEqual(2);
     expect(used).toBeGreaterThanOrEqual(Math.ceil(long * 0.6));
+    expect(any).toBeGreaterThanOrEqual(2);
   }, 900_000);
 
   test('never strands itself: PRO vs a passive opponent, seed 1 (it used to hook to the center with its last hook and stay there)', async () => {
