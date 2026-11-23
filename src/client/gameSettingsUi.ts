@@ -55,14 +55,16 @@ export class GameSettingsPanel {
     modeName.className = 'gs-name';
     modeName.textContent = SETTING_LABEL.teamMode;
     const modes = document.createElement('div');
-    modes.className = 'map-picker';
+    modes.className = 'map-picker gs-seg';
     modes.setAttribute('role', 'radiogroup');
     modes.dataset.testid = `${testid}-teamMode`;
     for (const m of TEAM_MODES) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'map-opt';
-      b.textContent = m.name;
+      // Short label so all four fit on one line beside the sliders; the full name is the tooltip.
+      b.textContent = m.teams === 0 ? 'FFA' : m.name;
+      b.title = m.name;
       b.setAttribute('role', 'radio');
       b.dataset.testid = `${testid}-teamMode-${m.id}`;
       b.disabled = !onChange;

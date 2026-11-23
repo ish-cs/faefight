@@ -111,6 +111,30 @@
 .seat-slider[data-tone="medium"] { --tone: var(--c-yellow); --ink: var(--c-on-yellow); }
 .seat-slider[data-tone="hard"] { --tone: var(--c-orange); --ink: var(--c-on-orange); }
 .seat-slider:focus-visible { box-shadow: inset 0 0 0 1px var(--c-line), var(--focus); }
+/* Seat difficulty: the same flat segmented look as the map picker. No trail tint (it made the stops left of
+   the thumb look like a different background) and no tick lines (they came and went beside the thumb). */
+.seat-slider { width: 224px; }
+.seat-slider .fill, .seat-slider .stop + .stop::before { display: none; }
+.seat-slider .stop { font-size: 12px; letter-spacing: 0.04em; white-space: nowrap; }
+.seat-name .nick { flex: 0 1 auto; }
+/* Two columns: faint empty slot bands under the seats (room for 8), instead of a bare hole beside the settings. */
+@media (min-width: 980px) {
+  .lobby-card .seats { background: repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 0 46px, transparent 46px 51px); border-radius: var(--r-sm); }
+}
+/* Side column: the label column lines up for Map, Your colour and Your team. */
+.lobby-side .lobby-map, .lobby-side .color-row { justify-content: flex-start; }
+.lobby-side .lobby-map > .label, .lobby-side .color-row > .label { width: 104px; flex: none; justify-content: flex-start; white-space: nowrap; }
+.lobby-side .lobby-map > .label::before, .lobby-side .lobby-map > .label::after, .lobby-side .color-row > .label::before, .lobby-side .color-row > .label::after { display: none; }
+.lobby-side .lobby-map .map-picker { flex: 1; min-width: 0; }
+.lobby-side .lobby-map .map-opt { flex: 1 1 auto; min-width: 0; white-space: nowrap; padding: 7px 6px; font-size: 13px; }
+.lobby-side .swatches { justify-content: flex-start; }
+/* Game settings: label | control | value, every control in the same column; the mode picker spans control + value. */
+.game-settings .gs-head .label { font-family: var(--ff-display); font-weight: 800; font-size: 13px; letter-spacing: var(--track-label); text-transform: uppercase; color: var(--c-text-dim); }
+.gs-name { font-weight: 600; white-space: nowrap; }
+.gs-range { margin: 0; }
+.gs-value { font-family: var(--ff-display); font-weight: 800; font-size: 15px; white-space: nowrap; }
+.gs-mode .gs-seg { grid-column: 2 / -1; display: flex; min-width: 0; }
+.gs-seg .map-opt { flex: 1 1 auto; min-width: 0; padding: 7px 6px; font-size: 13px; white-space: nowrap; }
 /* Fixed line box: status text appearing/disappearing never moves the buttons below it. */
 .lobby-status { font-weight: 600; color: var(--c-text-dim); height: 18px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seat .btn.small { min-height: 28px; }
@@ -176,7 +200,7 @@
 
 /* ---- how to play ---- */
 .howto-overlay { background: radial-gradient(120% 90% at 50% 50%, rgba(4, 11, 17, 0.5), rgba(4, 11, 17, 0.85)); backdrop-filter: blur(6px); animation: ui-fade var(--dur-2) ease-out both; }
-.howto { position: relative; width: 560px; padding: 34px 32px 26px; border-radius: var(--r-md); animation: ui-pop var(--dur-3) var(--ease-out) both; }
+.howto { position: relative; width: 680px; max-width: 100%; padding: 34px 32px 26px; border-radius: var(--r-md); animation: ui-pop var(--dur-3) var(--ease-out) both; }
 .howto::before { content: ""; position: absolute; left: -1px; right: -1px; top: -1px; height: 6px; background: var(--hazard); border-radius: var(--r-md) var(--r-md) 0 0; }
 .howto-title { font-family: var(--ff-stencil); font-weight: 900; font-size: 54px; line-height: 0.85; text-transform: uppercase; letter-spacing: 0.02em; margin-bottom: 22px; }
 .howto-steps { gap: 14px; }

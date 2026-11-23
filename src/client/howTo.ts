@@ -1,3 +1,4 @@
+import { LIFECYCLE } from '../sim/constants';
 import { activeKeymap, bindingLabel } from './keymap';
 
 /** "How to play" card: the match loop in seven steps. Opened from the menu, and once on a first launch. */
@@ -19,12 +20,12 @@ function steps(): { icon: keyof typeof ICON; title: string; text: string }[] {
   const e = bindingLabel(activeKeymap(), 'interact');
   return [
     { icon: 'goal', title: 'The goal', text: 'Seal every enemy bunker, then eliminate them. Last one standing wins.' },
-    { icon: 'cash', title: 'Earn cash', text: `Your generator fills with cash over time. Stand next to it and press ${e} to collect.` },
-    { icon: 'shop', title: 'Shop', text: `Press ${e} at the shop for guns, ammo, building pieces, grenades and medkits.` },
-    { icon: 'bridge', title: 'Build a bridge', text: 'Pick a piece on the hotbar and click to place it. Bridge the water to an enemy island.' },
+    { icon: 'cash', title: 'Earn cash', text: `Your generator fills with cash over time. Press ${e} next to it to collect.` },
+    { icon: 'shop', title: 'Shop', text: `Press ${e} at the shop: guns, ammo, pieces, potions, grappling hooks, traps.` },
+    { icon: 'bridge', title: 'Build a bridge', text: 'Pick a piece on the hotbar, click to place, bridge to an enemy island.' },
     { icon: 'seal', title: 'Seal their bunker', text: 'While an enemy is dead, plug all 3 doorways of their bunker.' },
     { icon: 'skull', title: 'Eliminate', text: 'A player whose bunker is sealed when they die is out for good.' },
-    { icon: 'timer', title: 'Sealed in yourself?', text: 'You respawn trapped inside: break out within 10 seconds.' },
+    { icon: 'timer', title: 'Sealed in yourself?', text: `Sealed while dead? Respawn trapped and break out within ${LIFECYCLE.breakoutSec} seconds.` },
   ];
 }
 
