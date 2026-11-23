@@ -91,6 +91,11 @@ export type DriveParams = {
   dockDefend: number;
   dockMinRange: number;
   dockRollSec: number;
+  /**
+   * Sudden death: leave for the center island (where the ring ends) once the ring will reach me less than this many
+   * seconds after I'd get there walking (a route round by other islands counts in full). By skill.
+   */
+  stormLead: Record<Difficulty, number>;
 };
 
 /**
@@ -289,6 +294,7 @@ export const DRIVE: DriveParams = {
   dockDefend: 0.3,
   dockMinRange: 6,
   dockRollSec: 1,
+  stormLead: D(0, 8, 12, 15),
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
@@ -407,7 +413,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]], ['drive.crossFire.*', [15, 60]],
   ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedFocus', [1, 3]],
   ['drive.spoilsTarget.*', [0, 1.5]], ['drive.finishTrapped', [0, 2]],
-  ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]],
+  ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]], ['drive.stormLead.*', [0, 40]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
   ['buildSkill.*.peekOut', [0.3, 3]],

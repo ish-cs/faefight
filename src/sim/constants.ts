@@ -410,3 +410,8 @@ export const CRATE_LOOT = {
   /** Rockets per ammo drop (a magazine for every other gun). */
   rockets: 1,
 } as const;
+
+/** Station props (generator, vault, shop NPC) as solid boxes: half extents (physics colliders; bots walk round them). */
+export const PROP_HALF = {
+  generator: { x: 0.6, y: 0.7, z: 0.6 }, vault: { x: 0.6, y: 1.0, z: 0.5 }, shop: { x: 0.3, y: 0.9, z: 0.3 },
+} as const;

@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { MAP, PIECES, PLAYER } from '../constants';
+import { MAP, PIECES, PLAYER, PROP_HALF } from '../constants';
 import { MOVE } from '../movement';
 import type { Box, Bunker, CenterIsland, Doorway, IslandLayout, StaticBox } from '../map';
 import { doorBlocked } from './plans';
@@ -373,7 +373,14 @@ export class Nav {
       this.nodeList = navNodes(view.map, view.center?.island);
       this.grids.clear();
       for (const n of this.nodeList) {
-        const own = (view.statics ?? []).filter((s: StaticBox) => (s.island < 0 ? view.map.length : s.island) === n.index);
+        const own: Box[] = (view.statics ?? []).filter((s: StaticBox) => (s.island < 0 ? view.map.length : s.island) === n.index);
+        // The island's generator, vault and shop NPC are solid too: walk round them (a straight line to the shop ran
+        // into the generator and stood there; measured in the storm replay 02ce1c).
+        const isl = view.map[n.index];
+        if (isl?.bunker) for (const key of ['generator', 'vault', 'shop'] as const) {
+          const p = isl[key], h = PROP_HALF[key];
+          own.push({ center: v3(p.x, p.y + h.y, p.z), half: v3(h.x, h.y, h.z), rotY: isl.bunker.facingYaw });
+        }
         this.grids.set(n.index, new WalkGrid(n, own));
       }
     }
@@ -512,6 +519,18 @@ export class Nav {
     return [laneS(l, p) <= f.s + 1 ? l.from : l.to];
   }
 
+  /**
+   * The node(s) a walk from p starts on, also off any lane: on a pier or a dock, the island it belongs to (nearest
+   * rim within `pad` m). Empty in open water.
+   */
+  standNodes(p: Vec3, pad = 10): number[] {
+    const s = this.startNodes(p);
+    if (s.length) return s;
+    let best = -1, bestD = pad;
+    for (const n of this.nodeList) { const d = dist2D(p, n.center) - n.radius; if (d < bestD) { bestD = d; best = n.index; } }
+    return best >= 0 ? [best] : [];
+  }
+
   /** Node to head for next from a toward b over finished bridges (b itself, or the next stop on the way), or null. */
   hop(a: number, b: number): number | null {
     const r = this.route(a, b);
@@ -533,7 +552,9 @@ export class Nav {
       const l = this.lane(i, j);
       const s = laneS(l, p);
       if (s < 0 || s > l.length) continue;
-      const off = laneOff(l, p);
+      // Opposite islands' lane runs right over the center island's own (same line): the shorter one is the one I'm on
+      // (ties broken by length; walking 'toward the far island' from mid-bridge turned bots back).
+      const off = laneOff(l, p) + 2e-4 * l.length;
       if (off < bestOff) { bestOff = off; best = l; }
     }
     return best;

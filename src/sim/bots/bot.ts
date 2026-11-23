@@ -103,6 +103,8 @@ const EASY_DODGE = 0.4;
 const STORM_PREP_SEC = 150;
 /** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
 const STORM_SPARE_DECKS = 2, STORM_SHOP_GRACE = 45;
+/** Share of top sprint speed a walk to the center island averages (turns, doorways, decks). */
+const STORM_TRIP_PACE = 0.75;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Walls a bot throws down for cover, best first (sandbags go up two high). */
 const WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
@@ -1195,7 +1197,9 @@ export class Bot {
       if (e.alive && eff < pickD) { enemy = e; enemyDist = d; pickD = eff; }
     }
     const reach = !!rivalIsl && (on === rivalIsl.index || this.nav.hop(src, rivalIsl.index) !== null);
-    const homeReach = node === home.index || node < 0 || this.nav.hop(node, home.index) !== null;
+    // Off any island (a bridge, a pier): from wherever that walk starts (a dock off a dead rival's island is not home).
+    const stand = node >= 0 ? [node] : this.nav.standNodes(me.pos);
+    const homeReach = stand.length === 0 || stand.some((n) => n === home.index || this.nav.hop(n, home.index) !== null);
     const openDoors = rivalIsl ? rivalIsl.bunker.doorways.filter((d) => !doorBlocked(view.pieces, d)) : [];
     const danger = view.now - this.mem.lastHurtAt < 3 || (!!enemy && enemyDist < 40);
     const C = this.nav.centerNode;
@@ -1214,7 +1218,7 @@ export class Bot {
         (bridgeTo === null ? this.centerMinded : this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
     // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
     if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
-    const bridgeFrom = !homeReach && node >= 0 ? node : home.index;
+    const bridgeFrom = !homeReach && stand.length && stand[0] !== bridgeTo ? stand[0] : home.index;
     return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, hookFrom, homeReach, openDoors, bridgeTo, bridgeFrom, centerReach, danger };
   }
 
@@ -1448,6 +1452,8 @@ export class Bot {
         const d = Math.hypot(me.pos.x - st.x, me.pos.z - st.z);
         if (d > st.r) return this.difficulty === 'easy' ? 0.9 : 1.7;
         if (d > this.stormSafeR(st)) return this.difficulty === 'easy' ? 0.4 : 1.3;
+        // The walk to the center island (round by other islands) takes about as long as the ring has left: go now.
+        if (this.stormLeave(c)) return 1.5;
         // No way onto the center island yet: the ring will end there, so the bridge comes first.
         return this.needCenterBridge(c) ? 1.2 : 0;
       }
@@ -1464,7 +1470,7 @@ export class Bot {
       case 'disengage': {
         if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
         // Outside the safe ring, getting in comes first (running from a gun into the storm kills just as well).
-        if (view.storm && Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm)) return 0;
+        if (view.storm && (Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm) || this.stormLeave(c))) return 0;
         // Final circle: nowhere left to run (backing off only buys regen, and the fight never ends); fists vs fists
         // in sudden death likewise.
         if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
@@ -1534,7 +1540,8 @@ export class Bot {
         return want + (c.danger || this.intruder(c) ? 0.55 : 0) + (leaving ? 0.25 : 0) - dist2D(me.pos, home.vault) / 80;
       }
       case 'collect': {
-        if (!c.homeReach) return 0;
+        // Sudden death: the generators have stopped, and home is where the storm is.
+        if (!c.homeReach || view.suddenDeath) return 0;
         const stored = view.generators[home.index];
         let s = stored >= COLLECT_AT ? 0.45 + 0.1 * t.greed + Math.min(stored, 500) / 1000 : 0.15;
         // Don't leave cash at an unguarded generator (anyone can take it), and don't let it hit the cap.
@@ -1547,6 +1554,8 @@ export class Bot {
         // Can't walk home (e.g. left on a dead rival's island): any island's shop I can walk to serves me.
         const shop = this.shopSpot(c);
         if (!shop) return 0;
+        // Sudden death: never a shopping trip out past the safe line of the ring.
+        if (view.storm && Math.hypot(shop.x - view.storm.x, shop.z - view.storm.z) > this.stormSafeR(view.storm) - 2) return 0;
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
         if (dist2D(me.pos, shop) < 4 && plan.spent <= me.inv.cash) return 0.9;
@@ -1660,7 +1669,8 @@ export class Bot {
     const walledIn = !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos) && this.blockers(c).some((p) => this.canClear(c, p));
     if (this.trapped(c) || walledIn) { this.probe?.decided(c, null, 'defend'); return 'defend'; }
     const rows: ScoreRow[] | null = this.probe ? [] : null;
-    let best: Goal = (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
+    // Nothing scores: wait at my generator (or go at my rival); in the storm, stay in the ring (doStorm holds inside it).
+    let best: Goal = c.view.storm ? 'storm' : (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
       if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrep(c.view)) continue; // banned for a while (goal watchdog)
@@ -2685,14 +2695,58 @@ export class Bot {
   }
 
   /**
-   * Sudden-death storm: get inside the ring ahead of it. Straight toward the centre when that stays on land
-   * I can walk to; otherwise to the walkable spot closest to the centre (the near shore of my island or of one
-   * I can reach by bridge).
+   * Seconds of walking (a little under top sprint speed) from here onto the center island along finished bridges, and
+   * where to aim on it; null when no walkable route leads there (or I'm on it). Out on a bridge: via either end.
+   */
+  private centerTrip(c: Ctx): { sec: number; to: Vec3 } | null {
+    const C = this.nav.centerNode, me = c.me;
+    if (C < 0) return null;
+    const node = this.nav.nodes[C];
+    const here = this.nav.nodeAt(me.pos);
+    let best = Infinity;
+    for (const s of this.nav.startNodes(me.pos)) {
+      if (s === C) return null;
+      const r = this.nav.route(s, C);
+      if (!r) continue;
+      // Through the centres of the islands on the way (an overestimate: the safe side), from my feet.
+      let len = 0, at = me.pos;
+      for (const n of r.slice(here === s ? 1 : 0)) { len += dist2D(at, this.nav.nodes[n].center); at = this.nav.nodes[n].center; }
+      best = Math.min(best, len - node.radius);
+    }
+    if (best === Infinity) return null;
+    const d = flat(sub(me.pos, node.center)), l = Math.hypot(d.x, d.z) || 1, k = Math.max(0, node.radius - 3);
+    return { sec: Math.max(0, best) / (PLAYER.sprint * STORM_TRIP_PACE), to: v3(node.center.x + (d.x / l) * k, node.groundY, node.center.z + (d.z / l) * k) };
+  }
+
+  /**
+   * Sudden death: time to leave for the center island (where the ring ends) now: the ring reaches me in less than the
+   * walk there (round by other islands, not straight in) plus my lead (DriveParams.stormLead).
+   */
+  private stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null {
+    const st = c.view.storm;
+    if (!st || !(st.rate > 0)) return null;
+    const trip = this.centerTrip(c);
+    if (!trip) return null;
+    const d = Math.hypot(c.me.pos.x - st.x, c.me.pos.z - st.z);
+    const slack = (st.r - d) / st.rate - trip.sec;
+    return slack < this.P.drive.stormLead[this.difficulty] ? { ...trip, slack } : null;
+  }
+
+  /**
+   * Sudden-death storm: get inside the ring ahead of it. When the walk onto the center island takes about as long as
+   * the ring has left to reach me, go there now. Otherwise straight toward the centre when that stays on land I can
+   * walk to, else to the walkable spot closest to the centre (on my island or one I can reach by bridge; out on a
+   * bridge, via whichever end leads on). No walkable way at all: bridge there (decks from any shop I can reach).
    */
   private doStorm(c: Ctx): Act {
     const { view, me } = c;
     const st = view.storm;
     if (!st) return IDLE;
+    const go = this.stormLeave(c);
+    if (go) {
+      const walk = this.goTo(go.to, 1.5);
+      if (walk.dir) return { ...walk, sprint: true };
+    }
     const ctr = v3(st.x, me.pos.y, st.z);
     const want = this.stormSafeR(st) - 1;
     const d = dist2D(me.pos, ctr);
@@ -2700,33 +2754,37 @@ export class Bot {
     const spot = add(ctr, scale(out, Math.min(d, want)));
     const here = this.nav.nodeAt(me.pos);
     const target = this.nav.nodeAt(spot);
-    if (d > want && target >= 0 && (target === here || this.nav.routeTo(spot))) return { ...this.goTo(spot, 1), sprint: true };
-    // The walkable spot closest to the centre: on my island, or one I can reach (center island included).
+    const edge = d > want && target >= 0 && (target === here || this.nav.routeTo(spot));
+    // Holding the ring's edge on an island with no way onto the center island only waits for the ring to pass it:
+    // with no walkable way there, getting the bridge built (decks bought while the shop is safe) comes first.
+    if (edge && !this.needCenterBridge(c)) return { ...this.goTo(spot, 1), sprint: true };
+    const starts = this.nav.startNodes(me.pos);
     let best: Vec3 | null = null, bestD = Infinity;
     for (const n of this.nav.nodes) {
-      if (n.index !== here && (here < 0 || this.nav.hop(here, n.index) === null)) continue;
+      if (!starts.some((s) => s === n.index || this.nav.hop(s, n.index) !== null)) continue;
       const toC = dist2D(n.center, ctr);
       const k = toC < 0.5 ? 0 : Math.max(0, toC - n.radius + 2.5) / toC;
       const p = v3(n.center.x + (ctr.x - n.center.x) * (1 - k), n.groundY, n.center.z + (ctr.z - n.center.z) * (1 - k));
       const pd = dist2D(p, ctr) + dist2D(p, me.pos) * 0.05;
       if (pd < bestD) { bestD = pd; best = p; }
     }
-    // Nothing walkable inside the ring, or no way onto the center island where it ends: bridge there
-    // (buy the decks first if I have none).
     if ((bestD > want || this.needCenterBridge(c)) && c.bridgeTo !== null && c.bridgeTo === this.nav.centerNode) {
       const have = me.inv.pieces.scaffold ?? 0, need = this.scaffoldsNeeded(c);
-      // Stock up in one shop visit (not one deck per trip) while still on my island.
-      // Only while the shop (and the vault, if I need cash from it) is still inside the ring: a trip out into the
-      // storm to shop kills just as surely.
-      const shopSafe = [c.home.shop, ...(me.inv.cash < PIECES.scaffold.price ? [c.home.vault] : [])]
-        .every((p) => dist2D(p, ctr) < st.r - 2) || view.now - LIFECYCLE.suddenDeathAt < STORM_SHOP_GRACE;
-      const buy = have < need && c.homeReach && shopSafe && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
+      const shop = this.shopSpot(c);
+      // Stock up in one shop visit (the whole bridge, not a deck per trip) while still on land with a shop, and only
+      // while the shop (and my vault, if I need cash from it) is inside the ring: shopping out in the storm kills too.
+      const shopSafe = !!shop && ([shop, ...(me.inv.cash < PIECES.scaffold.price ? [c.home.vault] : [])]
+        .every((p) => dist2D(p, ctr) < st.r - 2) || view.now - LIFECYCLE.suddenDeathAt < STORM_SHOP_GRACE);
+      const shopNode = shop ? this.nav.nodeAt(shop) : -1;
+      const onLand = here >= 0 && shopNode >= 0 && (here === shopNode || this.nav.hop(here, shopNode) !== null);
+      const buy = have < need && shopSafe && (have === 0 || onLand) ? this.buyDecks(c) : null;
       if (buy) return buy;
       if (have > 0) {
         const b = this.doBridge(c);
         if (b.dir || b.build || b.face) return b;
       }
     }
+    if (edge) return { ...this.goTo(spot, 1), sprint: true };
     if (!best) return { dir: norm(flat(sub(ctr, me.pos))), sprint: true };
     return { ...this.goTo(best, 1), sprint: true };
   }
@@ -2737,7 +2795,7 @@ export class Bot {
    */
   private shopSpot(c: Ctx): Vec3 | null {
     if (c.homeReach) return c.home.shop;
-    const starts = this.nav.startNodes(c.me.pos);
+    const starts = this.nav.standNodes(c.me.pos);
     let best: Vec3 | null = null, bestD = Infinity;
     for (const isl of c.view.map) {
       const n = this.nav.nodeAt(isl.shop);
