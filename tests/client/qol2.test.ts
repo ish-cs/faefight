@@ -79,6 +79,14 @@ describe('kill feed entries', () => {
     expect(feedText(self, name)).toBe('p3 blew up via propane');
   });
 
+  it('environmental kill credit: "X via water" with the water marker, no explosion marker', () => {
+    const e = feedEntries([ev(1, 'kill', { victim: B, killer: A, inWater: true, via: 'water' })], ctx)[0];
+    expect(e).toMatchObject({ killer: A, via: 'water', markers: ['water'] });
+    expect(feedText(e, name)).toBe('p2 via water ⟶ p3');
+    const fall = feedEntries([ev(1, 'kill', { victim: B, killer: A, inWater: false, via: 'fall' }), ev(1, 'hit', { target: B, by: null, weapon: 'fall' })], ctx)[0];
+    expect(fall).toMatchObject({ killer: A, via: 'fall', markers: ['fall'] });
+  });
+
   it('seal entries: who sealed whose bunker; yours highlighted either way', () => {
     const [s] = feedEntries([ev(1, 'sealed', { island: 2, owner: B, by: ME })], ctx);
     expect(s).toMatchObject({ kind: 'sealed', killer: ME, victim: B, island: 2, mine: true, me: false });

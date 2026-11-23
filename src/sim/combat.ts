@@ -18,7 +18,8 @@ export type CombatCtx = {
   pieces: Map<number, PieceState>;
   explosives: Explosive[];
   nextId(): number;
-  onPieceDestroyed(id: number): void;
+  /** `by`: the player whose damage broke it (kill credit for whoever stood on it), null/absent for none. */
+  onPieceDestroyed(id: number, by?: number | null): void;
   /** `cause`: the HitInfo weapon of the killing hit ('storm', 'lightning', 'barrel', a gun...). */
   onKill(victim: number, killer: number | null, cause?: string): void;
   /** Whether a player stands on something (spread); defaults to "vertical speed is small". */
@@ -83,6 +84,7 @@ export function applyPlayerDamage(
   target.shield = had - shieldAmount;
   target.hp -= amount - shieldAmount;
   target.lastDamagedAt = now;
+  if (attackerId !== null && attackerId !== target.id) target.hurtBy = { by: attackerId, at: now };
   // Getting hurt is stressful: less stamina now and slower recovery for a while (movement.ts).
   if (target.mv) { stressFromDamage(target.mv, amount); target.stamina = target.mv.stamina; }
   const broke = had > 0 && target.shield <= 0;
@@ -107,7 +109,7 @@ export function hitPiece(
     piece: id, kind: piece.kind, by, source, amount: before - Math.max(0, piece.hp), hp: Math.max(0, piece.hp), maxHp: PIECES[piece.kind].hp, pos: at,
   })];
   if (!destroyed) return out;
-  ctx.onPieceDestroyed(id);
+  ctx.onPieceDestroyed(id, by);
   out.push(ev(now, 'destroyed', { piece: id, kind: piece.kind, pos: pieceCenter(piece), rotY: piece.rotY }));
   return out;
 }

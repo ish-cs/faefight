@@ -66,6 +66,23 @@ describe('elimination credit', () => {
     expect(elims().map((e) => e.data)).toEqual([expect.objectContaining({ victim: 2, by: 3, assists: [1], how: 'killed' })]);
   });
 
+  test('shot, then drowns while sealed out (environment kill credit), then fails the breakout → the shooter; the sealer assists', async () => {
+    const { m, run, p, outside, seal, elims, events } = await setup();
+    outside();
+    seal([1, 1, 1]);
+    run(0.2);
+    // Player 3 just shot them (lifecycle envKiller reads hurtBy), then they end up in the water off their island.
+    p(2).hurtBy = { by: 3, at: state(m).time - 1 };
+    const isl = m.map[p(2).island];
+    const sea = add(isl.center, scale(forward(isl.bunker.facingYaw), isl.radius + 15));
+    m.debugTeleport(2, v3(sea.x, state(m).waterY - 1, sea.z));
+    run(1);
+    expect(events.find((e) => e.type === 'kill' && e.data.victim === 2)?.data).toMatchObject({ killer: 3, via: 'water' });
+    run(LIFECYCLE.respawnSec + LIFECYCLE.breakoutSec + 1);
+    expect(p(2).eliminated).toBe(true);
+    expect(elims().map((e) => e.data)).toEqual([expect.objectContaining({ victim: 2, by: 3, assists: [1], how: 'killed' })]);
+  });
+
   test('pure credit rules: teammates never get credit, a recent hitter is the fallback, nobody → null', () => {
     const v = newPlayer(2, 'v', false, 1, v3()), a = newPlayer(1, 'a', false, 0, v3()), b = newPlayer(3, 'b', false, 2, v3());
     const players = new Map<number, PlayerState>([[1, a], [2, v], [3, b]]);

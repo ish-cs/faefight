@@ -3,7 +3,7 @@ import { damagePiece, snapPlacement, validatePlacement, type Placement } from '.
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
-import { islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
+import { envKiller, islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
@@ -32,11 +32,11 @@ import type { AllyStatus, BotView, FeedLine, HurtEvent, ShotSeen, TeamSighting }
 import { Bot } from './bots/bot';
 import { Banter } from './bots/banter';
 import { QUIP_SHOW_SEC, WheelLimiter, emoteEnd, isEmoteId, isQuipId, isWheelId, type WheelId } from './emotes';
-import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
+import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PieceState, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { clampSettings, resolveColors, type GameSettings } from './settings';
 import { TEAM_COLORS, isAlly, islandOrder, resolveTeams, sealBlocker } from './teams';
-import { clone, dist, dist2D, forward, norm, sub, v3 } from './vec';
+import { clone, dist, dist2D, forward, norm, rotateY, sub, v3 } from './vec';
 import { mulberry32, type Rng } from './rng';
 import { deepClone } from './replay/clone';
 
@@ -71,6 +71,8 @@ export class Match implements MatchApi {
   private sealDirty = true;
   private doors: DoorwayTracker;
   private supportDirty = false;
+  /** Player whose damage broke a piece this tick: whatever collapses with it is theirs too (kill credit). */
+  private breaker: number | null = null;
   private kills: { victim: number; killer: number | null }[] = [];
   private ctx: CombatCtx;
   /** Grappling hooks' view of this match (grapple.ts); bound like ctx. */
@@ -215,7 +217,12 @@ export class Match implements MatchApi {
       pieces: this.s.pieces,
       explosives: this.explosives,
       nextId: () => this.s.nextId++,
-      onPieceDestroyed: (id) => {
+      onPieceDestroyed: (id, by) => {
+        const pc = this.s.pieces.get(id);
+        if (pc && by !== null && by !== undefined) {
+          this.creditFloor(by, this.s.time, (p) => onPiece(pc, p.pos));
+          this.breaker = by;
+        }
         this.s.pieces.delete(id);
         physics.removePiece(id);
         this.sealDirty = true;
@@ -233,11 +240,15 @@ export class Match implements MatchApi {
       },
       castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, true) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
       onKill: (victim, killer, cause) => {
+        // A fatal fall or the storm soon after a player hurt them or broke their floor: that player's kill ("X via fall").
+        const world = cause === 'fall' || cause === 'storm' || cause === 'lightning';
+        const credit = killer === null && world ? envKiller(this.s, this.s.players.get(victim)!, this.s.time) : null;
+        if (credit !== null) killer = credit;
         this.kills.push({ victim, killer });
         // Only environment causes go on the kill event (death recap / feed); weapon kills are told by the killer.
-        const env = killer === null && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
+        const env = (killer === null || credit !== null) && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
         // A barrel / tank someone set off: the feed says "X via barrel".
-        const via = cause === 'barrel' || cause === 'propane' || cause === 'trap' ? cause : undefined;
+        const via = credit !== null ? cause : cause === 'barrel' || cause === 'propane' || cause === 'trap' ? cause : undefined;
         this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env, via));
       },
       // Spike traps ride the hazard hooks with negative ids (bullets and fists stop at the nearer of the two).
@@ -414,6 +425,17 @@ export class Match implements MatchApi {
     if (p.mv) p.mv.ack = 0;
   }
 
+  /**
+   * Player `by` broke the floor under everyone `on` picks (a piece, a pier section, or what collapsed with it):
+   * a drowning or fatal fall soon after is their kill (lifecycle envKiller). Not themselves or teammates.
+   */
+  private creditFloor(by: number, now: number, on: (p: PlayerState) => boolean) {
+    const breaker = this.s.players.get(by);
+    if (!breaker) return;
+    for (const p of this.s.players.values())
+      if (p.alive && p.id !== by && !isAlly(breaker, p) && on(p)) p.hurtBy = { by, at: now };
+  }
+
   /** Pieces left with nothing holding them up fall apart (no floating bridges or walls). */
   /** Pier sections this tick's explosions broke: open water there, anything built on them falls, loot sinks. */
   private breakDocks(now: number) {
@@ -422,16 +444,21 @@ export class Match implements MatchApi {
       const d = this.docks.defs.find((x) => x.id === e.data.id)!;
       this.physics.removeDock(d.id);
       this.supportDirty = true;
+      const by = e.data.by, top = d.center.y + d.half.y;
+      if (typeof by === 'number') this.creditFloor(by, now, (p) => overDock(d, p.pos, PLAYER.radius) && p.pos.y - top > -0.3 && p.pos.y - top < 1.5);
       for (const [id, b] of this.s.loot) if (overDock(d, b.pos, 0.3) && Math.abs(b.pos.y - (d.center.y + d.half.y)) < 0.6) this.s.loot.delete(id);
     }
     this.events.push(...out);
   }
 
   private collapseUnsupported(now: number) {
+    const by = this.breaker;
+    this.breaker = null;
     if (!this.supportDirty) return;
     this.supportDirty = false;
     for (const id of unsupportedPieces(this.physics, this.s.pieces)) {
       const p = this.s.pieces.get(id)!;
+      if (by !== null) this.creditFloor(by, now, (q) => onPiece(p, q.pos));
       this.s.pieces.delete(id);
       this.physics.removePiece(id);
       this.sealDirty = true;
@@ -999,4 +1026,15 @@ export class Match implements MatchApi {
     if (!p) throw new Error(`Match: no player ${id}`);
     return p;
   }
+}
+
+/** Feet at `pos` on (or just above) piece `pc`'s top: inside its footprint (plus body radius), up to 1.5 m above the deck. */
+function onPiece(pc: PieceState, pos: Vec3): boolean {
+  const s = PIECES[pc.kind];
+  const l = rotateY(v3(pos.x - pc.pos.x, 0, pos.z - pc.pos.z), -pc.rotY);
+  if (Math.abs(l.x) > s.w / 2 + PLAYER.radius || Math.abs(l.z) > s.d / 2 + PLAYER.radius) return false;
+  // A ramp's deck rises from 0 at local z = -d/2 to h at +d/2.
+  const top = pc.kind === 'ramp' ? s.h * Math.min(1, Math.max(0, l.z / s.d + 0.5)) : s.h;
+  const dy = pos.y - (pc.pos.y + top);
+  return dy > -0.3 && dy < 1.5;
 }
