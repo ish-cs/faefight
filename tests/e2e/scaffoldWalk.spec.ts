@@ -90,7 +90,7 @@ test('placed while moving, solid where shown: run up a ramp dropped in front of 
   await dbg(page, 'give', { pieces: { ramp: 1 } });
 
   // 1) Ramp: run sideways across the island, aiming at the ground ~3.5 m ahead; place it mid-run and keep running.
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2'); // slot 1 holds the starting pistol
   await dbg(page, 'teleport', ...((p) => [p.x, p.z])(at(C, R, -10, F, -4)));
   await page.waitForTimeout(300);
   const hold = { x: R.x, z: R.z };
@@ -121,7 +121,7 @@ test('placed while moving, solid where shown: run up a ramp dropped in front of 
 
   // 2) Off the shore: the assist's first bridge segment, then walk out onto it and stand 3 s.
   await dbg(page, 'give', { pieces: { scaffold: 1 } });
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2'); // slot 1 holds the starting pistol
   await dbg(page, 'teleport', ...((p) => [p.x, p.z])(at(C, R, home.radius - 2.5, F, 0)));
   await aimAt(page, at(C, R, home.radius + 2, F, 0, 0));
   await expect.poll(async () => { const a = await aim(page); return a?.ok && a.tag; }).toBe('shore');
