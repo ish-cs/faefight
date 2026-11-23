@@ -37,12 +37,12 @@ describe('scoreboard rows', () => {
 
   test('row fields: name, bot tag, you, host, kills/deaths, sealed bunker by island', () => {
     const snap = snapOf(
-      [player(1, { name: 'Alice' }), player(2, { name: 'Mossy', isBot: true, kills: 2, deaths: 1, island: 1 })],
+      [player(1, { name: 'Alice' }), player(2, { name: 'Mossy', isBot: true, kills: 2, deaths: 1, island: 1, bounty: 350 })],
       [false, true],
     );
     const rows = scoreRows(snap, { humanId: 1, hostId: 1 });
     expect(rows.find((r) => r.id === 2)).toEqual({
-      id: 2, name: 'Mossy', island: 1, isBot: true, isYou: false, isHost: false, kills: 2, deaths: 1, status: 'alive', sealed: true,
+      id: 2, name: 'Mossy', island: 1, isBot: true, isYou: false, isHost: false, kills: 2, deaths: 1, status: 'alive', sealed: true, bounty: 350,
     });
     expect(rows.find((r) => r.id === 1)).toMatchObject({ isYou: true, isHost: true, sealed: false, isBot: false });
   });
