@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { Bot } from '../../src/sim/bots/bot';
 import { BUILD_SKILL, shields } from '../../src/sim/bots/build';
+import { withParams, type BotParams } from '../../src/sim/bots/params';
 import { lookAt } from '../../src/sim/bots/aim';
 import { preset, type Archetype } from '../../src/sim/bots/personality';
 import { eyePos } from '../../src/sim/combat';
@@ -16,10 +17,10 @@ import { add, right, scale, v3 } from '../../src/sim/vec';
  */
 type Placed = { t: number; piece: PieceState };
 
-async function setup(difficulty: Difficulty, opts: { island?: number; gap?: number; give: Partial<Inventory>; archetype?: Archetype; seed?: number; shield?: number }) {
+async function setup(difficulty: Difficulty, opts: { island?: number; gap?: number; give: Partial<Inventory>; archetype?: Archetype; seed?: number; shield?: number; params?: BotParams }) {
   let bot: Bot | null = null;
   const m = await Match.create({ players: [{ name: '', isBot: true, difficulty }, { name: 'human', isBot: false }], seed: opts.seed ?? 5 },
-    { makeBot: (id, d, rng) => (bot = new Bot(id, d, rng, preset(opts.archetype ?? 'Turtle'))) });
+    { makeBot: (id, d, rng) => (bot = new Bot(id, d, rng, preset(opts.archetype ?? 'Turtle'), opts.params)) });
   const isl = m.map[opts.island ?? 0];
   const lat = right(isl.bunker.facingYaw);
   const half = (opts.gap ?? 16) / 2;
@@ -102,9 +103,12 @@ describe('combat building: reinforcing and healing behind cover', () => {
 });
 
 describe('combat building: ramps', () => {
-  test('pro in a level mid-range fight throws a ramp toward the shooter and chains a second one forward and up', async () => {
+  // Fight ramps are off by default (buildSkill.*.ramp 0: under 165-damage rockets a perch cost PRO more than it won);
+  // the play itself stays in for the trainer to switch on.
+  test('with ramps switched on, pro in a level mid-range fight throws a ramp toward the shooter and chains a second one forward and up', async () => {
     // Only ramps to build with (no walls): this is the high-ground play, not cover.
-    const r = await setup('pro', { island: 1, gap: 22, give: { pieces: { ramp: 3 } }, seed: 7, shield: 100 });
+    const params = withParams({ 'buildSkill.pro.ramp': 0.85, 'buildSkill.pro.rampChain': 1 });
+    const r = await setup('pro', { island: 1, gap: 22, give: { pieces: { ramp: 3 } }, seed: 7, shield: 100, params });
     const whys: string[] = [];
     r.run(8 * 30, (i) => i % 60 === 3, () => { const w = r.bot().debugBrain().build?.why; if (w && !whys.includes(w)) whys.push(w); });
     const ramps = r.placed.filter((p) => p.piece.kind === 'ramp');
@@ -128,7 +132,6 @@ describe('combat building: skill scaling', () => {
     for (let i = 1; i < order.length; i++) {
       const a = BUILD_SKILL[order[i - 1]], b = BUILD_SKILL[order[i]];
       expect(b.pieceSec).toBeLessThan(a.pieceSec);
-      expect(b.ramp).toBeGreaterThanOrEqual(a.ramp);
       expect(b.rampChain).toBeGreaterThanOrEqual(a.rampChain);
       expect(b.reinforce).toBeGreaterThanOrEqual(a.reinforce);
     }
