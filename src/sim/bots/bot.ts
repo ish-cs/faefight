@@ -1550,7 +1550,7 @@ export class Bot {
         const leavingSoon = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
         if (leavingSoon && this.insuranceDue(me) > 0 && !(c.enemy && c.enemyDist < 8)) return 0.8;
         // Shops pay from the vault anywhere and carried cash drops on death: bank all but pocket money.
-        const keep = this.P.vault.carry[this.difficulty];
+        const keep = this.bankKeep(c);
         const excess = me.inv.cash - keep;
         const close = c.enemy && c.enemyDist < 8;
         if (close) return 0;
@@ -1833,10 +1833,21 @@ export class Bot {
     const remote = vaultSpec(me).remote && !upgrade;
     const walk = remote ? IDLE : this.goTo(c.home.vault, 1.8);
     if ((!remote && dist2D(me.pos, c.home.vault) > USE_RANGE) || me.busyUntil > c.view.now) return walk;
-    const cash = Math.max(Math.floor(me.inv.cash - this.P.vault.carry[this.difficulty]), this.insuranceDue(me));
+    const cash = Math.max(Math.floor(me.inv.cash - this.bankKeep(c)), this.insuranceDue(me));
     if (cash <= 0 && !upgrade) { this.nextScoreAt = c.view.now; return walk; }
     this.nextScoreAt = c.view.now + 1.2;
     return { ...walk, vault: { ...(cash > 0 ? { deposit: { cash } } : {}), ...(upgrade ? { upgrade: true as const } : {}) } };
+  }
+
+  /**
+   * Carried cash a bank trip leaves on me: VaultParams.carry by skill in calm times; before a risky moment (danger
+   * at home, an intruder, heading out) anyone but easy banks down to pocket money (min with the hard/PRO carry).
+   */
+  bankKeep(c: Ctx): number {
+    const carry = this.P.vault.carry[this.difficulty];
+    if (this.difficulty === 'easy') return carry;
+    const leaving = c.reach || (c.me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c);
+    return c.danger || this.intruder(c) || leaving ? Math.min(carry, this.P.vault.carry.hard) : carry;
   }
 
   /** The next vault level is affordable with VaultParams.upgradeAt to spare (carried + banked). */

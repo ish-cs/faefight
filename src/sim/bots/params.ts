@@ -377,7 +377,7 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
 export const WEAPON: WeaponParams = { holdSec: 0.6, rocketHoldSec: 2.5, threatM: 12, hurtSec: 1, shotgunHyst: 2 };
 
 export const VAULT: VaultParams = {
-  medkits: D(0, 1, 2, 2), scaffolds: D(0, 0, 0, 0), keep: D(0, 0, 40, 40), buy: D(0, 0, 1, 1), carry: D(400, 150, 25, 25), bankMin: 80,
+  medkits: D(0, 1, 2, 2), scaffolds: D(0, 0, 0, 0), keep: D(0, 0, 40, 40), buy: D(0, 0, 1, 1), carry: D(400, 400, 25, 25), bankMin: 80,
   upgradeAt: D(Infinity, 500, 200, 100), upgradeScore: 0.75,
 };
 

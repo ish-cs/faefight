@@ -115,7 +115,7 @@ type Internals = {
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
   needs(c: Ctx): Needs; trapped(c: Ctx): boolean; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
-  stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean;
+  stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
   defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
   waitFor(c: Ctx): AllyStatus | null; ownFight(c: Ctx): boolean; teamFocus(view: BotView, id: number): number;
@@ -274,7 +274,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const close = !!c.enemy && c.enemyDist < 8;
       const due = I.insuranceDue(me);
       if ((c.reach || (sc > 0 && sc >= need)) && due > 0 && !close) return { f: [['insurance', 0.8]], why: `Heading out: banking $${Math.round(due)} so I can rebuy a gun if I die` };
-      const keep = I.P.vault.carry[I.difficulty];
+      const keep = I.bankKeep(c);
       const excess = me.inv.cash - keep;
       if (close) return zero('enemy too close');
       if (I.wantsVaultUpgrade(me)) {
