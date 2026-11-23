@@ -1399,6 +1399,8 @@ export class Bot {
 
   /** Vault cash I may spend on gear (everything above the insurance). */
   private spendable(me: PlayerState): number {
+    // A weak player forgets what they banked: shops only with carried cash (the vault still rebuys a lost gun).
+    if (this.difficulty === 'easy') return 0;
     return Math.max(0, me.vault.cash - this.insurance());
   }
 
