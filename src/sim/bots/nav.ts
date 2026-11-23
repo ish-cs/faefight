@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { MAP, PIECES, PLAYER, PROP_HALF } from '../constants';
+import { MAP, PIECES, PLAYER } from '../constants';
 import { MOVE } from '../movement';
 import type { Box, Bunker, CenterIsland, Doorway, IslandLayout, StaticBox } from '../map';
 import { doorBlocked } from './plans';
@@ -374,13 +374,6 @@ export class Nav {
       this.grids.clear();
       for (const n of this.nodeList) {
         const own: Box[] = (view.statics ?? []).filter((s: StaticBox) => (s.island < 0 ? view.map.length : s.island) === n.index);
-        // The island's generator, vault and shop NPC are solid too: walk round them (a straight line to the shop ran
-        // into the generator and stood there; measured in the storm replay 02ce1c).
-        const isl = view.map[n.index];
-        if (isl?.bunker) for (const key of ['generator', 'vault', 'shop'] as const) {
-          const p = isl[key], h = PROP_HALF[key];
-          own.push({ center: v3(p.x, p.y + h.y, p.z), half: v3(h.x, h.y, h.z), rotY: isl.bunker.facingYaw });
-        }
         this.grids.set(n.index, new WalkGrid(n, own));
       }
     }
@@ -544,7 +537,8 @@ export class Nav {
     return y !== null && y - nodes[i].groundY <= STEP_UP;
   }
 
-  private nearestLane(p: Vec3): Lane | null {
+  /** The lane p stands on; `prefer`: of lanes along the same line, one that ends at that node. */
+  private nearestLane(p: Vec3, prefer = -1): Lane | null {
     const nodes = this.nodeList;
     let best: Lane | null = null, bestOff = 2.5;
     for (let i = 0; i < nodes.length; i++) for (let j = 0; j < nodes.length; j++) {
@@ -552,9 +546,9 @@ export class Nav {
       const l = this.lane(i, j);
       const s = laneS(l, p);
       if (s < 0 || s > l.length) continue;
-      // Opposite islands' lane runs right over the center island's own (same line): the shorter one is the one I'm on
-      // (ties broken by length; walking 'toward the far island' from mid-bridge turned bots back).
-      const off = laneOff(l, p) + 2e-4 * l.length;
+      // Opposite islands' lane runs right over the center island's own (same line): heading for the center, it's the
+      // center's (taking the far island's turned a bot on the center bridge round, back to where it came from).
+      const off = laneOff(l, p) - (prefer >= 0 && (l.from === prefer || l.to === prefer) ? 0.05 : 0);
       if (off < bestOff) { bestOff = off; best = l; }
     }
     return best;
@@ -620,7 +614,7 @@ export class Nav {
         if (dist2D(me, entry) > 0.6) return this.within(a, me, v3(entry.x, this.nodeList[a].groundY, entry.z));
       }
     } else if (a < 0) {
-      l = this.nearestLane(me);
+      l = this.nearestLane(me, b);
       if (!l) return null;
       // Heading for a node off this lane (e.g. the center island, from a bridge between two outer islands): walk
       // off at the end with the shorter way on to it, not the one nearer as the crow flies (often a dead end).
