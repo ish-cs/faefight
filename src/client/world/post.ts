@@ -31,7 +31,9 @@ export type PostOptions = {
  * WebGPU allows 8 (critters: 9 → pipeline creation fails and the mesh disappears). Free when TAAU is off.
  */
 export function noVelocity(m: THREE.NodeMaterial) {
-  m.mrtNode = mrt({ velocity: vec4(0, 0, 0, 0) });
+  // `output` too: with no MRT on the scene pass (low, competitive) three uses the material's MRT alone, and a
+  // velocity-only MRT left the fragment shader with no outputs at all (invalid WGSL, the mesh vanished on low)
+  m.mrtNode = mrt({ output, velocity: vec4(0, 0, 0, 0) });
 }
 
 /** live sharpen strength for 'taau' / 'cas' (debug) */
