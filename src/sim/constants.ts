@@ -137,7 +137,7 @@ export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
  * Cooldowns 0.5 s / 0.2 s (were 1.5 / 0.6): the user's call, 2026-11-22.
  */
 export const GRAPPLE = {
-  price: 90, uses: 3, range: 40, tipSpeed: 90,
+  price: 90, uses: 3, range: 26, tipSpeed: 90,
   pullSpeed: 22, pullResponse: 7, pullSec: 2.4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.3,
   yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
   cooldownSec: 0.5, missCooldownSec: 0.2, minDist: 2.5, yankCreditSec: 5,

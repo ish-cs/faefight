@@ -453,6 +453,29 @@ export class Nav {
     return path;
   }
 
+  /** Walking length of route(a, b) (centre to centre), or Infinity when there is none. */
+  routeLen(a: number, b: number): number {
+    const r = this.route(a, b);
+    if (!r) return Infinity;
+    let len = 0;
+    for (let i = 1; i < r.length; i++) len += dist2D(this.nodeList[r[i - 1]].center, this.nodeList[r[i]].center);
+    return len;
+  }
+
+  /**
+   * The node(s) a walk from p starts on: p's own node; out on a bridge, the lane ends I can walk off it to (both on a
+   * finished bridge, else the end its decks hang off). Empty when p is on neither (in the water, off any lane).
+   */
+  startNodes(p: Vec3): number[] {
+    const a = this.nodeAt(p);
+    if (a >= 0) return [a];
+    const l = this.nearestLane(p);
+    if (!l) return [];
+    const f = this.frontier(l);
+    if (f.complete) return [l.from, l.to];
+    return [laneS(l, p) <= f.s + 1 ? l.from : l.to];
+  }
+
   /** Node to head for next from a toward b over finished bridges (b itself, or the next stop on the way), or null. */
   hop(a: number, b: number): number | null {
     const r = this.route(a, b);
@@ -542,7 +565,16 @@ export class Nav {
     } else if (a < 0) {
       l = this.nearestLane(me);
       if (!l) return null;
-      sTarget = b >= 0 ? this.landS(l, b) : laneS(l, dest);
+      // Heading for a node off this lane (e.g. the center island, from a bridge between two outer islands): walk
+      // off at the end with the shorter way on to it, not the one nearer as the crow flies (often a dead end).
+      let end = b;
+      if (b >= 0 && b !== l.from && b !== l.to) {
+        const s = laneS(l, me), ends = this.startNodes(me);
+        const viaFrom = ends.includes(l.from) ? s + this.routeLen(l.from, b) : Infinity;
+        const viaTo = ends.includes(l.to) ? l.length - s + this.routeLen(l.to, b) : Infinity;
+        if (viaFrom < Infinity || viaTo < Infinity) end = viaFrom <= viaTo ? l.from : l.to;
+      }
+      sTarget = b >= 0 ? this.landS(l, end) : laneS(l, dest);
       // Out on one bridge, heading for a spot on another (e.g. the tip of a pier on a new lane): back to the island
       // both lanes hang off first, not straight at it across the water (that flip-flops on the deck forever).
       // (Not in the storm: heading home first there is walking out into it.)
