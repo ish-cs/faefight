@@ -53,7 +53,8 @@ function buildReq(x: unknown): BuildRequest | null {
   const kind = oneOf(PIECE_KINDS, x.kind);
   const pos = vec(x.pos);
   if (!kind || !pos || typeof x.rotY !== 'number' || !Number.isFinite(x.rotY)) return null;
-  return { kind, pos, rotY: x.rotY, free: bool(x.free) };
+  const seq = typeof x.seq === 'number' && Number.isSafeInteger(x.seq) && x.seq >= 0 ? x.seq : undefined;
+  return { kind, pos, rotY: x.rotY, free: bool(x.free), ...(seq !== undefined ? { seq } : {}) };
 }
 
 function trapReq(x: unknown): TrapRequest | undefined {

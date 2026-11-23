@@ -7,7 +7,7 @@ import { WireDecoder } from '../net/wire';
 import type { Link } from '../net/transport';
 import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
-import type { Placement } from '../sim/building';
+import { snapPlacement, validatePlacement, type Placement } from '../sim/building';
 import { BuildAim, CLIENT_REACH, type AimOutcome } from './buildAim';
 import { trapAim, validateTrap } from '../sim/traps';
 import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, TRAP, WEAPONS } from '../sim/constants';
@@ -1522,9 +1522,17 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const me = latest.players.find((p) => p.id === humanId);
     if (!me || !me.alive || piecesLeft(me, aim.req.kind) <= 0) return false;
     if (me.healAt !== null || me.drinking) return false; // busy with a medkit/potion: the host would refuse it
-    input.queue({ build: aim.req });
+    // The host places it right after our latest move command (BuildRequest.seq), where our predicted player
+    // stands now: validate there, in the predicted world, exactly as the host will. The ghost was aimed from the
+    // rendered (extrapolated) feet, which can be a step off; a spot that only worked from there isn't placed.
+    const at = predictor?.current?.pos;
+    if (!predictor || !at) return false;
+    const sn = snapPlacement(aim.req.pos, aim.req.rotY, aim.req.free);
+    const v = validatePlacement(predictor.world, aim.req.kind, sn.pos, sn.rotY, at);
+    if (!v.ok) return false;
+    input.queue({ build: { ...aim.req, seq: moveSeq } });
     const afterId = latest.pieces.reduce((m, p) => Math.max(m, p.id), 0);
-    const piece = builds.place(aim.req.kind, aim.ghost, aim.rotY, humanId, now, afterId);
+    const piece = builds.place(aim.req.kind, v.pos, sn.rotY, humanId, now, afterId, moveSeq);
     predictor?.addLocalPiece(piece);
     renderer.setPredictedPieces(builds.pieces);
     placeWantedAt = -Infinity;
@@ -1538,7 +1546,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (!r.confirmed.length && !r.rejected.length) return;
     for (const p of [...r.confirmed, ...r.rejected]) predictor?.removeLocalPiece(p.id);
     renderer.setPredictedPieces(builds.pieces);
+    if (r.rejected.length) notPlaced(r.rejected);
   };
+  /** A placement the host refused: it fades out red, and say so (it is not there to stand on). */
+  const notPlaced = (pieces: PieceState[]) => toast(`✕ ${pieces[0].kind} not placed`);
 
   /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
   const gunHud = (me: Snapshot['players'][number] | undefined, own = true) => {
@@ -1671,6 +1682,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     },
     snapshot: (s) => {
       // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
+      // A predicted piece this snapshot shows the host refused leaves the local world first, so prediction
+      // replays without it (we fall where the host has us fall, instead of standing on it for a second).
+      const mine = s.players.find((p) => p.id === humanId);
+      if (mine?.mv) {
+        const refused = builds.refusedBy(s.pieces, mine.mv.ack, mine.busyUntil > s.time, performance.now());
+        if (refused.length) { for (const p of refused) predictor?.removeLocalPiece(p.id); renderer.setPredictedPieces(builds.pieces); notPlaced(refused); }
+      }
       predictor?.onSnapshot(s);
       killcam.push(s);
       latest = s;

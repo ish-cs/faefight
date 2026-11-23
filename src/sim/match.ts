@@ -597,8 +597,21 @@ export class Match implements MatchApi {
     if (input.view !== undefined) p.view = input.view === 1 ? 1 : 0;
     if (p.hook) this.events.push(...tickGrapple(this.grappleCtx, p, now));
 
+    // A build sent while still busy (a held-place stream arriving a little bunched) waits for the busy time
+    // to end instead of being dropped; it expires after BUILD.queueSec. The newest request wins.
+    if (input.build) this.queuedBuild.set(p.id, { req: input.build, until: now + (input.build.seq !== undefined ? BUILD.seqWaitSec : BUILD.queueSec) });
+    // This tick's other actions see the busy state from before a build placed mid-batch (below), as when it went last.
+    let busyBefore: number | null = null;
     if (cmds) {
       for (const c of cmds) {
+        // A build tied to command `seq` goes in right after it, before the next one moves us: where the client's
+        // predicted player stood when it validated the spot and showed the piece.
+        const q = this.queuedBuild.get(p.id);
+        if (q?.req.seq !== undefined && c.seq > q.req.seq && p.alive && now >= p.busyUntil) {
+          this.queuedBuild.delete(p.id);
+          busyBefore ??= p.busyUntil;
+          if (now <= q.until) this.build(p, q.req, now);
+        }
         if (p.alive) this.move(p, c); // a hard landing can kill mid-batch
         else p.mv!.ack = c.seq;
       }
@@ -607,10 +620,7 @@ export class Match implements MatchApi {
     if (input.drop) this.drop(p, input.drop, now);
 
     tickReload(p, now);
-    // A build sent while still busy (a held-place stream arriving a little bunched) waits for the busy time
-    // to end instead of being dropped; it expires after BUILD.queueSec. The newest request wins.
-    if (input.build) this.queuedBuild.set(p.id, { req: input.build, until: now + BUILD.queueSec });
-    if (now < p.busyUntil) return;
+    if (now < (busyBefore ?? p.busyUntil)) return;
     const isl = this.map[p.island];
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
 
@@ -662,7 +672,9 @@ export class Match implements MatchApi {
       try { this.events.push(...fireGrapple(this.grappleCtx, p, now)); } finally { this.rewindT = null; }
     }
     const queued = this.queuedBuild.get(p.id);
-    if (queued) {
+    // One tied to a command waits for the command after it (placed in the move loop). If we were still busy when
+    // that command came (ack past seq), it goes in now that we aren't, as an untied one would; or it expires.
+    if (queued && (queued.req.seq === undefined || queued.req.seq < (p.mv?.ack ?? 0) || now > queued.until)) {
       this.queuedBuild.delete(p.id);
       if (now <= queued.until) this.build(p, queued.req, now);
     }
