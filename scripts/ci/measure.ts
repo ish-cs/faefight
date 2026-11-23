@@ -16,7 +16,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch'] as const;
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
@@ -37,6 +37,7 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
       return { diffs: seed % 2 ? [hi, lo] : [lo, hi], maxSec: 25 * 60 };
     }
     case 'ffa8-pro': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
+    case 'ffa3-pro': return { diffs: Array(3).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
     case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 180 };
     case 'ffa8-pro-arch': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
@@ -68,7 +69,7 @@ type SeatOut = {
 };
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
-  time: number; decisive: boolean; preSdElims: number; firstSeal: number | null; msPerTick: number; wallSec: number;
+  time: number; decisive: boolean; preSdElims: number; preSdSeals?: number; firstSeal: number | null; msPerTick: number; wallSec: number;
   seats: SeatOut[];
   /** Player kills at or after sudden death (15:00+), eliminations in all, credited ones (refs with elimination rewards) and their spoils. */
   lateKills?: number; elims?: number; credited?: number; spoils?: number;
@@ -138,7 +139,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   }));
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
-  let preSdElims = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
+  let preSdElims = 0, preSdSeals = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
   const maxTicks = Math.round(maxSec * TICK_HZ);
   const w0 = performance.now();
   let snap = m.tick(new Map());
@@ -180,6 +181,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         const by = e.data.by as number | null | undefined;
         if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
         if (firstSeal === null && by != null && by !== e.data.owner && e.t < SD) firstSeal = e.t;
+        if (by != null && by !== e.data.owner && e.t < SD) preSdSeals++;
       } else if ((e.type as string) === 'elimination') {
         if (e.data.by != null) { credited++; spoils += Number(e.data.spoils) || 0; }
       } else if (e.type === 'eliminated') {
@@ -198,7 +200,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const winner = snap.winner !== null && snap.winner > 0 ? snap.winner : null;
   return {
     scenario, seed, winner, winnerDifficulty: winner ? diffs[winner - 1] : null, time: snap.time,
-    decisive: winner !== null && snap.time < SD, preSdElims, lateKills, elims, credited, spoils, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
+    decisive: winner !== null && snap.time < SD, preSdElims, preSdSeals, lateKills, elims, credited, spoils, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
   };
 }
 
@@ -245,6 +247,8 @@ export type ScenarioSummary = {
   scenario: Scenario; games: number; seeds: number[]; decisive: number; noWinner: number;
   winsByDifficulty: Record<string, number>; medianPreSdElims: number | null; medianEngagementM: number | null;
   attackPct: number; homePct: number; medianFirstSealSec: number | null; gamesWithSeal: number;
+  /** Seals (by a rival, before sudden death) per game: median and mean. */
+  medianSeals: number | null; meanSeals: number;
   longestHomeSitSec: number; avgMinutes: number; msPerTick: number; maxWallSec: number;
   /** Kept for older readers: the same as `ladder` on 1v1-pro-vs-hard. */
   proVsHard: Share | null;
@@ -288,6 +292,7 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     attackPct: (100 * seats.reduce((a, x) => a + x.attackSec, 0)) / alive,
     homePct: (100 * seats.reduce((a, x) => a + x.idleHome, 0)) / alive,
     medianFirstSealSec: median(seals), gamesWithSeal: seals.length,
+    medianSeals: median(games.map((g) => g.preSdSeals ?? 0)), meanSeals: games.reduce((a, g) => a + (g.preSdSeals ?? 0), 0) / Math.max(1, games.length),
     longestHomeSitSec: Math.max(0, ...seats.map((x) => x.longestHomeIdle)),
     avgMinutes: games.reduce((a, g) => a + g.time, 0) / Math.max(1, games.length) / 60,
     msPerTick: games.reduce((a, g) => a + g.msPerTick, 0) / Math.max(1, games.length),
@@ -322,9 +327,9 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '',
     Object.entries(meta).map(([k, v]) => `**${k}** ${v}`).join(' · '),
     '',
-    '| scenario | games | decisive < 15:00 | median elims < 15:00 | median engagement | attack | home | median first seal | higher tier wins (95% CI) | avg length | ship check |',
-    '|---|---|---|---|---|---|---|---|---|---|---|',
-    ...sums.map((s) => `| ${s.scenario} | ${s.games} | ${s.decisive}/${s.games} | ${s.medianPreSdElims ?? '-'} | ${s.medianEngagementM ?? '-'} m | ${pct(s.attackPct)} | ${pct(s.homePct)} | ${secs(s.medianFirstSealSec)} (${s.gamesWithSeal}/${s.games} games) | ${s.ladder ? `${(100 * s.ladder.share).toFixed(0)}% ± ${(100 * s.ladder.ci95).toFixed(0)}` : '-'} | ${s.avgMinutes.toFixed(1)} min | ${s.shipCheck.pass === null ? 'n/a' : s.shipCheck.pass ? '✅ pass' : '❌ fail'} |`),
+    '| scenario | games | decisive < 15:00 | median elims < 15:00 | median engagement | attack | home | median first seal | seals < 15:00 per game (median / mean) | higher tier wins (95% CI) | avg length | ship check |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|',
+    ...sums.map((s) => `| ${s.scenario} | ${s.games} | ${s.decisive}/${s.games} | ${s.medianPreSdElims ?? '-'} | ${s.medianEngagementM ?? '-'} m | ${pct(s.attackPct)} | ${pct(s.homePct)} | ${secs(s.medianFirstSealSec)} (${s.gamesWithSeal}/${s.games} games) | ${s.medianSeals ?? '-'} / ${(s.meanSeals ?? 0).toFixed(1)} | ${s.ladder ? `${(100 * s.ladder.share).toFixed(0)}% ± ${(100 * s.ladder.ci95).toFixed(0)}` : '-'} | ${s.avgMinutes.toFixed(1)} min | ${s.shipCheck.pass === null ? 'n/a' : s.shipCheck.pass ? '✅ pass' : '❌ fail'} |`),
     '',
     '### Ship-check details',
     ...sums.flatMap((s) => s.shipCheck.checks.map((c) => `- ${s.scenario}: ${c.pass ? '✅' : '❌'} ${c.name} (${c.value})`)),

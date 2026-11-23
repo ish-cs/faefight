@@ -57,6 +57,15 @@ const TURN_RATE = 8;
 /** Beyond this, an enemy on another island isn't worth abandoning the current goal for. */
 const ENGAGE_RANGE = 25;
 const CHEST = 1.2;
+/**
+ * Where the next deck of a bridge goes, tried in order: [s past the tip, metres to the side]. Straight on first; when
+ * that won't fit (the far shore has something on it right at the lane, e.g. a barrier on the center island, and the
+ * gap left is shorter than a deck) the same deck shifted sideways, still resting on the tip (decks are 2 m wide).
+ */
+export const DECK_TRIES: readonly [number, number][] = [
+  [2.0, 0], [2.1, 0], [2.2, 0], [2.3, 0], [2.4, 0], [2.6, 0],
+  [2.0, 0.5], [2.0, -0.5], [2.0, 0.8], [2.0, -0.8], [2.2, 0.5], [2.2, -0.5], [2.2, 0.8], [2.2, -0.8],
+];
 /** Net forward progress of one scaffold laid end-to-end. */
 const SCAFFOLD_STEP = 3.8;
 /** Teams (waitFor): the bridge head is within this of the rival island's shore; a teammate within this of where I
@@ -165,6 +174,11 @@ type Ctx = {
   enemy: PlayerState | null;
   enemyDist: number;
   reach: boolean;
+  /**
+   * Can't walk to the rival's island but can hook over: where to stand to fire (my shore facing them, or the tip of my
+   * bridge toward them once it's within hook range), else null. Counts as a route for attack and seal.
+   */
+  hookFrom: Vec3 | null;
   homeReach: boolean;
   openDoors: Doorway[];
   /** Node (island, or the center island) the next bridge goes to, and whether I can already walk to the center. */
@@ -226,6 +240,8 @@ export class Bot {
   private alt = new Set<number>();
   private bridgeStuck: { key: string; since: number; triedAt: number } | null = null;
   private bridgeHoldUntil = -Infinity;
+  /** Bridge targets given up on until then (a center lane whose last deck never fits). */
+  private laneBan = new Map<number, number>();
   private mirrorCache = new Map<number, { at: number; f: { l: Lane; s: number; complete: boolean } }>();
   private lastWallS = new Map<string, number>();
   private wallsOnBridge: boolean;
@@ -677,6 +693,45 @@ export class Bot {
     if (to === home || this.nav.hop(to, home) !== null) return true;
     if ((c.me.inv.grapples ?? 0) - 1 >= Math.max(1, Math.round(this.P.hook.keepForTravel))) return true;
     return (c.me.inv.pieces.scaffold ?? 0) >= this.scaffoldsTo(to, home);
+  }
+
+  /**
+   * Where I could hook over to node `to` from (I can't walk there): my shore facing it, or the tip of my bridge toward
+   * it, whichever is within hook reach (HookParams.crossMax, rim to rim, from eye height) and I can walk to. Null:
+   * no hook in hand, no way back from there (canReturn), or nowhere close enough yet (lay more decks first).
+   */
+  private hookLaunch(view: BotView, me: PlayerState, node: number, home: number, to: number): Vec3 | null {
+    if ((me.inv.grapples ?? 0) <= 0 || view.suddenDeath) return null;
+    const dest = this.nav.nodes[to];
+    if (!dest) return null;
+    const H = this.P.hook;
+    const inReach = (p: Vec3) => dist2D(p, dest.center) - dest.radius + H.crossInset <= Math.min(H.crossMax, GRAPPLE.range - 0.5) - 1;
+    const starts = this.nav.startNodes(me.pos);
+    let best: Vec3 | null = null, bestD = Infinity;
+    const consider = (p: Vec3) => { const d = dist2D(p, me.pos); if (inReach(p) && d < bestD) { bestD = d; best = p; } };
+    for (const s of starts) {
+      if (s !== node && node >= 0) continue;
+      const n = this.nav.nodes[s];
+      const d = flat(sub(dest.center, n.center)), l = Math.hypot(d.x, d.z) || 1;
+      consider(v3(n.center.x + (d.x / l) * (n.radius - 0.7), n.groundY, n.center.z + (d.z / l) * (n.radius - 0.7)));
+    }
+    // The tip of my bridge toward them (I can walk out on it from my island).
+    const from = node >= 0 ? node : starts[0] ?? home;
+    if (from !== undefined && from !== to && this.nav.nodes[from]) {
+      const l = this.nav.lane(from, to), f = this.nav.frontier(l);
+      if (!f.complete) { const t = laneAt(l, f.s - 0.6); consider(v3(t.x, me.pos.y, t.z)); }
+    }
+    if (!best) return null;
+    // A way back from there: a spare hook use, scaffolds, or a bridge.
+    const back = to === home || this.nav.hop(to, home) !== null || (me.inv.grapples ?? 0) - 1 >= Math.max(1, Math.round(H.keepForTravel)) ||
+      (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsTo(to, home);
+    return back ? best : null;
+  }
+
+  /** Walk to where I hook over to my rival's island from (hookPlan fires once it's in reach and nobody is in sight). */
+  private toHookLaunch(c: Ctx): Act {
+    const walk = this.goTo(c.hookFrom!, 0.8);
+    return walk.dir ? { ...walk, sprint: true } : { dir: null, face: c.rivalIsl!.center };
   }
 
   /**
@@ -1140,6 +1195,7 @@ export class Bot {
     const C = this.nav.centerNode;
     const centerReach = C >= 0 && (node === C || this.nav.hop(src, C) !== null);
     let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
+    const hookFrom = rivalIsl && !reach ? this.hookLaunch(view, me, node, home.index, rivalIsl.index) : null;
     // Teams: bridge to the teammate whose island is on the way (they lay the rest); already linked to them, wait
     // for their bridge instead of laying a second, longer one of my own.
     const stage = bridgeTo !== null && rival ? this.stageIsland(view, rival) : null;
@@ -1147,11 +1203,12 @@ export class Bot {
     // Center-minded: bridge to the center island first when it isn't much further than the rival. Anyone else
     // (but easy players) goes via the center when it's the shorter bridge: it's the hub to everyone, and the fights.
     const slack = this.centerMinded ? 2 : this.difficulty !== 'easy' ? 0 : -Infinity;
-    if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath && stage === null &&
+    // A center bridge that wouldn't finish (laneBanSec): bridge to them directly for a while.
+    if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath && stage === null && !((this.laneBan.get(C) ?? -Infinity) > view.now) &&
         (bridgeTo === null ? this.centerMinded : this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
     // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
     if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
-    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, homeReach, openDoors, bridgeTo, centerReach, danger };
+    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, hookFrom, homeReach, openDoors, bridgeTo, centerReach, danger };
   }
 
   private scaffoldsNeeded(c: Ctx): number {
@@ -1512,7 +1569,7 @@ export class Bot {
         return 0.1 + 0.25 * t.greed + 0.1 * t.opportunism + Math.min(cv.gold, 1000) / 2000 + supplies - far - rich - (c.danger ? 0.2 : 0);
       }
       case 'attack': {
-        if (!c.reach || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
+        if (!(c.reach || c.hookFrom) || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
         // Sealed in (or about to respawn into a sealed bunker): be there to finish it.
@@ -1528,7 +1585,7 @@ export class Bot {
       }
       case 'seal': {
         const kit = sealKit(me.inv);
-        if (view.suddenDeath || !c.reach || !c.rivalIsl || kit === 0 || !c.openDoors.length) return 0;
+        if (view.suddenDeath || !(c.reach || c.hookFrom) || !c.rivalIsl || kit === 0 || !c.openDoors.length) return 0;
         const near = c.on === c.rivalIsl.index && dist2D(me.pos, c.rivalIsl.bunker.center) < 15;
         const ownerAway = !!c.rival && c.rival.alive && this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)?.island !== c.rival.island &&
           !!this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC);
@@ -1811,8 +1868,8 @@ export class Bot {
     // Nothing fits (e.g. a gap shorter than a deck, something in the way): look again now and then, not every tick.
     const st = this.bridgeStuck?.key === key ? this.bridgeStuck : null;
     if (st && now - st.triedAt < this.P.buildTuning.bridgeRetrySec) return { dir: null, face: ahead };
-    for (const k of [2.0, 2.1, 2.2, 2.3, 2.4, 2.6]) {
-      const p = at(k);
+    for (const [k, side] of DECK_TRIES) {
+      const p = add(at(k), scale(right(rotY), side));
       const pos = v3(p.x, c.me.pos.y, p.z);
       if (!c.view.canPlace('scaffold', pos, rotY).ok) continue;
       this.nav.invalidate(); this.mirrorCache.clear();
@@ -1826,6 +1883,9 @@ export class Bot {
       if (now - st.since > this.P.buildTuning.bridgeStuckSec) {
         this.bridgeStuck = null;
         if (toRival && !mirror && this.P.buildSkill[this.difficulty].altRoute) this.alt.add(to);
+        // The center as a stepping stone that won't finish: bridge to the rival directly instead (not in the storm:
+        // the center is where it ends).
+        else if (to === this.nav.centerNode && !this.stormPrep(c.view)) { this.alt.delete(to); this.laneBan.set(to, now + this.P.buildTuning.laneBanSec); }
         else { this.alt.delete(to); this.bridgeHoldUntil = now + this.P.buildTuning.bridgeHoldSec; }
         this.nextScoreAt = now;
       }
@@ -1835,6 +1895,7 @@ export class Bot {
 
   private doAttack(c: Ctx): Act {
     if (!c.rivalIsl || !c.rival) return IDLE;
+    if (!c.reach && c.hookFrom) return this.toHookLaunch(c);
     const now = c.view.now;
     // Hunt them where they were last seen, if that's somewhere I can walk to; else go to their bunker.
     const seen = this.mem.recent(c.rival.id, now, 10);
@@ -1871,6 +1932,7 @@ export class Bot {
   private doSeal(c: Ctx): Act {
     const isl = c.rivalIsl;
     if (!isl || !c.openDoors.length) return IDLE;
+    if (!c.reach && c.hookFrom) return this.toHookLaunch(c);
     const standOf = (d: Doorway) => add(d.center, scale(forward(d.yaw), 2.5));
     const door = c.openDoors.reduce((a, d) => (dist2D(standOf(d), c.me.pos) < dist2D(standOf(a), c.me.pos) ? d : a));
     const plug = plugFor(c.me.inv, c.view.pieces, door);
