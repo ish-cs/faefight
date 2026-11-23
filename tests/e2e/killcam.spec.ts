@@ -39,7 +39,7 @@ test('dying shows the killcam from the killer, it ends before the respawn; Space
   const mine = page.locator('[data-testid="feed-entry"].mine');
   await expect(mine).toBeVisible();
   await expect(mine).toContainText('You');
-  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === bot)!.alive, { timeout: 10_000 }).toBe(true);
+  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === bot)!.alive, { timeout: RESPAWN_MS + 5_000 }).toBe(true);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/qol2-killfeed.png` });
 
   // Killed by the bot: the killcam plays, then ends by itself before the respawn.
@@ -57,7 +57,7 @@ test('dying shows the killcam from the killer, it ends before the respawn; Space
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/qol2-killcam.png` });
   await expect(kc).toBeHidden({ timeout: 5_000 });
   expect((await dbg<KcInfo>(page, 'killcam')).reason).toBe('ended');
-  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);
+  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: RESPAWN_MS + 5_000 }).toBe(true);
   expect(Date.now() - diedAt).toBeLessThan(RESPAWN_MS + 3000); // respawn not held up
 
   // Again, skipped with Space.
@@ -67,7 +67,7 @@ test('dying shows the killcam from the killer, it ends before the respawn; Space
   await page.keyboard.press('Space');
   await expect(kc).toBeHidden({ timeout: 1_000 });
   expect((await dbg<KcInfo>(page, 'killcam')).reason).toBe('skipped');
-  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);
+  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: RESPAWN_MS + 5_000 }).toBe(true);
 
   expect(errors).toEqual([]);
 });
