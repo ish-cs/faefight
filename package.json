@@ -31,7 +31,8 @@
   },
   "pnpm": {
     "overrides": {
-      "sharp": "-"
+      "sharp": "-",
+      "onnxruntime-node": "-"
     }
   }
 }
