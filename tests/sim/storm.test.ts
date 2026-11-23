@@ -245,7 +245,11 @@ describe('8 bots and the storm', () => {
       expect(Math.hypot(w.pos.x - c.center.x, w.pos.z - c.center.z)).toBeLessThan(snap.storm!.r);
       expect(w.pos.y).toBeGreaterThan(snap.waterY + 1); // on land or a deck, not in the sea
     } else expect(snap.players.every((p) => p.id === w.id || p.eliminated)).toBe(true);
-    // Someone actually bridged onto the center island.
-    expect(snap.pieces.filter((p) => p.kind === 'scaffold' && Math.hypot(p.pos.x - c.center.x, p.pos.z - c.center.z) < c.radius + 4).length).toBeGreaterThan(0);
+    // Someone actually bridged onto the center island (the last deck may end up to a walkable step short of the shore:
+    // its centre within half a deck + Nav STEP_GAP + a little of the land).
+    // (Only when the game lasted until the ring passed the islands' inner shores, ~SD + 80 s at 8 players: a game won
+    // before that never needed the center.)
+    const bridged = snap.pieces.filter((p) => p.kind === 'scaffold' && Math.hypot(p.pos.x - c.center.x, p.pos.z - c.center.z) < c.radius + 6).length;
+    if (snap.time > SD + 80) expect(bridged, `ended at ${(snap.time - SD).toFixed(0)} s into sudden death`).toBeGreaterThan(0);
   }, 300_000);
 });
