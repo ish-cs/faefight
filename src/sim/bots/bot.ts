@@ -263,6 +263,8 @@ export class Bot {
   /** When I noticed I'm stranded with no way home (strandedDitch). */
   private strandedSince: number | null = null;
   hookNote: { t: number; text: string } | null = null;
+  /** When I last fired the hook to yank someone: if it caught the world instead, I let go (yankMissed). */
+  private yankFiredAt = -Infinity;
   /** Blowing out a pier section under an enemy (or under the piece they hide behind): which, how, and why. */
   private dockPlan: { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number } | null = null;
   private nextDockRollAt = 0;
@@ -554,6 +556,8 @@ export class Bot {
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
     if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     if (rope || grapple) jump = false; // a jump lets go of the rope
+    // A yank that missed them and caught something behind (a wall over the water) would reel me across: let go.
+    if (rope && now - this.yankFiredAt < 2 * GRAPPLE.range / GRAPPLE.tipSpeed + 0.5) { jump = true; this.yankFiredAt = -Infinity; }
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
@@ -579,6 +583,7 @@ export class Bot {
       select = me.hotbar.indexOf('grapple');
       useMedkit = false;
       this.hookNote = { t: now, text: hook!.note };
+      if (hook!.why === 'yank') this.yankFiredAt = now;
       this.hookIntent = null;
       this.lastDidAt = now;
     }
