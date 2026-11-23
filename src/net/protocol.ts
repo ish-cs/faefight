@@ -82,4 +82,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 26; // 26: sudden-death doorway barriers (snapshot `barrierAt`, event `allSealed`, no per-bunker sealed events in sudden death). 25: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 24 (main: stranded bots)
+export const NET_VERSION = 27; // 27: sudden-death doorway barriers (snapshot `barrierAt`, event `allSealed`, no per-bunker sealed events in sudden death). 25: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 24 (main: stranded bots)
