@@ -43,6 +43,16 @@ describe('cinematic interest scoring', () => {
     expect(tr.storylines(snap(20, after))[0].reason).not.toBe('elimination');
   });
 
+  it('a sealed-in elimination (no killer) features the credited sealer from the elimination event', () => {
+    const tr = new InterestTracker();
+    const ps = [pl(1), pl(2), pl(3)];
+    tr.ingest(snap(5, ps));
+    const after = [pl(1), pl(2, { alive: false, eliminated: true }), pl(3)];
+    tr.ingest(snap(6, after, { events: [{ t: 6, type: 'kill', data: { victim: 2, killer: null } }, { t: 6, type: 'eliminated', data: { player: 2 } },
+      { t: 6, type: 'elimination', data: { victim: 2, by: 3, assists: [], how: 'trapped', spoils: 200, shares: [[3, 200]] } }] }));
+    expect(tr.storylines(snap(6.2, after))[0]).toMatchObject({ reason: 'elimination', playerId: 3, otherId: 2 });
+  });
+
   it('a sealed player being hunted, a rocket incoming and sudden death all register', () => {
     const tr = new InterestTracker();
     const ps = [pl(1), pl(2), pl(3)];

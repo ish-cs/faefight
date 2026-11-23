@@ -49,7 +49,7 @@ type Hit = { t: number; by: number; target: number };
 export class InterestTracker {
   private hits: Hit[] = [];
   private kills: { t: number; killer: number | null; victim: number; at: V3 | null }[] = [];
-  private elims: { t: number; player: number; at: V3 | null }[] = [];
+  private elims: { t: number; player: number; at: V3 | null; by?: number }[] = [];
   private seals: { t: number; by: number | null; owner: number | null; island: number }[] = [];
   private lastTick = -1;
   /** Last known position of every player (a killed player's spot for the orbit). */
@@ -64,6 +64,8 @@ export class InterestTracker {
       if (e.type === 'hit' && typeof d.target === 'number' && typeof d.by === 'number' && d.by !== d.target) this.hits.push({ t: e.t, by: d.by, target: d.target });
       else if (e.type === 'kill' && typeof d.victim === 'number') this.kills.push({ t: e.t, killer: typeof d.killer === 'number' && d.killer !== d.victim ? d.killer : null, victim: d.victim, at: this.spot(d.victim) });
       else if (e.type === 'eliminated' && typeof d.player === 'number') this.elims.push({ t: e.t, player: d.player, at: this.spot(d.player) });
+      // Elimination credit (sim/elimination.ts, same tick): feature the eliminator (the sealer of a sealed-in player too).
+      else if (e.type === 'elimination' && typeof d.by === 'number') { const x = this.elims.find((k) => k.player === d.victim && k.t === e.t); if (x) x.by = d.by; }
       else if (e.type === 'sealed' && typeof d.island === 'number') this.seals.push({ t: e.t, island: d.island, by: typeof d.by === 'number' ? d.by : null, owner: typeof d.owner === 'number' ? d.owner : null });
     }
     for (const p of s.players) if (p.alive) {
@@ -97,7 +99,7 @@ export class InterestTracker {
     // Eliminations and kills: orbit the spot where it happened, featuring the killer when they live.
     for (const e of this.elims) {
       const k = [...this.kills].reverse().find((x) => x.victim === e.player);
-      const who = k?.killer != null && isAlive(k.killer) ? k.killer : e.player;
+      const who = e.by != null && isAlive(e.by) ? e.by : k?.killer != null && isAlive(k.killer) ? k.killer : e.player;
       out.push({ reason: 'elimination', playerId: who, otherId: e.player, score: SCORE.elimination - (t - e.t) * 0.3, kind: 'orbit', at: e.at ?? k?.at ?? undefined });
     }
     for (const k of this.kills) {
