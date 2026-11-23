@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 const out = process.argv[2] ?? 'docs/screens/bunker-slits.png';
 const tpl = process.argv[3] ?? 'harbor';
 const base = process.env.MAP_URL ?? 'http://localhost:5331';
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e).slice(0, 300)));

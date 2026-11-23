@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Commentator, REPEAT_SEC, STALE_LOW, type Prio } from '../../src/client/cinematic/commentary/commentator';
 import { fill, KEY_VARS, LINES, type LineKey } from '../../src/client/cinematic/commentary/lines';
-import { BrowserTts, delivery, pickVoices, type SpeakOpts, type Tts } from '../../src/client/cinematic/commentary/tts';
+import { BrowserTts, delivery, pickVoices, RecordingSynth, type SpeakOpts, type Tts } from '../../src/client/cinematic/commentary/tts';
 import { defaultSettings, sanitizeSettings, SETTINGS_KEY, SettingsStore } from '../../src/client/settings/store';
 import type { MatchEvent, MatchEventType, PlayerState, Snapshot } from '../../src/sim/types';
 
@@ -306,5 +306,23 @@ describe('commentary settings', () => {
     store.update((d) => { d.audio.commentary = 0.3; d.audio.commentaryOn = false; d.audio.commentarySpectate = true; });
     expect(JSON.parse(m.get(SETTINGS_KEY)!).audio).toMatchObject({ commentary: 0.3, commentaryOn: false, commentarySpectate: true });
     expect(new SettingsStore(kv).get().audio).toMatchObject({ commentary: 0.3, commentaryOn: false, commentarySpectate: true, captions: true });
+  });
+});
+
+describe('automated browsers stay silent', () => {
+  it('RecordingSynth records lines and ends them on its own, never touching the OS voice', () => {
+    vi.useFakeTimers();
+    const synth = new RecordingSynth();
+    class U { voice: unknown = null; lang = ''; rate = 1; pitch = 1; volume = 1; onend: (() => void) | null = null; onerror: ((e: unknown) => void) | null = null; constructor(public text: string) {} }
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const tts = new BrowserTts(synth, U as never);
+    info.mockRestore();
+    const onEnd = vi.fn();
+    tts.speak('Down goes Bruno!', { persona: 'pbp', intensity: 1, volume: 1, onEnd });
+    expect(synth.spoken).toEqual(['Down goes Bruno!']);
+    expect(onEnd).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(3000);
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });

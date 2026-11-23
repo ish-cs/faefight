@@ -71,4 +71,8 @@ test('WATCH BOTS: 60 s of commentary, varied lines, captions, no errors', async 
   // Variety: no template repeated in the run.
   expect(new Set(log.map((l) => l.text)).size).toBe(log.length);
   expect(seen.length).toBeGreaterThan(0);
+  // Automated browsers never really speak: the game swaps in a recording stand-in for speechSynthesis.
+  const spoken = await page.evaluate(() => (window as unknown as { __commentarySpoken?: string[] }).__commentarySpoken ?? null);
+  expect(spoken, "speech went to the real OS voice").not.toBeNull();
+  expect(spoken!.length).toBeGreaterThan(0);
 });

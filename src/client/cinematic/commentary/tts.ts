@@ -65,13 +65,36 @@ type SynthLike = Pick<SpeechSynthesis, 'speak' | 'cancel' | 'getVoices'> & {
 };
 type UtterCtor = new (text: string) => SpeechSynthesisUtterance;
 
+/** Driven by Playwright / WebDriver (tests, screenshot and perf scripts): never make real sound. */
+export const automated = () => typeof navigator !== 'undefined' && navigator.webdriver === true;
+
+/**
+ * Stand-in speechSynthesis for automated browsers: Chrome speaks through the OS speech service even
+ * headless and with --mute-audio, so tests would talk out loud on the machine. This records each line
+ * (window.__commentarySpoken) and ends it after its rough speaking time instead.
+ */
+export class RecordingSynth implements SynthLike {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  readonly spoken: string[] = [];
+  constructor() {
+    if (typeof window !== 'undefined') (window as unknown as { __commentarySpoken?: string[] }).__commentarySpoken = this.spoken;
+  }
+  getVoices(): SpeechSynthesisVoice[] { return []; }
+  speak(u: SpeechSynthesisUtterance) {
+    this.spoken.push(u.text);
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => { this.timer = null; u.onend?.(new Event('end') as SpeechSynthesisEvent); }, 600 + u.text.split(/\s+/).length * 330);
+  }
+  cancel() { if (this.timer) clearTimeout(this.timer); this.timer = null; }
+}
+
 export class BrowserTts implements Tts {
   readonly available: boolean;
   private voices: { pbp: SpeechSynthesisVoice | null; colour: SpeechSynthesisVoice | null } = { pbp: null, colour: null };
   private current: SpeechSynthesisUtterance | null = null;
 
   constructor(
-    private synth: SynthLike | null = typeof speechSynthesis !== 'undefined' ? speechSynthesis : null,
+    private synth: SynthLike | null = automated() ? new RecordingSynth() : typeof speechSynthesis !== 'undefined' ? speechSynthesis : null,
     private Utter: UtterCtor | null = typeof SpeechSynthesisUtterance !== 'undefined' ? SpeechSynthesisUtterance : null,
   ) {
     this.available = !!synth && !!Utter;

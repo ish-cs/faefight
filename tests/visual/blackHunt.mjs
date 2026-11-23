@@ -29,7 +29,7 @@ const TOGGLES = {
 const SETTINGS = { nogov: { video: { dynamicResolution: false } } };
 TOGGLES.nogov = () => 'governor / dynamic resolution off';
 
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
 const results = [];
 for (const cfg of configs) {
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });

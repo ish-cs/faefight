@@ -47,6 +47,18 @@ export class Commentary {
       duck,
     });
     settings.subscribe(() => this.recompute());
+    // A hidden tab never talks (a background preview tab, a minimised window); an unfocused one only in cinematic mode.
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => this.recompute());
+      window.addEventListener('blur', () => this.recompute());
+      window.addEventListener('focus', () => this.recompute());
+    }
+  }
+
+  /** May the commentator be heard right now? Visible, and focused unless cinematic mode is on. */
+  private audible(): boolean {
+    if (typeof document === 'undefined') return true;
+    return !document.hidden && (document.hasFocus() || !!this.dir?.active);
   }
 
   /** Each snapshot, with whether we're watching rather than playing. */
@@ -73,6 +85,6 @@ export class Commentary {
 
   private recompute() {
     const a = settings.get().audio;
-    this.commentator.setActive(a.commentaryOn && (!!this.dir?.active || (this.spectating && a.commentarySpectate)));
+    this.commentator.setActive(a.commentaryOn && this.audible() && (!!this.dir?.active || (this.spectating && a.commentarySpectate)));
   }
 }
