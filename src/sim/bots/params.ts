@@ -370,7 +370,7 @@ export const WEAPON: WeaponParams = { holdSec: 0.6, rocketHoldSec: 2.5, threatM:
 /** Sprint-jump reach is ~7.3 m and a walking one ~4.8 m (measured in the sim): PRO's 4.2 m leaves a wide margin. */
 export const PARKOUR: Record<Difficulty, ParkourSkill> = {
   easy: { gapMax: 1.5, use: 0.25, slop: 0.5, climbUp: 0.5, underFire: 0, rush: 0, rushRamps: 0 },
-  medium: { gapMax: 2.5, use: 0.6, slop: 0.35, climbUp: 0.8, underFire: 0.4, rush: 0, rushRamps: 1 },
+  medium: { gapMax: 2, use: 0.4, slop: 0.35, climbUp: 0.8, underFire: 0, rush: 0, rushRamps: 1 },
   hard: { gapMax: 3.4, use: 0.9, slop: 0.2, climbUp: 1.0, underFire: 0.7, rush: 0.4, rushRamps: 2 },
   pro: { gapMax: 4.2, use: 1, slop: 0.08, climbUp: 1.1, underFire: 1, rush: 0.8, rushRamps: 2 },
 };
