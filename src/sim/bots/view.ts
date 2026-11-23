@@ -83,6 +83,8 @@ export type BotView = {
    * block it), and the player it would hit, if any. Absent in hand-made test views.
    */
   castHook?(dir: Vec3): { point: Vec3; dist: number; player: number | null } | null;
+  /** This map's hook reach (map.ts grappleRange); absent: GRAPPLE.range. */
+  hookRange?: number;
   /** Positions of loot bags within sight range. */
   loot: Vec3[];
   waterY: number;

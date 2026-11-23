@@ -4,7 +4,7 @@ import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosiv
 import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { envKiller, islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
-import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
+import { buildMapDef, grappleRange, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
 import { Docks, overDock } from './docks';
@@ -74,6 +74,8 @@ export class Match implements MatchApi {
   private ctx: CombatCtx;
   /** Grappling hooks' view of this match (grapple.ts); bound like ctx. */
   private grappleCtx!: GrappleCtx;
+  /** This map's grappling hook reach (map.ts grappleRange). */
+  readonly hookRange: number;
   /** Public recent history a human would have on screen: hits, tracers, kill feed, scoreboard. */
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
@@ -134,6 +136,7 @@ export class Match implements MatchApi {
     islandOf.forEach((isl, i) => { def.colors![isl] = teams[i] === undefined ? picked[i] : TEAM_COLORS[teams[i]!]; });
     this.cosmetics = new Cosmetics(def.cosmetics);
     this.hazards = new Hazards(def.hazards);
+    this.hookRange = grappleRange(map);
     this.docks = new Docks(def.docks ?? []);
     this.hazardSeed = setup.seed ?? 1;
     this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
@@ -195,6 +198,7 @@ export class Match implements MatchApi {
       players: s.players,
       pieces: s.pieces,
       get waterY() { return s.waterY; },
+      range: this.hookRange,
       // The rope never threads a firing slit; aimed at players it is lag-compensated like a shot.
       cast: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, false) : this.rewoundRay(o, d, max, shooter, this.rewindT, false)),
       clear: (a, b) => {
@@ -899,8 +903,9 @@ export class Match implements MatchApi {
         const hz = this.hazards.ray(eye, dir, d + 0.5);
         return !hz || dist(add3(eye, dir, hz.dist), to) < 1;
       },
+      hookRange: this.hookRange,
       castHook: (dir) => {
-        const h = this.physics.raycast(eye, dir, GRAPPLE.range, self.id, false);
+        const h = this.physics.raycast(eye, dir, this.hookRange, self.id, false);
         return h ? { point: h.point, dist: h.dist, player: h.hit.type === 'player' ? h.hit.id : null } : null;
       },
       waterY: this.s.waterY,
