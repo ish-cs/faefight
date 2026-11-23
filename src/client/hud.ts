@@ -1,7 +1,7 @@
 import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, TRAP, WEAPONS } from '../sim/constants';
 import { elimView } from './elimBanner';
 import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
-import type { CenterIsland, IslandLayout } from '../sim/map';
+import { grappleRange, type CenterIsland, type IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem, isPotionItem } from '../sim/hotbar';
 import type { BotBrainInfo, GunKind, HotbarItem, Inventory, MatchEvent, PieceKind, PlayerState, ShopItem, Snapshot, VaultAction, WeaponKind } from '../sim/types';
 import { dist2D } from '../sim/vec';
@@ -62,6 +62,9 @@ function shortOf(item: ShopItem): string {
   return g ? `Lock ${SHORT[g]}` : SHORT[item as HotbarItem] ?? item;
 }
 
+/** This map's hook reach for the shop text (set with the map). */
+let hookRange: number = GRAPPLE.range;
+
 /** Shop info-bar text: what the item is and does, beyond its name. */
 function detailsOf(item: ShopItem, price: number, genLevel: number, me: PlayerState): string {
   const name = labelOf(item);
@@ -83,7 +86,7 @@ function detailsOf(item: ShopItem, price: number, genLevel: number, me: PlayerSt
   }
   if (item === 'grenade') return `Grenade · ${GRENADE.dmg} dmg in a ${GRENADE.radius} m blast · $${price}`;
   if (item === 'charge') return `Breach charge · cracks walls and sealed doors · $${price}`;
-  if (item === 'grapple') return `Grappling hook · ${GRAPPLE.uses} uses · ${GRAPPLE.range} m · hook a wall to swing to it, a player to yank them to you · Space lets go · $${price}`;
+  if (item === 'grapple') return `Grappling hook · ${GRAPPLE.uses} uses · ${Math.round(hookRange)} m · hook a wall to swing to it, a player to yank them to you · Space lets go · $${price}`;
   if (item === 'trap') return `Spike trap · set on a floor or wall; ${TRAP.dmg} dmg to enemies who step in, never you · max ${TRAP.maxPerPlayer} out · $${price}`;
   if (item === 'medkit') return `Medkit · heals ${MEDKIT.heal} HP over ${MEDKIT.useSec}s · $${price}`;
   return `${name} · $${price}`;
@@ -288,6 +291,7 @@ export class Hud {
 
   setMap(map: IslandLayout[], humanId: number, humanIsland: number, center: CenterIsland | null = null) {
     this.map = map;
+    hookRange = grappleRange(map);
     this.centerIsland = center;
     this.humanId = humanId;
     this.seals.replaceChildren(...map.map((isl) => {

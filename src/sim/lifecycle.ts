@@ -122,6 +122,7 @@ export function killPlayer(
   p.vel = v3();
   delete p.yankedBy;
   delete p.hurtBy;
+  delete p.rocketJumpAt;
   p.deaths++;
   const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
   if (k) k.kills++;

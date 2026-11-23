@@ -5,7 +5,7 @@ import { BUILD, DT, ECONOMY, TICK_HZ, VAULT_INTEREST_SEC, GRAPPLE, LIFECYCLE, MA
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { payInterest, sanitizeLoadout, upgradeVault, vaultMove, vaultSpec } from './vault';
 import { envKiller, islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
-import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
+import { buildMapDef, grappleRange, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
 import { Docks, overDock } from './docks';
@@ -78,6 +78,8 @@ export class Match implements MatchApi {
   private ctx: CombatCtx;
   /** Grappling hooks' view of this match (grapple.ts); bound like ctx. */
   private grappleCtx!: GrappleCtx;
+  /** This map's grappling hook reach (map.ts grappleRange). */
+  readonly hookRange: number;
   /** Public recent history a human would have on screen: hits, tracers, kill feed, scoreboard. */
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
@@ -138,6 +140,7 @@ export class Match implements MatchApi {
     islandOf.forEach((isl, i) => { def.colors![isl] = teams[i] === undefined ? picked[i] : TEAM_COLORS[teams[i]!]; });
     this.cosmetics = new Cosmetics(def.cosmetics);
     this.hazards = new Hazards(def.hazards);
+    this.hookRange = grappleRange(map);
     this.docks = new Docks(def.docks ?? []);
     this.hazardSeed = setup.seed ?? 1;
     this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
@@ -200,6 +203,7 @@ export class Match implements MatchApi {
       players: s.players,
       pieces: s.pieces,
       get waterY() { return s.waterY; },
+      range: this.hookRange,
       // The rope never threads a firing slit; aimed at players it is lag-compensated like a shot.
       cast: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, false) : this.rewoundRay(o, d, max, shooter, this.rewindT, false)),
       clear: (a, b) => {
@@ -230,7 +234,7 @@ export class Match implements MatchApi {
         this.supportDirty = true;
       },
       grounded: (id) => this.s.players.get(id)?.mv?.grounded ?? false,
-      onKnockback: (id, dv) => {
+      onKnockback: (id, dv, rocketJump) => {
         // The movement model keeps momentum (fully in the air, braking on the ground), so a blast is just a
         // velocity change; an upward one lifts you off the ground (rocket jump).
         const p = this.s.players.get(id);
@@ -238,6 +242,7 @@ export class Match implements MatchApi {
         p.vel.x += dv.x; p.vel.z += dv.z;
         p.vel.y = Math.max(p.vel.y, 0) + dv.y;
         if (dv.y > 0 && p.mv) { p.mv.grounded = false; p.mv.airTime = 1; }
+        if (rocketJump && dv.y > 0) p.rocketJumpAt = this.s.time;
       },
       castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, true) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
       onKill: (victim, killer, cause) => {
@@ -821,7 +826,10 @@ export class Match implements MatchApi {
       speedMult(p, this.s.time) * adsSpeed(p));
     mv.ack = cmd.seq;
     p.stamina = mv.stamina;
-    if (landingSpeed > LIFECYCLE.safeFallSpeed)
+    // The landing after your own rocket jump never hurts; the flag is spent on touchdown (or after 6 s).
+    const rocketJump = p.rocketJumpAt !== undefined && this.s.time - p.rocketJumpAt < 6;
+    if (landingSpeed > 0 || !rocketJump) delete p.rocketJumpAt;
+    if (landingSpeed > LIFECYCLE.safeFallSpeed && !rocketJump)
       this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time, { bypassShield: true, weapon: 'fall' }));
   }
 
@@ -940,8 +948,9 @@ export class Match implements MatchApi {
         const hz = this.hazards.ray(eye, dir, d + 0.5);
         return !hz || dist(add3(eye, dir, hz.dist), to) < 1;
       },
+      hookRange: this.hookRange,
       castHook: (dir) => {
-        const h = this.physics.raycast(eye, dir, GRAPPLE.range, self.id, false);
+        const h = this.physics.raycast(eye, dir, this.hookRange, self.id, false);
         return h ? { point: h.point, dist: h.dist, player: h.hit.type === 'player' ? h.hit.id : null } : null;
       },
       waterY: this.s.waterY,

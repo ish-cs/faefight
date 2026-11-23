@@ -137,7 +137,8 @@ export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
  * Cooldowns 0.5 s / 0.2 s (were 1.5 / 0.6): the user's call, 2026-11-22.
  */
 export const GRAPPLE = {
-  price: 90, uses: 3, range: 40, tipSpeed: 90,
+  /** range: the most a hook ever reaches; a map's own reach is grappleRange(islands) (≤ this). gapMargin: see there. */
+  price: 90, uses: 3, range: 26, gapMargin: 8, tipSpeed: 90,
   pullSpeed: 22, pullResponse: 7, pullSec: 2.4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.3,
   yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
   cooldownSec: 0.5, missCooldownSec: 0.2, minDist: 2.5, yankCreditSec: 5,
@@ -157,14 +158,16 @@ export const SPEED_POTION = { mult: 1.3, sec: 15 };
 export const CHARGE = { price: 250, pieceDmg: 1500, radius: 2, playerRadius: 1, playerDmg: 100, fuseSec: 3 };
 /**
  * Rocket: slow projectile, explodes on contact or after `fuseSec`. Player damage falls off with distance
- * to the body (full inside `fullRadius`; self-damage at `selfMult`, so a rocket jump costs most of your
- * health: 82.5 of 100); pieces take heavy explosive damage measured to their surface (a direct hit breaks steel).
- * `knock`/`knockUp` = push (m/s) at the centre. `playerDmg` 165 (was 110, x1.5): the user's call, 2026-11-22
- * ("rockets don't do enough"); `pieceDmg` unchanged.
+ * to the body (full inside `fullRadius`); pieces take heavy explosive damage measured to their surface (a direct
+ * hit breaks steel). `knock`/`knockUp` = push (m/s) at the centre. `playerDmg` 165 (was 110, x1.5): the user's
+ * call, 2026-11-22 ("rockets don't do enough"); `pieceDmg` unchanged.
+ * Rocket jump (the user's call, 2026-11-22: "self-damage way lower like 20-30, push u further"): your own blast
+ * costs at most `selfDmgMax` (falloff x `selfMult` below that) and launches you `selfKnockUp` m/s up plus
+ * `selfKnock` m/s away from it, both scaled by the same falloff; the landing after it never hurts.
  */
 export const ROCKET = {
   speed: 35, gravity: 2.5, fuseSec: 3, radius: 4.5, fullRadius: 0.5, playerDmg: 165, selfMult: 0.5,
-  pieceDmg: 1300, knock: 9, knockUp: 3.5,
+  pieceDmg: 1300, knock: 9, knockUp: 3.5, selfDmgMax: 25, selfKnockUp: 9, selfKnock: 6,
 };
 
 export type DamageSource = 'bullet' | 'fist' | 'explosive';
