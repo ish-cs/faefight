@@ -4,7 +4,7 @@ import { chromium } from '@playwright/test';
 
 const quality = process.argv[2] ?? 'high';
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync'] });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
 page.setDefaultTimeout(180_000);
 await page.addInitScript((q) => { localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q, dynamicResolution: false } })); }, quality);

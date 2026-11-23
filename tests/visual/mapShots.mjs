@@ -11,7 +11,7 @@ const takeShots = (process.argv[4] ?? '1') === '1';
 const base = process.env.MAP_URL ?? 'http://localhost:5331';
 mkdirSync(out, { recursive: true });
 
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 for (const tpl of templates) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errors = [];

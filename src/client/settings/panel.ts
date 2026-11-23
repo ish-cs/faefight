@@ -1,3 +1,4 @@
+import { AIM_MODES, ctrlAimDefault, isMacPlatform, platformNav } from '../aimInput';
 import './settings.css';
 
 import {
@@ -160,6 +161,11 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
       () => c().sensitivity, (v) => set((d) => { d.controls.sensitivity = v; }), (v) => v.toFixed(2));
     body.append(sensPreview());
     toggle('Invert Y', 'Push the mouse up to look down', 'set-invert', () => c().invertY, (v) => set((d) => { d.controls.invertY = v; }));
+    segmented('Aim mode', 'Right mouse and Ctrl: hold to aim, or press once to aim and again to stop', 'set-aim-mode', AIM_MODES,
+      (m) => (m === 'hold' ? 'Hold' : 'Toggle'), () => c().aimMode, (m) => set((d) => { d.controls.aimMode = m; }));
+    toggle('Ctrl aims', isMacPlatform(platformNav()) ? 'Either Ctrl key aims too, so a trackpad can aim and click to fire'
+      : 'Either Ctrl key aims too (trackpads). Ctrl+W can close the tab: play fullscreen to keep it in the game',
+    'set-ctrl-aim', () => c().ctrlAim, (v) => set((d) => { d.controls.ctrlAim = v; }));
 
     const conflicts = findConflicts(c().keys);
     const banner = el('div', 'set-conflicts');
@@ -189,8 +195,8 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
         r.classList.toggle('conflict', clash.length > 0);
       }
     }
-    body.append(el('div', 'set-hint', 'Fire / use / place is the left mouse button; the mouse wheel also picks hotbar slots.'));
-    resetBtn('Reset controls to defaults', () => set((d) => { d.controls.keys = defaultKeymap(); d.controls.sensitivity = 1; d.controls.invertY = false; }));
+    body.append(el('div', 'set-hint', 'Fire / use / place is the left mouse button; the mouse wheel also picks hotbar slots. Ctrl aims too when "Ctrl aims" is on.'));
+    resetBtn('Reset controls to defaults', () => set((d) => { d.controls.keys = defaultKeymap(); d.controls.sensitivity = 1; d.controls.invertY = false; d.controls.aimMode = 'hold'; d.controls.ctrlAim = ctrlAimDefault(platformNav()); }));
   }
 
   function sensPreview() {
@@ -260,6 +266,11 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     section('Music');
     toggle('Music', 'Calm while you build, tense in a nearby fight, intense when the storm closes', 'set-music-on', () => a().musicOn, (x) => set((d) => { d.audio.musicOn = x; }));
     slider('Music volume', '', 'set-music', 0, 1, 0.05, () => a().music, (x) => set((d) => { d.audio.music = x; }), pct);
+    section('Commentary');
+    toggle('Commentary', 'A sportscaster calls the action when you watch bots (cinematic mode)', 'set-commentary-on', () => a().commentaryOn, (x) => set((d) => { d.audio.commentaryOn = x; }));
+    slider('Commentary volume', 'Game sound dips a little while the commentator talks', 'set-commentary', 0, 1, 0.05, () => a().commentary, (x) => set((d) => { d.audio.commentary = x; }), pct);
+    toggle('Captions', 'Show what the commentator says on screen', 'set-captions', () => a().captions, (x) => set((d) => { d.audio.captions = x; }));
+    toggle('While spectating', 'Also commentate when you spectate a match', 'set-commentary-spectate', () => a().commentarySpectate, (x) => set((d) => { d.audio.commentarySpectate = x; }));
     section('Output');
     toggle('Mute', `Also on ${keyLabel(settings.get().controls.keys.mute[0] ?? '') || '—'} in game`, 'set-mute', () => a().muted, (x) => set((d) => { d.audio.muted = x; }));
     resetBtn('Reset audio to defaults', () => settings.reset('audio'));
