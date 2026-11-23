@@ -75,12 +75,13 @@ describe('environmental kill credit', () => {
     expect(internal(m, 1).kills).toBe(1);
   }, 30_000);
 
-  test('the same drowning while trapped by a seal is an elimination, credited to the shooter', async () => {
+  test('in sudden death (every bunker sealed for good) that drowning is the elimination, credited to the shooter', async () => {
     const { m, shooter, y } = await bridge();
-    internal(m, 2).breakoutUntil = now(m) + LIFECYCLE.breakoutSec;
+    (m as unknown as { s: { forcedSeal: boolean } }).s.forcedSeal = true;
     const events = run(m, 6, rocketAt(m, shooter, v3(-40, y + 0.1, 21.5)), (ev) => ev.some((e) => e.type === 'kill'));
     expect(events.find((e) => e.type === 'kill')!.data).toMatchObject({ victim: 2, killer: 1, via: 'water' });
-    expect(events.some((e) => e.type === 'eliminated' && e.data.player === 2)).toBe(true);
+    const later = run(m, LIFECYCLE.respawnSec + 1, undefined, (ev) => ev.some((e) => e.type === 'eliminated'));
+    expect(later.some((e) => e.type === 'eliminated' && e.data.player === 2)).toBe(true);
     expect(internal(m, 1).kills).toBe(1);
   }, 30_000);
 
