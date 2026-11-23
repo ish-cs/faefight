@@ -250,6 +250,7 @@ export class Bot {
   private lastDmgAt = -Infinity;
   /** This fight's rolls (coverFirst, reloadWeight), since when I've been breaking line of sight to heal. */
   private healRoll = { cover: true, reload: true };
+  private healRng: () => number;
   private healHideAt: number | null = null;
   /** How I'd break line of sight to heal right now (cover close by or a wall to throw), or null: none at hand. */
   private healHideAct: Act | null = null;
@@ -322,6 +323,8 @@ export class Bot {
     const base = isRng(rng) ? rng.state.a : Math.floor(rng() * 4294967296);
     const aimSeed = (base ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
     this.aim = new Aim({ ...AIM[difficulty], recoilComp: P.gunSkill[difficulty].recoilComp }, mulberry32(aimSeed), P.aim.feel[difficulty]);
+    // Heal habits roll on their own stream too (like the aim hand): healing never shifts the match's other rolls.
+    this.healRng = mulberry32((base ^ Math.imul(id, 0x85ebca6b) ^ 0x3c6ef372) >>> 0);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
@@ -2420,7 +2423,7 @@ export class Bot {
     const eff = me.hp + me.shield;
     if (eff < this.lastEff) {
       if (now - this.lastDmgAt > H.quietSec) {
-        this.healRoll = { cover: this.rng() < H.coverFirst[this.difficulty], reload: this.rng() < H.reloadWeight[this.difficulty] };
+        this.healRoll = { cover: this.healRng() < H.coverFirst[this.difficulty], reload: this.healRng() < H.reloadWeight[this.difficulty] };
       }
       if (now - this.burstAt > 1) { this.burst = 0; this.burstAt = now; }
       this.burst += this.lastEff - eff;
