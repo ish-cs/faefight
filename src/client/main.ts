@@ -68,6 +68,8 @@ import { ReplayControls } from './replay/viewerUi';
 import { followNewHost, GuestMigration, hostReachable, takeOver, type HeldLink, type HostWorker } from './migration';
 import type { PracticeCmd } from '../sim/practice';
 import { PracticePanel } from './practicePanel';
+import { director } from './cinematic/director';
+import { CinematicOverlay } from './cinematic/overlay';
 import { EmoteWheel } from './emoteWheel';
 import { isWheelId, quipLines, type WheelId } from '../sim/emotes';
 // UI theme last: its tokens and skin win over style.css / qol.css / settings.css (docs/ui-style.md).
@@ -716,7 +718,34 @@ function showMenu() {
   const practiceNote = document.createElement('span');
   practiceNote.textContent = 'Targets, dummies, free shop & building';
   practiceRow.append(practiceBtn, practiceNote);
-  card.append(mapRow, play, bots.root, practiceRow, settingsToggle, soloSettings.root, online, status, menuBtns, keys);
+  // Watch bots: an all-bot match straight into the cinematic camera (no player of your own).
+  const watchRow = document.createElement('div');
+  watchRow.className = 'practice-play watch-play';
+  const watchBtn = document.createElement('button');
+  watchBtn.className = 'btn';
+  watchBtn.textContent = 'Watch bots';
+  watchBtn.dataset.testid = 'watch-bots';
+  const watchCount = document.createElement('select');
+  watchCount.className = 'text-in watch-sel';
+  watchCount.dataset.testid = 'watch-count';
+  watchCount.title = 'Bots in the match';
+  for (let n = 2; n <= WATCH_MAX; n++) watchCount.append(new Option(`${n} bots`, String(n), n === WATCH_DEFAULT.count, n === WATCH_DEFAULT.count));
+  const watchDiff = document.createElement('select');
+  watchDiff.className = 'text-in watch-sel';
+  watchDiff.dataset.testid = 'watch-difficulty';
+  watchDiff.title = 'Bot difficulty';
+  for (const d of ['easy', 'medium', 'hard', 'pro'] as Difficulty[]) watchDiff.append(new Option(d === 'pro' ? 'PRO' : d[0].toUpperCase() + d.slice(1), d, d === WATCH_DEFAULT.difficulty, d === WATCH_DEFAULT.difficulty));
+  watchBtn.onclick = () => {
+    lockMenu();
+    status.textContent = 'Loading a bot match…';
+    watchBots(watchDiff.value as Difficulty, Number(watchCount.value), mapSel.value as MapChoice, menu).catch((err) => {
+      console.error('[main] failed to start watch bots', err);
+      status.textContent = `Failed to start: ${err?.message ?? err}`;
+      unlockMenu();
+    });
+  };
+  watchRow.append(watchBtn, watchCount, watchDiff);
+  card.append(mapRow, play, bots.root, practiceRow, watchRow, settingsToggle, soloSettings.root, online, status, menuBtns, keys);
   menu.append(card);
   app.append(menu);
   if (!currentIsChromium()) menu.append(chromeBanner());
@@ -811,6 +840,39 @@ async function playSolo(d: Difficulty, choice: MapChoice, menu: HTMLElement, bot
     },
   });
 }
+
+/** Watch bots: lobby size and difficulty defaults (menu selects; `?watch=1&bots=N&diff=pro` from a link). */
+const WATCH_DEFAULT = { count: 8, difficulty: 'pro' as Difficulty };
+const WATCH_MAX = 8;
+
+/** An all-bot match with no player of our own (humanId 0), watched through the cinematic director. */
+async function watchBots(d: Difficulty, count: number, choice: MapChoice, menu: HTMLElement) {
+  const n = Math.max(2, Math.min(WATCH_MAX, Math.round(count) || WATCH_DEFAULT.count));
+  const map = resolveMapChoice(choice, lastBotMap);
+  lastBotMap = map;
+  const settings = sanitizeSettings({ ...loadPrefs().settings, teamMode: 0 }); // free-for-all: teams would hand everyone a side to root for
+  console.info(`[main] watch bots: ${n} ${d} bots on ${map}`);
+  const backend = workerBackend(() => ({
+    setup: { players: Array.from({ length: n }, (_, i) => ({ name: `${BOT_NAMES[i % BOT_NAMES.length]} (${d})`, isBot: true, difficulty: d })), map, settings },
+    humanId: 0,
+  }), null);
+  let game: Game | null = null;
+  game = await startGame(backend, menu, undefined, {
+    hostId: null,
+    cinematic: true,
+    role: {
+      kind: 'solo',
+      playAgain: () => {
+        game?.destroy();
+        watchBots(d, n, choice, loadingScreen('Starting a new match…')).catch((err) => {
+          console.error('[main] watch again failed', err);
+          toast(`Could not restart: ${err?.message ?? err}`);
+        });
+      },
+    },
+  });
+}
+const BOT_NAMES = ['Ash', 'Briar', 'Cinder', 'Dusk', 'Ember', 'Fern', 'Gale', 'Hollow'];
 
 /** Practice range: you alone on the range layout (sim/practice.ts); no timer, no result, Esc → Quit to menu. */
 async function playPractice(menu: HTMLElement) {
@@ -971,7 +1033,7 @@ async function joinLobby(firstCode: string, name: string, menu: HTMLElement, rej
 /** A running game; destroy() removes every trace of it (rematch / back to lobby). */
 type Game = { destroy(): void };
 /** spectate / money: what /spectate and /money do here (host / vs bot); absent for a joined friend. */
-type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult; money?: (amount: number) => string; exitReplay?: () => void; practice?: boolean };
+type EndCtx = { role: EndRole; hostId: number | null; spectate?: () => SpectateResult; money?: (amount: number) => string; exitReplay?: () => void; practice?: boolean; cinematic?: boolean };
 
 /** Loading-screen phases for a match and their share of the bar (real progress, see loading.ts). */
 const MATCH_PHASES = { code: 15, gpu: 10, characters: 25, map: 15, shaders: 30, frames: 5 };
@@ -1323,6 +1385,27 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))) return;
     e.preventDefault();
     if (e.shiftKey) brainX.toggleOverlay(); else brainX.toggle();
+  });
+  // Cinematic mode: the broadcast director picks the action and frames it (cinematic/*.ts). Watch bots starts
+  // in it; while spectating in any match N toggles it; Esc leaves it.
+  const cineCam = new mods.cinematic.CinematicCamera(renderer.camera, () => renderer.collidables);
+  const cineOverlay = new CinematicOverlay(app);
+  let cineWant = !!end.cinematic;
+  const setCine = (on: boolean) => {
+    if (director.active === on) return;
+    director.setActive(on);
+    hud.root.classList.toggle('cinematic', on);
+    document.body.classList.toggle('cinematic', on);
+    cineOverlay.show(on);
+  };
+  window.addEventListener('keydown', (e) => {
+    const t = e.target as HTMLElement | null;
+    if (e.repeat || (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))) return;
+    if (e.code === 'Escape' && cineWant) { cineWant = false; return; } // the pause menu still opens as usual
+    if (!isAction('cinematic', e.code) || chat.open || !spectator.active) return;
+    e.preventDefault();
+    cineWant = !cineWant;
+    if (!cineWant) spectator.manualAt = performance.now(); // keep following whoever the director showed
   });
   // Replay viewer: always the spectator camera, playback bar at the bottom, interpolation on the playback clock.
   const replay = backend.replay ?? null;
@@ -2007,10 +2090,19 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const fid = spectator.mode === 'follow' ? spectator.followId : null;
       const fp = specCam.firstPerson(fid, fid !== null ? snap!.players.find((p) => p.id === fid)?.view : undefined, fpv.mode);
       const kc = bodyCam.active(fid, now / 1000) ? { victim: bodyCam.victim!, killer: bodyCam.killer } : null;
-      spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId: replay ? 0 : humanId, players: snap!.players,
-        posOf: (id, out) => renderer.playerPos(id, out),
-        lookOf: (id) => { const m = renderer.playerMotion(id, specMotion); return m && specLook.update(id, m.yaw, m.pitch, dt); },
-        firstPerson: fp, killcam: kc, hold: holdId });
+      const lookOf = (id: number) => { const m = renderer.playerMotion(id, specMotion); return m && specLook.update(id, m.yaw, m.pitch, dt); };
+      setCine(cineWant && !replay);
+      const shot = director.active ? director.update(snap!) : null;
+      if (shot) {
+        // The director's shot; the spectator follows the featured player (brain digests, HUD mirror).
+        spectator.mode = 'follow';
+        spectator.followId = shot.playerId;
+        spectator.firstPerson = false;
+        cineCam.frame(shot, snap!.time, dt, (id, out) => renderer.playerPos(id, out), lookOf);
+        const fp = snap!.players.find((p) => p.id === shot.playerId);
+        cineOverlay.update(now, fp, shot.reason, director.alive);
+      } else spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId: replay ? 0 : humanId, players: snap!.players,
+        posOf: (id, out) => renderer.playerPos(id, out), lookOf, firstPerson: fp, killcam: kc, hold: holdId });
       // A human's build ghost and open shop / vault, as they see them.
       const fv = spectator.following !== null && !snap!.players.find((p) => p.id === spectator.following)?.isBot ? backend.viewOf?.(spectator.following) ?? null : null;
       const g = kc ? null : fv?.ghost ?? null;
@@ -2019,7 +2111,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       // From their eyes: hide their avatar (as your own is hidden in first person).
       renderer.characters.hiddenId = spectator.firstPerson && spectator.following !== null ? spectator.following : humanId;
       replayUi?.setFollow(spectator.following);
-    } else { spectator.exit(); hud.setMirror(null); }
+    } else { spectator.exit(); hud.setMirror(null); setCine(false); }
     // Online: tell the host who we watch, so it can send that player's HUD state (only while we're dead).
     const following = spectator.following;
     if (following !== lastFollow) { lastFollow = following; backend.follow?.(following); }
@@ -2192,6 +2284,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       backend.close();
       app.classList.remove('replay-mode');
       document.body.classList.remove('brain-x-open');
+      setCine(false);
       scope.dispose(); // listeners + every element this game added (canvas, HUD, chat, overlays)
       renderer.gpu.dispose();
       console.info('[game] torn down');
@@ -2223,7 +2316,15 @@ async function boot() {
   loading.progress('fonts', 1);
   showMenu();
   loading.progress('menu', 1);
-  void loading.hide().then(firstLaunchHowTo);
+  const q = new URLSearchParams(location.search);
+  if (q.get('watch') === '1') {
+    // Link straight into a bot match in cinematic mode (also the e2e entry point).
+    void loading.hide();
+    const diff = (['easy', 'medium', 'hard', 'pro'] as const).find((x) => x === q.get('diff')) ?? WATCH_DEFAULT.difficulty;
+    const menuEl = document.querySelector<HTMLElement>('.menu');
+    if (!menuEl) throw new Error('watch link: the menu is missing');
+    watchBots(diff, Number(q.get('bots')) || WATCH_DEFAULT.count, storedMapChoice(), menuEl).catch((err) => console.error('[main] failed to start watch bots', err));
+  } else void loading.hide().then(firstLaunchHowTo);
   preloadGame();
 }
 
