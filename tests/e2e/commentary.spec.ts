@@ -32,7 +32,10 @@ test('WATCH BOTS: 60 s of commentary, varied lines, captions, no errors', async 
   const cinematic = () => page.evaluate(() => !!(window as unknown as { __cinematic?: { active: boolean } }).__cinematic?.active);
   // No WATCH BOTS in this build: the menu stays up, so play one bot and hand our player over.
   const menu = page.getByTestId('play-easy');
-  if (await menu.isVisible({ timeout: 8_000 }).catch(() => false)) {
+  // A build with the cinematic director has a WATCH BOTS button and ?watch=1 already starts the match: don't start a second one.
+  await page.getByTestId('play-easy').waitFor({ state: 'attached', timeout: 15_000 }).catch(() => {});
+  const hasWatch = (await page.getByTestId('watch-bots').count()) > 0;
+  if (!hasWatch && await menu.isVisible({ timeout: 8_000 }).catch(() => false)) {
     await menu.click();
     await expect(page.getByTestId('cash')).toHaveText(/\$\d+/, { timeout: 60_000 });
     await page.locator('canvas.game').focus();
@@ -68,4 +71,8 @@ test('WATCH BOTS: 60 s of commentary, varied lines, captions, no errors', async 
   // Variety: no template repeated in the run.
   expect(new Set(log.map((l) => l.text)).size).toBe(log.length);
   expect(seen.length).toBeGreaterThan(0);
+  // Automated browsers never really speak: the game swaps in a recording stand-in for speechSynthesis.
+  const spoken = await page.evaluate(() => (window as unknown as { __commentarySpoken?: string[] }).__commentarySpoken ?? null);
+  expect(spoken, "speech went to the real OS voice").not.toBeNull();
+  expect(spoken!.length).toBeGreaterThan(0);
 });

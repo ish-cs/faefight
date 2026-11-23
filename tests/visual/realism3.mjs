@@ -10,7 +10,7 @@ const W = +(process.argv[4] ?? 2560), H = +(process.argv[5] ?? 1440);
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
 const browser = await chromium.launch({
   channel: 'chromium',
-  args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'],
+  args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'],
 });
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
 page.setDefaultTimeout(240_000);

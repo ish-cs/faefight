@@ -49,7 +49,7 @@ test('a rocket that lands short of a wood wall sets it burning, and the fire des
   await dbg(page, 'teleport', stand.x, stand.z);
   await dbg(page, 'give', { weapons: { rocket: { mag: 1, spare: 0 } } });
   await page.locator('canvas.game').click();
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   await expect.poll(async () => (await me()).equipped).toBe('rocket');
   const ground = 3.6;
   await aim(page, yaw, -Math.atan2(1.6, ground));

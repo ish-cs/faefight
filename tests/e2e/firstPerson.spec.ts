@@ -30,7 +30,7 @@ test('V toggles first person (persisted) with a viewmodel', async ({ page }) => 
   const home = (await dbg<Isl[]>(page, 'map'))[me.island];
   await dbg(page, 'teleport', home.center.x, home.center.z);
   await dbg(page, 'give', { weapons: { rifle: { mag: 25, spare: 50 } } });
-  await page.keyboard.press('Digit1'); // the rifle lands in hotbar slot 1 (first free slot)
+  await page.keyboard.press('Digit2'); // the rifle lands in hotbar slot 2 (slot 1 holds the starting pistol)
   await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === humanId)!.equipped).toBe('rifle');
   await page.waitForTimeout(800);
   await page.screenshot({ path: 'test-results/third-person.png' });
@@ -67,7 +67,7 @@ test('V toggles first person (persisted) with a viewmodel', async ({ page }) => 
   await page.waitForTimeout(900);
   await page.screenshot({ path: 'test-results/first-person-fists.png' });
   await dbg(page, 'give', { weapons: { pistol: { mag: 12, spare: 24 } } });
-  await page.keyboard.press('Digit2'); // pistol took the next free slot
+  await page.keyboard.press('Digit1'); // the starting pistol's slot
   await page.waitForTimeout(900);
   await page.screenshot({ path: 'test-results/first-person-pistol.png' });
 

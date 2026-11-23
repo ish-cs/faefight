@@ -1,3 +1,4 @@
+import { AIM_MODES, ctrlAimDefault, isMacPlatform, platformNav } from '../aimInput';
 import './settings.css';
 
 import {
@@ -162,6 +163,11 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
       () => c().sensitivity, (v) => set((d) => { d.controls.sensitivity = v; }), (v) => v.toFixed(2));
     body.append(sensPreview());
     toggle('Invert Y', 'Push the mouse up to look down', 'set-invert', () => c().invertY, (v) => set((d) => { d.controls.invertY = v; }));
+    segmented('Aim mode', 'Right mouse and Ctrl: hold to aim, or press once to aim and again to stop', 'set-aim-mode', AIM_MODES,
+      (m) => (m === 'hold' ? 'Hold' : 'Toggle'), () => c().aimMode, (m) => set((d) => { d.controls.aimMode = m; }));
+    toggle('Ctrl aims', isMacPlatform(platformNav()) ? 'Either Ctrl key aims too, so a trackpad can aim and click to fire'
+      : 'Either Ctrl key aims too (trackpads). Ctrl+W can close the tab: play fullscreen to keep it in the game',
+    'set-ctrl-aim', () => c().ctrlAim, (v) => set((d) => { d.controls.ctrlAim = v; }));
 
     const conflicts = findConflicts(c().keys);
     const banner = el('div', 'set-conflicts');
@@ -191,8 +197,8 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
         r.classList.toggle('conflict', clash.length > 0);
       }
     }
-    body.append(el('div', 'set-hint', 'Fire / use / place is the left mouse button; the mouse wheel also picks hotbar slots.'));
-    resetBtn('Reset controls to defaults', () => set((d) => { d.controls.keys = defaultKeymap(); d.controls.sensitivity = 1; d.controls.invertY = false; }));
+    body.append(el('div', 'set-hint', 'Fire / use / place is the left mouse button; the mouse wheel also picks hotbar slots. Ctrl aims too when "Ctrl aims" is on.'));
+    resetBtn('Reset controls to defaults', () => set((d) => { d.controls.keys = defaultKeymap(); d.controls.sensitivity = 1; d.controls.invertY = false; d.controls.aimMode = 'hold'; d.controls.ctrlAim = ctrlAimDefault(platformNav()); }));
   }
 
   function sensPreview() {

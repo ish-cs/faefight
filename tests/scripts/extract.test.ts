@@ -115,7 +115,7 @@ describe('learning pipeline (scripts/replays/extract.ts)', { timeout: 240_000 },
 
   it('self-play recordings feed the same pipeline, and matchFromReplay starts a match from a mined tick', async () => {
     const setup = { players: [1, 2, 3].map((i) => ({ name: `Bot (pro) ${i}`, isBot: true, difficulty: 'pro' as const })) };
-    const r = await recordHeadlessMatch(setup, 5, 600);
+    const r = await recordHeadlessMatch(setup, 5, 1200); // 40 s: long enough for a first shop trip (everyone starts armed, so nobody shops at once)
     const file = writeReplay(path.join(tmp, 'selfplay'), r.bytes, r.header);
     expect(fs.existsSync(file)).toBe(true);
     const loaded = await loadReplays(path.join(tmp, 'selfplay'));

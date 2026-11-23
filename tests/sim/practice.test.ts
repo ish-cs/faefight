@@ -36,14 +36,14 @@ describe('normal matches are unaffected by practice mode', () => {
     expect(m.def.name).toBe('Harbor');
     const cash0 = me(s).inv.cash;
     // Far from the shop: nothing bought.
-    s = run(m, 1, { shop: { buy: 'pistol' } }).s;
-    expect(me(s).inv.weapons.pistol).toBeUndefined();
+    s = run(m, 1, { shop: { buy: 'wood' } }).s;
+    expect(me(s).inv.pieces.wood ?? 0).toBe(0);
     expect(me(s).inv.cash).toBe(cash0);
-    // At the shop: pistol bought, cash spent.
+    // At the shop: wood bought, cash spent.
     const shop = m.map[me(s).island].shop;
     m.debugTeleport(1, v3(shop.x + 1, shop.y, shop.z));
-    s = run(m, 1, { shop: { buy: 'pistol' } }).s;
-    expect(me(s).inv.weapons.pistol).toBeDefined();
+    s = run(m, 1, { shop: { buy: 'wood' } }).s;
+    expect(me(s).inv.pieces.wood).toBe(1);
     expect(me(s).inv.cash).toBeLessThan(cash0);
     expect(() => m.practiceCommand({ kind: 'reset' })).toThrow(/not a practice match/);
     setTime(m, LIFECYCLE.suddenDeathAt - 0.01);
@@ -76,7 +76,7 @@ describe('practice mode', () => {
     const p = me(s);
     expect(dist2D(p.pos, PRACTICE_START)).toBeLessThan(0.2);
     expect(p.inv.weapons.rifle).toBeDefined();
-    expect(p.hotbar.filter((k) => k === null)).toHaveLength(3);
+    expect(p.hotbar.filter((k) => k === null)).toHaveLength(2);
     const names = s.players.filter((q) => q.isBot).map((q) => q.name);
     expect(names).toHaveLength(11);
     for (const d of PRACTICE.lanes) expect(names).toEqual(expect.arrayContaining([`Target ${d}m`, `Mover ${d}m`]));

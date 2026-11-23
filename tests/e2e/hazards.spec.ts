@@ -62,7 +62,7 @@ test('shoot a barrel: it fuses, blows, and the bot next to it takes damage; shoo
   // Rifle in hand, standing 9 m from the barrel; the bot parked 1.6 m beside it (off the line of fire).
   await dbg(page, 'give', { weapons: { rifle: { mag: 25, spare: 50 } } });
   await page.locator('canvas.game').click();
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   await expect.poll(async () => (await me()).equipped).toBe('rifle');
   const stand = around(barrel, c, 9);
   await dbg(page, 'teleport', stand.x, stand.z);

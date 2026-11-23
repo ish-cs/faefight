@@ -6,6 +6,7 @@ import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type PlayerInput, type Snapshot } from '../../src/sim/types';
 import { sanitizeInput } from '../../src/net/sanitize';
 import { v3 } from '../../src/sim/vec';
+import { unarmed } from './unarmed';
 
 const humans = { players: [{ name: 'you', isBot: false }, { name: 'friend', isBot: false }] };
 const inputs = (i: Partial<PlayerInput>) => new Map([[1, { ...NO_INPUT, ...i }]]);
@@ -47,6 +48,7 @@ describe('shop + hotbar: rocket launcher', () => {
 describe('match: aiming, rockets, projectiles', () => {
   test('ADS needs a gun, slows you down and is cleared by a reload', async () => {
     const { m } = await match();
+    unarmed(m);
     let s = m.tick(inputs({ ads: true, moveZ: 1 }));
     expect(me(s).ads).toBe(false); // fists
     m.debugGive(1, { weapons: { rifle: { mag: 20, spare: 50 } } });
@@ -63,6 +65,7 @@ describe('match: aiming, rockets, projectiles', () => {
   });
   test('a rocket in flight is in the snapshot; a rocket jump lifts you off the ground', async () => {
     const { m } = await match();
+    unarmed(m);
     m.debugGive(1, { weapons: { rocket: { mag: 1, spare: 3 } } });
     let s = m.tick(inputs({ select: 0, pitch: 0.4 }));
     s = m.tick(inputs({ select: 0, pitch: 0.4, fire: true }));

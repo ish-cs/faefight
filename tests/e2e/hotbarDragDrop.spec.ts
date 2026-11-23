@@ -37,24 +37,24 @@ test('drag a hotbar slot out over the game view to drop it; Shift drops one; Esc
   const bagsWith = async (k: string) => (await dbg<Snap>(page, 'snapshot')).loot.filter((b) => (b.inv.pieces[k] ?? 0) > 0).map((b) => b.inv.pieces[k]);
 
   await dbg(page, 'give', { pieces: { sandbags: 3, wood: 4 } });
-  await expect(page.getByTestId('hotbar-slot-1')).toHaveAttribute('data-item', 'wood');
+  await expect(page.getByTestId('hotbar-slot-2')).toHaveAttribute('data-item', 'wood');
   await page.locator('canvas.game').focus();
   await page.keyboard.press('KeyI');
   await expect(page.getByTestId('hotbar')).toHaveClass(/editing/);
 
-  // Slot 2 (Wood ×4) out over the game: the whole stack lands on the ground and the slot empties.
-  await dragOut(page, 1);
+  // Slot 3 (Wood ×4; slot 1 is the starting pistol) out over the game: the whole stack lands on the ground and the slot empties.
+  await dragOut(page, 2);
   await expect.poll(() => bagsWith('wood'), { timeout: 10_000 }).toEqual([4]);
-  await expect(page.getByTestId('hotbar-slot-1')).toHaveAttribute('data-item', '');
+  await expect(page.getByTestId('hotbar-slot-2')).toHaveAttribute('data-item', '');
   expect((await me()).inv.pieces.wood ?? 0).toBe(0);
 
   // Shift-drag drops one sandbag.
-  await dragOut(page, 0, true);
+  await dragOut(page, 1, true);
   await expect.poll(() => bagsWith('sandbags'), { timeout: 10_000 }).toEqual([1]);
-  await expect(page.locator('[data-testid="hotbar-slot-0"] .hb-count')).toHaveText('2');
+  await expect(page.locator('[data-testid="hotbar-slot-1"] .hb-count')).toHaveText('2');
 
   // Esc mid-drag cancels: nothing more is dropped.
-  const box = (await page.getByTestId('hotbar-slot-0').boundingBox())!;
+  const box = (await page.getByTestId('hotbar-slot-1').boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(640, 300, { steps: 6 });

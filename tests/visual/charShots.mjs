@@ -6,7 +6,7 @@ import { chromium } from '@playwright/test';
 const prefix = process.argv[2] ?? 'chars';
 const mode = process.argv[3] ?? 'shots';
 const base = process.env.LAB_URL ?? 'http://localhost:5299/tests/visual/chars.html';
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
 page.setDefaultTimeout(120_000);
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.log('[page]', m.type(), m.text().slice(0, 300)); });
