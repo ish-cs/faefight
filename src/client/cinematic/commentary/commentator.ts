@@ -13,9 +13,9 @@ import type { Persona, Tts } from './tts';
 
 export const REPEAT_SEC = 180;
 export const STALE_LOW = 3;
-export const STALE_HIGH = 8;
+export const STALE_HIGH = 6;
 /** Silence before the colour commentator fills in. */
-export const COLOUR_IDLE = 7;
+export const COLOUR_IDLE = 5;
 /** Breath between two lines. */
 export const GAP = 0.35;
 /** Kills by one player within this window count as a multi-kill. */
@@ -67,6 +67,7 @@ export class Commentator {
   private started = false;
   private anyKill = false;
   private startTime = 0;
+  private firstTime: number | null = null;
   private names = new Map<number, string>();
   private players = new Map<number, PlayerState>();
   private lastHit = new Map<number, { by: number | null; weapon?: string; part?: string; pos?: { x: number; y: number; z: number } }>();
@@ -100,7 +101,7 @@ export class Commentator {
   /** New match: forget everything about the last one. */
   reset() {
     this.queue.length = 0;
-    this.started = false; this.anyKill = false; this.leader = null; this.allSealedSaid = false;
+    this.started = false; this.anyKill = false; this.firstTime = null; this.leader = null; this.allSealedSaid = false;
     for (const m of [this.lastHit, this.hurtAt, this.killTimes, this.killedBy, this.escapedAt, this.cooldown]) m.clear();
     this.drinking.clear();
   }
@@ -110,9 +111,11 @@ export class Commentator {
   onSnapshot(s: Snapshot) {
     for (const p of s.players) { this.names.set(p.id, p.name); this.players.set(p.id, p); }
     this.noteState(s);
+    this.firstTime ??= s.time;
     const now = this.now();
-    if (!this.started && s.players.length >= 2 && s.winner === null) {
-      this.started = true; this.startTime = s.time;
+    // Opening line once we're on air (joining mid-match still gets the welcome).
+    if (this.active && !this.started && s.players.length >= 2 && s.winner === null) {
+      this.started = true; this.startTime = this.firstTime ?? s.time;
       this.say('start', { n: s.players.length }, 2);
     }
     const elimInBatch = new Set<number>();
@@ -167,11 +170,20 @@ export class Commentator {
         if (owner !== null && this.ready(`unsealed:${owner}`, 20)) this.say('unsealed', { a: this.name(owner) }, 1);
         break;
       }
-      case 'trapped': this.say('trapped', { a: this.name(d.player as number) }, 2); break;
+      case 'trapped': {
+        const id = d.player as number;
+        if (this.ready(`trapped:${id}`, 45)) this.say('trapped', { a: this.name(id) }, 2);
+        break;
+      }
       case 'escaped': {
         const id = d.player as number;
         this.escapedAt.set(id, now);
-        this.say('escaped', { a: this.name(id) }, 3);
+        // The sim can re-trap and free the same player in quick succession: call it once.
+        if (this.ready(`escaped:${id}`, 45)) {
+          const a = this.name(id);
+          this.queue = this.queue.filter((p) => !(p.key === 'trapped' && p.vars.a === a)); // out already: skip "trapped"
+          this.say('escaped', { a }, 3);
+        }
         break;
       }
       case 'suddenDeath': this.say('suddenDeath', {}, 3); break;
@@ -236,8 +248,8 @@ export class Commentator {
     else if (times.length === 2) { key = 'killMulti2'; prio = 3; }
     else if (first) { key = 'firstBlood'; prio = 3; }
     else if (hp > 0 && hp <= 25) { key = 'killClutch'; vars.n = hp; prio = 3; }
-    else if (revenge) { key = 'killRevenge'; prio = 3; }
-    else if (esc !== undefined && now - esc <= 90) { key = 'killComeback'; prio = 3; }
+    else if (revenge && this.ready(`revenge:${Math.min(killer, victim)}:${Math.max(killer, victim)}`, 120)) { key = 'killRevenge'; prio = 2; }
+    else if (esc !== undefined && now - esc <= 60 && this.ready(`comeback:${killer}`, 120)) { key = 'killComeback'; prio = 3; }
     else if (hit?.part === 'head') key = 'killHead';
     else if (weapon === 'rocket') key = 'killRocket';
     else if (weapon === 'grenade' || weapon === 'charge') key = 'killExplosive';
@@ -377,10 +389,10 @@ export class Commentator {
       },
       () => {
         const l = [...alive].sort((x, y) => y.kills - x.kills)[0];
-        return l.kills >= 1 && this.sayNow('colourStandings', { a: l.name, n: l.kills });
+        return l.kills >= 2 && this.sayNow('colourStandings', { a: l.name, n: l.kills });
       },
       () => this.builderLine(),
-      () => this.sayNow('colourAlive', { n: alive.length }),
+      () => alive.length < ps.length && this.sayNow('colourAlive', { n: alive.length }),
       () => this.genLine(),
       () => this.sayNow('colourIdle', {}),
     ];
