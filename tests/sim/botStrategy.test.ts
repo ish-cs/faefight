@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { Bot, throwAngles } from '../../src/sim/bots/bot';
+import { Bot, inStormShopGrace, throwAngles } from '../../src/sim/bots/bot';
 import { angleBetween, lookAt } from '../../src/sim/bots/aim';
 import { insideBunker, lane, laneAt } from '../../src/sim/bots/nav';
 import { plugSpot } from '../../src/sim/bots/plans';
@@ -96,6 +96,15 @@ function step(view: BotView, inp: PlayerInput) {
   me.pitch = inp.pitch;
   view.now += DT;
 }
+
+describe('storm shopping grace', () => {
+  test('counts from the match sudden-death time (custom lobby length), not the default', () => {
+    expect(inStormShopGrace({ now: 8 * 60 + 30, suddenDeathAt: 8 * 60 })).toBe(true);
+    expect(inStormShopGrace({ now: 8 * 60 + 60, suddenDeathAt: 8 * 60 })).toBe(false);
+    expect(inStormShopGrace({ now: 25 * 60 + 10, suddenDeathAt: 25 * 60 })).toBe(true);
+    expect(inStormShopGrace({ now: LIFECYCLE.suddenDeathAt + 10 })).toBe(true);
+  });
+});
 
 describe('personality', () => {
   test('random but seeded: same seed same personality, different bots differ', () => {

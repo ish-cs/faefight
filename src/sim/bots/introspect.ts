@@ -412,6 +412,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     case 'loot': {
       const bag = I.nearestLoot(c), crate = I.nearestCrate(c);
       if (!bag && !crate) return zero('no loot in reach');
+      if (bag && !gun && view.suddenDeath) return { f: [['sudden death, no ammo: bag first', 1.05]], why: `Sudden death and no ammo: a loot bag ${m(dist2D(bag, me.pos))} away beats punching` };
       const crateS = crate ? 0.2 + 0.3 * t.greed - dist2D(crate.pos, me.pos) / 30 : 0;
       const bagS = bag ? 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70 : 0;
       if (crate && (!bag || crateS > bagS)) {

@@ -101,6 +101,12 @@ const EASY_DODGE = 0.4;
 const STORM_PREP_SEC = 150;
 /** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
 const STORM_SPARE_DECKS = 2, STORM_SHOP_GRACE = 45;
+/**
+ * The first STORM_SHOP_GRACE s of sudden death: the ring has barely moved, a shop trip is still safe. Counted from the
+ * match's own sudden-death time (the lobby sets 8-25 min), not the default.
+ */
+export const inStormShopGrace = (view: Pick<BotView, 'now' | 'suddenDeathAt'>): boolean =>
+  view.now - (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) < STORM_SHOP_GRACE;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Walls a bot throws down for cover, best first (sandbags go up two high). */
 const WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
@@ -1564,6 +1570,9 @@ export class Bot {
       case 'loot': {
         const bag = this.nearestLoot(c);
         const crate = this.nearestCrate(c);
+        // Sudden death with no ammo: a bag (guns, rounds) beats punching (CI storm seed 7: two fist-only bots traded
+        // punches with regen for 3 min beside full bags).
+        if (bag && !gun && view.suddenDeath) return SD_FISTS_ATTACK + 0.1;
         const bagScore = bag ? 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70 : 0;
         // A crate is a small, uncertain prize: worth a short detour, never a trip.
         const crateScore = crate ? 0.2 + 0.3 * t.greed - dist2D(crate.pos, me.pos) / 30 : 0;
@@ -1660,7 +1669,7 @@ export class Bot {
         return long && !stillHit && me.hp / 100 > this.P.drive.reengageHp ? 0 : s;
       }
       case 'fight': {
-        if (!c.enemy) return s;
+        if (!c.enemy || (view.suddenDeath && !ownsGun(me.inv))) return s; // no ammo in sudden death: go and punch
         const sameIsland = this.sameGround(me.pos, c.enemy.pos);
         return !sameIsland && c.enemyDist > this.P.drive.plinkRange ? 0 : s;
       }
@@ -2670,7 +2679,7 @@ export class Bot {
       // Only while the shop (and the vault, if I need cash from it) is still inside the ring: a trip out into the
       // storm to shop kills just as surely.
       const shopSafe = [c.home.shop, ...(me.inv.cash < PIECES.scaffold.price ? [c.home.vault] : [])]
-        .every((p) => dist2D(p, ctr) < st.r - 2) || view.now - LIFECYCLE.suddenDeathAt < STORM_SHOP_GRACE;
+        .every((p) => dist2D(p, ctr) < st.r - 2) || inStormShopGrace(view);
       const buy = have < need && c.homeReach && shopSafe && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
       if (buy) return buy;
       if (have > 0) {
