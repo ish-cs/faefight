@@ -139,6 +139,7 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
   const topGeo = new THREE.CircleGeometry(R, 128).rotateX(-Math.PI / 2);
 
   const tops: THREE.BufferGeometry[] = [], walls: THREE.BufferGeometry[] = [];
+  yield;
   for (const isl of map) {
     const yaw = isl.bunker.facingYaw;
     const L = new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, 0, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
@@ -219,6 +220,7 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
       root.add(s);
     }
 
+    yield;
     if (scatter) scatterIsland(scatter, isl);
     if (dock) {
       // dense dock clusters (clusters.ts): low clutter on the playable disc, full clusters on the backdrop quay
@@ -228,7 +230,9 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
       const Q = L.clone().multiply(mat(0, qf.top, 0));
       for (const p of quayClusters(qf, 31 + isl.index * 7919)) dock.place(p, Q, dress);
     }
+    yield;
     dressIslandDetail(dress, L, isl);
+    yield;
     if (yard) {
       buildYardBackdrop(dress, L, rng, isl, n);
     } else {

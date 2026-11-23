@@ -116,6 +116,7 @@ export class World {
     // finer A/B switches: ?noclusters / ?nogameprops / ?nodebris drop one layer each
     const noClusters = noProps || q.includes('noclusters'), noGameProps = noProps || q.includes('nogameprops'), noDebris = noProps || q.includes('nodebris');
     lampSpots.length = 0; // the harbor street lamps below register their light pools
+    yield;
     // islands, props and scatter join the scene together once all three are built (nothing half-built is drawn)
     const { root, collidables } = yield* buildIslandsSteps(def, teamColors, this.scatter, noClusters ? undefined : this.props);
     this.props.build();
