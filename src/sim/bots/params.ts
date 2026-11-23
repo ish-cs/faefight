@@ -316,7 +316,7 @@ export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
   easy: { coverChance: 0.25, coverDelay: 1.4, gap: 1.6, misplace: 0.35, fort: 0.3, peekHide: 2.0, peekOut: 1.6, highGround: false, bridgeCover: false, altRoute: false, pieceSec: 1.2, ramp: 0, rampChain: 0, reinforce: 0 },
   medium: { coverChance: 0.55, coverDelay: 0.8, gap: 0.8, misplace: 0.12, fort: 0.55, peekHide: 1.4, peekOut: 1.3, highGround: false, bridgeCover: true, altRoute: false, pieceSec: 0.7, ramp: 0, rampChain: 0, reinforce: 0 },
   hard: { coverChance: 0.7, coverDelay: 0.5, gap: 0.3, misplace: 0.03, fort: 0.85, peekHide: 1.0, peekOut: 1.2, highGround: true, bridgeCover: true, altRoute: true, pieceSec: 0.45, ramp: 0.35, rampChain: 0, reinforce: 0.65 },
-  pro: { coverChance: 0.95, coverDelay: 0.22, gap: 0.05, misplace: 0, fort: 1, peekHide: 0.6, peekOut: 0.9, highGround: true, bridgeCover: true, altRoute: true, pieceSec: 0.3, ramp: 0, rampChain: 0, reinforce: 1 },
+  pro: { coverChance: 0.95, coverDelay: 0.22, gap: 0.05, misplace: 0, fort: 1, peekHide: 0.6, peekOut: 0.9, highGround: true, bridgeCover: true, altRoute: true, pieceSec: 0.3, ramp: 0.85, rampChain: 1, reinforce: 1 },
 };
 
 export const BUILD_TUNING: BuildTuning = {
@@ -342,7 +342,7 @@ export const BUILD_TUNING: BuildTuning = {
   coverScore: 1.05, fortifyScore: 0.5,
   crackedAt: 0.45, holdSec: 4, coverOffset: 0.45, peekStep: 0.7,
   rampCarry: D(0, 0, 1, 2), metalCarry: D(0, 0, 1, 1), rampUpTo: 1.2,
-  rampFirst: D(0, 0, 0, 0), kitCoverM: 30,
+  rampFirst: D(0, 0, 0, 1), kitCoverM: 30,
 };
 
 export const TEAM: TeamParams = {
