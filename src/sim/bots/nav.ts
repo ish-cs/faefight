@@ -26,7 +26,7 @@ const MAX_DROP = 3;
  * walking off a deck crosses 2.0 m (sprinting 2.6 m). The last deck of a bridge often can't go down (a gap shorter
  * than a deck, with a barrier or a crate on the shore right where it would rest): the bridge counts as finished.
  */
-export const STEP_GAP = 1.5;
+export const STEP_GAP = 0.06;
 /** Jump arc check: time step. */
 const JUMP_STEP = 0.1;
 const BUNKER_HALF = MAP.bunker.interior / 2 + MAP.bunker.wall;
