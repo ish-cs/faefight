@@ -125,8 +125,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     const skilled = difficulty === 'hard' || difficulty === 'pro';
     const wantMetal = skilled ? cash >= PIECES.metal.price
       : (difficulty === 'medium' || style.metal) && cash >= 2 * PIECES.metal.price;
-    if (wantMetal) return 'metal';
-    return cash >= PIECES.wood.price ? 'wood' : null;
+    // Never a kind the hotbar can't take (the shop would refuse it every tick).
+    if (wantMetal && room('metal')) return 'metal';
+    return cash >= PIECES.wood.price && room('wood') ? 'wood' : null;
   }
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
@@ -142,7 +143,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (inv.traps < (needs.traps ?? 0) && room('trap') && cash >= TRAP.price) return 'trap';
   if (style.closeGun && !inv.weapons.shotgun && room('shotgun') && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
-  if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
+  if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price && room('wood')) return 'wood';
   // Rich: invest in the generator, then lock the favourite gun so a death doesn't leave me unarmed.
   if (genPrice !== null && cash >= 3 * genPrice) return 'genUpgrade';
   const fav = GUNS.find((g) => inv.weapons[g]);
