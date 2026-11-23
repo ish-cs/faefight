@@ -134,12 +134,14 @@ export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
  * `arriveDist` you let go keeping `arriveKeep` of your speed plus a little `arrivePop` up, so you land on the ledge. Jump lets go early. Hooking a
  * player yanks them toward you at `yankSpeed` for at most `yankSec` (their own movement is off meanwhile),
  * stopping `yankStop` m short of you. `cooldownSec` after the hook comes back (a miss: `missCooldownSec`).
+ * Cooldowns 0.5 s / 0.2 s (were 1.5 / 0.6): the user's call, 2026-11-22.
  */
 export const GRAPPLE = {
-  price: 90, uses: 3, range: 40, tipSpeed: 90,
+  /** range: the most a hook ever reaches; a map's own reach is grappleRange(islands) (≤ this). gapMargin: see there. */
+  price: 90, uses: 3, range: 26, gapMargin: 8, tipSpeed: 90,
   pullSpeed: 22, pullResponse: 7, pullSec: 2.4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.3,
   yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
-  cooldownSec: 1.5, missCooldownSec: 0.6, minDist: 2.5, yankCreditSec: 5,
+  cooldownSec: 0.5, missCooldownSec: 0.2, minDist: 2.5, yankCreditSec: 5,
 };
 /** Shield sits on top of health (blue bar). */
 export const SHIELD_MAX = 100;
@@ -156,13 +158,16 @@ export const SPEED_POTION = { mult: 1.3, sec: 15 };
 export const CHARGE = { price: 250, pieceDmg: 1500, radius: 2, playerRadius: 1, playerDmg: 100, fuseSec: 3 };
 /**
  * Rocket: slow projectile, explodes on contact or after `fuseSec`. Player damage falls off with distance
- * to the body (full inside `fullRadius`; self-damage at `selfMult`, so a rocket jump costs about half your
- * health); pieces take heavy explosive damage measured to their surface (a direct hit breaks steel).
- * `knock`/`knockUp` = push (m/s) at the centre.
+ * to the body (full inside `fullRadius`); pieces take heavy explosive damage measured to their surface (a direct
+ * hit breaks steel). `knock`/`knockUp` = push (m/s) at the centre. `playerDmg` 165 (was 110, x1.5): the user's
+ * call, 2026-11-22 ("rockets don't do enough"); `pieceDmg` unchanged.
+ * Rocket jump (the user's call, 2026-11-22: "self-damage way lower like 20-30, push u further"): your own blast
+ * costs at most `selfDmgMax` (falloff x `selfMult` below that) and launches you `selfKnockUp` m/s up plus
+ * `selfKnock` m/s away from it, both scaled by the same falloff; the landing after it never hurts.
  */
 export const ROCKET = {
-  speed: 35, gravity: 2.5, fuseSec: 3, radius: 4.5, fullRadius: 0.5, playerDmg: 110, selfMult: 0.5,
-  pieceDmg: 1300, knock: 9, knockUp: 3.5,
+  speed: 35, gravity: 2.5, fuseSec: 3, radius: 4.5, fullRadius: 0.5, playerDmg: 165, selfMult: 0.5,
+  pieceDmg: 1300, knock: 9, knockUp: 3.5, selfDmgMax: 25, selfKnockUp: 9, selfKnock: 6,
 };
 
 export type DamageSource = 'bullet' | 'fist' | 'explosive';
@@ -195,6 +200,20 @@ export const GENERATOR_MAX_LEVEL = GENERATOR_LEVELS.length;
 /** Locking a gun (respawn with it) costs this many times the gun. */
 export const LOCK_PRICE_MULT = 4;
 
+/**
+ * Elimination rewards (elimination.ts), the user's ideas 1 + 3 + 6 (2026-11-22).
+ * Spoils = the victim's vault cash + carriedShare of the cash in their death drop + their generator's stored cash.
+ * The eliminator gets eliminatorShare of it, assists split the rest (alone: all of it); it lands in carried cash.
+ * Victory surge (eliminator, if alive): full hp, +surgeShield (to SHIELD_MAX), move speed x surgeSpeed for surgeSec.
+ * Assists get +assistShield. creditHitSec: a credit-less elimination (sudden death, no sealer) goes to whoever hit
+ * the victim last within this long.
+ */
+export const ELIM = {
+  eliminatorShare: 0.75, carriedShare: 0.5,
+  surgeSec: 10, surgeShield: 50, surgeSpeed: 1.2, assistShield: 25,
+  creditHitSec: 15,
+};
+
 /** queueSec: a build that arrives while still busy from the last one is held this long and placed the tick the
  *  busy time ends, so network jitter can't eat a held-place stream (still at most one piece per placeSec). */
 /** seqWaitSec: a build tied to a movement command (BuildRequest.seq) waits at most this long for that command. */
@@ -220,6 +239,13 @@ export const LIFECYCLE = {
   /** ...and you can't pick your own drop back up for this long. */
   dropPickupDelaySec: 1.5,
   regenDelaySec: 8,
+  /**
+   * Environmental kill credit window (s): drowning, a fatal fall or the storm this soon after a player hurt you
+   * (or broke what you stood on) is their kill. 8 s = the regen delay: as long as their damage still "counts"
+   * (no regen yet), so does the kill. Long enough for knocked off / bridge cut → fall → water (≈1-3 s) or a
+   * wounded player fleeing into the storm; short enough that a later unforced misstep is nobody's kill.
+   */
+  envCreditSec: 8,
   regenPerSec: 1,
   /** Landing faster than this (m/s, ≈3 m drop) hurts; damage per m/s above it. */
   safeFallSpeed: 8,

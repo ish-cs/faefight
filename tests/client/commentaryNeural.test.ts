@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fixedLines } from '../../src/client/cinematic/commentary';
-import { HybridTts, NEURAL_DEFAULT, NEURAL_VOICES, NeuralTts } from '../../src/client/cinematic/commentary/neural';
+import { HybridTts, NEURAL_DEFAULT, NEURAL_VOICES, neuralEngine, NeuralTts } from '../../src/client/cinematic/commentary/neural';
 import type { BrowserTts, SpeakOpts } from '../../src/client/cinematic/commentary/tts';
+import { defaultSettings } from '../../src/client/settings/store';
 
 /** A fake Kokoro worker: answers 'load' with ready and each 'say' with 1 s of silence (asynchronously). */
 class FakeWorker {
@@ -130,6 +131,29 @@ describe('HybridTts', () => {
     h.useNeural = false;
     h.speak('three', { persona: 'pbp', intensity: 0, volume: 1 });
     expect(said).toEqual(['one', 'three']);
+  });
+});
+
+describe('neural voice is opt-in', () => {
+  it('is off by default, and while off the model is never fetched (no worker is even created)', () => {
+    expect(defaultSettings().audio.voiceEngine).toBe('browser');
+    const was = neuralEngine.makeWorker;
+    const make = vi.fn(() => new FakeWorker() as unknown as Worker);
+    neuralEngine.makeWorker = make;
+    vi.stubGlobal('Worker', class {});
+    vi.stubGlobal('AudioContext', class {});
+    try {
+      const h = new HybridTts({ available: true, speaking: false, speak() {}, cancel() {}, setVoices() {} } as unknown as BrowserTts);
+      h.useNeural = false; // Settings → Neural voice off
+      h.ensureNeural();
+      expect(make).not.toHaveBeenCalled();
+      expect(h.neural).toBeNull();
+      h.useNeural = true; // turned on: it loads (the progress chip shows meanwhile)
+      h.ensureNeural();
+      expect(make).toHaveBeenCalledTimes(1);
+    } finally {
+      neuralEngine.makeWorker = was;
+    }
   });
 });
 

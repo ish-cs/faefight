@@ -79,6 +79,14 @@ describe('kill feed entries', () => {
     expect(feedText(self, name)).toBe('p3 blew up via propane');
   });
 
+  it('environmental kill credit: "X via water" with the water marker, no explosion marker', () => {
+    const e = feedEntries([ev(1, 'kill', { victim: B, killer: A, inWater: true, via: 'water' })], ctx)[0];
+    expect(e).toMatchObject({ killer: A, via: 'water', markers: ['water'] });
+    expect(feedText(e, name)).toBe('p2 via water ⟶ p3');
+    const fall = feedEntries([ev(1, 'kill', { victim: B, killer: A, inWater: false, via: 'fall' }), ev(1, 'hit', { target: B, by: null, weapon: 'fall' })], ctx)[0];
+    expect(fall).toMatchObject({ killer: A, via: 'fall', markers: ['fall'] });
+  });
+
   it('seal entries: who sealed whose bunker; yours highlighted either way', () => {
     const [s] = feedEntries([ev(1, 'sealed', { island: 2, owner: B, by: ME })], ctx);
     expect(s).toMatchObject({ kind: 'sealed', killer: ME, victim: B, island: 2, mine: true, me: false });
@@ -152,16 +160,18 @@ describe('snapshot history', () => {
 });
 
 describe('killcam window', () => {
-  it('full KILLCAM_SEC when there is no respawn coming; ends a little after the death', () => {
+  it('KILLCAM_SEC of real time (slow beat included) when there is no respawn coming; ends a little after the death', () => {
     const p = planKillcam(frames(0, 10), 10, A, null)!;
-    expect(p.duration).toBeCloseTo(KILLCAM_SEC);
+    expect(p.real).toBeLessThanOrEqual(KILLCAM_SEC + 1e-6);
+    expect(p.real).toBeGreaterThan(KILLCAM_SEC - 0.05); // starts on a recorded frame
+    expect(p.duration).toBeLessThan(p.real); // the slow beat costs real time
     expect(p.to).toBeCloseTo(10 + TAIL_SEC);
   });
 
   it('shortened to end before the respawn (respawn timing never changes)', () => {
     const p = planKillcam(frames(0, 10), 10, A, 3)!;
-    expect(p.duration).toBeLessThanOrEqual(3 - RESPAWN_MARGIN);
-    expect(p.duration).toBeGreaterThan(3 - RESPAWN_MARGIN - 1 / 30); // starts on a recorded frame
+    expect(p.real).toBeLessThanOrEqual(3 - RESPAWN_MARGIN);
+    expect(p.real).toBeGreaterThan(3 - RESPAWN_MARGIN - 0.1);
   });
 
   it('no killcam when the respawn is too soon, or no killer (fall, water, suicide)', () => {

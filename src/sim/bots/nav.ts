@@ -21,6 +21,12 @@ const DETOURS = [0.4, -0.4, 0.8, -0.8, 1.2, -1.2, 1.6, -1.6];
 const STEP_UP = 0.35;
 /** Don't walk off anything higher than this when there's another way (falls over ~3.3 m hurt). */
 const MAX_DROP = 3;
+/**
+ * A gap this short between a deck's tip and the land (or deck) beyond is walked across, no jump: measured, a player
+ * walking off a deck crosses 2.0 m (sprinting 2.6 m). The last deck of a bridge often can't go down (a gap shorter
+ * than a deck, with a barrier or a crate on the shore right where it would rest): the bridge counts as finished.
+ */
+export const STEP_GAP = 1.5;
 /** Jump arc check: time step. */
 const JUMP_STEP = 0.1;
 const BUNKER_HALF = MAP.bunker.interior / 2 + MAP.bunker.wall;
@@ -400,9 +406,39 @@ export class Nav {
   }
 
   private solidAhead(l: Lane, s: number): boolean {
-    // Decks laid end to end can leave a few-cm seam; anything wider is a real gap.
-    const p = laneAt(l, s + 0.06);
-    return this.view.groundAt(p.x, p.z) !== null;
+    // Decks laid end to end can leave a few-cm seam; a gap up to STEP_GAP is walked across; anything wider is a real gap.
+    for (let d = 0.06; d <= STEP_GAP; d += 0.12) {
+      const p = laneAt(l, s + d);
+      if (this.view.groundAt(p.x, p.z) !== null) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Walking from p along `dir`: the first gap in the floor (within `look` m) is at most STEP_GAP wide, with a floor
+   * beyond no higher than a step and no lower than a metre (the stride carries me across). True when there's no gap.
+   * Starting over a gap, its width counts back to the floor behind me.
+   */
+  crossable(p: Vec3, dir: Vec3, look = 3): boolean {
+    const l = Math.hypot(dir.x, dir.z);
+    if (l < 1e-6) return false;
+    // Only the end of a bridge: a deck on one side of the gap (never a hole in the ground or an island's rim).
+    if (!this.view.pieces.some((q) => q.kind === 'scaffold' && dist2D(q.pos, p) < 2.6 + STEP_GAP)) return false;
+    const ux = dir.x / l, uz = dir.z / l;
+    const at = (d: number) => this.view.groundAt(p.x + ux * d, p.z + uz * d);
+    let gapFrom: number | null = null;
+    if (at(0) === null) {
+      for (let b = 0.12; b <= STEP_GAP + 0.01; b += 0.12) if (at(-b) !== null) { gapFrom = -b; break; }
+      if (gapFrom === null) return false;
+    }
+    for (let d = 0.12; d <= look; d += 0.12) {
+      const y = at(d);
+      if (y === null) {
+        gapFrom ??= d;
+        if (d - gapFrom > STEP_GAP) return false;
+      } else if (gapFrom !== null) return y - p.y <= STEP_UP && p.y - y <= 1;
+    }
+    return gapFrom === null;
   }
 
   lane(from: number, to: number): Lane { return lane(this.nodeList, from, to); }
@@ -451,6 +487,29 @@ export class Nav {
     const path = [b];
     while (path[0] !== a) path.unshift(prev[path[0]]);
     return path;
+  }
+
+  /** Walking length of route(a, b) (centre to centre), or Infinity when there is none. */
+  routeLen(a: number, b: number): number {
+    const r = this.route(a, b);
+    if (!r) return Infinity;
+    let len = 0;
+    for (let i = 1; i < r.length; i++) len += dist2D(this.nodeList[r[i - 1]].center, this.nodeList[r[i]].center);
+    return len;
+  }
+
+  /**
+   * The node(s) a walk from p starts on: p's own node; out on a bridge, the lane ends I can walk off it to (both on a
+   * finished bridge, else the end its decks hang off). Empty when p is on neither (in the water, off any lane).
+   */
+  startNodes(p: Vec3): number[] {
+    const a = this.nodeAt(p);
+    if (a >= 0) return [a];
+    const l = this.nearestLane(p);
+    if (!l) return [];
+    const f = this.frontier(l);
+    if (f.complete) return [l.from, l.to];
+    return [laneS(l, p) <= f.s + 1 ? l.from : l.to];
   }
 
   /** Node to head for next from a toward b over finished bridges (b itself, or the next stop on the way), or null. */
@@ -542,7 +601,16 @@ export class Nav {
     } else if (a < 0) {
       l = this.nearestLane(me);
       if (!l) return null;
-      sTarget = b >= 0 ? this.landS(l, b) : laneS(l, dest);
+      // Heading for a node off this lane (e.g. the center island, from a bridge between two outer islands): walk
+      // off at the end with the shorter way on to it, not the one nearer as the crow flies (often a dead end).
+      let end = b;
+      if (b >= 0 && b !== l.from && b !== l.to) {
+        const s = laneS(l, me), ends = this.startNodes(me);
+        const viaFrom = ends.includes(l.from) ? s + this.routeLen(l.from, b) : Infinity;
+        const viaTo = ends.includes(l.to) ? l.length - s + this.routeLen(l.to, b) : Infinity;
+        if (viaFrom < Infinity || viaTo < Infinity) end = viaFrom <= viaTo ? l.from : l.to;
+      }
+      sTarget = b >= 0 ? this.landS(l, end) : laneS(l, dest);
       // Out on one bridge, heading for a spot on another (e.g. the tip of a pier on a new lane): back to the island
       // both lanes hang off first, not straight at it across the water (that flip-flops on the deck forever).
       // (Not in the storm: heading home first there is walking out into it.)
@@ -675,6 +743,8 @@ export class Nav {
         const i = this.nodeAt(p);
         floor = i >= 0 ? this.nodeList[i].groundY : null;
       }
+      // A short gap ahead with a floor beyond (a bridge's last metre): walked across.
+      if (floor === null && this.crossable(v3(me.x - d.z * o, me.y, me.z + d.x * o), d)) floor = me.y;
       return floor !== null && me.y - floor <= maxDrop && !(this.view.suddenDeath && floor <= this.view.waterY + 0.05);
     }));
     // Rather a hurtful drop than being stuck up there forever.

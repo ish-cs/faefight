@@ -200,8 +200,8 @@ describe('rocket', () => {
     off.a.pitch = Math.atan2(-1.6, 5.5);
     tryFire(off.ctx, off.a, 0);
     off.run(1 / 30, 1);
-    expect(off.b.hp).toBeGreaterThan(20);
-    expect(off.b.hp).toBeLessThan(90);
+    expect(off.b.hp).toBeGreaterThan(0); // ~92 damage since rockets went x1.5 (2026-11-22)
+    expect(off.b.hp).toBeLessThan(30);
     const push = off.knocks.find(([id]) => id === 2)![1];
     const f = forward(yaw());
     expect(push.x * f.x + push.z * f.z).toBeGreaterThan(0); // away from the blast
@@ -212,8 +212,9 @@ describe('rocket', () => {
     a.pitch = -Math.PI / 2 + 0.05; // at your own feet
     tryFire(ctx, a, 0);
     run(1 / 30, 0.2);
-    expect(a.hp).toBeLessThan(70);
-    expect(a.hp).toBeGreaterThan(30);
+    expect(a.hp).toBeLessThan(100);
+    expect(100 - a.hp).toBeLessThanOrEqual(ROCKET.selfDmgMax); // capped (25), however close the blast
+    expect(ROCKET.selfDmgMax).toBeLessThanOrEqual(30);
     const up = knocks.find(([id]) => id === 1)![1];
     expect(up.y).toBeGreaterThan(5);
   });

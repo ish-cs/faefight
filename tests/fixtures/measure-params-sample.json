@@ -1,0 +1,4 @@
+{
+  "note": "Sample params file for bot-measure --params (tests/scripts/measureParams.test.ts, CI smoke).",
+  "params": { "drive.push.pro": 0.4, "buildTuning.coverScore": 1.1 }
+}

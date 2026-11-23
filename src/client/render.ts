@@ -15,6 +15,8 @@ import { PotionSellers, stall } from './world/potionSeller';
 import { loadQuality } from './world/sky';
 import { DayNight } from './world/dayNight';
 import { StormFx } from './world/storm';
+import { IslandBeacons } from './world/beacons';
+import { settings } from './settings/store';
 import { TrapLayer } from './world/traps';
 import type { WorldSurface } from './world/surfaces';
 import { wetness } from './world/wetness';
@@ -106,6 +108,8 @@ export class Renderer {
 
   /** Sudden-death weather: storm wall, rain, telegraph markers, lightning (world/storm.ts). */
   storm!: StormFx;
+  /** A light beam in each living player's colour over their bunker; thin + flickering while sealed (world/beacons.ts). */
+  beacons!: IslandBeacons;
   /** Day → night over the match, night at sudden death (world/dayNight.ts). */
   dayNight!: DayNight;
   /** Tracers, muzzle light/smoke, shell casings, hit sparks, projectiles, explosion flashes. */
@@ -145,6 +149,7 @@ export class Renderer {
     r.scene.add(r.traps.root);
     r.dayNight = new DayNight(r.world.sky);
     r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
+    r.beacons = new IslandBeacons(r.world.sky, r.scene);
     // a body killed in the air ragdolls down onto the island under it, or the sea
     r.characters.floorAt = (x, z) => r.world.impacts.surf?.groundAt(x, z)?.y ?? r.waterY;
     r.characters.onThud = (pos, speed) => {
@@ -183,6 +188,7 @@ export class Renderer {
     this.npcs.sync(); // keepers registered by the map art (before the loading warm-up compiles the scene)
     const map = def.islands;
     this.storm.setMap(map, def.center);
+    this.beacons.setMap(map, islandColor);
     this.dayNight.setCycle(def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt);
     this.gunFx.warmUp([this.boomMat]);
     if (this.genPips) { this.scene.remove(this.genPips); this.genPips.dispose(); }
@@ -236,6 +242,7 @@ export class Renderer {
   resetInterp() {
     this.clock = new RenderClock();
     this.tracks.clear();
+    this.beacons?.reset();
   }
 
   /**
@@ -286,6 +293,7 @@ export class Renderer {
   pushSnapshot(snap: Snapshot): MatchEvent[] {
     this.curr = snap;
     this.waterY = snap.waterY;
+    this.beacons.sync(snap, true); // live state, also under a killcam replay
     if (this.replay) {
       // The replay owns pieces, projectiles and effects until it ends.
       this.syncLoot(snap);
@@ -561,6 +569,7 @@ export class Renderer {
     const simT = this.playT ?? snap?.time ?? 0;
     this.dayNight.frame(simT, !!snap?.suddenDeath);
     this.storm.frame(dt, this.camera, this.world.sky.quality, simT);
+    this.beacons.frame(dt, settings.get().gameplay.islandBeacons);
     this.traps.frame(simT);
     const feet = this.feet.slice(0, nf);
     this.npcs.frame(dt, this.camera, feet);

@@ -1,4 +1,4 @@
-import { HEAL_POTION, MAP, PLAYER, POTIONS, SHIELD_MAX, SHIELD_POTIONS, SPEED_POTION } from './constants';
+import { ELIM, HEAL_POTION, MAP, PLAYER, POTIONS, SHIELD_MAX, SHIELD_POTIONS, SPEED_POTION } from './constants';
 import { POTION_KINDS, isPotionItem, removeIfEmpty } from './hotbar';
 import type { PlayerState, PotionKind, PotionShop, ShopItem, Vec3 } from './types';
 import { v3 } from './vec';
@@ -85,5 +85,6 @@ export function tickPotions(p: PlayerState, now: number, dt: number): void {
   }
 }
 
-/** Movement multiplier from an active speed potion. */
-export const speedMult = (p: PlayerState, now: number) => (now < p.speedUntil ? SPEED_POTION.mult : 1);
+/** Movement multiplier from an active speed potion and a victory surge (they stack). */
+export const speedMult = (p: PlayerState, now: number) =>
+  (now < p.speedUntil ? SPEED_POTION.mult : 1) * (now < (p.surgeUntil ?? 0) ? ELIM.surgeSpeed : 1);

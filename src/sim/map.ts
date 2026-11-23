@@ -1,5 +1,5 @@
 import * as dm from './dmath';
-import { CENTER, DOCK, MAP } from './constants';
+import { CENTER, DOCK, GRAPPLE, MAP } from './constants';
 import type { Vec3 } from './types';
 import type { GameSettings } from './settings';
 import { placeProps, type PropSpawn } from './propPlace';
@@ -92,6 +92,20 @@ export type CenterIsland = {
   /** Standing within CENTER.wellRadius of this point refills shield. */
   shieldWell: Vec3;
 };
+
+/**
+ * How far a grappling hook reaches on this map: GRAPPLE.range, but at least GRAPPLE.gapMargin short of the narrowest
+ * water between two player islands, so hooking over to a rival always takes a few decks of bridge first
+ * (harbor: 36 m apart → 26 m; container yard: 26 m apart → 18 m). Deterministic per map.
+ */
+export function grappleRange(islands: readonly { center: Vec3; radius: number }[]): number {
+  let gap = Infinity;
+  for (let i = 0; i < islands.length; i++) for (let j = i + 1; j < islands.length; j++) {
+    const a = islands[i], b = islands[j];
+    gap = Math.min(gap, Math.hypot(a.center.x - b.center.x, a.center.z - b.center.z) - a.radius - b.radius);
+  }
+  return Math.max(8, Math.min(GRAPPLE.range, gap - GRAPPLE.gapMargin));
+}
 
 export type MapDef = {
   template: MapTemplate;

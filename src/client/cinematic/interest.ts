@@ -54,7 +54,7 @@ type Hit = { t: number; by: number; target: number };
 export class InterestTracker {
   private hits: Hit[] = [];
   private kills: { t: number; killer: number | null; victim: number; at: V3 | null }[] = [];
-  private elims: { t: number; player: number; at: V3 | null }[] = [];
+  private elims: { t: number; player: number; at: V3 | null; by?: number }[] = [];
   private seals: { t: number; by: number | null; owner: number | null; island: number }[] = [];
   private lastTick = -1;
   /** Last known position of every player (a killed player's spot for the orbit). */
@@ -69,6 +69,8 @@ export class InterestTracker {
       if (e.type === 'hit' && typeof d.target === 'number' && typeof d.by === 'number' && d.by !== d.target) this.hits.push({ t: e.t, by: d.by, target: d.target });
       else if (e.type === 'kill' && typeof d.victim === 'number') this.kills.push({ t: e.t, killer: typeof d.killer === 'number' && d.killer !== d.victim ? d.killer : null, victim: d.victim, at: this.spot(d.victim) });
       else if (e.type === 'eliminated' && typeof d.player === 'number') this.elims.push({ t: e.t, player: d.player, at: this.spot(d.player) });
+      // Elimination credit (sim/elimination.ts, same tick): feature the eliminator (the sealer of a sealed-in player too).
+      else if (e.type === 'elimination' && typeof d.by === 'number') { const x = this.elims.find((k) => k.player === d.victim && k.t === e.t); if (x) x.by = d.by; }
       else if (e.type === 'sealed' && typeof d.island === 'number') this.seals.push({ t: e.t, island: d.island, by: typeof d.by === 'number' ? d.by : null, owner: typeof d.owner === 'number' ? d.owner : null });
     }
     for (const p of s.players) if (p.alive) {
@@ -103,8 +105,10 @@ export class InterestTracker {
     // killer isn't a story to show).
     for (const e of this.elims) {
       const k = [...this.kills].reverse().find((x) => x.victim === e.player);
-      if (k?.killer == null || !isAlive(k.killer)) continue;
-      out.push({ reason: 'elimination', playerId: k.killer, otherId: e.player, score: SCORE.elimination - (t - e.t) * 0.3, kind: 'shoulder' });
+      // The credited eliminator (sim/elimination.ts: the sealer of a sealed-in player too), else the killer.
+      const who = e.by != null && isAlive(e.by) ? e.by : k?.killer != null && isAlive(k.killer) ? k.killer : null;
+      if (who === null) continue;
+      out.push({ reason: 'elimination', playerId: who, otherId: e.player, score: SCORE.elimination - (t - e.t) * 0.3, kind: 'shoulder' });
     }
     for (const k of this.kills) {
       if (this.elims.some((e) => e.player === k.victim) || k.killer === null || !isAlive(k.killer)) continue;

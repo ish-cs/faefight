@@ -51,13 +51,14 @@ export type Settings = {
     commentaryOn: boolean; commentary: number; captions: boolean; commentarySpectate: boolean;
     /** Browser voice names for play-by-play and colour ('' = pick the best installed automatically). */
     voicePbp: string; voiceColour: string;
-    /** 'neural' (default): the free Kokoro voice on WebGPU (downloaded once, ~160 MB), the browser voice until it's ready or without WebGPU. 'browser': speechSynthesis only. */
+    /** 'browser' (default): speechSynthesis. 'neural' (opt-in, Settings → Neural voice): the free Kokoro voice on WebGPU, downloaded once (~160 MB); the browser voice until it's ready or without WebGPU. */
     voiceEngine: VoiceEngine;
     /** Kokoro voice ids per commentator ('' = default pair). */
     neuralPbp: string; neuralColour: string };
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct;
     /** Screen shake + hit-stop strength, 0 (off) .. 1 (full). Accessibility. */ screenShake: number;
-    /** First-person camera bob while walking / sprinting. */ cameraBob: boolean };
+    /** First-person camera bob while walking / sprinting. */ cameraBob: boolean;
+    /** Light beams in each living player's colour over their bunker (world/beacons.ts). */ islandBeacons: boolean };
   /** One-time things: the How to play card shows by itself until it has been seen once. */
   onboarding: { howToSeen: boolean };
 };
@@ -74,8 +75,8 @@ export function defaultSettings(): Settings {
     v: SETTINGS_VERSION,
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null), aimMode: 'hold', ctrlAim: ctrlAimDefault(platformNav()) },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true, competitive: false },
-    audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false, commentaryOn: true, commentary: 0.9, captions: true, commentarySpectate: false, voicePbp: '', voiceColour: '', voiceEngine: 'neural', neuralPbp: '', neuralColour: '' },
-    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true },
+    audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false, commentaryOn: true, commentary: 0.9, captions: true, commentarySpectate: false, voicePbp: '', voiceColour: '', voiceEngine: 'browser', neuralPbp: '', neuralColour: '' },
+    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true, islandBeacons: true },
     onboarding: { howToSeen: false },
   };
 }
@@ -147,6 +148,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       genAlertPct: oneOf(g.genAlertPct, GEN_ALERT_PCTS, d.gameplay.genAlertPct),
       screenShake: num(g.screenShake, 0, 1, d.gameplay.screenShake),
       cameraBob: bool(g.cameraBob, d.gameplay.cameraBob),
+      islandBeacons: bool(g.islandBeacons, d.gameplay.islandBeacons),
     },
     onboarding: { howToSeen: bool(o.howToSeen, d.onboarding.howToSeen) },
   };

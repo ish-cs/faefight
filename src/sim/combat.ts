@@ -18,13 +18,15 @@ export type CombatCtx = {
   pieces: Map<number, PieceState>;
   explosives: Explosive[];
   nextId(): number;
-  onPieceDestroyed(id: number): void;
+  /** `by`: the player whose damage broke it (kill credit for whoever stood on it), null/absent for none. */
+  onPieceDestroyed(id: number, by?: number | null): void;
   /** `cause`: the HitInfo weapon of the killing hit ('storm', 'lightning', 'barrel', a gun...). */
   onKill(victim: number, killer: number | null, cause?: string): void;
   /** Whether a player stands on something (spread); defaults to "vertical speed is small". */
   grounded?(id: number): boolean;
   /** A blast pushed this player (velocity change, m/s). */
-  onKnockback?(id: number, dv: Vec3): void;
+  /** `rocketJump`: your own rocket launched you (the landing after it doesn't hurt). */
+  onKnockback?(id: number, dv: Vec3, rocketJump?: boolean): void;
   /** Hitscan ray for a shot (lag-compensated by the match); defaults to physics.raycast. */
   castShot?(origin: Vec3, dir: Vec3, maxDist: number, shooter: number): RayHit | null;
   /** Barrels / tanks / crates (hazards.ts): the first one a ray meets, and damaging one. Absent = none. */
@@ -83,6 +85,7 @@ export function applyPlayerDamage(
   target.shield = had - shieldAmount;
   target.hp -= amount - shieldAmount;
   target.lastDamagedAt = now;
+  if (attackerId !== null && attackerId !== target.id) target.hurtBy = { by: attackerId, at: now };
   // Getting hurt is stressful: less stamina now and slower recovery for a while (movement.ts).
   if (target.mv) { stressFromDamage(target.mv, amount); target.stamina = target.mv.stamina; }
   const broke = had > 0 && target.shield <= 0;
@@ -107,7 +110,7 @@ export function hitPiece(
     piece: id, kind: piece.kind, by, source, amount: before - Math.max(0, piece.hp), hp: Math.max(0, piece.hp), maxHp: PIECES[piece.kind].hp, pos: at,
   })];
   if (!destroyed) return out;
-  ctx.onPieceDestroyed(id);
+  ctx.onPieceDestroyed(id, by);
   out.push(ev(now, 'destroyed', { piece: id, kind: piece.kind, pos: pieceCenter(piece), rotY: piece.rotY }));
   return out;
 }
@@ -304,11 +307,14 @@ function rocketBlast(ctx: CombatCtx, e: Explosive, now: number, out: MatchEvent[
       if (block && !(block.hit.type === 'player' && block.hit.id === pl.id)) shield = 0.25;
     }
     const f = k(d) * shield;
-    const dmg = ROCKET.playerDmg * f * (pl.id === e.owner ? ROCKET.selfMult : 1);
+    const self = pl.id === e.owner;
+    const dmg = self ? Math.min(ROCKET.selfDmgMax, ROCKET.playerDmg * f * ROCKET.selfMult) : ROCKET.playerDmg * f;
     out.push(...applyPlayerDamage(ctx, pl, dmg, e.owner, now, { pos: rv(point), weapon: 'rocket' }));
     if (pl.alive && ctx.onKnockback && !friendlyFire(ctx, e.owner, pl)) {
       const away = norm(sub(bodyCenter(pl), e.pos));
-      ctx.onKnockback(pl.id, v3(away.x * ROCKET.knock * f, away.y * ROCKET.knock * f * 0.5 + ROCKET.knockUp * f, away.z * ROCKET.knock * f));
+      // Your own blast is a rocket jump: a strong launch up and away from it (constants.ts ROCKET).
+      if (self) ctx.onKnockback(pl.id, v3(away.x * ROCKET.selfKnock * f, ROCKET.selfKnockUp * f, away.z * ROCKET.selfKnock * f), true);
+      else ctx.onKnockback(pl.id, v3(away.x * ROCKET.knock * f, away.y * ROCKET.knock * f * 0.5 + ROCKET.knockUp * f, away.z * ROCKET.knock * f));
     }
   }
   for (const pc of [...ctx.pieces.values()]) {
