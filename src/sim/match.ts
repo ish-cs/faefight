@@ -1,4 +1,4 @@
-import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
+import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, grantStartPistol, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
@@ -156,6 +156,7 @@ export class Match implements MatchApi {
       const isl = islandOf[i];
       const p = newPlayer(id, name, cfg.isBot, isl, map[isl].spawn, this.settings.startCash);
       if (teams[i] !== undefined) p.team = teams[i];
+      grantStartPistol(p);
       p.yaw = spawnYaw(map[isl].bunker, p.pos);
       p.pitch = 0;
       this.s.players.set(id, p);

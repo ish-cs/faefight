@@ -161,6 +161,22 @@ export function grantLockedGuns(player: PlayerState): void {
 }
 
 /**
+ * Match start: everyone begins with a pistol + one spare mag (the respawn kit) selected in hand, so the
+ * first click fires. Skipped if a pistol is already held or the hotbar is full.
+ */
+export function grantStartPistol(player: PlayerState): void {
+  if (player.inv.weapons.pistol) return;
+  const at = addKind(player.hotbar, 'pistol');
+  if (at < 0) {
+    console.warn(`grantStartPistol: hotbar full, player ${player.id} starts without a pistol`);
+    return;
+  }
+  player.inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag };
+  player.selected = at;
+  player.equipped = 'pistol';
+}
+
+/**
  * Buying at a particular counter: the home shop (any island's NPC) or a potion seller each sell only
  * their own stock. `genLevels` is passed through for generator upgrades.
  */

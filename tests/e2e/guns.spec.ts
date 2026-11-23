@@ -48,7 +48,7 @@ test('rocket launcher: buy it, blow up a steel wall; ADS zooms', async ({ page }
   await expect(page.getByTestId('panel')).toBeVisible();
   await expect(page.getByTestId('buy-rocket')).toHaveAttribute('aria-label', /^Rocket launcher, \$500/);
   await page.getByTestId('buy-rocket').click();
-  await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', 'rocket');
+  await expect(page.getByTestId('hotbar-slot-1')).toHaveAttribute('data-item', 'rocket');
   expect((await me()).inv.weapons.rocket).toEqual({ mag: 1, spare: 3 });
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('panel')).toBeHidden();
@@ -57,7 +57,7 @@ test('rocket launcher: buy it, blow up a steel wall; ADS zooms', async ({ page }
   await dbg(page, 'give', { pieces: { steel: 1 } });
   await dbg(page, 'teleport', home.center.x, home.center.z);
   await page.locator('canvas.game').click();
-  await page.keyboard.press('Digit2');
+  await page.keyboard.press('Digit3');
   await expect(page.getByTestId('hotbar')).toHaveAttribute('data-ghost', 'ok', { timeout: 10_000 });
   const steel = async () => (await dbg<Snap>(page, 'snapshot')).pieces.filter((p) => p.owner === humanId && p.kind === 'steel').length;
   await expect(async () => {
@@ -71,7 +71,7 @@ test('rocket launcher: buy it, blow up a steel wall; ADS zooms', async ({ page }
   await page.keyboard.up('KeyS');
 
   // Launcher up; aiming down sights zooms in.
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   await expect.poll(async () => (await me()).equipped).toBe('rocket');
   await setPitch(page, 0);
   const fov0 = await dbg<number>(page, 'cameraFov');
@@ -101,7 +101,7 @@ test('rocket launcher: buy it, blow up a steel wall; ADS zooms', async ({ page }
 
   // Rifle in first person: sights up shows the 2x scope.
   await dbg(page, 'give', { weapons: { rifle: { mag: 25, spare: 50 } } });
-  await page.keyboard.press('Digit2');
+  await page.keyboard.press('Digit3');
   await expect.poll(async () => (await me()).equipped).toBe('rifle');
   await page.keyboard.press('KeyV');
   await page.waitForTimeout(600);

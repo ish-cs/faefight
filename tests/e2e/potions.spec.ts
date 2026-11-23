@@ -66,10 +66,10 @@ test('shield bar, potion seller, drinking', async ({ page }) => {
   }
   await expect.poll(async () => (await me()).inv.potions).toEqual({ shieldBig: 1, shieldSmall: 1, speedPotion: 1 });
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', 'shieldBig');
+  await expect(page.getByTestId('hotbar-slot-1')).toHaveAttribute('data-item', 'shieldBig');
 
   // Drink the big shield: "Drinking…" for 2 s, then a half-full shield bar.
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   await expect(async () => {
     if ((await me()).inv.potions.shieldBig) await page.mouse.click(640, 360);
     await expect.poll(async () => (await me()).inv.potions.shieldBig ?? 0, { timeout: 1000 }).toBe(0);
@@ -82,7 +82,7 @@ test('shield bar, potion seller, drinking', async ({ page }) => {
   await expect(page.locator('.shield-text')).toHaveText('50');
 
   // Speed potion: the buff timer shows.
-  await page.keyboard.press('Digit3');
+  await page.keyboard.press('Digit4');
   await expect(async () => {
     if ((await me()).inv.potions.speedPotion) await page.mouse.click(640, 360);
     await expect.poll(async () => (await me()).inv.potions.speedPotion ?? 0, { timeout: 1000 }).toBe(0);

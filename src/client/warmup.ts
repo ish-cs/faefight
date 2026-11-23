@@ -106,6 +106,10 @@ export async function warmUp(r: Renderer, loop: WarmLoop, fpv: Viewmodel, onStep
       if (e.count === 0) { if ((e.o as THREE.InstancedMesh).count === 1) (e.o as THREE.InstancedMesh).count = 0; }
       else if (g.instanceCount === 1) g.instanceCount = 0;
     }
+    // A body LOD the game switched to during the warm frames was in `forced` (hidden at the start) and was just
+    // hidden again, but the LOD cache says it's shown: re-apply (else the own avatar starts invisible).
+    r.characters.relod();
+    r.npcs.relod();
   }
   await loop.frames(1);
   onStep(0.9, 'Warming up the GPU');

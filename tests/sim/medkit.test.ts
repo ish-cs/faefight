@@ -5,6 +5,7 @@ import { Match } from '../../src/sim/match';
 import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type PlayerInput, type PlayerState } from '../../src/sim/types';
 import { add, forward, scale, v3 } from '../../src/sim/vec';
+import { unarmed } from './unarmed';
 
 const player = (cash = 0) => {
   const p = newPlayer(1, 'p', false, 0, v3());
@@ -92,6 +93,7 @@ describe('medkit in a match', () => {
 
   test('select + click heals after 2 s; Q drops one; death drops the rest', async () => {
     const m = await Match.create(humans1v1);
+    unarmed(m);
     m.debugTeleport(1, add(m.map[0].center, scale(forward(m.map[0].bunker.facingYaw), 6)));
     m.debugGive(1, { medkits: 3 });
     m.debugSetHp(1, 20);
@@ -116,6 +118,7 @@ describe('medkit in a match', () => {
 
   test('a click with the medkit not selected does nothing', async () => {
     const m = await Match.create(humans1v1);
+    unarmed(m);
     m.debugGive(1, { medkits: 1, grenades: 1 });
     m.debugSetHp(1, 20);
     let snap = m.tick(inputs({ select: 0, useMedkit: true }));
