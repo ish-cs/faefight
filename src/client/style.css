@@ -100,6 +100,14 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .hud .banner.storm { background: rgba(92, 60, 170, 0.8); }
 .hud .storm-warn { position: absolute; top: 140px; left: 50%; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; font-size: 56px; font-weight: 900; letter-spacing: 10px; color: #e9e2ff; text-shadow: 0 0 24px rgba(140, 100, 255, 0.9), 0 2px 0 rgba(0, 0, 0, 0.5); pointer-events: none; animation: pulse 1.2s ease-in-out infinite; }
 .hud .storm-warn-sub { font-size: 16px; font-weight: 700; letter-spacing: 1px; color: #fff; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8); }
+.hud .elim-banner { position: absolute; top: 230px; left: 50%; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; text-align: center; max-width: calc(100vw - 32px); animation: elim-pop 0.35s ease-out; }
+.hud .elim-banner .elim-title { font-size: 44px; font-weight: 900; letter-spacing: 6px; color: #ffe9e0; text-shadow: 0 0 22px rgba(255, 70, 40, 0.85), 0 2px 0 rgba(0, 0, 0, 0.55); }
+.hud .elim-banner .elim-sub { font-size: 17px; font-weight: 700; letter-spacing: 0.5px; color: #fff; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85); }
+.hud .elim-banner.mine .elim-title { color: #fff4c2; text-shadow: 0 0 26px rgba(255, 196, 40, 0.95), 0 2px 0 rgba(0, 0, 0, 0.55); }
+.hud .feed-item.elim { font-weight: 800; border-left: 3px solid #ff6a3d; }
+.hud .feed-item.elim.mine { border-left-color: #ffc428; color: #fff4c2; }
+@keyframes elim-pop { from { transform: translateX(-50%) scale(1.35); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+@media (max-width: 600px) { .hud .elim-banner .elim-title { font-size: 26px; letter-spacing: 3px; } }
 /* Outside the storm ring: a pulsing violet edge (screen-space only, no render cost). */
 .hud .storm-vignette { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.35s; box-shadow: inset 0 0 160px 40px rgba(110, 60, 220, 0.75); background: radial-gradient(ellipse at center, transparent 55%, rgba(60, 20, 140, 0.45) 100%); }
 .hud .storm-vignette.on { opacity: 1; animation: storm-edge 1s ease-in-out infinite; }
@@ -657,3 +665,7 @@ body.cinematic .spectate-banner, body.cinematic .click-hint { display: none !imp
 }
 .commentary-caption.on { opacity: 1; transform: translate(-50%, 0); }
 .commentary-caption[data-persona="colour"] { border-left-color: var(--c-teal, #1fc9b6); font-weight: 600; }
+.commentary-status {
+  position: fixed; right: 16px; bottom: 16px; padding: 6px 10px; border-radius: 6px; background: rgba(4, 11, 17, 0.72);
+  font-family: var(--ff-body, inherit); font-size: var(--fs-xs, 12px); color: var(--c-text-dim, #cfc9bf); pointer-events: none; z-index: 40;
+}

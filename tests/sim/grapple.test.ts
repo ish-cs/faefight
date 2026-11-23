@@ -192,7 +192,7 @@ describe('grappling hook in a match', () => {
   test('no yank through a wall that went up while the hook flew; nothing spent', async () => {
     const { m, f, s: s0, slot } = await setup();
     const p0 = me(s0);
-    m.debugTeleport(2, add(p0.pos, scale(f, 30)));
+    m.debugTeleport(2, add(p0.pos, scale(f, 22)));
     let s = m.tick(new Map([[1, { ...NO_INPUT, select: slot }]]));
     for (let i = 0; i < 5; i++) s = m.tick(new Map([[1, { ...NO_INPUT, select: slot }]]));
     const them = me(s, 2);
@@ -200,7 +200,7 @@ describe('grappling hook in a match', () => {
     const inp = (x: Partial<PlayerInput> = {}) => new Map([[1, { ...NO_INPUT, ...aim, select: slot, ...x }]]);
     s = m.tick(inp({ grapple: true }));
     expect(me(s).hook?.tgt).toBe(2);
-    const mid = add(me(s).pos, scale(f, 15));
+    const mid = add(me(s).pos, scale(f, 11));
     m.debugPlacePiece('steel', v3(mid.x, me(s).pos.y, mid.z), yawOf(f));
     const at = me(s, 2).pos;
     for (let i = 0; i < 30; i++) s = m.tick(inp());

@@ -98,9 +98,11 @@ export function killPlayer(
   const p = s.players.get(victimId);
   if (!p) throw new Error(`killPlayer: no player ${victimId}`);
   if (!p.alive) return [];
+  // The drop bag's id rides on the kill event (elimination.ts takes the spoils' share of its cash).
+  let bag: number | undefined;
   if (!inWater && !isEmpty(p.inv)) {
-    const id = s.nextId++;
-    s.loot.set(id, { id, pos: clone(p.pos), inv: p.inv });
+    bag = s.nextId++;
+    s.loot.set(bag, { id: bag, pos: clone(p.pos), inv: p.inv });
   }
   p.inv = emptyInventory();
   p.hotbar = emptyHotbar();
@@ -109,6 +111,7 @@ export function killPlayer(
   p.drinking = null;
   p.healLeft = 0;
   p.speedUntil = 0;
+  delete p.surgeUntil;
   p.equipped = 'fists';
   p.reloadUntil = 0;
   p.reloadSec = 0;
@@ -118,6 +121,7 @@ export function killPlayer(
   p.vel = v3();
   delete p.yankedBy;
   delete p.hurtBy;
+  delete p.rocketJumpAt;
   p.deaths++;
   const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
   if (k) k.kills++;
@@ -127,12 +131,12 @@ export function killPlayer(
     p.respawnAt = null;
     p.eliminated = true;
     physics.setPlayerPos(victimId, PARKED);
-    const kill = { victim: victimId, killer, inWater, ...(cause ? { cause } : {}), ...(via ? { via } : {}) };
+    const kill = { victim: victimId, killer, inWater, ...(cause ? { cause } : {}), ...(via ? { via } : {}), ...(bag !== undefined ? { bag } : {}) };
     return [ev(now, 'kill', kill), ev(now, 'eliminated', { player: victimId })];
   }
   p.respawnAt = now + LIFECYCLE.respawnSec;
   physics.setPlayerPos(victimId, PARKED);
-  return [ev(now, 'kill', { victim: victimId, killer, inWater, ...(cause ? { cause } : {}), ...(via ? { via } : {}) })];
+  return [ev(now, 'kill', { victim: victimId, killer, inWater, ...(cause ? { cause } : {}), ...(via ? { via } : {}), ...(bag !== undefined ? { bag } : {}) })];
 }
 
 /**

@@ -14,12 +14,18 @@ const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
 
 type P = { id: number; alive: boolean };
 type Snap = { time: number; players: P[] };
-type KcInfo = { active: boolean; started: boolean; reason: string; plan: { duration: number } | null; frames: number; killer: number | null };
+type KcInfo = {
+  active: boolean; started: boolean; reason: string; plan: { duration: number; real: number } | null; frames: number; killer: number | null;
+  real: number; slow: number; stats: { frames: number; blocked: number; maxStep: number; slowFrames: number; clampMax: number; sideSwitches: number };
+};
 type Spec = { active: boolean; mode: string; followId: number | null; killcam: boolean };
 
-const SHOTS = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.E2E_SHOTS;
+const ENV = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
+const SHOTS = ENV.E2E_SHOTS;
+/** Where the three killcam frames go (establishing / glide / slow beat): KILLCAM_SHOTS, else E2E_SHOTS. */
+const KC_SHOTS = ENV.KILLCAM_SHOTS ?? SHOTS;
 
-test('dying shows the killcam from the killer, it ends before the respawn; Space skips; kill feed lines', async ({ page }) => {
+test('dying shows the killcam cinematic, it ends before the respawn; any key / click skips; kill feed lines', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -53,18 +59,42 @@ test('dying shows the killcam from the killer, it ends before the respawn; Space
   const info = await dbg<KcInfo>(page, 'killcam');
   expect(info.started).toBe(true);
   expect(info.plan!.duration).toBeLessThan(LIFECYCLE.respawnSec); // fits in the respawn wait
-  await page.waitForTimeout(900);
+  expect(info.plan!.real).toBeLessThanOrEqual(4.6); // short: ≤ ~4.5 s, slow beat included
+  // Three frames: the establishing angle, the glide in, and the slow-motion beat on the kill.
+  const plan = info.plan!;
+  const shot = async (name: string, until: (i: KcInfo) => boolean) => {
+    await expect.poll(async () => { const i = await dbg<KcInfo>(page, 'killcam'); return !i.active || until(i); }, { timeout: 6_000, intervals: [30] }).toBe(true);
+    if (KC_SHOTS && (await dbg<KcInfo>(page, 'killcam')).active) await page.screenshot({ path: `${KC_SHOTS}/killcam-${name}.png` });
+  };
+  await shot('1-establishing', (i) => i.real > 0.45);
+  await shot('2-glide', (i) => i.real > plan.real * 0.5);
+  await shot('3-slowmo', (i) => i.slow > 0.9);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/qol2-killcam.png` });
   await expect(kc).toBeHidden({ timeout: 5_000 });
-  expect((await dbg<KcInfo>(page, 'killcam')).reason).toBe('ended');
+  const done = await dbg<KcInfo>(page, 'killcam');
+  console.log('[killcam e2e] stats', JSON.stringify(done.stats), 'real', done.plan!.real.toFixed(2));
+  expect(done.reason).toBe('ended');
+  expect(done.stats.slowFrames).toBeGreaterThan(5); // the slow beat played
+  expect(done.stats.maxStep).toBeLessThan(25); // no camera snaps (m/s)
   await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);
   expect(Date.now() - diedAt).toBeLessThan(RESPAWN_MS + 3000); // respawn not held up
 
-  // Again, skipped with Space.
+  // Again, skipped with a key (any key, once past the short grace for the press you died on).
   await page.waitForTimeout(RESPAWN_MS + 500);
   await dbg(page, 'kill', me, bot);
   await expect(kc).toBeVisible({ timeout: 5_000 });
-  await page.keyboard.press('Space');
+  await page.waitForTimeout(500);
+  await page.keyboard.press('KeyQ');
+  await expect(kc).toBeHidden({ timeout: 1_000 });
+  expect((await dbg<KcInfo>(page, 'killcam')).reason).toBe('skipped');
+  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);
+
+  // And with a click.
+  await page.waitForTimeout(RESPAWN_MS + 500);
+  await dbg(page, 'kill', me, bot);
+  await expect(kc).toBeVisible({ timeout: 5_000 });
+  await page.waitForTimeout(500);
+  await page.mouse.click(640, 360);
   await expect(kc).toBeHidden({ timeout: 1_000 });
   expect((await dbg<KcInfo>(page, 'killcam')).reason).toBe('skipped');
   await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);

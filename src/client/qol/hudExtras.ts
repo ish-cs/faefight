@@ -223,6 +223,9 @@ const ITEM_NAME: Record<string, string> = {
   ammo: 'Ammo', medkit: 'Medkit', shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', genUpgrade: 'Generator ↑',
 };
 
+/** Eliminations, with assists after a plus (older hosts send neither: 0). */
+const elimsCell = (s: PlayerStats) => `${s.elims ?? 0}${s.assists ? ` +${s.assists}` : ''}`;
+
 function summaryNode(stats: PlayerStats[], snap: Snapshot, humanId: number): HTMLElement {
   const root = el('div', 'qol-summary glass');
   root.dataset.testid = 'match-summary';
@@ -241,7 +244,7 @@ function summaryNode(stats: PlayerStats[], snap: Snapshot, humanId: number): HTM
   }
   const table = el('table');
   const head = el('tr');
-  for (const h of ['', 'Player', 'Kills', 'Deaths', 'Damage', 'Seals', 'Built', 'Cash', 'Longest life']) head.append(el('th', '', h));
+  for (const h of ['', 'Player', 'Kills', 'Elims', 'Deaths', 'Damage', 'Seals', 'Built', 'Cash', 'Spoils', 'Longest life']) head.append(el('th', '', h));
   table.append(el('thead'));
   table.tHead!.append(head);
   const body = el('tbody');
@@ -255,7 +258,7 @@ function summaryNode(stats: PlayerStats[], snap: Snapshot, humanId: number): HTM
     dc.append(dot);
     const name = el('td', 'qs-name', p?.name ?? `#${s.id}`);
     if (s.id === humanId) name.append(el('span', 'tagpill you', 'you'));
-    tr.append(dc, name, ...[s.kills, s.deaths, s.damage, s.seals, s.built, `$${s.cash}`, fmtLife(s.longestLife)].map((v) => el('td', 'num', String(v))));
+    tr.append(dc, name, ...[s.kills, elimsCell(s), s.deaths, s.damage, s.seals, s.built, `$${s.cash}`, `$${s.spoils ?? 0}`, fmtLife(s.longestLife)].map((v) => el('td', 'num', String(v))));
     body.append(tr);
   }
   table.append(body);

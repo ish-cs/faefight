@@ -16,7 +16,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch'] as const;
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
@@ -37,6 +37,7 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
       return { diffs: seed % 2 ? [hi, lo] : [lo, hi], maxSec: 25 * 60 };
     }
     case 'ffa8-pro': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
+    case 'ffa3-pro': return { diffs: Array(3).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
     case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 180 };
     case 'ffa8-pro-arch': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
@@ -80,26 +81,50 @@ export type BuildOut = {
 const FIGHT_GAP = 8, BLOCK_M = 4, HIGH_M = 1.2;
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
-  time: number; decisive: boolean; preSdElims: number; firstSeal: number | null; msPerTick: number; wallSec: number;
+  time: number; decisive: boolean; preSdElims: number; preSdSeals?: number; firstSeal: number | null; msPerTick: number; wallSec: number;
   seats: SeatOut[];
+  /** Player kills at or after sudden death (15:00+), eliminations in all, credited ones (refs with elimination rewards) and their spoils. */
+  lateKills?: number; elims?: number; credited?: number; spoils?: number;
 };
+
+/** What src/sim/bots/params.ts exports, depending on the ref (the trainer branch adds sanitize/toBotParams). */
+type ParamsModule = {
+  withParams?: (over: Record<string, number>) => unknown;
+  sanitize?: (p: Record<string, number>) => Record<string, number>;
+  toBotParams?: (flat: Record<string, number>) => unknown;
+};
+
+/**
+ * A params file (`{ params: { 'drive.push.pro': 0.4, ... } }` or the flat map itself) as the BotParams a Bot takes.
+ * Main's params.ts has withParams (flat overrides on the defaults; unknown keys throw); a trainer ref clamps into
+ * its search box first (sanitize) and builds with toBotParams. Fails loudly if the module has neither.
+ */
+export function paramsFromJson(mod: ParamsModule, json: unknown): unknown {
+  if (!json || typeof json !== 'object') throw new Error('measure: params file is not a JSON object');
+  const j = json as { params?: Record<string, number> } & Record<string, unknown>;
+  const flat = (j.params ?? j) as Record<string, number>;
+  for (const [k, v] of Object.entries(flat)) if (typeof v !== 'number') throw new Error(`measure: params file: ${k} is not a number`);
+  if (mod.sanitize && mod.toBotParams) return mod.toBotParams(mod.sanitize(flat));
+  if (mod.withParams) return mod.withParams(flat);
+  throw new Error('measure: --params given but src/sim/bots/params.ts exports neither withParams nor sanitize/toBotParams');
+}
+
+export async function loadParamsFile(paramsPath: string): Promise<unknown> {
+  // Variable specifier: params.ts exists only on refs with the tunable bot (tsc must pass on refs without it).
+  const paramsModule = '../../src/sim/bots/params';
+  let mod: ParamsModule;
+  try { mod = await import(/* @vite-ignore */ paramsModule); } catch (e) {
+    throw new Error(`measure: --params given but this ref has no src/sim/bots/params.ts (${(e as Error).message})`);
+  }
+  return paramsFromJson(mod, JSON.parse(fs.readFileSync(paramsPath, 'utf8')));
+}
 
 async function runOne(scenario: Scenario, seed: number, paramsPath: string | null): Promise<GameOut> {
   const { Match } = await import('../../src/sim/match');
   const { Bot } = await import('../../src/sim/bots/bot');
   const { LIFECYCLE, TICK_HZ } = await import('../../src/sim/constants');
   if (LIFECYCLE.suddenDeathAt !== SD) throw new Error(`measure: sudden death is at ${LIFECYCLE.suddenDeathAt}s, script assumes ${SD}s — update SD`);
-  let params: unknown = undefined;
-  if (paramsPath) {
-    let mod: { sanitize: (p: Record<string, number>) => unknown };
-    // Variable specifier: params.ts exists only on refs with the trainable bot (tsc must pass on refs without it).
-    const paramsModule = '../../src/sim/bots/params';
-    try { mod = await import(/* @vite-ignore */ paramsModule); } catch (e) {
-      throw new Error(`measure: --params given but this ref has no src/sim/bots/params.ts (${(e as Error).message})`);
-    }
-    const j = JSON.parse(fs.readFileSync(paramsPath, 'utf8')) as { params?: Record<string, number> } & Record<string, number>;
-    params = mod.sanitize(j.params ?? j);
-  }
+  const params = paramsPath ? await loadParamsFile(paramsPath) : undefined;
   const { diffs } = seatsFor(scenario, seed);
   // MEASURE_MAX_SEC: cut games short (smoke tests of this script only; real measurements never set it).
   const maxSec = Number(process.env.MEASURE_MAX_SEC) || seatsFor(scenario, seed).maxSec;
@@ -126,7 +151,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   }));
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
-  let preSdElims = 0, firstSeal: number | null = null;
+  let preSdElims = 0, preSdSeals = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
   const bo: BuildOut[] = diffs.map(() => ({ fights: 0, built: 0, builtWon: 0, plainWon: 0, pieces: 0, kinds: {}, bulletsTaken: 0, bulletsBlocked: 0, hits: 0, highHits: 0 }));
   const fight: ({ last: number; pieces: number; kill: boolean } | null)[] = diffs.map(() => null);
   const pieceOwner = new Map<number, number>();
@@ -193,18 +218,22 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       } else if (e.type === 'kill') {
         const v = e.data.victim as number, k = e.data.killer as number | null;
         seats[v - 1].deaths++;
-        if (k != null && k !== v) seats[k - 1].kills++;
+        if (k != null && k !== v) { seats[k - 1].kills++; if (e.t >= SD) lateKills++; }
         if (k != null && k !== v && fight[k - 1]) { fight[k - 1]!.kill = true; endFight(k - 1, false); }
         endFight(v - 1, true);
       } else if (e.type === 'sealed') {
         const by = e.data.by as number | null | undefined;
         if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
         if (firstSeal === null && by != null && by !== e.data.owner && e.t < SD) firstSeal = e.t;
+        if (by != null && by !== e.data.owner && e.t < SD) preSdSeals++;
+      } else if ((e.type as string) === 'elimination') {
+        if (e.data.by != null) { credited++; spoils += Number(e.data.spoils) || 0; }
       } else if (e.type === 'eliminated') {
         const id = e.data.player as number;
         if (seats[id - 1].eliminatedAt === null) {
           seats[id - 1].eliminatedAt = e.t;
           if (e.t < SD) preSdElims++;
+          elims++;
         }
       }
     }
@@ -217,7 +246,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const winner = snap.winner !== null && snap.winner > 0 ? snap.winner : null;
   return {
     scenario, seed, winner, winnerDifficulty: winner ? diffs[winner - 1] : null, time: snap.time,
-    decisive: winner !== null && snap.time < SD, preSdElims, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
+    decisive: winner !== null && snap.time < SD, preSdElims, preSdSeals, lateKills, elims, credited, spoils, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
   };
 }
 
@@ -264,6 +293,8 @@ export type ScenarioSummary = {
   scenario: Scenario; games: number; seeds: number[]; decisive: number; noWinner: number;
   winsByDifficulty: Record<string, number>; medianPreSdElims: number | null; medianEngagementM: number | null;
   attackPct: number; homePct: number; medianFirstSealSec: number | null; gamesWithSeal: number;
+  /** Seals (by a rival, before sudden death) per game: median and mean. */
+  medianSeals: number | null; meanSeals: number;
   longestHomeSitSec: number; avgMinutes: number; msPerTick: number; maxWallSec: number;
   /** Kept for older readers: the same as `ladder` on 1v1-pro-vs-hard. */
   proVsHard: Share | null;
@@ -274,6 +305,8 @@ export type ScenarioSummary = {
   /** Combat building per skill (absent when the shards predate it). */
   build?: Record<string, BuildSummary>;
   shipCheck: { pass: boolean | null; checks: Check[] };
+  /** Means per game (absent on old shard files): kills at 15:00+, eliminations, credited eliminations, spoils paid. */
+  perGame?: { lateKills: number; elims: number; credited: number; spoils: number };
 };
 
 export type BuildSummary = {
@@ -323,12 +356,15 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     attackPct: (100 * seats.reduce((a, x) => a + x.attackSec, 0)) / alive,
     homePct: (100 * seats.reduce((a, x) => a + x.idleHome, 0)) / alive,
     medianFirstSealSec: median(seals), gamesWithSeal: seals.length,
+    medianSeals: median(games.map((g) => g.preSdSeals ?? 0)), meanSeals: games.reduce((a, g) => a + (g.preSdSeals ?? 0), 0) / Math.max(1, games.length),
     longestHomeSitSec: Math.max(0, ...seats.map((x) => x.longestHomeIdle)),
     avgMinutes: games.reduce((a, g) => a + g.time, 0) / Math.max(1, games.length) / 60,
     msPerTick: games.reduce((a, g) => a + g.msPerTick, 0) / Math.max(1, games.length),
     maxWallSec: Math.max(0, ...games.map((g) => g.wallSec)),
     proVsHard, ladder, placementByTier,
     shipCheck: { pass: null, checks: [] },
+    perGame: (['lateKills', 'elims', 'credited', 'spoils'] as const).reduce((o, k) => ({ ...o, [k]: games.reduce((a, g) => a + (g[k] ?? 0), 0) / Math.max(1, games.length) }),
+      {} as { lateKills: number; elims: number; credited: number; spoils: number }),
   };
   const withBuild = seats.filter((x) => x.build);
   if (withBuild.length) {
@@ -363,9 +399,9 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '',
     Object.entries(meta).map(([k, v]) => `**${k}** ${v}`).join(' · '),
     '',
-    '| scenario | games | decisive < 15:00 | median elims < 15:00 | median engagement | attack | home | median first seal | higher tier wins (95% CI) | avg length | ship check |',
-    '|---|---|---|---|---|---|---|---|---|---|---|',
-    ...sums.map((s) => `| ${s.scenario} | ${s.games} | ${s.decisive}/${s.games} | ${s.medianPreSdElims ?? '-'} | ${s.medianEngagementM ?? '-'} m | ${pct(s.attackPct)} | ${pct(s.homePct)} | ${secs(s.medianFirstSealSec)} (${s.gamesWithSeal}/${s.games} games) | ${s.ladder ? `${(100 * s.ladder.share).toFixed(0)}% ± ${(100 * s.ladder.ci95).toFixed(0)}` : '-'} | ${s.avgMinutes.toFixed(1)} min | ${s.shipCheck.pass === null ? 'n/a' : s.shipCheck.pass ? '✅ pass' : '❌ fail'} |`),
+    '| scenario | games | decisive < 15:00 | median elims < 15:00 | median engagement | attack | home | median first seal | seals < 15:00 per game (median / mean) | higher tier wins (95% CI) | avg length | ship check |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|',
+    ...sums.map((s) => `| ${s.scenario} | ${s.games} | ${s.decisive}/${s.games} | ${s.medianPreSdElims ?? '-'} | ${s.medianEngagementM ?? '-'} m | ${pct(s.attackPct)} | ${pct(s.homePct)} | ${secs(s.medianFirstSealSec)} (${s.gamesWithSeal}/${s.games} games) | ${s.medianSeals ?? '-'} / ${(s.meanSeals ?? 0).toFixed(1)} | ${s.ladder ? `${(100 * s.ladder.share).toFixed(0)}% ± ${(100 * s.ladder.ci95).toFixed(0)}` : '-'} | ${s.avgMinutes.toFixed(1)} min | ${s.shipCheck.pass === null ? 'n/a' : s.shipCheck.pass ? '✅ pass' : '❌ fail'} |`),
     '',
     '### Ship-check details',
     ...sums.flatMap((s) => s.shipCheck.checks.map((c) => `- ${s.scenario}: ${c.pass ? '✅' : '❌'} ${c.name} (${c.value})`)),
@@ -376,6 +412,9 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     ...sums.filter((s) => s.placementByTier).flatMap((s) => [`### ${s.scenario}: average placement by tier (1 = won)`, '',
       '| tier | mean placement | 95% CI | seats |', '|---|---|---|---|',
       ...Object.entries(s.placementByTier!).map(([d, p]) => `| ${d} | ${p!.mean.toFixed(2)} | ± ${p!.ci95.toFixed(2)} | ${p!.n} |`), '']),
+    '### Eliminations per game (means)', '',
+    '| scenario | kills 15:00+ | eliminations | credited | spoils paid |', '|---|---|---|---|---|',
+    ...sums.filter((s) => s.perGame).map((s) => `| ${s.scenario} | ${s.perGame!.lateKills.toFixed(1)} | ${s.perGame!.elims.toFixed(1)} | ${s.perGame!.credited.toFixed(1)} | $${s.perGame!.spoils.toFixed(0)} |`), '',
     '### Combat building',
     '| scenario | skill | fights | pieces / fight | fights with building | win % building | win % not | bullets blocked by own cover | hits from high ground | pieces |',
     '|---|---|---|---|---|---|---|---|---|---|',

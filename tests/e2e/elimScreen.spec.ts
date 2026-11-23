@@ -100,14 +100,16 @@ test('eliminated: killcam, then title / subtitle / recap / buttons apart at comm
   await page.setViewportSize(SIZES[0]);
   await eliminatedByBot(page);
 
-  // Killcam: its own banner; the recap sits aside; no spectator free-fly hint.
+  // Killcam: its own lower-third card (carrying the recap's facts, so the recap waits for the end screen);
+  // no spectator free-fly hint.
   const kc = page.getByTestId('killcam');
   const recap = page.getByTestId('death-recap');
   if (await kc.isVisible()) {
-    await expect(recap).toBeVisible();
+    await expect(kc).toContainText('Killed by');
+    await expect(recap).toBeHidden();
     await expect(page.getByTestId('spectate-banner')).toBeHidden();
-    expect(overlaps(await box(page, '[data-testid="killcam"]'), await box(page, '[data-testid="death-recap"]'))).toBe(false);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/elim-killcam-1280x720.png` });
+    await page.waitForTimeout(350); // past the skip grace (the press you died on doesn't skip)
     await page.keyboard.press('Space');
   }
   await expect(page.getByTestId('end-screen')).toBeVisible({ timeout: 10_000 });
@@ -137,7 +139,7 @@ test.describe('retina', () => {
   test.use({ deviceScaleFactor: 2, viewport: { width: 1440, height: 900 } });
   test('eliminated end screen at 2x: no overlap, buttons clickable', async ({ page }) => {
     await eliminatedByBot(page);
-    if (await page.getByTestId('killcam').isVisible()) await page.keyboard.press('Space');
+    if (await page.getByTestId('killcam').isVisible()) { await page.waitForTimeout(350); await page.keyboard.press('Space'); }
     await expect(page.getByTestId('end-screen')).toBeVisible({ timeout: 10_000 });
     await page.waitForTimeout(700);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/elim-1440x900@2x.png` });
