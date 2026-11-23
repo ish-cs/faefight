@@ -292,6 +292,7 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     paint();
     section('Feedback');
     toggle('Damage numbers', 'Floating numbers over players you hit', 'set-dmgnums', () => g().damageNumbers, (x) => set((d) => { d.gameplay.damageNumbers = x; }));
+    toggle('Island beacons', "A light beam in each player's colour over their bunker (thin and flickering while sealed)", 'set-beacons', () => g().islandBeacons, (x) => set((d) => { d.gameplay.islandBeacons = x; }));
     section('Alerts');
     segmented('Generator alert', 'Soft ping + toast when your home generator reaches this', 'set-gen-alert', GEN_ALERT_PCTS,
       (x) => (x === 100 ? 'Full' : x === 0 ? 'Off' : `${x}%`), () => g().genAlertPct, (x) => set((d) => { d.gameplay.genAlertPct = x; }));

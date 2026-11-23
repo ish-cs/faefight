@@ -28,7 +28,9 @@ export type SoundId =
   | 'grappleFire' | 'grappleAttach' | 'grappleReel' | 'grappleRelease'
   | 'spikeArm' | 'spikeTrigger'
   | 'shellCasing' | 'ragdollThud'
-  | 'dockCreak' | 'dockBreak';
+  | 'dockCreak' | 'dockBreak'
+  /** An island beacon shutting down (its owner is out of the game). */
+  | 'beaconDown';
 
 export type Cue = {
   sound: SoundId;

@@ -1855,6 +1855,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       killcam: () => killcam.info(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
+      updateSettings: (mutate: Parameters<typeof settings.update>[0]) => settings.update(mutate),
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
       predicted: () => ({ active: !!predictor?.active, pos: lastRendered, seq: moveSeq, stats: predictor?.stats ?? null, pending: predictor?.pending ?? 0 }),
       frames: () => frameStats(),

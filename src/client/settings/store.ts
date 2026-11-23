@@ -45,7 +45,8 @@ export type Settings = {
   audio: { master: number; effects: number; ui: number; ambience: number; music: number; musicOn: boolean; muted: boolean };
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct;
     /** Screen shake + hit-stop strength, 0 (off) .. 1 (full). Accessibility. */ screenShake: number;
-    /** First-person camera bob while walking / sprinting. */ cameraBob: boolean };
+    /** First-person camera bob while walking / sprinting. */ cameraBob: boolean;
+    /** Light beams in each living player's colour over their bunker (world/beacons.ts). */ islandBeacons: boolean };
   /** One-time things: the How to play card shows by itself until it has been seen once. */
   onboarding: { howToSeen: boolean };
 };
@@ -63,7 +64,7 @@ export function defaultSettings(): Settings {
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true, competitive: false },
     audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false },
-    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true },
+    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true, islandBeacons: true },
     onboarding: { howToSeen: false },
   };
 }
@@ -121,6 +122,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       genAlertPct: oneOf(g.genAlertPct, GEN_ALERT_PCTS, d.gameplay.genAlertPct),
       screenShake: num(g.screenShake, 0, 1, d.gameplay.screenShake),
       cameraBob: bool(g.cameraBob, d.gameplay.cameraBob),
+      islandBeacons: bool(g.islandBeacons, d.gameplay.islandBeacons),
     },
     onboarding: { howToSeen: bool(o.howToSeen, d.onboarding.howToSeen) },
   };
