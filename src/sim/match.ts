@@ -14,6 +14,7 @@ import { HAZARD, HEAD } from './constants';
 import { Fire, fireZones, type FireCtx } from './fire';
 import { Traps, validateTrap } from './traps';
 import { DoorwayTracker } from './seal';
+import { bountyOf, newElimLedger, resolveEliminations, type ElimLedger } from './elimination';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import { clearGrapple, fireGrapple, tickGrapple, type GrappleCtx } from './grapple';
 import type { MatchApi, MatchSetup } from './matchApi';
@@ -66,6 +67,8 @@ export class Match implements MatchApi {
   private rng: Rng;
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
+  /** Elimination credit bookkeeping (elimination.ts): plain data, so fork() and checkpoints carry it. */
+  private elim: ElimLedger;
   private sealDirty = true;
   private doors: DoorwayTracker;
   private supportDirty = false;
@@ -144,6 +147,7 @@ export class Match implements MatchApi {
     this.s.waterY = def.waterY;
     this.s.stormCenter = stormCenterOf(def.center);
     this.sealed = map.map(() => false);
+    this.elim = newElimLedger(map.length);
     this.doors = new DoorwayTracker(map.map((isl) => isl.bunker));
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
@@ -362,6 +366,8 @@ export class Match implements MatchApi {
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
     this.updateSeals(now);
+    this.events.push(...resolveEliminations(this.s, this.elim, this.events, now, (i) => this.sealed[i]));
+    for (const p of this.s.players.values()) p.bounty = bountyOf(this.s, p);
     this.remember(now);
     this.stats.onTick(this.events, this.s.players.values(), now);
     for (const b of this.banter.onTick(this.events, this.s.players, now)) if (this.bots.has(b.id)) this.wheel(b.id, b.what);
@@ -615,7 +621,8 @@ export class Match implements MatchApi {
     p.eliminated = true;
     p.respawnAt = null;
     p.breakoutUntil = null;
-    this.events.push({ t: this.s.time, type: 'eliminated', data: { player: playerId } });
+    // With the kill, in the next tick's events (credited there: elimination.ts), not the tick already returned.
+    this.debugEvents.push({ t: this.s.time, type: 'eliminated', data: { player: playerId } });
   }
 
   /** A restock loadout (sim/vault.ts) can be set from anywhere, busy, dead or alive: it only acts on respawn. */
@@ -843,9 +850,17 @@ export class Match implements MatchApi {
         const owner = [...this.s.players.values()].find((p) => p.island === i)?.id ?? null;
         // Credit the seal to whoever placed the newest piece around that bunker (null in sudden death).
         let by: number | null = null, newest = -1;
+        const placers = new Set<number>();
         if (sealed && !this.s.forcedSeal)
           for (const pc of sealPieces(this.s, i))
-            if (pc.id > newest && dist2D(pc.pos, isl.bunker.center) <= SEAL.half) { newest = pc.id; by = pc.owner; }
+            if (dist2D(pc.pos, isl.bunker.center) <= SEAL.half) {
+              if (pc.owner !== owner) placers.add(pc.owner);
+              if (pc.id > newest) { newest = pc.id; by = pc.owner; }
+            }
+        // Elimination credit: the closing plug's owner, other players with pieces in the seal assist. Sudden death's
+        // forced seal keeps whatever physical seal was there.
+        if (!sealed) this.elim.seal[i] = null;
+        else if (by !== null) { placers.delete(by); this.elim.seal[i] = { by, placers: [...placers].sort((a, b) => a - b) }; }
         this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i, owner, by } });
       }
       this.sealed[i] = sealed;
@@ -897,7 +912,7 @@ export class Match implements MatchApi {
       self,
       enemies,
       others: [...this.s.players.values()].filter((o) => !isAlly(o, self))
-        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills })),
+        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills, trapped: o.breakoutUntil !== null, bounty: o.bounty ?? 0 })),
       ...(team ? { allies: team.allies, teamSeen: team.seen } : {}),
       map: this.map,
       center: { island: this.def.center, gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },

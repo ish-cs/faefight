@@ -72,6 +72,8 @@ export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
   time: number; decisive: boolean; preSdElims: number; firstSeal: number | null; msPerTick: number; wallSec: number;
   seats: SeatOut[];
+  /** Player kills at or after sudden death (15:00+), eliminations in all, credited ones (refs with elimination rewards) and their spoils. */
+  lateKills?: number; elims?: number; credited?: number; spoils?: number;
 };
 
 async function runOne(scenario: Scenario, seed: number, paramsPath: string | null): Promise<GameOut> {
@@ -118,7 +120,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const lastCash = new Map<number, [number, number]>();
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
-  let preSdElims = 0, firstSeal: number | null = null;
+  let preSdElims = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
   const maxTicks = Math.round(maxSec * TICK_HZ);
   const w0 = performance.now();
   let snap = m.tick(new Map());
@@ -166,11 +168,13 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       } else if (e.type === 'kill') {
         const v = e.data.victim as number, k = e.data.killer as number | null;
         seats[v - 1].deaths++;
-        if (k != null && k !== v) seats[k - 1].kills++;
+        if (k != null && k !== v) { seats[k - 1].kills++; if (e.t >= SD) lateKills++; }
       } else if (e.type === 'sealed') {
         const by = e.data.by as number | null | undefined;
         if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
         if (firstSeal === null && by != null && by !== e.data.owner && e.t < SD) firstSeal = e.t;
+      } else if ((e.type as string) === 'elimination') {
+        if (e.data.by != null) { credited++; spoils += Number(e.data.spoils) || 0; }
       } else if ((e.type as string) === 'restock') {
         const s = seats[(e.data.player as number) - 1];
         if (s) s.restocks!++;
@@ -179,6 +183,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (seats[id - 1].eliminatedAt === null) {
           seats[id - 1].eliminatedAt = e.t;
           if (e.t < SD) preSdElims++;
+          elims++;
         }
       }
     }
@@ -189,7 +194,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const winner = snap.winner !== null && snap.winner > 0 ? snap.winner : null;
   return {
     scenario, seed, winner, winnerDifficulty: winner ? diffs[winner - 1] : null, time: snap.time,
-    decisive: winner !== null && snap.time < SD, preSdElims, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
+    decisive: winner !== null && snap.time < SD, preSdElims, lateKills, elims, credited, spoils, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
   };
 }
 
@@ -246,6 +251,8 @@ export type ScenarioSummary = {
   /** Vault use per game (all seats together). */
   vault: { deposits: number; banked: number; vaultPaid: number; restocks: number; interest: number; upgrades: number };
   shipCheck: { pass: boolean | null; checks: Check[] };
+  /** Means per game (absent on old shard files): kills at 15:00+, eliminations, credited eliminations, spoils paid. */
+  perGame?: { lateKills: number; elims: number; credited: number; spoils: number };
 };
 
 export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary {
@@ -290,6 +297,8 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
       return { deposits: per('deposits'), banked: per('banked'), vaultPaid: per('vaultPaid'), restocks: per('restocks'), interest: per('interest'), upgrades };
     })(),
     shipCheck: { pass: null, checks: [] },
+    perGame: (['lateKills', 'elims', 'credited', 'spoils'] as const).reduce((o, k) => ({ ...o, [k]: games.reduce((a, g) => a + (g[k] ?? 0), 0) / Math.max(1, games.length) }),
+      {} as { lateKills: number; elims: number; credited: number; spoils: number }),
   };
   // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%; the ladder bar here is 80% per step, the steward hand-off rule).
   // The shipChecks comparisons against the hand-tuned params need a second series and are not run here.
@@ -329,6 +338,9 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     ...sums.filter((s) => s.placementByTier).flatMap((s) => [`### ${s.scenario}: average placement by tier (1 = won)`, '',
       '| tier | mean placement | 95% CI | seats |', '|---|---|---|---|',
       ...Object.entries(s.placementByTier!).map(([d, p]) => `| ${d} | ${p!.mean.toFixed(2)} | ± ${p!.ci95.toFixed(2)} | ${p!.n} |`), '']),
+    '### Eliminations per game (means)', '',
+    '| scenario | kills 15:00+ | eliminations | credited | spoils paid |', '|---|---|---|---|---|',
+    ...sums.filter((s) => s.perGame).map((s) => `| ${s.scenario} | ${s.perGame!.lateKills.toFixed(1)} | ${s.perGame!.elims.toFixed(1)} | ${s.perGame!.credited.toFixed(1)} | $${s.perGame!.spoils.toFixed(0)} |`), '',
     '### Vault use per game (all seats)', '',
     '| scenario | deposits | $ banked | shop buys paid from vault | respawn restocks | $ interest | vault levels bought |', '|---|---|---|---|---|---|---|',
     ...sums.map((s) => `| ${s.scenario} | ${(s.vault?.deposits ?? 0).toFixed(1)} | $${Math.round(s.vault?.banked ?? 0)} | ${(s.vault?.vaultPaid ?? 0).toFixed(1)} | ${(s.vault?.restocks ?? 0).toFixed(1)} | $${Math.round(s.vault?.interest ?? 0)} | ${(s.vault?.upgrades ?? 0).toFixed(1)} |`), '',

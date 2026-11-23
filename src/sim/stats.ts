@@ -1,7 +1,7 @@
 import type { MatchEvent, PlayerState, PlayerStats } from './types';
 
 type Counters = Omit<PlayerStats, 'id' | 'kills' | 'deaths'>;
-const zero = (): Counters => ({ damage: 0, seals: 0, built: 0, cash: 0, longestLife: 0, headshots: 0 });
+const zero = (): Counters => ({ damage: 0, seals: 0, built: 0, cash: 0, longestLife: 0, headshots: 0, elims: 0, assists: 0, spoils: 0 });
 
 /**
  * Match totals for the end-screen summary. Fed from each tick's events (hits, seals, placements) plus the
@@ -38,6 +38,10 @@ export class MatchStats {
         this.row(d.by).seals++;
       } else if (e.type === 'placed' && typeof d.by === 'number') {
         this.row(d.by).built++;
+      } else if (e.type === 'elimination' && typeof d.by === 'number') {
+        this.row(d.by).elims++;
+        for (const id of d.assists as number[]) this.row(id).assists++;
+        for (const [id, amt] of d.shares as [number, number][]) this.row(id).spoils += amt;
       }
     }
     for (const p of players) {
@@ -61,6 +65,7 @@ export class MatchStats {
       out.push({
         id: p.id, kills: p.kills, deaths: p.deaths, damage: Math.round(r.damage), seals: r.seals, built: r.built,
         cash: Math.round(r.cash), longestLife: Math.round(Math.max(r.longestLife, life) * 10) / 10, headshots: r.headshots,
+        elims: r.elims, assists: r.assists, spoils: r.spoils,
       });
     }
     return out;

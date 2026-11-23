@@ -1,14 +1,18 @@
 /**
  * The sportscaster: turns match events, snapshot state and the cinematic director's shots into spoken
  * lines. Templates only (lines.ts), no LLM. Rules:
- * - A priority queue: urgent calls (kills, eliminations, escapes) interrupt colour chat; nothing talks over
- *   anything else; low-priority lines older than STALE_LOW sec are dropped, big ones after STALE_HIGH.
+ * - One voice at a time, always: a line is never cut mid-sentence, except by a TOP call (an elimination, the
+ *   final two, the win), which hands over naturally ("Hold on!"). Everything else waits its turn, and lines
+ *   that waited too long are dropped (STALE_LOW / STALE_HIGH / STALE_TOP sec), never squeezed in.
+ * - Turn-taking: a short breath after every line (GAP), longer when the other commentator takes over
+ *   (SWITCH_GAP); colour chat only after COLOUR_IDLE sec of silence with no call waiting.
  * - Variety: a template isn't reused within REPEAT_SEC (the least recently used one wins if all are fresh).
  * - Two voices: play-by-play calls the events, the colour commentator fills quiet moments and reacts.
  * Client only: wall-clock time and Math.random are fine here (nothing feeds back into the sim).
  */
 import type { MatchEvent, PlayerState, Snapshot } from '../../../sim/types';
 import { fill, KEY_VARS, LINES, PERSONA, weaponPhrase, type LineKey, type Vars } from './lines';
+import { Narrative, type NarrativeHost } from './narrative';
 import type { Persona, Tts } from './tts';
 
 export const REPEAT_SEC = 180;
@@ -17,12 +21,19 @@ export const STALE_HIGH = 6;
 /** Silence before the colour commentator fills in. */
 export const COLOUR_IDLE = 5;
 /** Breath between two lines. */
-export const GAP = 0.35;
+export const GAP = 0.45;
+/** Breath when the other commentator takes over. */
+export const SWITCH_GAP = 0.9;
+/** How long a top call (elimination, final two, win) may wait for its turn before it is dropped. */
+export const STALE_TOP = 10;
 /** Kills by one player within this window count as a multi-kill. */
 export const MULTI_SEC = 10;
 
-/** 0 colour, 1 minor, 2 major, 3 urgent (interrupts colour). */
-export type Prio = 0 | 1 | 2 | 3;
+/** 0 colour, 1 minor, 2 major, 3 big, 4 top (eliminations, final two, win: the only calls that may cut in). */
+export type Prio = 0 | 1 | 2 | 3 | 4;
+export const TOP: Prio = 4;
+/** What a top call says first when it has to cut a line short. */
+export const HANDOFFS = ['Hold on!', 'Wait, wait!', 'Stop right there!', 'Oh, hang on!', 'Sorry to cut in!'];
 
 /** What the director tells us (src/client/cinematic/director.ts, structural copy so this compiles alone). */
 export type ShotReason = 'duel' | 'clutch' | 'seal' | 'hunt' | 'rocket' | 'parkour' | 'leader' | 'elimination' | 'suddenDeath' | 'idle';
@@ -43,6 +54,8 @@ export interface CommentatorOpts {
   onCaption?: (c: Caption | null) => void;
   /** Duck the game mix while speaking. */
   duck?: (on: boolean) => void;
+  /** How to say a player's name (default: their sim name). */
+  displayName?: (p: PlayerState) => string;
 }
 
 /** Rough speaking time of a line (≈ 2.9 words/s at sportscaster pace), for captions and silent mode. */
@@ -54,9 +67,12 @@ const SHOT_KEY: Partial<Record<ShotReason, LineKey>> = {
 
 export class Commentator {
   active = false;
+  /** While true (a killcam is playing), no new line starts; one already playing finishes. */
+  hold = false;
   readonly log: LogLine[] = [];
   private queue: Pending[] = [];
-  private speaking: { item: Pending; caption: Caption; until: number } | null = null;
+  private speaking: { item: Pending; caption: Caption; until: number; hardUntil: number } | null = null;
+  private lastPersona: Persona | null = null;
   private lastEnd = 0;
   private captionOff = 0;
   /** Template id ("key#i") → last time said. */
@@ -79,12 +95,23 @@ export class Commentator {
   private leader: number | null = null;
   private allSealedSaid = false;
   private colourTopic = 0;
+  /** Quiet moments rotate: narrative (strategy, memory) twice, then stats colour. */
+  private narrativeTurn = 0;
   private readonly now: () => number;
   private readonly rng: () => number;
+  /** Storylines, predictions and analysis (narrative.ts). */
+  readonly narrative: Narrative;
 
   constructor(private opts: CommentatorOpts) {
     this.now = opts.now ?? (() => performance.now() / 1000);
     this.rng = opts.rng ?? Math.random;
+    this.narrative = new Narrative({
+      say: (k, v, p, age) => this.say(k, v, p, age),
+      name: (id) => this.name(id),
+      ready: (tag, sec) => this.ready(tag, sec),
+      rng: () => this.rng(),
+      unready: (tag: string) => this.cooldown.delete(tag),
+    } as NarrativeHost);
   }
 
   setActive(on: boolean) {
@@ -104,12 +131,13 @@ export class Commentator {
     this.started = false; this.anyKill = false; this.firstTime = null; this.leader = null; this.allSealedSaid = false;
     for (const m of [this.lastHit, this.hurtAt, this.killTimes, this.killedBy, this.escapedAt, this.cooldown]) m.clear();
     this.drinking.clear();
+    this.narrative.reset();
   }
 
   // ---- input ----
 
   onSnapshot(s: Snapshot) {
-    for (const p of s.players) { this.names.set(p.id, p.name); this.players.set(p.id, p); }
+    for (const p of s.players) { this.names.set(p.id, this.opts.displayName?.(p) ?? p.name); this.players.set(p.id, p); }
     this.noteState(s);
     this.firstTime ??= s.time;
     const now = this.now();
@@ -121,6 +149,7 @@ export class Commentator {
     const elimInBatch = new Set<number>();
     for (const e of s.events) if (e.type === 'eliminated') elimInBatch.add(e.data.player as number);
     const killedInBatch = new Set<number>();
+    this.narrative.onSnapshot(s);
     for (const e of s.events) this.onEvent(e, s, now, elimInBatch, killedInBatch);
     this.watchHeals(s, now);
     this.watchLeader(s);
@@ -130,6 +159,9 @@ export class Commentator {
 
   /** The cinematic director cut to a new shot: low-priority scene-setting line (events speak louder). */
   onShot(e: ShotEvent) {
+    this.narrative.featured = e.playerId;
+    // The camera picked someone: sometimes the colour commentator reads what they're up to.
+    if (this.ready('shotPredict', 20) && this.rng() < 0.5 && this.narrative.predictFor(e.playerId)) return;
     const key = SHOT_KEY[e.reason];
     if (!key || !this.ready(`shot:${e.reason}`, 15)) return;
     const a = this.name(e.playerId);
@@ -145,6 +177,7 @@ export class Commentator {
         const target = d.target as number;
         this.lastHit.set(target, { by: d.by as number | null, weapon: d.weapon as string | undefined, part: d.part as string | undefined, pos: d.pos as never });
         this.hurtAt.set(target, now);
+        this.narrative.onHit(target, d.by as number | null, s.time);
         const victim = this.players.get(target);
         if (d.weapon === 'rocket' && typeof d.by === 'number' && d.by !== target && (d.amount as number) >= 35 && victim && victim.hp > 0 && this.ready('rocketHit', 10))
           this.say('rocketHit', { a: this.name(d.by), b: this.name(target) }, 1);
@@ -155,14 +188,16 @@ export class Commentator {
         const id = d.player as number;
         if (killedInBatch.has(id)) break; // already called as a kill + elimination
         const left = s.players.filter((p) => !p.eliminated);
-        if (left.length === 2) this.say('finalTwo', { a: left[0].name, b: left[1].name }, 3);
-        else if (left.length > 2) this.say('eliminated', { a: this.name(id), n: left.length }, 3);
+        if (left.length === 2) this.say('finalTwo', { a: this.name(left[0].id), b: this.name(left[1].id) }, TOP);
+        else if (left.length > 2) this.say('eliminated', { a: this.name(id), n: left.length }, TOP);
+        this.narrative.onEliminated(id);
         break;
       }
       case 'sealed': {
         const owner = d.owner as number | null, by = d.by as number | null;
         if (owner === null || by === null || by === owner) break; // sudden-death closure / own pieces: not a play
         this.say('sealed', { a: this.name(by), b: this.name(owner) }, 2);
+        this.narrative.onSealed(by, owner, s.time);
         break;
       }
       case 'unsealed': {
@@ -178,6 +213,7 @@ export class Commentator {
       case 'escaped': {
         const id = d.player as number;
         this.escapedAt.set(id, now);
+        this.narrative.onEscaped(id);
         // The sim can re-trap and free the same player in quick succession: call it once.
         if (this.ready(`escaped:${id}`, 45)) {
           const a = this.name(id);
@@ -196,10 +232,11 @@ export class Commentator {
       case 'win': {
         const w = d.winner as number;
         if (w < 0 || !this.names.has(w)) break;
-        this.say('win', { a: this.name(w) }, 3);
+        this.say('win', { a: this.name(w) }, TOP);
         const others = s.players.filter((p) => p.id !== w).sort((x, y) => y.kills - x.kills);
         const mins = Math.max(1, Math.round((s.time - this.startTime) / 60));
-        this.say('recap', { a: this.name(w), b: others[0]?.name ?? 'the field', n: this.players.get(w)?.kills ?? 0, g: mins }, 2, 20);
+        this.say('recap', { a: this.name(w), b: others[0] ? this.name(others[0].id) : 'the field', n: this.players.get(w)?.kills ?? 0, g: mins }, 2, 20);
+        this.narrative.postMatch(w);
         break;
       }
       default: break;
@@ -236,8 +273,10 @@ export class Commentator {
     if (elimInBatch.has(victim)) {
       killedInBatch.add(victim);
       const left = s.players.filter((p) => !p.eliminated);
-      if (left.length === 2) this.say('finalTwo', { a: left[0].name, b: left[1].name }, 3);
-      else this.say('killElim', { a, b, n: left.length }, 3);
+      if (left.length === 2) this.say('finalTwo', { a: this.name(left[0].id), b: this.name(left[1].id) }, TOP);
+      else this.say('killElim', { a, b, n: left.length }, TOP);
+      this.narrative.onKill(killer, victim, s.time);
+      this.narrative.onEliminated(victim);
       return;
     }
     let key: LineKey = 'kill', prio: Prio = 2;
@@ -257,8 +296,10 @@ export class Commentator {
     else if (dist >= 40) { key = 'killLong'; vars.d = dist; }
     else if (weapon === 'shotgun' || (dist >= 0 && dist <= 4)) key = 'killClose';
     this.say(key, vars, prio);
-    // The colour commentator chimes in after the big ones, now and then.
-    if (prio === 3 && this.rng() < 0.4) this.say('react', {}, 1, 12);
+    // Then the story: streaks, rivalries, or why it happened; else a quick reaction to a big one.
+    const before = this.queue.length;
+    this.narrative.onKill(killer, victim, s.time, key === 'killClutch' ? { clutchHp: hp } : {});
+    if (this.queue.length === before && prio >= 3 && this.rng() < 0.4) this.say('react', {}, 1, 12);
   }
 
   private watchHeals(s: Snapshot, now: number) {
@@ -266,9 +307,10 @@ export class Commentator {
       const was = this.drinking.has(p.id);
       if (p.drinking && !was) {
         this.drinking.add(p.id);
+        this.narrative.onDrink(p.id, s.time);
         const hurt = this.hurtAt.get(p.id);
         if (p.alive && p.hp <= 40 && hurt !== undefined && now - hurt <= 4 && this.ready(`heal:${p.id}`, 20))
-          this.say('heal', { a: p.name, n: Math.max(1, Math.round(p.hp)) }, 2);
+          this.say('heal', { a: this.name(p.id), n: Math.max(1, Math.round(p.hp)) }, 2);
       } else if (!p.drinking && was) this.drinking.delete(p.id);
     }
   }
@@ -279,7 +321,7 @@ export class Commentator {
     if (!l || l.kills < 3 || (top[1] && top[1].kills === l.kills)) return;
     if (l.id !== this.leader) {
       this.leader = l.id;
-      this.say('leader', { a: l.name, n: l.kills }, 1);
+      this.say('leader', { a: this.name(l.id), n: l.kills }, 1);
     }
   }
 
@@ -296,7 +338,7 @@ export class Commentator {
   // ---- queue ----
 
   /** Queue a line. maxAge: drop it if it can't start within this many seconds. */
-  say(key: LineKey, vars: Vars, prio: Prio, maxAge = prio >= 2 ? STALE_HIGH : STALE_LOW) {
+  say(key: LineKey, vars: Vars, prio: Prio, maxAge = prio >= TOP ? STALE_TOP : prio >= 2 ? STALE_HIGH : STALE_LOW) {
     if (!this.active) return;
     this.queue.push({ key, vars, prio, at: this.now(), maxAge });
     if (this.queue.length > 8) {
@@ -310,17 +352,26 @@ export class Commentator {
   update() {
     if (!this.active) return;
     const now = this.now();
-    if (this.speaking && now >= this.speaking.until) this.finish(now);
+    // Safety cap: an engine that never reports the end frees the floor (without cutting anything off).
+    if (this.speaking && now >= this.speaking.until && !(this.opts.tts.available && this.opts.tts.speaking && now < this.speaking.hardUntil)) this.finish(now);
     this.queue = this.queue.filter((p) => now - p.at <= p.maxAge);
     if (this.captionOff && now >= this.captionOff && !this.speaking) { this.captionOff = 0; this.opts.onCaption?.(null); }
     if (this.speaking) {
-      // Urgent calls cut colour chat short.
-      const urgent = this.best(3);
-      if (urgent && this.speaking.item.prio <= 1) { this.opts.tts.cancel(); this.finish(now); this.start(urgent, now); }
+      // Only a top call cuts in, and only on a lesser line; it opens with a hand-off. Never during a hold.
+      const top = this.hold ? null : this.best(TOP);
+      if (top && this.speaking.item.prio < TOP) {
+        console.info(`[commentary] top call cuts in on "${this.speaking.caption.text}"`);
+        this.opts.tts.cancel();
+        this.finish(now);
+        this.start(top, now, HANDOFFS[Math.floor(this.rng() * HANDOFFS.length)]);
+      }
       return;
     }
-    if (now - this.lastEnd < GAP) return;
+    if (this.opts.tts.available && this.opts.tts.speaking) return; // the engine is still finishing a line
+    if (this.hold) { this.lastEnd = Math.max(this.lastEnd, now - COLOUR_IDLE + 2); return; } // e.g. a killcam: no new lines; colour waits a beat after
     const next = this.best(0);
+    const gap = next && this.lastPersona && PERSONA[next.key] !== this.lastPersona ? SWITCH_GAP : GAP;
+    if (now - this.lastEnd < gap) return;
     if (next) { this.start(next, now); return; }
     if (now - this.lastEnd >= COLOUR_IDLE) this.colour(now);
   }
@@ -331,21 +382,24 @@ export class Commentator {
     return b;
   }
 
-  private start(item: Pending, now: number) {
+  private start(item: Pending, now: number, lead = '') {
     this.queue = this.queue.filter((p) => p !== item);
-    const text = this.pick(item.key, item.vars, now);
-    if (!text) return;
+    const line = this.pick(item.key, item.vars, now);
+    if (!line) return;
+    const said = line.charAt(0).toUpperCase() + line.slice(1); // a name like "our player" can open the line
+    const text = lead ? `${lead} ${said}` : said;
     const caption: Caption = { text, persona: PERSONA[item.key], key: item.key, prio: item.prio };
     const est = estimateSec(text);
     // A real voice releases the floor on its end event (capped in case it never comes); silent mode holds it for the estimate.
-    const speaking = { item, caption, until: now + (this.opts.tts.available ? est * 2 + 2 : est) };
+    const speaking = { item, caption, until: now + (this.opts.tts.available ? est * 2 + 2 : est), hardUntil: now + est * 4 + 6 };
+    this.lastPersona = caption.persona;
     this.speaking = speaking;
     this.log.push({ ...caption, at: now });
     if (this.log.length > 300) this.log.splice(0, this.log.length - 300);
     this.opts.onCaption?.(caption);
     this.opts.duck?.(true);
     this.opts.tts.speak(text, {
-      persona: caption.persona, intensity: item.prio / 3, volume: this.opts.volume?.() ?? 1,
+      persona: caption.persona, intensity: item.prio / TOP, volume: this.opts.volume?.() ?? 1,
       onEnd: () => { if (this.opts.tts.available && this.speaking === speaking) this.finish(this.now()); },
     });
   }
@@ -382,14 +436,17 @@ export class Commentator {
     const ps = [...this.players.values()];
     const alive = ps.filter((p) => !p.eliminated);
     if (!alive.length) { this.lastEnd = now; return; }
+    // Two quiet moments in three are strategy / memory, when there's a story to tell; the third is stats.
+    this.narrativeTurn = (this.narrativeTurn + 1) % 3;
+    if (this.narrativeTurn !== 2 && this.narrative.quiet()) { this.update(); return; }
     const topics: (() => boolean)[] = [
       () => {
         const r = [...alive].sort((x, y) => y.inv.cash - x.inv.cash)[0];
-        return r.inv.cash >= 100 && this.sayNow('colourEconomy', { a: r.name, n: r.inv.cash });
+        return r.inv.cash >= 100 && this.sayNow('colourEconomy', { a: this.name(r.id), n: r.inv.cash });
       },
       () => {
         const l = [...alive].sort((x, y) => y.kills - x.kills)[0];
-        return l.kills >= 2 && this.sayNow('colourStandings', { a: l.name, n: l.kills });
+        return l.kills >= 2 && this.sayNow('colourStandings', { a: this.name(l.id), n: l.kills });
       },
       () => this.builderLine(),
       () => alive.length < ps.length && this.sayNow('colourAlive', { n: alive.length }),
@@ -421,7 +478,7 @@ export class Commentator {
   private genLine(): boolean {
     const top = [...this.players.values()].filter((p) => !p.eliminated).sort((x, y) => (this.genLevels[y.island] ?? 1) - (this.genLevels[x.island] ?? 1))[0];
     const lvl = top ? this.genLevels[top.island] ?? 1 : 1;
-    return lvl >= 2 && this.sayNow('colourGenerator', { a: top!.name, n: lvl });
+    return lvl >= 2 && this.sayNow('colourGenerator', { a: this.name(top!.id), n: lvl });
   }
 
   private sayNow(key: LineKey, vars: Vars): boolean { this.say(key, vars, 0); return true; }

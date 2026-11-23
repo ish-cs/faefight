@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Commentator, REPEAT_SEC, STALE_LOW, type Prio } from '../../src/client/cinematic/commentary/commentator';
-import { fill, KEY_VARS, LINES, type LineKey } from '../../src/client/cinematic/commentary/lines';
-import { BrowserTts, delivery, pickVoices, RecordingSynth, type SpeakOpts, type Tts } from '../../src/client/cinematic/commentary/tts';
+import { displayName } from '../../src/client/cinematic/commentary';
+import { Commentator, GAP, HANDOFFS, REPEAT_SEC, STALE_LOW, SWITCH_GAP, TOP, type Prio } from '../../src/client/cinematic/commentary/commentator';
+import { fill, KEY_VARS, LINES, type LineKey, type Vars } from '../../src/client/cinematic/commentary/lines';
+import { BrowserTts, delivery, pickVoices, RecordingSynth, speakable, type SpeakOpts, type Tts } from '../../src/client/cinematic/commentary/tts';
 import { defaultSettings, sanitizeSettings, SETTINGS_KEY, SettingsStore } from '../../src/client/settings/store';
 import type { MatchEvent, MatchEventType, PlayerState, Snapshot } from '../../src/sim/types';
 
@@ -30,10 +31,19 @@ class FakeTts implements Tts {
   available = true;
   said: { text: string; opts: SpeakOpts }[] = [];
   cancels = 0;
+  /** speak() calls made while another line was still playing (must stay 0). */
+  overlaps = 0;
+  private live: SpeakOpts | null = null;
   constructor(private hold = false) {}
-  speak(text: string, opts: SpeakOpts) { this.said.push({ text, opts }); if (!this.hold) opts.onEnd?.(); }
-  cancel() { this.cancels++; const l = this.said.at(-1); l?.opts.onEnd?.(); }
-  end() { this.said.at(-1)?.opts.onEnd?.(); }
+  get speaking() { return this.live !== null; }
+  speak(text: string, opts: SpeakOpts) {
+    if (this.live) this.overlaps++;
+    this.said.push({ text, opts });
+    this.live = opts;
+    if (!this.hold) this.end();
+  }
+  cancel() { this.cancels++; this.end(); }
+  end() { const l = this.live; this.live = null; l?.onEnd?.(); }
 }
 
 function rig(hold = false) {
@@ -191,28 +201,90 @@ describe('Commentator', () => {
     expect(r.c.log.at(-1)!.text).toBe(texts[0]);
   });
 
-  it('urgent calls interrupt colour; nothing talks over a big call; stale low-priority lines drop', () => {
+  it('a big call waits for colour to finish; only a top call cuts in, with a hand-off; stale lines drop', () => {
     const r = rig(true);
     r.c.say('colourIdle', {}, 0);
     r.adv(0.5);
     expect(r.tts.said).toHaveLength(1);
+    // A big (non-top) call never cuts a line short: it waits.
     r.c.say('escaped', { a: 'Ava' }, 3);
     r.adv(0.1);
-    expect(r.tts.cancels).toBe(1);
+    expect(r.tts.cancels).toBe(0);
+    expect(r.c.log.at(-1)!.key).toBe('colourIdle');
+    r.tts.end();
+    r.adv(0.2);
+    expect(r.c.log.at(-1)!.key).toBe('colourIdle'); // the other commentator takes a breath first
+    r.adv(SWITCH_GAP);
     expect(r.c.log.at(-1)!.key).toBe('escaped');
-    // A major call is speaking: another urgent one waits its turn (no cancel).
-    r.c.say('suddenDeath', {}, 3);
+    // A top call (elimination) cuts in on it, opening with a hand-off.
+    r.c.say('eliminated', { a: 'Bruno', n: 3 }, TOP);
     r.adv(0.1);
     expect(r.tts.cancels).toBe(1);
-    expect(r.c.log.at(-1)!.key).toBe('escaped');
+    const cut = r.c.log.at(-1)!;
+    expect(cut.key).toBe('eliminated');
+    expect(HANDOFFS.some((h) => cut.text.startsWith(h))).toBe(true);
+    // A top call never cuts another top call.
+    r.c.say('win', { a: 'Cleo' }, TOP);
+    r.adv(0.1);
+    expect(r.tts.cancels).toBe(1);
     // A low-priority line queued now goes stale before the floor frees.
     r.c.say('react', {}, 1 as Prio);
     r.adv(STALE_LOW + 0.5);
     r.tts.end();
-    for (let i = 0; i < 4; i++) r.adv(0.4);
+    for (let i = 0; i < 6; i++) r.adv(0.5);
     const keys = r.c.log.map((l) => l.key);
-    expect(keys).toContain('suddenDeath');
+    expect(keys).toContain('win');
     expect(keys).not.toContain('react');
+    expect(r.tts.overlaps).toBe(0);
+  });
+
+  it('never overlaps and never cuts a line except for a top call (random event storm)', () => {
+    const r = rig(true);
+    const kinds: [LineKey, Vars, Prio][] = [
+      ['colourIdle', {}, 0], ['react', {}, 1], ['sealed', { a: 'Ava', b: 'Bruno' }, 2], ['escaped', { a: 'Cleo' }, 3],
+      ['kill', { a: 'Dax', b: 'Ava', w: 'the rifle' }, 2], ['killMulti2', { a: 'Dax', b: 'Cleo' }, 3], ['eliminated', { a: 'Bruno', n: 3 }, TOP],
+    ];
+    let seed = 3;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    let lastPrio = -1, cuts = 0, starts = 0;
+    for (let step = 0; step < 3000; step++) {
+      if (rnd() < 0.08) { const [k, v, p] = kinds[Math.floor(rnd() * kinds.length)]; r.c.say(k, v, p); }
+      if (r.tts.speaking && rnd() < 0.05) r.tts.end(); // the voice finishes a line after ~2 s
+      const before = r.tts.said.length, cancels = r.tts.cancels;
+      r.adv(0.1);
+      if (r.tts.cancels > cancels) {
+        cuts++;
+        expect(r.c.log.at(-1)!.prio).toBe(TOP); // only a top call cuts in...
+        expect(lastPrio).toBeLessThan(TOP); // ...and only on a lesser line
+      }
+      if (r.tts.said.length > before) { starts++; lastPrio = r.c.log.at(-1)!.prio; }
+    }
+    expect(r.tts.overlaps).toBe(0);
+    expect(starts).toBeGreaterThan(20);
+    expect(cuts).toBeLessThan(starts / 3);
+  });
+
+  it('turn-taking: the other commentator waits SWITCH_GAP, the same one GAP', () => {
+    const r = rig(true);
+    r.c.say('kill', { a: 'Ava', b: 'Bruno', w: 'the rifle' }, 2);
+    r.adv(0.1);
+    r.tts.end();
+    r.c.say('react', {}, 1);
+    r.adv(GAP + 0.05);
+    expect(r.c.log.at(-1)!.key).toBe('kill');
+    r.adv(SWITCH_GAP - GAP);
+    expect(r.c.log.at(-1)!.key).toBe('react');
+  });
+
+  it('a long line is never cut by the safety timer while the voice is still talking', () => {
+    const r = rig(true);
+    r.c.say('trapped', { a: 'Bruno' }, 2);
+    r.adv(0.1);
+    r.c.say('escaped', { a: 'Bruno' }, 3);
+    for (let i = 0; i < 16; i++) r.adv(0.5); // well past the estimate, voice still going
+    expect(r.tts.cancels).toBe(0);
+    expect(r.tts.overlaps).toBe(0);
+    expect(r.c.log).toHaveLength(1);
   });
 
   it('ducks the game mix while speaking and clears captions afterwards', () => {
@@ -227,6 +299,22 @@ describe('Commentator', () => {
     expect(r.caps.at(-1)).toBeNull();
   });
 
+  it('a hold (killcam) starts no new line, lets the current one finish, and nothing cuts in', () => {
+    const r = rig(true);
+    r.c.say('trapped', { a: 'Bruno' }, 2);
+    r.adv(0.1);
+    r.c.hold = true;
+    r.c.say('eliminated', { a: 'Cleo', n: 3 }, TOP);
+    r.adv(0.1);
+    expect(r.tts.cancels).toBe(0); // not even a top call cuts in during a hold
+    r.tts.end();
+    for (let i = 0; i < 8; i++) r.adv(0.5);
+    expect(r.c.log.map((l) => l.key)).toEqual(['trapped']);
+    r.c.hold = false;
+    r.adv(1);
+    expect(r.c.log.at(-1)!.key).toBe('eliminated'); // still fresh (top calls wait up to STALE_TOP)
+  });
+
   it('says nothing while inactive', () => {
     const r = rig();
     r.c.setActive(false);
@@ -237,7 +325,7 @@ describe('Commentator', () => {
 
   it('silent TTS (no speechSynthesis) still paces captions by the line length', () => {
     let t = 0;
-    const c = new Commentator({ tts: { available: false, speak: (_x, o) => o.onEnd?.(), cancel() {} }, now: () => t });
+    const c = new Commentator({ tts: { available: false, speaking: false, speak: (_x, o) => o.onEnd?.(), cancel() {} }, now: () => t });
     c.setActive(true);
     c.say('suddenDeath', {}, 3);
     c.say('trapped', { a: 'Cleo' }, 2);
@@ -254,9 +342,12 @@ describe('BrowserTts', () => {
   const voice = (name: string, lang = 'en-US', localService = true) => ({ name, lang, localService, default: false, voiceURI: name }) as SpeechSynthesisVoice;
 
   it('prefers enhanced English voices and skips novelty / non-English ones', () => {
-    const v = pickVoices([voice('Albert'), voice('Thomas', 'fr-FR'), voice('Samantha'), voice('Evan (Enhanced)'), voice('Bad News')]);
-    expect(v.pbp?.name).toBe('Evan (Enhanced)');
-    expect(v.colour?.name).toBe('Samantha');
+    const v = pickVoices([voice('Albert'), voice('Thomas', 'fr-FR'), voice('Samantha'), voice('Evan (Enhanced)'), voice('Bad News'), voice('Ava (Premium)'), voice('Ava (Enhanced)')]);
+    expect(v.pbp?.name).toBe('Ava (Premium)');
+    expect(v.colour?.name).toBe('Evan (Enhanced)'); // a different person, not Ava again
+    // The user's pick wins when installed; an unknown name falls back to automatic.
+    const all = [voice('Samantha (Enhanced)'), voice('Zoe (Premium)'), voice('Daniel', 'en-GB')];
+    expect(pickVoices(all, { pbp: 'Daniel', colour: 'Nope' })).toMatchObject({ pbp: { name: 'Daniel' }, colour: { name: 'Zoe (Premium)' } });
     expect(pickVoices([voice('Amelie', 'fr-FR')])).toEqual({ pbp: null, colour: null });
   });
 
@@ -274,7 +365,10 @@ describe('BrowserTts', () => {
     expect(u.text).toBe('What a play!');
     expect((u.voice as SpeechSynthesisVoice).name).toBe('Evan (Enhanced)');
     expect(u.rate).toBeCloseTo(delivery('pbp', 1).rate);
-    expect(u.pitch).toBeGreaterThan(1);
+    // Natural delivery: no chipmunk pitch or race-pace.
+    expect(u.pitch).toBeGreaterThanOrEqual(1);
+    expect(u.pitch).toBeLessThan(1.05);
+    expect(u.rate).toBeLessThan(1.15);
     expect(u.volume).toBe(0.5);
     tts.cancel();
     expect(synth.cancel).toHaveBeenCalled();
@@ -283,6 +377,9 @@ describe('BrowserTts', () => {
     expect(onEnd).toHaveBeenCalledTimes(1);
     tts.speak('Calm line', { persona: 'colour', intensity: 0, volume: 1, onEnd });
     expect(((spoken[1] as unknown as U).voice as SpeechSynthesisVoice).name).toBe('Samantha');
+    // Symbols and shouting are made speakable.
+    tts.speak('HUGE seal by Mighty.Ana! $152 on Skipper_Harbor, 12 HP!', { persona: 'pbp', intensity: 1, volume: 1 });
+    expect((spoken[2] as unknown as U).text).toBe('Huge seal by Mighty Ana! 152 dollars on Skipper Harbor, 12 health!');
   });
 
   it('without speechSynthesis it is unavailable and ends lines at once', () => {
@@ -296,9 +393,35 @@ describe('BrowserTts', () => {
   });
 });
 
+describe('speakable text and names', () => {
+  it('formats money, names, all-caps and acronyms for the voice', () => {
+    expect(speakable('DOUBLE KILL! $40 with the SMG')).toBe('Double Kill! 40 dollars with the S M G');
+    expect(speakable('Wow. Just wow.')).toBe('Wow. Just wow.');
+    expect(speakable("Let's GO!")).toBe("Let's GO!");
+  });
+
+  it('says the human display name instead of "You"', () => {
+    expect(displayName({ name: 'You', isBot: false }, () => 'Ishaan')).toBe('Ishaan');
+    expect(displayName({ name: 'You', isBot: false }, () => '  ')).toBe('our player');
+    expect(displayName({ name: 'You', isBot: true }, () => 'Ishaan')).toBe('You');
+    expect(displayName({ name: 'Captain_Walrus', isBot: true }, () => 'Ishaan')).toBe('Captain_Walrus');
+    expect(displayName({ name: 'Ash (hard)', isBot: true }, () => 'Ishaan')).toBe('Ash');
+    const tts = new FakeTts();
+    let t = 0;
+    const c = new Commentator({ tts, now: () => t, displayName: (p) => displayName(p, () => 'Ishaan') });
+    c.setActive(true);
+    c.onSnapshot(snap(1, [ev('trapped', { player: 1, until: 9 })], [player(1, { name: 'You', isBot: false }), player(2)]));
+    for (let i = 0; i < 20; i++) { t += 0.5; c.update(); }
+    const trapped = c.log.find((l) => l.key === 'trapped')!.text;
+    expect(trapped).toMatch(/Ishaan/);
+    expect(trapped).not.toMatch(/\bYou\b/);
+  });
+});
+
 describe('commentary settings', () => {
   it('defaults on with captions, off while spectating; values sanitize and persist', () => {
-    expect(defaultSettings().audio).toMatchObject({ commentaryOn: true, commentary: 0.9, captions: true, commentarySpectate: false });
+    expect(defaultSettings().audio).toMatchObject({ commentaryOn: true, commentary: 0.9, captions: true, commentarySpectate: false, voicePbp: '', voiceColour: '' });
+    expect(sanitizeSettings({ audio: { voicePbp: 'Ava (Premium)', voiceColour: 7 } }).audio).toMatchObject({ voicePbp: 'Ava (Premium)', voiceColour: '' });
     expect(sanitizeSettings({ audio: { commentary: 4, commentaryOn: 'x', captions: false } }).audio).toMatchObject({ commentary: 1, commentaryOn: true, captions: false });
     const m = new Map<string, string>();
     const kv = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };

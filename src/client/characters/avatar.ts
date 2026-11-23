@@ -7,6 +7,9 @@ import { chooseClip } from './animState';
 import { EMOTE_BONES, emoteClip, emotePose, type BodyAxis, type EmoteBone } from './emotePose';
 import { QUICK_CHAT, QUIP_SHOW_SEC, type EmoteId, type QuipId } from '../../sim/emotes';
 import { lods } from '../world/lod';
+import { sceneColorFor } from '../world/displayColor';
+import { tagTextColor } from '../colors';
+import { texture, vec4 } from 'three/tsl';
 import { soldierLook } from './body';
 import { breath, flinchEnvelope, LOCOMOTION_CLIPS, StrideIK, strideFor } from './locomotion';
 import { BODY_LOD, HAND_BONE, loadCharacters, makeBody, type Body, type CharacterAssets } from './loader';
@@ -134,23 +137,28 @@ function speechBubble(): { sprite: THREE.Sprite; draw(text: string): void } {
   return { sprite, draw };
 }
 
-/** Name tag sprite (white text on the island colour), drawn above remote players. */
+/**
+ * Name tag sprite: the exact island colour (the same as the HUD chips and the beacon), with black or white text,
+ * whichever reads better on it. The shader undoes the scene's tone mapping + grade (world/displayColor.ts), so the
+ * tag shows the colour as-is instead of drifting in hue (yellow used to come out brown).
+ */
 function nameTag(text: string, color: number): THREE.Sprite {
   const c = document.createElement('canvas');
   c.width = 256; c.height = 64;
   const g = c.getContext('2d')!;
   const col = new THREE.Color(color);
-  g.fillStyle = `rgba(${Math.round(col.r * 160)},${Math.round(col.g * 160)},${Math.round(col.b * 160)},1)`;
+  g.fillStyle = col.getStyle(THREE.SRGBColorSpace);
   g.beginPath(); g.roundRect(8, 10, 240, 44, 22); g.fill();
-  g.fillStyle = '#fff';
+  g.fillStyle = tagTextColor(color);
   g.font = '600 26px "Helvetica Neue", Helvetica, Arial, sans-serif';
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText(text.slice(0, 16), 128, 33);
   const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.colorSpace = THREE.NoColorSpace; // sample the sRGB values as drawn: sceneColorFor wants display values
   // Constant on-screen size so it stays readable across the map; no fog so distance doesn't wash it out.
-  const mat = new THREE.SpriteNodeMaterial({ map: tex, transparent: true, depthWrite: false, sizeAttenuation: false, fog: false });
-  mat.color.setScalar(1.8); // pre-boost against tone mapping (same as render.ts labels)
+  const mat = new THREE.SpriteNodeMaterial({ transparent: true, depthWrite: false, sizeAttenuation: false, fog: false });
+  const t = texture(tex);
+  mat.colorNode = vec4(sceneColorFor(t.rgb), t.a);
   const s = new THREE.Sprite(mat);
   s.scale.set(0.12, 0.03, 1);
   s.renderOrder = 6;

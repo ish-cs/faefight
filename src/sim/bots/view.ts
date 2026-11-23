@@ -8,6 +8,10 @@ export type OtherStatus = {
   id: number; island: number; alive: boolean; eliminated: boolean; respawnAt: number | null;
   /** Kills so far (scoreboard). */
   kills: number;
+  /** Trapped in their sealed bunker, the breakout clock running (scoreboard status). */
+  trapped?: boolean;
+  /** What eliminating them would pay right now (scoreboard bounty, sim/elimination.ts bountyOf). */
+  bounty?: number;
 };
 
 /**

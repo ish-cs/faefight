@@ -212,6 +212,20 @@ export const GENERATOR_MAX_LEVEL = GENERATOR_LEVELS.length;
 /** Locking a gun (respawn with it) costs this many times the gun. */
 export const LOCK_PRICE_MULT = 4;
 
+/**
+ * Elimination rewards (elimination.ts), the user's ideas 1 + 3 + 6 (2026-11-22).
+ * Spoils = the victim's vault cash + carriedShare of the cash in their death drop + their generator's stored cash.
+ * The eliminator gets eliminatorShare of it, assists split the rest (alone: all of it); it lands in carried cash.
+ * Victory surge (eliminator, if alive): full hp, +surgeShield (to SHIELD_MAX), move speed x surgeSpeed for surgeSec.
+ * Assists get +assistShield. creditHitSec: a credit-less elimination (sudden death, no sealer) goes to whoever hit
+ * the victim last within this long.
+ */
+export const ELIM = {
+  eliminatorShare: 0.75, carriedShare: 0.5,
+  surgeSec: 10, surgeShield: 50, surgeSpeed: 1.2, assistShield: 25,
+  creditHitSec: 15,
+};
+
 /** queueSec: a build that arrives while still busy from the last one is held this long and placed the tick the
  *  busy time ends, so network jitter can't eat a held-place stream (still at most one piece per placeSec). */
 /** seqWaitSec: a build tied to a movement command (BuildRequest.seq) waits at most this long for that command. */

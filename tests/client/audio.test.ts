@@ -168,6 +168,10 @@ describe('SoundDirector: events → cues', () => {
     expect(sounds(d.update(snap(1, ps, [['sealed', { island: 1 }]])))).toEqual(['explosion:charge']);
     expect(sounds(d.update(snap(1.1, ps, [['sealed', { island: 0 }]])))).toEqual(['explosion:charge', 'alarm']);
     expect(sounds(d.update(snap(1.2, ps, [['eliminated', { player: ME }], ['eliminated', { player: BOT }]])))).toEqual(['eliminated']);
+    // Glory sting on a credited elimination for everyone; the eliminator's own is the 'mine' variant; uncredited: none.
+    expect(sounds(d.update(snap(1.25, ps, [['elimination', { victim: BOT, by: ME, assists: [], spoils: 300 }]])))).toEqual(['elimination:mine']);
+    expect(sounds(d.update(snap(1.26, ps, [['elimination', { victim: ME, by: BOT, assists: [], spoils: 0 }]])))).toEqual(['elimination']);
+    expect(sounds(d.update(snap(1.27, ps, [['elimination', { victim: BOT, by: null, assists: [], spoils: 0 }]])))).toEqual([]);
     expect(sounds(d.update(snap(1.3, ps, [['win', { winner: ME }]])))).toEqual(['win']);
     expect(sounds(d.update(snap(1.4, ps, [['win', { winner: BOT }]])))).toEqual(['lose']);
     expect(sounds(d.update(snap(1.5, ps, [['win', { winner: -1 }]])))).toEqual(['draw']);
