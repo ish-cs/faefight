@@ -641,6 +641,9 @@ export class Avatar {
   }
   private chest: THREE.Bone | undefined;
 
+  /** Forget the cached LOD / shadow tier: the next update re-applies them to the meshes. */
+  relod() { this.lod = -1; this.shadowTier = -1; }
+
   /** Body detail + shadow casting by distance (only touches the meshes when something changes). */
   private applyLod() {
     const d = this.lodDist;
@@ -729,6 +732,13 @@ export class CharacterSystem {
 
   get loaded() { return this.assets !== null; }
 
+  /**
+   * Re-apply every avatar's LOD visibility on its next update. The loading warm-up shows every hidden mesh and
+   * then hides them again; a LOD switch during its frames (e.g. the first frame's far LOD → near) would otherwise
+   * leave the cached LOD's mesh hidden, an invisible avatar until the next LOD change.
+   */
+  relod() { for (const a of this.avatars.values()) a.relod(); }
+
   private avatar(p: PlayerState, humanId: number): Avatar {
     let a = this.avatars.get(p.id);
     if (!a) {
@@ -810,16 +820,18 @@ export class CharacterSystem {
       if (hidden?.includes(p.id)) { const h = this.avatars.get(p.id); if (h) { h.group.visible = false; h.alive = false; } continue; }
       const a = this.avatar(p, humanId);
       a.allyMarker(myTeam !== undefined && p.team === myTeam && p.id !== humanId);
+      m.yaw = p.yaw;
+      m.pitch = p.pitch;
+      if (!motionOf(p.id, m)) { m.pos.set(p.pos.x, p.pos.y, p.pos.z); m.vel.set(p.vel.x, p.vel.y, p.vel.z); }
       if (cam) {
-        const pos = a.group.position;
+        // Where it's drawn this frame: alive = this frame's motion; dead = where it fell (a new avatar's
+        // group still sits at the origin, which would pick the far LOD for its first frame).
+        const pos = p.alive ? m.pos : a.group.position;
         a.lodDist = cam.position.distanceTo(pos);
         _sphere.center.set(pos.x, pos.y + 0.9, pos.z);
         _sphere.radius = CHAR_LOD.cullRadius + CHAR_LOD.shadowRadius;
         a.lodOnScreen = this.frustum.intersectsSphere(_sphere);
       }
-      m.yaw = p.yaw;
-      m.pitch = p.pitch;
-      if (!motionOf(p.id, m)) { m.pos.set(p.pos.x, p.pos.y, p.pos.z); m.vel.set(p.vel.x, p.vel.y, p.vel.z); }
       a.update({
         pos: m.pos, vel: m.vel, yaw: p.id === humanId ? localYaw : m.yaw, pitch: m.pitch, alive: p.alive, equipped: p.equipped,
         blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0, shield: p.shield ?? 0,
