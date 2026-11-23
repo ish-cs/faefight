@@ -55,8 +55,6 @@ function obb(center: Vec3, half: Vec3, rotY: number): Obb {
 
 function pieceObb(p: PieceState): Obb {
   const s = PIECES[p.kind];
-  // Ramps are wedges: only the box under the slope's midpoint is surely solid.
-  if (p.kind === 'ramp') return obb(add(p.pos, rotateY(v3(0, s.h / 4, s.d / 4), p.rotY)), v3(s.w / 2, s.h / 4, s.d / 4), p.rotY);
   return obb(v3(p.pos.x, p.pos.y + s.h / 2, p.pos.z), v3(s.w / 2, s.h / 2, s.d / 2), p.rotY);
 }
 
@@ -125,7 +123,8 @@ export class InterestManager {
     const key = snap.pieces.map((p) => p.id).join(',');
     if (key !== this.piecesKey) {
       this.piecesKey = key;
-      this.pieceBoxes = snap.pieces.map(pieceObb);
+      // Ramps are thin sloped slabs, open underneath: no axis-aligned box of one is a useful occluder.
+      this.pieceBoxes = snap.pieces.filter((p) => p.kind !== 'ramp').map(pieceObb);
       this.occluders = [...this.statics, ...this.pieceBoxes];
     }
   }

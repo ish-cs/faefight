@@ -42,7 +42,14 @@ export type Loadout = { items: Partial<Record<HotbarItem, number>>; keep: number
 /** Vault moves (only at your own vault, 1 s busy) and/or a new restock loadout (accepted anywhere). */
 export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory>; loadout?: Loadout };
 
-export type BuildRequest = { kind: PieceKind; pos: Vec3; rotY: number; free: boolean };
+/**
+ * `seq`: the movement command (MoveCmd.seq) the client placed after, i.e. where its predicted player stood when it
+ * validated the spot and showed the piece. The host places it after simulating that command, just before the next
+ * one moves the player (the same position; it waits up to BUILD.seqWaitSec for that next command, else expires), instead of after the whole batch of moves it happens to get this tick (a moving player could otherwise
+ * be ahead or behind by several steps: refused as 'blocked'/'too far', or placed while the client already walks
+ * on its own copy). Bots and older clients leave it out: placed after this tick's move, as before.
+ */
+export type BuildRequest = { kind: PieceKind; pos: Vec3; rotY: number; free: boolean; seq?: number };
 /**
  * Place a spike trap. Floor: `pos` on the surface, `rotY` the plate's turn. Wall: `pos` on the wall face,
  * spikes pointing along forward(rotY) (out of the wall).

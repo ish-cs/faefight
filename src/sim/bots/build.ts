@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { PIECES } from '../constants';
+import { PIECES, RAMP_SLAB } from '../constants';
 import type { Bunker, IslandLayout } from '../map';
 import { isSealed } from '../seal';
 import type { Difficulty, PieceKind, PieceState, Vec3 } from '../types';
@@ -44,6 +44,12 @@ export function shields(p: PieceState, from: Vec3, to: Vec3): boolean {
     if (ta > tb) [ta, tb] = [tb, ta];
     t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
     if (t0 > t1) return false;
+  }
+  if (p.kind === 'ramp') {
+    // A thin sloped slab, open underneath: the line must cross the slab (height over the slope in [-RAMP_SLAB, 0]).
+    const f = (t: number) => a.y + (b.y - a.y) * t - (s.h * (a.z + (b.z - a.z) * t + s.d / 2)) / s.d;
+    const f0 = f(t0), f1 = f(t1);
+    return Math.min(f0, f1) <= 0 && Math.max(f0, f1) >= -RAMP_SLAB;
   }
   const y = from.y + (to.y - from.y) * ((t0 + t1) / 2);
   return y < p.pos.y + s.h && y > p.pos.y - 0.05;
