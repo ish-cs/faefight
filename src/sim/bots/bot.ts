@@ -5,6 +5,7 @@ import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
 import type { DockDef, Doorway, IslandLayout } from '../map';
 import { overDock } from '../docks';
+import { isHomeOnly } from '../economy';
 import { NO_INPUT } from '../types';
 import type {
   BuildRequest, Difficulty, HotbarItem, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
@@ -205,6 +206,8 @@ type Ctx = {
   openDoors: Doorway[];
   /** Node (island, or the center island) the next bridge goes to, and whether I can already walk to the center. */
   bridgeTo: number | null;
+  /** Node that bridge is laid from: home, or where I stand when I can't walk home (e.g. left on a dead rival's island). */
+  bridgeFrom: number;
   centerReach: boolean;
   /** Someone is shooting at me or close to me right now. */
   danger: boolean;
@@ -1284,12 +1287,13 @@ export class Bot {
         (bridgeTo === null ? this.centerMinded : this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
     // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
     if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
-    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, hookFrom, homeReach, openDoors, bridgeTo, centerReach, danger };
+    const bridgeFrom = !homeReach && node >= 0 ? node : home.index;
+    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, hookFrom, homeReach, openDoors, bridgeTo, bridgeFrom, centerReach, danger };
   }
 
   private scaffoldsNeeded(c: Ctx): number {
     if (c.bridgeTo === null) return 0;
-    return this.scaffoldsTo(c.home.index, c.bridgeTo);
+    return this.scaffoldsTo(c.bridgeFrom, c.bridgeTo);
   }
 
   /**
@@ -1678,10 +1682,12 @@ export class Bot {
         return s - away;
       }
       case 'shop': {
-        if (!c.homeReach) return 0;
+        // Can't walk home (e.g. left on a dead rival's island): any island's shop I can walk to serves me.
+        const shop = this.shopSpot(c);
+        if (!shop) return 0;
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
-        if (dist2D(me.pos, home.shop) < 4 && plan.spent <= this.spendCash(me)) return 0.9;
+        if (dist2D(me.pos, shop) < 4 && plan.spent <= this.spendCash(me)) return 0.9;
         // Topping up heals is no reason for a trip home once I hold one (they're bought on the next visit anyway).
         const items = hpHealsHeld(me) > 0 ? plan.items.filter((i) => i !== 'medkit') : plan.items;
         if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
@@ -1939,9 +1945,13 @@ export class Bot {
     const me = c.me, now = c.view.now;
     // The shop pays from the vault (carried cash first): no trip to fetch it. The rebuy insurance stays banked
     // unless the gun (or its ammo) is what I'm buying.
-    const walk = this.goTo(c.home.shop, 2.0);
-    if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt) return walk;
+    const shop = this.shopSpot(c);
+    if (!shop) { this.nextScoreAt = now; return IDLE; }
+    const walk = this.goTo(shop, 2.0);
+    if (dist2D(me.pos, shop) > USE_RANGE || now < this.nextBuyAt) return walk;
     let item = nextPurchase({ ...me, inv: { ...me.inv, cash: this.spendCash(me) } }, this.needs(c), this.difficulty, this.style);
+    // Upgrades and gun locks sell only at my own shop.
+    if (item && shop !== c.home.shop && isHomeOnly(item)) { this.buyBlockedUntil.set(item, now + BUY_BACKOFF_SEC); item = null; }
     if (!item || this.buyBlocked(item)) { this.nextScoreAt = now; return walk; }
     if (this.difficulty === 'easy' && item in PIECES && item !== 'scaffold' && this.rng() < EASY_MISBUY && me.inv.cash >= PIECES.sandbags.price) item = 'sandbags';
     this.nextBuyAt = now + BUY_GAP[this.difficulty];
@@ -1998,9 +2008,9 @@ export class Bot {
     const to = c.bridgeTo, now = c.view.now;
     const toRival = to !== this.nav.centerNode && !this.allyIsland(c.view, to);
     // Main lane runs from my side (s grows toward them); the mirror lane (rivals only) is measured from their side.
-    const mirror = toRival && this.alt.has(to);
+    const mirror = toRival && this.alt.has(to) && c.bridgeFrom === c.home.index;
     const m = mirror ? this.mirrorFrontier(to) : null;
-    const l = m ? m.l : this.nav.lane(c.home.index, to);
+    const l = m ? m.l : this.nav.lane(c.bridgeFrom, to);
     const f = m ?? this.nav.frontier(l);
     const sign = mirror ? -1 : 1;
     const at = (k: number) => laneAt(l, f.s + sign * k);
@@ -2027,7 +2037,8 @@ export class Bot {
     const ahead = at(4);
     if (c.me.busyUntil > now) return { dir: null, face: ahead };
     // Long bridge: a wall along the deck edge facing the nearest third island (flank fire), walkway left free.
-    const shore = Math.sqrt(c.home.radius * c.home.radius - 9);
+    const fromR = this.nav.nodes[c.bridgeFrom].radius;
+    const shore = Math.sqrt(fromR * fromR - 9);
     const out = mirror ? l.length - shore - f.s : f.s - shore;
     const lastWall = this.lastWallS.get(key) ?? -Infinity;
     const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? PLAIN_WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
@@ -3121,12 +3132,31 @@ export class Bot {
     return { ...this.goTo(best, 1), sprint: true };
   }
 
-  /** Walk to my shop and buy scaffolds (the shop takes vault cash too); null when I can't afford one. */
+  /**
+   * The shop I'd buy at: my own when I can walk home, else the nearest island shop I can walk to (shop keepers serve
+   * anyone and take vault cash; upgrades and gun locks stay home-only). Null: none in reach.
+   */
+  private shopSpot(c: Ctx): Vec3 | null {
+    if (c.homeReach) return c.home.shop;
+    const starts = this.nav.startNodes(c.me.pos);
+    let best: Vec3 | null = null, bestD = Infinity;
+    for (const isl of c.view.map) {
+      const n = this.nav.nodeAt(isl.shop);
+      if (n < 0 || !starts.some((s) => s === n || this.nav.hop(s, n) !== null)) continue;
+      const d = dist2D(isl.shop, c.me.pos);
+      if (d < bestD) { bestD = d; best = isl.shop; }
+    }
+    return best;
+  }
+
+  /** Walk to a shop I can reach and buy scaffolds (the shop takes vault cash too); null when I can't afford one. */
   private buyDecks(c: Ctx): Act | null {
     const me = c.me, now = c.view.now, price = PIECES.scaffold.price;
     if (funds(me) < price) return null;
-    const walk = this.goTo(c.home.shop, 2.0);
-    if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt || this.buyBlocked('scaffold')) return { ...walk, sprint: true };
+    const shop = this.shopSpot(c);
+    if (!shop) return null;
+    const walk = this.goTo(shop, 2.0);
+    if (dist2D(me.pos, shop) > USE_RANGE || now < this.nextBuyAt || this.buyBlocked('scaffold')) return { ...walk, sprint: true };
     this.nextBuyAt = now + BUY_GAP[this.difficulty];
     return { ...walk, shop: 'scaffold' };
   }
