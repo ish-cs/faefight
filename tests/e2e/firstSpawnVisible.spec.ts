@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
 import { NEEDS_GPU, ON_CI } from './gpu';
 
 test.skip(ON_CI, NEEDS_GPU);
@@ -59,8 +61,7 @@ test('own avatar is drawn in third person from the first second, after a respawn
   expect(firstShown!.t - from).toBeLessThan(1000);
   const hidden = after.filter((s) => s.t > from + 1000 && !s.shown);
   expect(hidden, `own avatar hidden on ${hidden.length} frames: ${JSON.stringify(hidden.slice(0, 3))}`).toHaveLength(0);
-  await page.screenshot({ path: `${SHOTS}/first-spawn-third-person.png` });
-  expect(await selfPixels(page), 'own avatar not on screen (pixel check)').toBeGreaterThan(400);
+  expect(await selfPixels(page, `${SHOTS}/first-spawn-third-person.png`), 'own avatar not on screen (pixel check)').toBeGreaterThan(400);
 
   // Everyone else's avatar as this client draws it: one body LOD mesh each (the same warm-up path).
   const others = await page.evaluate(() => {
@@ -85,8 +86,7 @@ test('own avatar is drawn in third person from the first second, after a respawn
   expect(r1, 'never drawn after the respawn').toBeTruthy();
   expect(r1!.t - back).toBeLessThan(1000);
   expect(resp.filter((s) => s.t > back + 1000 && !s.shown)).toHaveLength(0);
-  await page.screenshot({ path: `${SHOTS}/respawn-third-person.png` });
-  expect(await selfPixels(page), 'own avatar not on screen after the respawn (pixel check)').toBeGreaterThan(400);
+  expect(await selfPixels(page, `${SHOTS}/respawn-third-person.png`), 'own avatar not on screen after the respawn (pixel check)').toBeGreaterThan(400);
   expect(errors, errors.join('\n')).toEqual([]);
 });
 
@@ -94,8 +94,8 @@ test('own avatar is drawn in third person from the first second, after a respawn
  * Pixels the own body changes on screen: screenshot as drawn vs with its body meshes hidden for a few frames,
  * diffed inside the avatar's projected box. Spawn protection blinks the model, so a few tries; best one wins.
  */
-async function selfPixels(page: Page): Promise<number> {
-  let best = 0;
+async function selfPixels(page: Page, shot: string): Promise<number> {
+  let best = 0, bestShot: Buffer | null = null;
   for (let i = 0; i < 4 && best <= 400; i++) {
     const box = await page.evaluate(() => {
       const api = (window as unknown as { __faefight: Api }).__faefight;
@@ -107,12 +107,13 @@ async function selfPixels(page: Page): Promise<number> {
       const pad = 60;
       return { x0: Math.max(0, Math.min(...xs) - pad), x1: Math.min(innerWidth, Math.max(...xs) + pad), y0: Math.max(0, Math.min(...ys) - pad / 2), y1: Math.min(innerHeight, Math.max(...ys) + pad / 2) };
     });
-    const shown = (await page.screenshot()).toString('base64');
+    const shownPng = await page.screenshot();
+    const shown = shownPng.toString('base64');
     await setBody(page, false);
     await page.waitForTimeout(150);
     const gone = (await page.screenshot()).toString('base64');
     await setBody(page, true);
-    best = Math.max(best, await page.evaluate(async ([a, b, bx]) => {
+    const n = await page.evaluate(async ([a, b, bx]) => {
       const load = async (s: string) => {
         const img = await createImageBitmap(await (await fetch(`data:image/png;base64,${s}`)).blob());
         const c = new OffscreenCanvas(img.width, img.height);
@@ -128,8 +129,10 @@ async function selfPixels(page: Page): Promise<number> {
         if (Math.abs(p.data[k] - q.data[k]) + Math.abs(p.data[k + 1] - q.data[k + 1]) + Math.abs(p.data[k + 2] - q.data[k + 2]) > 60) n++;
       }
       return n;
-    }, [shown, gone, box] as const));
+    }, [shown, gone, box] as const);
+    if (n >= best) { best = n; bestShot = shownPng; }
   }
+  if (bestShot) { fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, bestShot); } // the frame the check counted (spawn protection blinks the model)
   return best;
 }
 
