@@ -173,6 +173,8 @@ export type PlayerState = {
    * fall or storm death within LIFECYCLE.envCreditSec is their kill ("X via water"). Cleared on death.
    */
   hurtBy?: { by: number; at: number };
+  /** Host bookkeeping: when your own rocket last launched you (the landing after it doesn't hurt). */
+  rocketJumpAt?: number;
   /** The hook can't be fired again before this sim time (absent = ready). */
   hookReadyAt?: number;
   /** Last quick-chat line (speech bubble for QUIP_SHOW_SEC from `at`); absent when none. */

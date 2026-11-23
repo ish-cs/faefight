@@ -25,7 +25,8 @@ export type CombatCtx = {
   /** Whether a player stands on something (spread); defaults to "vertical speed is small". */
   grounded?(id: number): boolean;
   /** A blast pushed this player (velocity change, m/s). */
-  onKnockback?(id: number, dv: Vec3): void;
+  /** `rocketJump`: your own rocket launched you (the landing after it doesn't hurt). */
+  onKnockback?(id: number, dv: Vec3, rocketJump?: boolean): void;
   /** Hitscan ray for a shot (lag-compensated by the match); defaults to physics.raycast. */
   castShot?(origin: Vec3, dir: Vec3, maxDist: number, shooter: number): RayHit | null;
   /** Barrels / tanks / crates (hazards.ts): the first one a ray meets, and damaging one. Absent = none. */
@@ -306,11 +307,14 @@ function rocketBlast(ctx: CombatCtx, e: Explosive, now: number, out: MatchEvent[
       if (block && !(block.hit.type === 'player' && block.hit.id === pl.id)) shield = 0.25;
     }
     const f = k(d) * shield;
-    const dmg = ROCKET.playerDmg * f * (pl.id === e.owner ? ROCKET.selfMult : 1);
+    const self = pl.id === e.owner;
+    const dmg = self ? Math.min(ROCKET.selfDmgMax, ROCKET.playerDmg * f * ROCKET.selfMult) : ROCKET.playerDmg * f;
     out.push(...applyPlayerDamage(ctx, pl, dmg, e.owner, now, { pos: rv(point), weapon: 'rocket' }));
     if (pl.alive && ctx.onKnockback && !friendlyFire(ctx, e.owner, pl)) {
       const away = norm(sub(bodyCenter(pl), e.pos));
-      ctx.onKnockback(pl.id, v3(away.x * ROCKET.knock * f, away.y * ROCKET.knock * f * 0.5 + ROCKET.knockUp * f, away.z * ROCKET.knock * f));
+      // Your own blast is a rocket jump: a strong launch up and away from it (constants.ts ROCKET).
+      if (self) ctx.onKnockback(pl.id, v3(away.x * ROCKET.selfKnock * f, ROCKET.selfKnockUp * f, away.z * ROCKET.selfKnock * f), true);
+      else ctx.onKnockback(pl.id, v3(away.x * ROCKET.knock * f, away.y * ROCKET.knock * f * 0.5 + ROCKET.knockUp * f, away.z * ROCKET.knock * f));
     }
   }
   for (const pc of [...ctx.pieces.values()]) {

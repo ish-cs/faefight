@@ -212,8 +212,9 @@ describe('rocket', () => {
     a.pitch = -Math.PI / 2 + 0.05; // at your own feet
     tryFire(ctx, a, 0);
     run(1 / 30, 0.2);
-    expect(a.hp).toBeLessThan(30); // 82.5 self-damage at your feet since rockets went x1.5
-    expect(a.hp).toBeGreaterThan(10);
+    expect(a.hp).toBeLessThan(100);
+    expect(100 - a.hp).toBeLessThanOrEqual(ROCKET.selfDmgMax); // capped (25), however close the blast
+    expect(ROCKET.selfDmgMax).toBeLessThanOrEqual(30);
     const up = knocks.find(([id]) => id === 1)![1];
     expect(up.y).toBeGreaterThan(5);
   });
