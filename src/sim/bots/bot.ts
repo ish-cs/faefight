@@ -571,7 +571,7 @@ export class Bot {
     let select: number | null = null, useMedkit = false;
     const kit = me.hotbar.indexOf('medkit');
     if (kit >= 0 && me.inv.medkits > 0 && me.hp <= MEDKIT_AT[this.difficulty] && me.busyUntil <= now && me.healAt === null &&
-        (!enemy || ctx.enemyDist > 30 || this.sheltered(ctx)) && now - this.mem.lastHurtAt > 0.5) {
+        (!enemy || ctx.enemyDist > 30 || (this.skilledHealer() && this.sheltered(ctx))) && now - this.mem.lastHurtAt > 0.5) {
       select = kit; useMedkit = true; fire = false;
     }
     // Stamina (movement.ts): like a human, stop sprinting around when winded and keep the rest for getting away.
@@ -2352,6 +2352,9 @@ export class Bot {
     return c.on === c.home.index || c.me.inv.cash + c.me.vault.cash >= this.P.buildTuning.metalCoverAt ||
       (!!cv && cv.heldSince !== null && c.view.now - cv.heldSince >= this.P.buildTuning.holdSec);
   }
+
+  /** Patching up behind cover with the shooter still in sight takes nerve: Hard and PRO (buildSkill.reinforce > 0.5). */
+  skilledHealer(): boolean { return this.P.buildSkill[this.difficulty].reinforce > 0.5; }
 
   /** Behind something solid from whoever is shooting at me (heals are safe here even with them in sight). */
   sheltered(c: Ctx): boolean {
