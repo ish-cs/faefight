@@ -1243,8 +1243,7 @@ export class Bot {
     const wall: PieceKind = me.hotbar.includes('metal') && !me.hotbar.includes('wood') ? 'metal' : 'wood';
     add1(wall, walls);
     // Once rich, a couple of metal walls beside them for holding a spot and replacing a cracked wall.
-    // (After the grappling hook: crossing and escaping come first.)
-    if (sk.reinforce > 0 && total >= this.P.buildTuning.metalCoverAt && (me.inv.grapples ?? 0) > 0) add1('metal', this.P.buildTuning.metalCarry[this.difficulty]);
+    if (sk.reinforce > 0 && total >= this.P.buildTuning.metalCoverAt) add1('metal', this.P.buildTuning.metalCarry[this.difficulty]);
     const scaffolds = this.scaffoldsNeeded(c);
     if (sk.bridgeCover && this.wallsOnBridge && scaffolds >= 2 * this.P.buildTuning.scaffoldsPerBridgeWall)
       add1(wall, Math.floor(scaffolds / this.P.buildTuning.scaffoldsPerBridgeWall));

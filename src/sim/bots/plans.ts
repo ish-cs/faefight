@@ -114,11 +114,11 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
   const room = (k: HotbarItem) => countOf(inv, k) > 0 || canAdd(p.hotbar, k);
-  if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
-  if (needs.grapple === 'cross' && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
-  // A ramp in the pocket for fights (skilled players): cheap, never saved up for; after a hook I need to cross.
+  // A ramp in the pocket for fights (skilled players): cheap, never saved up for.
   for (const [k, n] of Object.entries(needs.combatKit ?? {}) as [PieceKind, number][])
     if ((inv.pieces[k] ?? 0) < n && room(k) && cash >= PIECES[k].price) return k;
+  if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
+  if (needs.grapple === 'cross' && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
     if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price) return 'steel';
