@@ -46,6 +46,8 @@ const CONTEST_AT = 150;
 const RESCORE_SEC: Record<Difficulty, number> = { easy: 1.6, medium: 1.0, hard: 0.5, pro: 0.3 };
 const HESITATE_SEC: Record<Difficulty, number> = { easy: 1.2, medium: 0.6, hard: 0.15, pro: 0.05 };
 const STICKY = 0.1;
+/** Going back to the goal I left less than this ago skips the thinking pause; goal misjudgements last about this. */
+const FLIP_BACK_SEC = 5, NOISE_HOLD_SEC = 3;
 /** Misjudgement in goal/target scores (decision mistakes). */
 const NOISE: Record<Difficulty, number> = { easy: 0.3, medium: 0.15, hard: 0.08, pro: 0.03 };
 const BUY_GAP: Record<Difficulty, number> = { easy: 3, medium: 1.5, hard: 0.6, pro: 0.35 };
@@ -60,6 +62,14 @@ const USE_RANGE = ECONOMY.interactRadius - 0.2;
 const UPGRADE_NEAR_M = 12;
 const COLLECT_AT = 40;
 const STUCK_SEC = 2, STUCK_DIST = 0.5, UNSTICK_SEC = 0.6;
+/** Disengaging: how long I stick with the enemy I'm getting away from before thinking again about whom to flee. */
+const FLEE_KEEP_SEC = 1.5;
+/** Fighting: someone just out of sight is still my opponent this long, and only someone this much closer takes over. */
+const FOE_HOLD_SEC = 0.5, FOE_SWITCH = 0.7;
+/** In a cover spot, drifting this far off it (it moves as the shooter does) is when I walk back into it. */
+const COVER_LEAVE_M = 1.5;
+/** Out of a barrel's danger zone (hazardAvoid), this much further is where I stop walking straight back toward it. */
+const HAZARD_FENCE_M = 1;
 const TURN_RATE = 8;
 /** Beyond this, an enemy on another island isn't worth abandoning the current goal for. */
 const ENGAGE_RANGE = 25;
@@ -250,6 +260,20 @@ export class Bot {
   private strafeSign = 1;
   private strafeFlipAt = 0;
   private retreat: { from: Vec3; until: number } | null = null;
+  /** Disengaging (doDisengage): from whom, until when that holds, and whether I'm on my way behind my bunker. */
+  private flee: { id: number; until: number; home: boolean } | null = null;
+  /** Who doFight is squaring up to (held through a blink out of sight). */
+  private fightFoe: { id: number; e: PlayerState } | null = null;
+  /** Goal I switched away from last and when (no thinking pause for flipping straight back); held goal noise. */
+  private prevGoal: Goal | null = null;
+  private switchAt = -Infinity;
+  private noise = new Map<Goal, { v: number; until: number }>();
+  /** doFight: stepping in (1), back (-1) or holding range (0) last tick. */
+  private radialWas = 0;
+  /** The island (nav node) I last stood on: out on a deck, where I walked out from. */
+  private lastNode = -1;
+  /** Settled into a cover spot (holdCover). */
+  private inCover = false;
   private nextBuyAt = 0;
   private pendingBuy: { item: ShopItem; cash: number; at: number } | null = null;
   private buyFails = new Map<ShopItem, number>();
@@ -446,6 +470,10 @@ export class Bot {
       this.aimLost = null;
       this.stuckRef = null;
       this.retreat = null;
+      this.flee = null;
+      this.lastNode = -1;
+      this.fightFoe = null;
+      this.inCover = false;
       this.pendingBuy = null;
       this.nadePlan = null;
       this.hideFrom = null;
@@ -462,6 +490,8 @@ export class Bot {
     }
     this.view = view;
     this.nav.begin(view);
+    const onNode = this.nav.nodeAt(me.pos);
+    if (onNode >= 0) this.lastNode = onNode;
     this.checkPurchase(me, now);
     // Came back from a death (bots aren't ticked while dead): note it for respawnCautionSec.
     if (me.deaths !== this.lastDeaths) { this.lastDeaths = me.deaths; this.respawnedAt = now; this.window = null; }
@@ -473,7 +503,12 @@ export class Bot {
     if (now >= this.nextScoreAt) {
       const next = this.pick(ctx);
       if (next !== this.goal) {
-        this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
+        // Thinking it over is for a new plan, not for going back to the one I just dropped (a near-tie that tips
+        // back and forth would otherwise restart the thinking at every rescore and never act).
+        const back = next === this.prevGoal && now - this.switchAt < FLIP_BACK_SEC;
+        if (!back) this.hesitateUntil = now + HESITATE_SEC[this.difficulty] * (0.5 + this.rng());
+        this.prevGoal = this.goal;
+        this.switchAt = now;
         noteSwitch(this.switches, this.probe, this.lastScores, now, this.goal, next);
       }
       this.goal = next;
@@ -998,7 +1033,9 @@ export class Bot {
     const me = view.self, now = view.now;
     const home = me.island;
     const node = this.nav.nodeAt(me.pos);
-    const src = node >= 0 ? node : home;
+    // Out on a deck: everything the island I walked out from reaches, I reach (not my home's view of the map: at the
+    // end of a bridge from a rival's island that swaps my target with each step on and off the deck).
+    const src = node >= 0 ? node : this.lastNode >= 0 ? this.lastNode : home;
     const alive = view.others.filter((o) => !o.eliminated && o.island !== home);
     const leaderKills = Math.max(0, ...view.others.map((o) => o.kills));
     return alive.map((o) => {
@@ -1289,7 +1326,7 @@ export class Bot {
     if (!home) throw new Error(`Bot ${this.id}: island ${me.island} is not on the map`);
     const on = islandAt(view.map, me.pos);
     const node = this.nav.nodeAt(me.pos);
-    const src = node >= 0 ? node : home.index;
+    const src = node >= 0 ? node : this.lastNode >= 0 ? this.lastNode : home.index;
     let rival = this.targetId === null ? null : view.others.find((o) => o.id === this.targetId && !o.eliminated) ?? null;
     if (!rival) {
       this.targetId = null;
@@ -1668,7 +1705,9 @@ export class Bot {
         if (view.sealed[home.index]) return (can ? 0.85 + (this.sealedHomeCalm(c) ? this.P.drive.sealedHome[this.difficulty] : 0) : 0.1) + 0.1 * t.caution;
         // One plugged doorway is most of a seal: clear it before going out. Out of ammo with the money for a box
         // (vault too): fetch it first, punching sandbags out one by one takes a minute (ffa8-mixed seed 18: 61 s).
-        const restock = !ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) && me.inv.cash + me.vault.cash >= AMMO_BOX.price;
+        // (Cash waiting in my generator counts: collect it, then buy.)
+        const restock = !ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) &&
+          me.inv.cash + me.vault.cash + view.generators[home.index] >= AMMO_BOX.price;
         return c.homeReach && can ? (restock ? 0.5 : 0.7 + 0.15 * t.caution) : 0;
       }
       case 'heal': {
@@ -1733,6 +1772,9 @@ export class Bot {
         const leaving = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
         if (c.on === home.index && stored >= COLLECT_BEFORE_LEAVING && leaving && !c.enemy) s = Math.max(s, 0.72);
         if (stored >= COLLECT_NEAR_CAP) s = Math.max(s, 0.8);
+        // An empty gun and no money for ammo: the generator is where the next box comes from (seen: a bot stood 250 s
+        // in its doorway with an empty pistol and $0, $500 waiting in its generator).
+        if (!ownsGun(me.inv) && me.inv.cash + me.vault.cash < AMMO_BOX.price && stored >= AMMO_BOX.price) s = Math.max(s, 0.95);
         return s - away;
       }
       case 'shop': {
@@ -1886,6 +1928,18 @@ export class Bot {
     return c.me.breakoutUntil !== null || (c.view.sealed[c.home.index] && !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos) && underRoof(c.home, c.me.pos));
   }
 
+  /**
+   * Misjudgement of a goal's worth (NOISE): a wrong idea that lasts a few seconds, not one re-rolled at every rescore
+   * (fresh noise each time made near-ties flip back and forth every second).
+   */
+  private goalNoise(g: Goal, now: number): number {
+    const n = this.noise.get(g);
+    if (n && now < n.until) return n.v;
+    const v = (this.rng() - 0.5) * NOISE[this.difficulty];
+    this.noise.set(g, { v, until: now + NOISE_HOLD_SEC * (0.75 + 0.5 * this.rng()) });
+    return v;
+  }
+
   private pick(c: Ctx): Goal {
     // Inside my own bunker with a doorway plugged: clearing it (or slipping out round it) comes first. Any other goal
     // walks into the plug (measured: a PRO stood 260 s inside, its collect route running through its plugged door).
@@ -1900,7 +1954,7 @@ export class Bot {
       const raw = this.score(g, c);
       const base = this.teamDrive(g, c, this.drive(g, c, raw));
       if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
-      const noise = (this.rng() - 0.5) * NOISE[this.difficulty], sticky = g === this.goal ? STICKY : 0;
+      const noise = this.goalNoise(g, c.view.now), sticky = g === this.goal ? STICKY : 0;
       const s = base + noise + sticky;
       rows?.push({ goal: g, raw, base, noise, sticky, score: s });
       scored.push({ goal: g, score: s });
@@ -2580,8 +2634,15 @@ export class Bot {
       // Fights: only out of the inner part of a live barrel's blast, where it would really hurt (measured on the
       // bot ladder: a wider berth costs the stronger bot its fights).
       const R = h.fusing ? h.radius + 1 : h.radius * 0.6;
-      if (d >= R) continue;
+      if (d >= R + HAZARD_FENCE_M) continue;
       const away = d < 0.05 ? right(me.yaw) : norm(flat(sub(me.pos, h.pos)));
+      if (d >= R) {
+        // Just got out: don't walk straight back in (the fight pulls me toward them, the barrel pushes me out, and I
+        // shuffle on the line between): slide along the edge instead.
+        const k = dir ? dir.x * away.x + dir.z * away.z : 0;
+        if (dir && k < 0) { const t = v3(dir.x - away.x * k, 0, dir.z - away.z * k); dir = Math.hypot(t.x, t.z) < 0.2 ? null : norm(t); }
+        continue;
+      }
       push = add(push ?? v3(), scale(away, (h.fusing ? 3 : 2) * (1 - d / R) + 0.4));
     }
     if (!push) return dir;
@@ -2592,6 +2653,19 @@ export class Bot {
     const isl = this.raidIsland(c);
     if (!isl) { this.nextScoreAt = c.view.now; return IDLE; }
     return this.goTo(isl.generator, 1.5);
+  }
+
+  /**
+   * Into a cover spot and stay there: once in (0.8 m), only drifting COVER_LEAVE_M off it walks me back (no stepping
+   * out and in again every tick). `shuffle`: a step along it in the strafe rhythm, as long as it keeps me in.
+   */
+  private holdCover(c: Ctx, spot: Vec3, shuffle: Vec3 | null): Act {
+    const me = c.me, d = dist2D(spot, me.pos);
+    if (d <= 0.8) this.inCover = true;
+    else if (d > COVER_LEAVE_M) this.inCover = false;
+    if (!this.inCover) return this.goTo(spot, 0.6);
+    if (shuffle && dist2D(add(me.pos, scale(norm(shuffle), 0.3)), spot) < Math.max(d, 1)) return { dir: shuffle };
+    return { dir: null };
   }
 
   /** Best spot behind solid cover from a shooter at e within reach, or null. */
@@ -2617,21 +2691,32 @@ export class Bot {
   }
 
   private doFight(c: Ctx): Act {
-    const e = c.enemy;
-    if (!e) return IDLE;
     const now = c.view.now, me = c.me, t = this.t;
+    // Who I'm fighting: kept through a blink out of sight (FOE_HOLD_SEC, where I last saw them) and over someone not
+    // clearly closer. A body ducking in and out of sight past a corner otherwise swaps my footwork to someone else
+    // (or to nothing) and back every few ticks.
+    let e: PlayerState | null = c.enemy;
+    const held = this.fightFoe;
+    if (held && e?.id !== held.id) {
+      const s = this.mem.recent(held.id, now, FOE_HOLD_SEC);
+      const alive = c.view.others.some((o) => o.id === held.id && o.alive);
+      if (s && alive && (!e || dist2D(e.pos, me.pos) >= FOE_SWITCH * dist2D(s.pos, me.pos))) e = { ...held.e, pos: s.pos };
+    }
+    if (!e) { this.fightFoe = null; return IDLE; }
+    if (e === c.enemy) this.fightFoe = { id: e.id, e };
+    const enemyDist = dist2D(e.pos, me.pos);
     if (now >= this.strafeFlipAt) {
       this.strafeSign = this.rng() < 0.5 ? -1 : 1;
       this.strafeFlipAt = now + 0.6 + this.rng() * 0.8;
     }
     const to = norm(flat(sub(e.pos, me.pos)));
     // They're healing (hands busy for a second or two) and I'm fit to fight: rush them before it lands.
-    if ((e.healAt !== null || e.drinking) && me.hp + me.shield >= this.P.heal.punishHp && this.difficulty !== 'easy') {
+    if (e === c.enemy && (e.healAt !== null || e.drinking) && me.hp + me.shield >= this.P.heal.punishHp && this.difficulty !== 'easy') {
       this.healNote = { t: now, text: `@${e.id} is healing: rushing them` };
       const wp = this.sameGround(me.pos, e.pos) ? null : this.nav.routeTo(e.pos);
       if (this.sameGround(me.pos, e.pos) || wp) return { dir: norm(flat(sub(wp ?? e.pos, me.pos))), sprint: true, approach: true };
     }
-    const gun = bestGun(me.inv, c.enemyDist);
+    const gun = bestGun(me.inv, enemyDist);
     const pref = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
     // Skilled players close in rather than trade shots from afar.
     const want = this.difficulty === 'easy' ? pref : Math.min(pref, this.P.drive.maxRange[this.difficulty]);
@@ -2649,16 +2734,18 @@ export class Bot {
     const ramp = this.highGround(c, e, to, gun, sameIsland);
     if (ramp) return ramp;
     // Careful players fight from behind something solid.
-    if (gun !== 'fists' && c.enemyDist > 6 && sameIsland && (t.caution > 0.5 || me.hp < 60)) {
+    if (gun !== 'fists' && enemyDist > 6 && sameIsland && (t.caution > 0.5 || me.hp < 60)) {
       const cover = this.coverFrom(c, e);
-      if (cover) this.moveSrc = 'fight:coverSpot';
-      if (cover && dist2D(cover, me.pos) > 0.8) return this.goTo(cover, 0.6);
-      if (cover) return { dir: scale(side, 0.4) };
+      if (cover) { this.moveSrc = 'fight:coverSpot'; return this.holdCover(c, cover, scale(side, 0.4)); }
     }
+    this.inCover = false;
 
-    const gapM = c.enemyDist - want;
+    const gapM = enemyDist - want;
     // Hold range within a couple of metres; with fists (reach 2 m) only a step's slack, or they circle out of reach.
-    const radial = Math.abs(gapM) < (want < 2 ? 0.4 : 2) ? 0 : Math.sign(gapM);
+    // Once stepping in (or back), keep at it until well inside the band: no in-out-in at its edge every few ticks.
+    const band = want < 2 ? 0.4 : 2, was = this.radialWas;
+    const radial = Math.abs(gapM) >= band || (was !== 0 && Math.sign(gapM) === was && Math.abs(gapM) > 0.4 * band) ? Math.sign(gapM) : 0;
+    this.radialWas = radial;
     const dir = add(scale(to, radial), side);
     const rush = this.difficulty !== 'easy' && gapM > this.P.drive.sprintGap;
     // Chasing across water needs a route; otherwise just strafe in place.
@@ -3130,22 +3217,40 @@ export class Bot {
 
   /** Back off from whoever is hurting me: home to the bunker if that isn't toward them, else straight away. */
   private doDisengage(c: Ctx): Act {
-    const me = c.me;
-    const from = c.enemy?.pos ?? (this.mem.lastHurtBy !== null ? this.mem.recent(this.mem.lastHurtBy, c.view.now, 5)?.pos : undefined);
-    if (!from) { this.nextScoreAt = c.view.now; return IDLE; }
+    const me = c.me, now = c.view.now;
+    // Who I'm getting away from: whoever is in sight, else whoever hurt me last. Kept a moment (FLEE_KEEP_SEC) unless
+    // someone much closer turns up: a far enemy blinking in and out of sight past a corner would otherwise swing
+    // "away" (and the spot behind the bunker) round and back every few ticks.
+    const posOf = (id: number | null) => (id === null ? undefined : id === c.enemy?.id ? c.enemy.pos : this.mem.recent(id, now, 5)?.pos);
+    let id = c.enemy?.id ?? this.mem.lastHurtBy;
+    const f = this.flee;
+    if (f && now < f.until && f.id !== id) {
+      const keep = posOf(f.id), cand = posOf(id);
+      if (keep && !(cand && dist2D(cand, me.pos) < 0.6 * dist2D(keep, me.pos))) id = f.id;
+    }
+    const from = posOf(id);
+    if (id === null || !from) { this.flee = null; this.nextScoreAt = now; return IDLE; }
+    if (!f || f.id !== id || now >= f.until) this.flee = { id, until: now + FLEE_KEEP_SEC, home: f?.home ?? false };
     // Out of heals: the shop first (buy, heal, re-peek), not minutes of backing off on low hp.
     const restock = this.restockHeal(c);
     if (restock) return restock;
     const away = norm(flat(sub(me.pos, from)));
     if (c.homeReach) {
-      // Behind my bunker, not inside it (inside, one plug per door seals me in).
+      // Behind my bunker, not inside it (inside, one plug per door seals me in); once there, stay in its lee.
       const b = c.home.bunker;
       const behind = add(b.center, scale(norm(flat(sub(b.center, from))), BUNKER_OUT));
-      const home = this.goTo(v3(behind.x, c.home.groundY, behind.z), 1.5);
-      if (home.dir && home.dir.x * away.x + home.dir.z * away.z > -0.2) return { ...home, sprint: true };
+      const spot = v3(behind.x, c.home.groundY, behind.z);
+      const home = this.goTo(spot, 1.5);
+      if (!home.dir && dist2D(me.pos, spot) <= 1.5) { this.flee!.home = true; return { dir: null }; }
+      // The way there may lead round the bunker toward them for a bit: once on it, keep on it (no swapping between it
+      // and running straight away at each bend).
+      const k = home.dir ? home.dir.x * away.x + home.dir.z * away.z : -Infinity;
+      this.flee!.home = k > (this.flee!.home ? -0.6 : -0.2);
+      if (this.flee!.home) return { ...home, sprint: true };
     }
-    const cover = c.enemy ? this.coverFrom(c, c.enemy) : null;
-    if (cover && dist2D(cover, me.pos) > 0.8) return { ...this.goTo(cover, 0.6), sprint: true };
+    const cover = c.enemy || this.mem.recent(id, now, FLEE_KEEP_SEC) ? this.coverFrom(c, { pos: from }) : null;
+    if (cover) return { ...this.holdCover(c, cover, null), sprint: true };
+    this.inCover = false;
     // Straight away from them, or the nearest heading that keeps me on land (measured: botDrown medium seed 3, a bot
     // landed from a hook escape on an island rim and ran on into the sea).
     const dir = this.landward(me.pos, away);
