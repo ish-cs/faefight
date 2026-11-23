@@ -514,6 +514,14 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       noise(k, out, t + 0.45, { type: 'bandpass', freq: 3000, dur: 0.25, peak: 0.25, attack: 0.01 });
       return Math.max(len, 0.45 + noise(k, out, t + 0.45, { type: 'lowpass', freq: 1500 * p, freqEnd: 400, dur: 0.5, peak: 0.7, attack: 0.01 }));
     }
+    case 'beaconDown': { // an island beacon shuts down: a bright zap, then a power-down whine falling away + a low thud
+      noise(k, out, t, { type: 'highpass', freq: 3000, dur: 0.06, peak: 0.45, attack: 0.002 });
+      tone(k, out, t, { type: 'triangle', f0: 1320 * p, f1: 660, dur: 0.18, peak: 0.25, attack: 0.004 });
+      tone(k, out, t + 0.12, { type: 'sawtooth', f0: 880 * p, f1: 55, dur: 1.25, peak: 0.22, lp: 1800, attack: 0.02 });
+      tone(k, out, t + 0.12, { f0: 440 * p, f1: 40, dur: 1.3, peak: 0.3, attack: 0.02 });
+      noise(k, out, t + 0.1, { type: 'bandpass', freq: 2200 * p, freqEnd: 300, q: 1.2, dur: 1.1, peak: 0.12, attack: 0.05 });
+      return 1.3 + tone(k, out, t + 1.3, { f0: 70 * p, f1: 35, dur: 0.3, peak: 0.5, attack: 0.004 });
+    }
     case 'hurt':
       noise(k, out, t, { type: 'bandpass', freq: 3000 * p, q: 1, dur: 0.08, peak: 0.15 });
       noise(k, out, t, { type: 'lowpass', freq: 250, dur: 0.2, peak: 0.6 });
