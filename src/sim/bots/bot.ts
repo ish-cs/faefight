@@ -1500,10 +1500,7 @@ export class Bot {
         return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression + (gun ? sealedFoe : 0);
       }
       case 'disengage': {
-        // Nobody to break away from: none in sight, or (at home) one across the water who isn't hitting me (backing off
-        // from them just sits me at home regenerating; measured: ffa8-hard seed 18, a 61 s home sit).
-        const acrossWater = !!c.enemy && c.on === home.index && c.enemyDist > 1.5 * ENGAGE_RANGE && !this.sameGround(me.pos, c.enemy.pos);
-        if ((!c.enemy || acrossWater) && view.now - this.mem.lastHurtAt > 1.5) return 0;
+        if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
         // Outside the safe ring, getting in comes first (running from a gun into the storm kills just as well).
         if (view.storm && Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm)) return 0;
         // Final circle: nowhere left to run (backing off only buys regen, and the fight never ends); fists vs fists
