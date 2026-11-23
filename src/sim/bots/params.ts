@@ -342,7 +342,7 @@ export const BUILD_TUNING: BuildTuning = {
   coverScore: 1.05, fortifyScore: 0.5,
   crackedAt: 0.45, holdSec: 4, coverOffset: 0.45, peekStep: 0.7,
   rampCarry: D(0, 0, 1, 2), metalCarry: D(0, 0, 1, 1), rampUpTo: 1.2,
-  rampFirst: D(0, 0, 0, 1), kitCoverM: 30,
+  rampFirst: D(0, 0, 0, 1), kitCoverM: 80,
 };
 
 export const TEAM: TeamParams = {

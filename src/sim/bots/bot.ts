@@ -2418,7 +2418,7 @@ export class Bot {
     if ((inv.pieces.sandbags ?? 0) > 0) return 'sandbags';
     // Masters (reinforce > 0.8) spend a plug on cover when the doors are far off (they'll buy another): staying alive first.
     const far = !c.rivalIsl || dist2D(c.me.pos, c.rivalIsl.bunker.center) > this.P.buildTuning.kitCoverM;
-    return tall > 0 && this.P.buildSkill[this.difficulty].reinforce > 0.8 && far ? pick() : null;
+    return tall > 0 && false && far ? pick() : null;
   }
 
   /** Should the next cover wall be the strongest I carry: at home, rich enough to spend it, or I've held this spot a while. */
