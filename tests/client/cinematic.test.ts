@@ -134,10 +134,11 @@ describe('cinematic director hysteresis', () => {
 describe('cinematic director quiet moments', () => {
   it('rotates through players when nothing is happening', () => {
     const d = new Director();
-    const seen = new Set<number>();
-    d.on('shot', (e) => seen.add(e.playerId));
+    const seen = new Set<number>(), kinds = new Set<string>();
+    d.on('shot', (e) => { seen.add(e.playerId); if (e.t > CUT.opening) kinds.add(e.kind); });
     d.setActive(true);
     for (let t = 0; t <= 120; t += 1 / 30) d.update(snap(t, [pl(1), pl(2), pl(3), pl(4)]));
     expect(seen.size).toBeGreaterThanOrEqual(4);
+    expect([...kinds].sort()).toEqual(['shoulder', 'wide']); // and the angle keeps changing
   });
 });

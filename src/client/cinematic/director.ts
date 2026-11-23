@@ -125,7 +125,8 @@ export class Director {
       // again, from a different angle if it's the same one.
       const quiet = best.reason === 'idle' || best.reason === 'leader';
       const fresh = quiet ? this.freshest(t, cur.playerId) : null;
-      const next = fresh ?? (isNew(best) ? best : { ...best, kind: varyKind(cur.kind, best) });
+      // A fresh player in a quiet moment alternates angle with the last shot (shoulder <-> wide).
+      const next = fresh ? { ...fresh, kind: varyKind(cur.kind, fresh) } : isNew(best) ? best : { ...best, kind: varyKind(cur.kind, best) };
       return this.cut(next.playerId === cur.playerId && next.kind === cur.kind ? { ...next, kind: varyKind(cur.kind, next) } : next, t);
     }
     return cur;
