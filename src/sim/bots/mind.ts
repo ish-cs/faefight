@@ -117,10 +117,17 @@ export type RivalFacts = {
   away: boolean;
   /** I carry a full seal kit. */
   kit?: boolean;
+  /** Trapped in their sealed bunker right now (breakout running): a kill finishes them. */
+  trapped?: boolean;
+  /** Spoils their elimination would pay ($, scoreboard bounty). */
+  bounty?: number;
 };
 
+/** Spoils of war in rival choice (params drive.spoilsTarget per $1000 of bounty, drive.finishTrapped). */
+export type SpoilsWeights = { perK: number; trapped: number };
+
 /** Desirability of going after this rival; higher is better. Personality only shifts weights. */
-export function rivalScore(f: RivalFacts, t: Traits, sealAwayTarget = 0.6): number {
+export function rivalScore(f: RivalFacts, t: Traits, sealAwayTarget = 0.6, spoils: SpoilsWeights = { perK: 0, trapped: 0 }): number {
   let s = 1;
   s -= f.reach ? 0 : Math.min(2, f.scaffolds * 0.06 * (1.2 - 0.4 * t.aggression));
   s -= (f.dist / 100) * (0.25 + 0.35 * t.aggression);
@@ -135,7 +142,17 @@ export function rivalScore(f: RivalFacts, t: Traits, sealAwayTarget = 0.6): numb
   if (f.away && !f.sealed) s += 0.35 * t.opportunism;
   // Kit in hand, owner out and their island in walking reach: seal the empty bunker.
   if (f.kit && f.away && f.reach && !f.sealed) s += sealAwayTarget;
+  s += spoilsBonus(f, spoils);
   return s;
+}
+
+/**
+ * Spoils of war: a rival whose death would eliminate them now (sealed, or trapped mid-breakout) is worth their bounty
+ * (capped at $1500), and a trapped one in walking reach is a finish to go and take before they break out.
+ */
+export function spoilsBonus(f: RivalFacts, w: SpoilsWeights): number {
+  if (!f.sealed && !f.trapped) return 0;
+  return (w.perK * Math.min(1500, f.bounty ?? 0)) / 1000 + (f.trapped && f.reach ? w.trapped : 0);
 }
 
 /** Bonus the current target keeps over challengers, so the bot does not flip-flop. */

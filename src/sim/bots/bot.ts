@@ -847,6 +847,8 @@ export class Bot {
         onMyIsland: !!fresh && o.alive && dist2D(fresh.pos, view.map[home].center) < view.map[home].radius + 6,
         away: !!seen && o.alive && seen.island !== o.island,
         kit: sealKit(me.inv) >= MAP_DOORS,
+        trapped: !!o.trapped,
+        bounty: o.bounty ?? 0,
       };
     });
   }
@@ -889,11 +891,16 @@ export class Bot {
     return !!this.window && !!c.rival && this.window.id === c.rival.id && !c.rival.alive;
   }
 
+  /** Spoils of war in rival choice (params: drive.spoilsTarget, drive.finishTrapped). */
+  private get spoilsWeights() {
+    return { perK: this.P.drive.spoilsTarget[this.difficulty], trapped: this.P.drive.finishTrapped };
+  }
+
   /** Score every rival; keep the current one unless another is clearly better. */
   private chooseTarget(view: BotView) {
     let best: number | null = null, bestScore = -Infinity, cur = -Infinity;
     for (const f of this.rivalFacts(view)) {
-      const s = rivalScore(f, this.t, this.P.drive.sealAwayTarget) + (this.rng() - 0.5) * NOISE[this.difficulty] -
+      const s = rivalScore(f, this.t, this.P.drive.sealAwayTarget, this.spoilsWeights) + (this.rng() - 0.5) * NOISE[this.difficulty] -
         ((this.targetBan.get(f.id) ?? -Infinity) > view.now ? 1.5 : 0) + this.teamFocus(view, f.id);
       if (f.id === this.targetId) cur = s;
       if (s > bestScore) { bestScore = s; best = f.id; }

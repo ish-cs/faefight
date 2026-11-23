@@ -1,4 +1,5 @@
 import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, TRAP, WEAPONS } from '../sim/constants';
+import { elimView } from './elimBanner';
 import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
 import type { CenterIsland, IslandLayout } from '../sim/map';
 import { HOTBAR_SIZE, POTION_KINDS, canAdd, countOf, isGunItem, isHotbarItem, isPieceItem, isPotionItem } from '../sim/hotbar';
@@ -193,6 +194,9 @@ export class Hud {
   private sealedBanner = el('div', 'sealed-banner', 'YOUR BUNKER IS SEALED');
   /** Sudden death: a big STORM warning for a few seconds, and a storm-coloured screen edge while outside the ring. */
   private stormWarn = el('div', 'storm-warn', 'STORM');
+  /** "ELIMINATED by X" for everyone (elimination credit, sim/elimination.ts); gold when it's the viewed player's. */
+  private elimBanner = el('div', 'elim-banner');
+  private elimBannerUntil = 0;
   private stormVignette = el('div', 'storm-vignette');
   /** Red edges at low HP (the viewed player's: yours, or whoever you spectate). */
   private lowHp = el('div', 'lowhp-vignette');
@@ -268,9 +272,10 @@ export class Hud {
     this.stormWarn.dataset.testid = 'storm-warn';
     this.stormWarn.append(el('div', 'storm-warn-sub', 'Sudden death · get inside the ring'));
     this.stormVignette.dataset.testid = 'storm-vignette';
+    this.elimBanner.dataset.testid = 'elim-banner';
     this.lowHp.dataset.testid = 'lowhp-vignette';
     this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
-      this.sealedBanner, this.stormVignette, this.lowHp, this.stormWarn, this.damage, this.endScreen, this.fps, this.panel, this.brain);
+      this.sealedBanner, this.stormVignette, this.lowHp, this.stormWarn, this.elimBanner, this.damage, this.endScreen, this.fps, this.panel, this.brain);
     parent.append(this.root);
   }
 
@@ -501,7 +506,7 @@ export class Hud {
     this.shield.classList.toggle('empty', sh <= 0);
     if (this.lastShield > 0 && sh <= 0 && me.alive) this.flash(this.shield, 'broke');
     this.lastShield = sh;
-    const speedLeft = me.alive ? (me.speedUntil ?? 0) - snap.time : 0;
+    const speedLeft = me.alive ? Math.max(me.speedUntil ?? 0, me.surgeUntil ?? 0) - snap.time : 0;
     this.speedBuff.style.display = speedLeft > 0 ? '' : 'none';
     if (speedLeft > 0) setText(this.speedBuff.querySelector('.buff-time') as HTMLElement, `${Math.ceil(speedLeft)}s`);
   }
@@ -715,6 +720,7 @@ export class Hud {
     this.banner.classList.toggle('storm', !!st);
     this.stormVignette.classList.toggle('on', out !== null && out > 0);
     this.stormWarn.style.display = performance.now() < this.stormWarnUntil ? 'flex' : 'none';
+    if (this.elimBannerUntil && performance.now() >= this.elimBannerUntil) { this.elimBannerUntil = 0; this.elimBanner.style.display = 'none'; }
 
     Array.from(this.seals.children).forEach((chip, i) => {
       const sealed = !!snap.sealed[i];
@@ -770,7 +776,12 @@ export class Hud {
         const isl = e.data.island as number | undefined;
         this.addFeed(`${isl === this.me?.island ? 'Your' : `${islandName(isl ?? 0)}'s`} bunker reopened`);
       } else if (e.type === 'eliminated') {
-        this.addFeed(`${name(e.data.player ?? e.data.id) ?? 'Someone'} eliminated`, true);
+        // Credited ones get the big line from their 'elimination' event (same tick).
+        const id = e.data.player ?? e.data.id;
+        if (!events.some((x) => x.type === 'elimination' && x.data.victim === id && x.data.by !== null))
+          this.addFeed(`${name(id) ?? 'Someone'} eliminated`, true);
+      } else if (e.type === 'elimination' && typeof e.data.by === 'number') {
+        this.showElimination(e, name);
       } else if (e.type === 'suddenDeath') {
         this.addFeed('Sudden death: generators stopped, the storm is closing in', true);
         this.stormWarnUntil = performance.now() + 4000;
@@ -785,6 +796,22 @@ export class Hud {
         if (e.data.target === v) this.flash(this.damage, 'on');
       }
     }
+  }
+
+  /** Glory: the big banner and a highlighted feed line for an elimination credit. */
+  private showElimination(e: MatchEvent, name: (id: unknown) => string | null) {
+    const g = elimView(e, this.viewId || this.humanId, name);
+    if (!g) return;
+    const node = el('div', `feed-item alert elim${g.mine ? ' mine' : ''}`, g.feed);
+    node.dataset.testid = 'feed-elim';
+    this.addFeedNode(node);
+    if (!g.banner) return;
+    this.elimBanner.replaceChildren(el('div', 'elim-title', g.banner.title), el('div', 'elim-sub', g.banner.sub));
+    this.elimBanner.classList.toggle('mine', g.banner.mine);
+    this.elimBanner.dataset.victim = String(e.data.victim);
+    this.elimBanner.dataset.by = String(e.data.by);
+    this.elimBanner.style.display = 'flex';
+    this.elimBannerUntil = performance.now() + 3500;
   }
 
   /** Crosshair hitmarker (also shown straight away for a predicted hit). */

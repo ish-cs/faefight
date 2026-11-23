@@ -1,7 +1,7 @@
 import type { PlayerStats } from '../../sim/types';
 
 /** End-of-match awards (pure). */
-export type AwardKey = 'mvp' | 'builder' | 'sealer' | 'sharpshooter';
+export type AwardKey = 'mvp' | 'builder' | 'sealer' | 'sharpshooter' | 'warlord';
 export type Award = { key: AwardKey; title: string; id: number; detail: string };
 
 export const mvpScore = (s: PlayerStats) => s.kills * 100 + s.damage + s.seals * 150 - s.deaths * 25;
@@ -26,6 +26,8 @@ export function awards(stats: PlayerStats[]): Award[] {
   if (se) out.push({ key: 'sealer', title: 'Sealer', id: se.id, detail: `${se.seals} bunker${se.seals > 1 ? 's' : ''} sealed` });
   const sh = best(stats, (s) => s.headshots, (s) => s.damage);
   if (sh) out.push({ key: 'sharpshooter', title: 'Sharpshooter', id: sh.id, detail: `${sh.headshots} headshot${sh.headshots > 1 ? 's' : ''}` });
+  const w = best(stats, (s) => s.elims ?? 0, (s) => s.spoils ?? 0);
+  if (w) out.push({ key: 'warlord', title: 'Warlord', id: w.id, detail: `${w.elims} elimination${w.elims > 1 ? 's' : ''} · $${w.spoils ?? 0} spoils` });
   return out;
 }
 

@@ -138,6 +138,10 @@ export type PlayerState = {
   healLeft: number;
   /** Speed potion buff lasts until this sim time (0 = none). */
   speedUntil: number;
+  /** Victory surge (an elimination credit) lasts until this sim time: extra move speed (ELIM). Absent = never. */
+  surgeUntil?: number;
+  /** Public bounty: the spoils eliminating them would pay now, in $10 steps (elimination.ts bountyOf; scoreboard, bots). */
+  bounty?: number;
   reloadUntil: number;
   /** Length of the reload in progress (s), for animation; 0 when not reloading. */
   reloadSec: number;
@@ -214,7 +218,12 @@ export type MatchEventType =
   /** Spike trap: data { what: 'placed' | 'fired' | 'broken', id, pos, by / owner } (sim/traps.ts). */
   | 'trap'
   /** A wooden pier section broke (docks.ts): data { id, island, row, pos, rotY, by, kind }. */
-  | 'dockBroken';
+  | 'dockBroken'
+  /**
+   * Elimination credit (elimination.ts): data { victim, by (eliminator, null = nobody), assists: number[],
+   * how: 'killed' | 'sealed' | 'trapped' | 'other', spoils (total $), shares: [id, $][] }.
+   */
+  | 'elimination';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -290,6 +299,11 @@ export type PlayerStats = {
   /** Longest time alive in one life (s). */
   longestLife: number;
   headshots: number;
+  /** Eliminations credited (elimination.ts) and assists on them. */
+  elims: number;
+  assists: number;
+  /** Spoils of war collected ($). */
+  spoils: number;
 };
 
 /**

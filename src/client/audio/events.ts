@@ -15,7 +15,7 @@ export type SoundId =
   | 'shot' | 'impact' | 'hurt' | 'hitmarker' | 'splash'
   | 'explosion' | 'placed' | 'destroyed'
   | 'coin' | 'loot' | 'purchase' | 'vault'
-  | 'kill' | 'death' | 'eliminated' | 'win' | 'lose' | 'draw'
+  | 'kill' | 'death' | 'eliminated' | 'elimination' | 'win' | 'lose' | 'draw'
   | 'alarm' | 'ping' | 'tick' | 'escaped' | 'horn' | 'footstep'
   | 'shieldHit' | 'shieldBreak' | 'drink' | 'potionDone'
   | 'reload' | 'dry' | 'ads' | 'thunder'
@@ -314,6 +314,10 @@ export class SoundDirector {
           break;
         case 'eliminated':
           if (d.player === this.humanId) out.push({ sound: 'eliminated', pos: null, gain: 0.9 });
+          break;
+        case 'elimination':
+          // Glory sting for everyone on a credited elimination; brighter (kind 'mine') for the eliminator.
+          if (d.by !== null) out.push({ sound: 'elimination', kind: d.by === this.humanId ? 'mine' : undefined, pos: null, gain: d.by === this.humanId ? 1.0 : 0.7 });
           break;
         case 'win':
           if (me) out.push({ sound: d.winner === this.humanId ? 'win' : d.winner === -1 ? 'draw' : 'lose', pos: null, gain: 0.9 });
