@@ -201,7 +201,11 @@ export class SkyLighting {
   /** Effective pixel ratio the scene renders at (debug/perf). */
   get pixelRatio() { return this.gpu.getPixelRatio(); }
 
+  /** Set while the game recompiles the scene after a preset change (main.ts): the quality key waits for it. */
+  busy = false;
+
   toggleQuality(): Quality {
+    if (this.busy) return this.quality;
     this.setQuality(QUALITIES[(QUALITIES.indexOf(this.quality) + 1) % QUALITIES.length]);
     return this.quality;
   }
