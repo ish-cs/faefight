@@ -20,7 +20,8 @@ import { Grass } from './grass';
 import { buildGroundAO } from './groundAO';
 import { perfOff } from './perfFlags';
 import { Scatter } from './scatter';
-import { backdropFrame, buildIslands, islandMask } from './islands';
+import { backdropFrame, buildIslandsSteps, islandMask } from './islands';
+import { runSteps, runStepsAsync } from './steps';
 import { PieceFx } from './pieceFx';
 import { PieceLayer } from './pieces';
 import { PropLayer, TIER_LIMIT } from './propLayer';
@@ -93,7 +94,17 @@ export class World {
     };
   }
 
+  /** Build the map in one go (labs). The game uses setMapAsync. */
   setMap(def: MapDef, teamColors: number[]) {
+    runSteps(this.setMapSteps(def, teamColors));
+  }
+
+  /** setMap spread over tasks (~30 ms each), so a 1.5 s build (6 s on a throttled CPU) doesn't freeze the page. */
+  setMapAsync(def: MapDef, teamColors: number[], onStep?: () => void): Promise<void> {
+    return runStepsAsync(this.setMapSteps(def, teamColors), 30, onStep);
+  }
+
+  private *setMapSteps(def: MapDef, teamColors: number[]): Generator<void, void> {
     this.clearMap();
     const t0 = performance.now();
     if (!this.scatter.has('pebble')) defineDetailKinds(this.scatter);
@@ -105,10 +116,13 @@ export class World {
     // finer A/B switches: ?noclusters / ?nogameprops / ?nodebris drop one layer each
     const noClusters = noProps || q.includes('noclusters'), noGameProps = noProps || q.includes('nogameprops'), noDebris = noProps || q.includes('nodebris');
     lampSpots.length = 0; // the harbor street lamps below register their light pools
-    const { root, collidables } = buildIslands(def, teamColors, this.scatter, noClusters ? undefined : this.props);
+    // islands, props and scatter join the scene together once all three are built (nothing half-built is drawn)
+    const { root, collidables } = yield* buildIslandsSteps(def, teamColors, this.scatter, noClusters ? undefined : this.props);
     this.props.build();
-    this.scene.add(this.props.root);
+    yield;
     this.scatter.build();
+    yield;
+    this.scene.add(this.props.root);
     this.scene.add(this.scatter.root);
     this.scene.add(root);
     this.islands = root;
@@ -128,10 +142,12 @@ export class World {
     this.waterEnv = wm;
     this.groundAO = perfOff('nogroundao') ? null : buildGroundAO(def);
     if (this.groundAO) this.scene.add(this.groundAO);
+    yield;
     this.sky.setInteriors(map);
     // grass follows the harbor surface mask (sand/grass beds); the Container Yard is bare asphalt
     if (def.template === 'harbor') this.grass.build(map, (isl) => backdropFrame(isl, map.length), islandMask);
     this.scene.add(this.grass.root);
+    yield;
     this.boats = new Boats(map);
     this.gulls = new Gulls(map, gullPerches(map, (isl) => backdropFrame(isl, map.length)));
     this.scene.add(this.boats.root, this.gulls.mesh);
@@ -139,11 +155,13 @@ export class World {
     this.critters = new Critters(def, perches);
     this.critters.onSound = (s) => this.onCritterSound?.(s);
     this.scene.add(this.critters.root);
+    yield;
     setBuiltInPotionStalls([def.center.potionShop]); // center.ts draws this seller; PotionSellers must not double it
     // debug stress scene: visual-only shifted copies with ids the sim never uses
     const cos = STRESS > 1 ? stressOffsets().flatMap(([ox, oz], k) => def.cosmetics.map((c) => k === 0 ? c : { ...c, id: 1e6 * k + c.id, pos: { ...c.pos, x: c.pos.x + ox, z: c.pos.z + oz } })) : def.cosmetics;
     this.cosmetics = new CosmeticLayer(cos);
     this.scene.add(this.cosmetics.root);
+    yield;
     this.scene.add(this.debris.root);
     const gameProps = this.gameProps = new GameProps(noGameProps ? [] : def.props ?? []);
     this.scene.add(gameProps.root);
