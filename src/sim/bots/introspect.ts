@@ -267,11 +267,12 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     case 'bank': {
       if (c.on !== home.index) return zero('not home');
       if (view.suddenDeath) return zero('sudden death');
+      if (I.stormPrep(view)) return zero('storm coming: no time for the vault');
       const sc = me.inv.pieces.scaffold ?? 0, need = I.scaffoldsNeeded(c);
       const close = !!c.enemy && c.enemyDist < 8;
       const due = I.insuranceDue(me);
       if ((c.reach || (sc > 0 && sc >= need)) && due > 0 && !close) return { f: [['insurance', 0.8]], why: `Heading out: banking $${Math.round(due)} so I can rebuy a gun if I die` };
-      const keep = I.P.vault.carry;
+      const keep = I.P.vault.carry[I.difficulty];
       const excess = me.inv.cash - keep;
       if (excess < I.P.vault.bankMin) return zero('little cash on me');
       if (close) return zero('enemy too close');

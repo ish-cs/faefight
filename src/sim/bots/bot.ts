@@ -562,7 +562,8 @@ export class Bot {
     // Patch up with a medkit when hurt and nobody is in my face (2 s with my hands busy).
     let select: number | null = null, useMedkit = false;
     const kit = me.hotbar.indexOf('medkit');
-    if (kit >= 0 && me.inv.medkits > 0 && me.hp <= MEDKIT_AT[this.difficulty] && me.busyUntil <= now && me.healAt === null &&
+    // (Not mid-reload: the medkit takes the gun out of my hands and cancels the reload; it can wait a moment.)
+    if (kit >= 0 && me.inv.medkits > 0 && me.hp <= MEDKIT_AT[this.difficulty] && me.busyUntil <= now && me.healAt === null && me.reloadUntil === 0 &&
         (!enemy || ctx.enemyDist > 30) && now - this.mem.lastHurtAt > 0.5) {
       select = kit; useMedkit = true; fire = false;
     }
@@ -1472,12 +1473,13 @@ export class Bot {
         return (0.4 + 0.45 * t.caution) * (0.5 + 0.5 * fresh) + (gun ? 0.1 : -0.2);
       }
       case 'bank': {
-        if (c.on !== home.index || view.suddenDeath) return 0;
+        // Storm coming: getting to the center beats a trip to the vault (the shop takes vault cash anyway).
+        if (c.on !== home.index || view.suddenDeath || this.stormPrep(view)) return 0;
         // Death insurance: before heading out, leave enough in the vault to rebuy a gun after a death.
         const leavingSoon = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
         if (leavingSoon && this.insuranceDue(me) > 0 && !(c.enemy && c.enemyDist < 8)) return 0.8;
         // Shops pay from the vault anywhere and carried cash drops on death: bank all but pocket money.
-        const keep = this.P.vault.carry;
+        const keep = this.P.vault.carry[this.difficulty];
         const excess = me.inv.cash - keep;
         if (excess < this.P.vault.bankMin) return 0;
         const close = c.enemy && c.enemyDist < 8;
@@ -1753,7 +1755,7 @@ export class Bot {
     const me = c.me;
     const walk = this.goTo(c.home.vault, 1.8);
     if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > c.view.now) return walk;
-    const cash = Math.max(Math.floor(me.inv.cash - this.P.vault.carry), this.insuranceDue(me));
+    const cash = Math.max(Math.floor(me.inv.cash - this.P.vault.carry[this.difficulty]), this.insuranceDue(me));
     if (cash <= 0) { this.nextScoreAt = c.view.now; return walk; }
     this.nextScoreAt = c.view.now + 1.2;
     return { ...walk, vault: { deposit: { cash } } };

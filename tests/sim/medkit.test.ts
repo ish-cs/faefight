@@ -29,7 +29,7 @@ describe('medkit', () => {
     expect(p.inv.cash).toBe(25);
     expect(p.inv.medkits).toBe(1);
     expect(p.hotbar[0]).toBe('medkit');
-    expect(buy(p, { buy: 'medkit' })).toEqual({ ok: false, reason: 'need $75, carrying $25' });
+    expect(buy(p, { buy: 'medkit' })).toEqual({ ok: false, reason: 'need $75, have $25 (carried + vault)' });
   });
 
   test('using one takes 2 s, then heals 50', () => {
