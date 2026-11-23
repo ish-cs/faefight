@@ -133,7 +133,8 @@ export class Commentary {
   }
 
   /** Each snapshot, with whether we're watching rather than playing. */
-  onSnapshot(s: Snapshot, spectating: boolean) {
+  onSnapshot(s: Snapshot, spectating: boolean, hold = false) {
+    this.commentator.hold = hold;
     this.attachDirector();
     if (s.time < this.lastTime) this.commentator.reset(); // a new match
     this.lastTime = s.time;

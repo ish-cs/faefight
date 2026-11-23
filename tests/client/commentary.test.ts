@@ -299,6 +299,22 @@ describe('Commentator', () => {
     expect(r.caps.at(-1)).toBeNull();
   });
 
+  it('a hold (killcam) starts no new line, lets the current one finish, and nothing cuts in', () => {
+    const r = rig(true);
+    r.c.say('trapped', { a: 'Bruno' }, 2);
+    r.adv(0.1);
+    r.c.hold = true;
+    r.c.say('eliminated', { a: 'Cleo', n: 3 }, TOP);
+    r.adv(0.1);
+    expect(r.tts.cancels).toBe(0); // not even a top call cuts in during a hold
+    r.tts.end();
+    for (let i = 0; i < 8; i++) r.adv(0.5);
+    expect(r.c.log.map((l) => l.key)).toEqual(['trapped']);
+    r.c.hold = false;
+    r.adv(1);
+    expect(r.c.log.at(-1)!.key).toBe('eliminated'); // still fresh (top calls wait up to STALE_TOP)
+  });
+
   it('says nothing while inactive', () => {
     const r = rig();
     r.c.setActive(false);

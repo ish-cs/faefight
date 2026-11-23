@@ -67,6 +67,8 @@ const SHOT_KEY: Partial<Record<ShotReason, LineKey>> = {
 
 export class Commentator {
   active = false;
+  /** While true (a killcam is playing), no new line starts; one already playing finishes. */
+  hold = false;
   readonly log: LogLine[] = [];
   private queue: Pending[] = [];
   private speaking: { item: Pending; caption: Caption; until: number; hardUntil: number } | null = null;
@@ -355,8 +357,8 @@ export class Commentator {
     this.queue = this.queue.filter((p) => now - p.at <= p.maxAge);
     if (this.captionOff && now >= this.captionOff && !this.speaking) { this.captionOff = 0; this.opts.onCaption?.(null); }
     if (this.speaking) {
-      // Only a top call cuts in, and only on a lesser line; it opens with a hand-off.
-      const top = this.best(TOP);
+      // Only a top call cuts in, and only on a lesser line; it opens with a hand-off. Never during a hold.
+      const top = this.hold ? null : this.best(TOP);
       if (top && this.speaking.item.prio < TOP) {
         console.info(`[commentary] top call cuts in on "${this.speaking.caption.text}"`);
         this.opts.tts.cancel();
@@ -366,6 +368,7 @@ export class Commentator {
       return;
     }
     if (this.opts.tts.available && this.opts.tts.speaking) return; // the engine is still finishing a line
+    if (this.hold) { this.lastEnd = Math.max(this.lastEnd, now - COLOUR_IDLE + 2); return; } // e.g. a killcam: no new lines; colour waits a beat after
     const next = this.best(0);
     const gap = next && this.lastPersona && PERSONA[next.key] !== this.lastPersona ? SWITCH_GAP : GAP;
     if (now - this.lastEnd < gap) return;

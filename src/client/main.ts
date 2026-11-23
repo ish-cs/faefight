@@ -1683,7 +1683,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Respawned: the sim turned me to face out of my bunker's front door. Snap camera + aim to it once.
     if (adoptSpawnLook(input, s.events, humanId)) console.info(`[main] respawn: facing front door (yaw ${input.yaw.toFixed(2)})`);
     audio.snapshot(s);
-    commentary.onSnapshot(s, watching || spectateChosen);
+    commentary.onSnapshot(s, watching || spectateChosen, killcam.active); // no new lines over a killcam
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
       if (me) { input.yaw = me.yaw; input.pitch = me.pitch; input.selected = me.selected; }
