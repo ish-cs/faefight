@@ -12,6 +12,7 @@ const IMPORTS = {
   hud: () => import('./hud'),
   warmup: () => import('./warmup'),
   spectator: () => import('./spectator'),
+  cinematic: () => import('./cinematic/camera'),
   characters: () => import('./characters/loader'),
 };
 type Mods = { [K in keyof typeof IMPORTS]: Awaited<ReturnType<(typeof IMPORTS)[K]>> };
