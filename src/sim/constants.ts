@@ -181,7 +181,8 @@ export const LOCK_PRICE_MULT = 4;
 
 /** queueSec: a build that arrives while still busy from the last one is held this long and placed the tick the
  *  busy time ends, so network jitter can't eat a held-place stream (still at most one piece per placeSec). */
-export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5, queueSec: 0.25 };
+/** seqWaitSec: a build tied to a movement command (BuildRequest.seq) waits at most this long for that command. */
+export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5, queueSec: 0.25, seqWaitSec: 0.5 };
 
 export const LIFECYCLE = {
   /**

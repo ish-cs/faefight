@@ -82,4 +82,5 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 25; // 25: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 24 (main: stranded bots)
+export const NET_VERSION = 26; // 26: BuildRequest.seq (host places a guest's piece right after that move command)
+// 25: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 24 (main: stranded bots)
