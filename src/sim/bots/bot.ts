@@ -1432,7 +1432,9 @@ export class Bot {
         return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression + (gun ? sealedFoe : 0);
       }
       case 'disengage': {
-        if (!c.enemy && view.now - this.mem.lastHurtAt > 1.5) return 0;
+        // Nobody to break away from: none in sight, or one far off who isn't hitting me (backing off at home from
+        // someone across the water just sits me there, regenerating; measured: ffa8-hard seed 18, a 61 s home sit).
+        if ((!c.enemy || c.enemyDist > 1.5 * ENGAGE_RANGE) && view.now - this.mem.lastHurtAt > 1.5) return 0;
         // Outside the safe ring, getting in comes first (running from a gun into the storm kills just as well).
         if (view.storm && Math.hypot(me.pos.x - view.storm.x, me.pos.z - view.storm.z) > this.stormSafeR(view.storm)) return 0;
         // Final circle: nowhere left to run (backing off only buys regen, and the fight never ends); fists vs fists
