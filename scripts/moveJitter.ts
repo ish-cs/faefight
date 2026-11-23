@@ -40,13 +40,13 @@ for (let k = 0; k < diffs.length; k++) {
   const s = moveStats(tracks[k], DT);
   const perMin = (x: number) => (x / Math.max(1, s.aliveSec / 60)).toFixed(1);
   const by = new Map<string, number>();
-  for (const i of s.wishFlips) by.set(srcs[k][i], (by.get(srcs[k][i]) ?? 0) + 1);
+  for (const i of s.rapidFlips) by.set(srcs[k][i], (by.get(srcs[k][i]) ?? 0) + 1);
   for (const [k2, v] of by) total.set(k2, (total.get(k2) ?? 0) + v);
-  console.log(`bot ${k + 1} ${diffs[k]}: wish flips/min ${perMin(s.wishFlips.length)}, vel flips/min ${perMin(s.velFlips.length)}, ` +
-    `episodes ${s.episodes.length}, osc ${s.oscSec.toFixed(1)} s of ${s.aliveSec.toFixed(0)} alive; flips by src ${[...by].sort((a, b) => b[1] - a[1]).map(([a, b]) => `${a}:${b}`).join(' ')}`);
+  console.log(`bot ${k + 1} ${diffs[k]}: rapid flips/min ${perMin(s.rapidFlips.length)}, wish flips/min ${perMin(s.wishFlips.length)}, vel flips/min ${perMin(s.velFlips.length)}, ` +
+    `episodes ${s.episodes.length}, osc ${s.oscSec.toFixed(1)} s of ${s.aliveSec.toFixed(0)} alive; rapid flips by src ${[...by].sort((a, b) => b[1] - a[1]).map(([a, b]) => `${a}:${b}`).join(' ')}`);
   for (const e of s.episodes.slice(0, showEp)) {
     const p = tracks[k][e.i0];
     console.log(`   ep t=${(e.i0 * DT).toFixed(1)}-${(e.i1 * DT).toFixed(1)} at (${p.x.toFixed(1)},${p.z.toFixed(1)}) goal ${goals[k][e.i0]} flips ${e.flips.length}: ${e.flips.map((i) => srcs[k][i]).join(' ')}`);
   }
 }
-console.log('flips by source (all bots):', [...total].sort((a, b) => b[1] - a[1]).map(([a, b]) => `${a}:${b}`).join(' '));
+console.log('rapid flips by source (all bots):', [...total].sort((a, b) => b[1] - a[1]).map(([a, b]) => `${a}:${b}`).join(' '));
