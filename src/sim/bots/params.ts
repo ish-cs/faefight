@@ -252,7 +252,7 @@ export type GunSkill = { recoilComp: number; burstShots: number; burstPause: num
  *   reload + reloadSlack s).
  * - coverFirst: chance (per incident) to break line of sight before healing; hideSec: give up hiding after this long
  *   and heal in the open. Below PRO 0: measured, hiding to heal dragged hard-vs-hard duels out (decisive 29/40 vs 37/40
- *   on main, ×40) while healing where I stand kept them decisive (39/40). PRO hides (cover at hand or a thrown wall) half the time.
+ *   on main, ×40) while healing where I stand kept them decisive (39/40). PRO too on the post-seal-fix main (pro-vs-hard decisive).
  * - hideM: cover this close (or a wall I can throw) is worth breaking line of sight for; farther, heal where I stand.
  * - reHealSec: after a mid-fight heal, no other one for this long unless a burst lands (one heal per exchange: fights end).
  * - pressLead: mid-fight, my hp + shield this far above the enemy in front of me: push the kill instead of healing.
@@ -393,11 +393,11 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
 };
 
 export const HEAL: HealParams = {
-  stock: D(1, 1, 2, 2), stockAt: D(600, 350, 220, 200), stockPer: 350, stockMax: 3,
+  stock: D(1, 1, 1, 2), stockAt: D(600, 350, 220, 200), stockPer: 350, stockMax: 3,
   safeHp: D(40, 55, 65, 70), quietSec: 2.5,
-  fightHp: D(25, 40, 50, 55), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
-  reloadWeight: D(0, 0.4, 0.8, 1), reloadSlack: 0.3,
-  coverFirst: D(0, 0, 0, 0.5), hideSec: 2.5,
+  fightHp: D(25, 35, 40, 45), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
+  reloadWeight: D(0, 0.3, 0.5, 1), reloadSlack: 0.3,
+  coverFirst: D(0, 0, 0, 0), hideSec: 2.5,
   reHealSec: 8, pressLead: 25, punishHp: 40, hideM: 4,
   detourM: 18,
   slotValue: 0.5,
