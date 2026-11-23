@@ -217,7 +217,7 @@ export class Match implements MatchApi {
         this.supportDirty = true;
       },
       grounded: (id) => this.s.players.get(id)?.mv?.grounded ?? false,
-      onKnockback: (id, dv) => {
+      onKnockback: (id, dv, rocketJump) => {
         // The movement model keeps momentum (fully in the air, braking on the ground), so a blast is just a
         // velocity change; an upward one lifts you off the ground (rocket jump).
         const p = this.s.players.get(id);
@@ -225,6 +225,7 @@ export class Match implements MatchApi {
         p.vel.x += dv.x; p.vel.z += dv.z;
         p.vel.y = Math.max(p.vel.y, 0) + dv.y;
         if (dv.y > 0 && p.mv) { p.mv.grounded = false; p.mv.airTime = 1; }
+        if (rocketJump && dv.y > 0) p.rocketJumpAt = this.s.time;
       },
       castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, true) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
       onKill: (victim, killer, cause) => {
@@ -748,7 +749,10 @@ export class Match implements MatchApi {
       speedMult(p, this.s.time) * adsSpeed(p));
     mv.ack = cmd.seq;
     p.stamina = mv.stamina;
-    if (landingSpeed > LIFECYCLE.safeFallSpeed)
+    // The landing after your own rocket jump never hurts; the flag is spent on touchdown (or after 6 s).
+    const rocketJump = p.rocketJumpAt !== undefined && this.s.time - p.rocketJumpAt < 6;
+    if (landingSpeed > 0 || !rocketJump) delete p.rocketJumpAt;
+    if (landingSpeed > LIFECYCLE.safeFallSpeed && !rocketJump)
       this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time, { bypassShield: true, weapon: 'fall' }));
   }
 
