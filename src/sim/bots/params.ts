@@ -245,13 +245,13 @@ export type WeaponParams = { holdSec: number; rocketHoldSec: number; threatM: nu
  * - medkits / scaffolds: restock loadout counts by skill (0 = not in the loadout).
  * - keep: carried cash the loadout tops up on respawn (pocket money for a potion seller off-island).
  * - buy: >= 0.5 lets the vault buy what it lacks for the loadout with vault cash.
- * - carry: carried cash a bank trip leaves on me; bankMin: carried excess worth a trip to the vault.
+ * - carry: carried cash a bank trip leaves on me, by skill (a weak player carries too much); bankMin: carried excess worth a trip to the vault.
  * - upgradeAt: cash (carried + banked) to have to spare beyond the next vault level's price before buying it.
  * - upgradeScore: goal score of the trip to the vault to buy that level.
  */
 export type VaultParams = {
   medkits: Record<Difficulty, number>; scaffolds: Record<Difficulty, number>; keep: Record<Difficulty, number>;
-  buy: Record<Difficulty, number>; carry: number; bankMin: number; upgradeAt: Record<Difficulty, number>; upgradeScore: number;
+  buy: Record<Difficulty, number>; carry: Record<Difficulty, number>; bankMin: number; upgradeAt: Record<Difficulty, number>; upgradeScore: number;
 };
 
 export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; vault: VaultParams };
@@ -365,7 +365,7 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
 export const WEAPON: WeaponParams = { holdSec: 0.6, rocketHoldSec: 2.5, threatM: 12, hurtSec: 1, shotgunHyst: 2 };
 
 export const VAULT: VaultParams = {
-  medkits: D(0, 1, 2, 2), scaffolds: D(0, 0, 6, 8), keep: D(0, 0, 40, 40), buy: D(0, 0, 1, 1), carry: 25, bankMin: 80,
+  medkits: D(0, 1, 2, 2), scaffolds: D(0, 0, 0, 0), keep: D(0, 0, 40, 40), buy: D(0, 0, 1, 1), carry: D(250, 60, 25, 25), bankMin: 80,
   upgradeAt: D(Infinity, 900, 500, 400), upgradeScore: 0.5,
 };
 
@@ -439,7 +439,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
   ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
   ['vault.medkits.*', [0, 4]], ['vault.scaffolds.*', [0, 15]], ['vault.keep.*', [0, 150]], ['vault.buy.*', [0, 1]],
-  ['vault.carry', [0, 150]], ['vault.bankMin', [30, 300]], ['vault.upgradeAt.*', [100, 2000]], ['vault.upgradeScore', [0.1, 1]],
+  ['vault.carry.*', [0, 400]], ['vault.bankMin', [30, 300]], ['vault.upgradeAt.*', [100, 2000]], ['vault.upgradeScore', [0.1, 1]],
   ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {
