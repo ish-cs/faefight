@@ -401,7 +401,7 @@ export const HEAL: HealParams = {
   reHealSec: 8, pressLead: 25, punishHp: 40, hideM: 4,
   detourM: 18,
   slotValue: 0.5,
-  keep: { pistol: 0.25, trap: 0.3, ramp: 0.35, speedPotion: 0.15, grapple: 0.45, sandbags: 0.4, grenade: 0.6 },
+  keep: { pistol: 0.25, trap: 0.3, ramp: 0.35, speedPotion: 0.15, grapple: 0.8, sandbags: 0.4, grenade: 0.6 },
 };
 
 export const WEAPON: WeaponParams = { holdSec: 0.6, rocketHoldSec: 2.5, threatM: 12, hurtSec: 1, shotgunHyst: 2 };

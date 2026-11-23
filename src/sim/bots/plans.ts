@@ -116,7 +116,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   // Short of heals with none slotted (and the cash for one): the last free slot is kept for a medkit.
   const healShort = cash >= MEDKIT.price && inv.medkits + (inv.potions.healPotion ?? 0) < (needs.medkits ?? 0) && !p.hotbar.includes('medkit') && !p.hotbar.includes('healPotion');
   const room = (k: HotbarItem) => countOf(inv, k) > 0 ||
-    (canAdd(p.hotbar, k) && (!healShort || k === 'medkit' || p.hotbar.filter((x) => x === null).length >= 2));
+    (canAdd(p.hotbar, k) && (!healShort || k === 'medkit' || k === 'grapple' || p.hotbar.filter((x) => x === null).length >= 2));
   if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   // The first heal before bridging gear when the cash covers the decks too (it never holds up a crossing).
   const heals = inv.medkits + (inv.potions.healPotion ?? 0);
