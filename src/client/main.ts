@@ -1106,15 +1106,38 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     sky.setDynamicScale(k.res);
   };
   let govQuality = sky.quality;
-  const offSettings = settings.subscribe((st) => {
+  /** Mid-match preset / competitive change: recompile time-sliced while drawing is held (warmup.recompileScene). */
+  let recompiling = false, recompileAgain = false, chainKey = `${sky.quality}/${sky.isCompetitive}`;
+  const recompileAfterChange = () => {
+    recompiling = true;
+    sky.busy = true;
+    warmLoop.paused = true; // before the next frame: drawn now, it would build every invalidated material at once
+    // a microtask later: the quality key saves the preset (this callback) before the sky rebuilds its chain
+    void Promise.resolve().then(() => mods.warmup.recompileScene(renderer, { setPaused: (on) => { warmLoop.paused = on; } }))
+      .catch((err) => console.warn('[render] graphics-change recompile failed; frames will build shaders as drawn', err))
+      .finally(() => {
+        warmLoop.paused = false;
+        recompiling = false;
+        sky.busy = false;
+        // a settings change that arrived meanwhile was held back (a rebuild mid-compile leaves the compile's
+        // pipelines for a chain that no longer exists): apply it now
+        if (recompileAgain) { recompileAgain = false; applySettings(settings.get()); }
+      });
+  };
+  const applySettings = (st: ReturnType<typeof settings.get>) => {
+    if (recompiling) { recompileAgain = true; return; }
     sky.setQuality(st.video.quality);
     sky.setResolutionScale(st.video.resolutionScale);
     sky.setCompetitive(st.video.competitive);
+    // the quality key sets the sky's preset before saving it, so compare with what was last compiled, not the sky
+    const key = `${st.video.quality}/${st.video.competitive}`;
+    if (key !== chainKey) { chainKey = key; if (revealed) recompileAfterChange(); }
     governor.enabled = st.video.dynamicResolution;
     perfDetail = st.video.perfDetail || DEBUG;
     if (sky.quality !== govQuality) { govQuality = sky.quality; governor.reset(); govSkip(); }
     applyGovernor();
-  });
+  };
+  const offSettings = settings.subscribe(applySettings);
   /** Shift + the FPS key (F3 / `): perf detail under the FPS counter (Settings → Video → Performance stats). */
   let perfDetail = settings.get().video.perfDetail || DEBUG, detailShown = false;
 
@@ -1128,7 +1151,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   });
   const revealTimer = setTimeout(() => { console.warn('[loading] warm-up took too long; showing the game anyway'); reveal(); }, REVEAL_TIMEOUT_MS);
   /** Frame-loop hooks for the warm-up (warmup.ts): pause drawing, count drawn frames, run a hook before each. */
-  const warmLoop = { paused: false, left: 0, before: null as (() => void) | null, done: null as (() => void) | null };
+  // Paused from the start: a frame drawn before the warm-up (the loading screen covers the canvas anyway) built every
+  // visible material synchronously in one frame (~1.3 s main-thread stall at 2× DPR, the browser froze). The warm-up
+  // compiles them time-sliced instead and unpauses; reveal() unpauses too, in case the warm-up never ran.
+  const warmLoop = { paused: true, left: 0, before: null as (() => void) | null, done: null as (() => void) | null };
   function maybeWarm() {
     if (warmStarted || !snap || !map.length || !charsReady) return;
     warmStarted = true;
@@ -1142,12 +1168,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       };
       mods.warmup.warmUp(renderer, loop, fpv, (f, label) => loading.progress('shaders', f, label))
         .catch((err) => console.warn('[loading] shader warm-up failed; continuing', err))
-        .finally(() => { warmed = true; });
+        .finally(() => { warmed = true; warmLoop.paused = false; });
     });
   }
   function reveal() {
     if (revealed) return;
     revealed = true;
+    warmLoop.paused = false;
     clearTimeout(revealTimer);
     console.info(`[loading] match ready in ${Math.round(performance.now() - loadStart)} ms`);
     loading.progress('frames', 1, 'Ready');

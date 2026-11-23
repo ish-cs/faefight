@@ -282,12 +282,15 @@ describe('bridge craft: alternate route', () => {
 });
 
 describe('skill shows in how much bots build', () => {
-  test('mixed 8-bot FFA: PRO places more pieces than easy, matches stay decisive', async () => {
+  // Coordinator's definition (one for every branch): summed over seeds 2–7, PRO places more pieces than Easy and at
+  // least 2× as many, and Hard at least 1.3× Easy. A single seed hung on one or two pieces even on main (14 vs 13).
+  const SEEDS = [2, 3, 4, 5, 6, 7];
+  test('mixed 8-bot FFA over seeds 2–7: PRO > Easy and ≥ 2× Easy, Hard ≥ 1.3× Easy, matches stay decisive', async () => {
     const diffs: Difficulty[] = ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'];
     const counts: Record<Difficulty, number> = { easy: 0, medium: 0, hard: 0, pro: 0 };
     const lines: string[] = [];
     let decisive = 0;
-    for (const seed of [2]) {
+    for (const seed of SEEDS) {
       const bots = new Map<number, Bot>();
       const m = await Match.create({ players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed },
         { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.set(id, b); return b; } });
@@ -303,12 +306,14 @@ describe('skill shows in how much bots build', () => {
         counts[b.difficulty] += per.get(id) ?? 0;
         lines.push(`  #${id} ${b.difficulty.padEnd(6)} ${b.personality.archetype.padEnd(9)} ${per.get(id) ?? 0} pieces`);
       }
-      lines.unshift(`seed ${seed}: winner ${snap.winner} at ${(snap.time / 60).toFixed(1)} min`);
+      lines.push(`seed ${seed}: winner ${snap.winner} at ${(snap.time / 60).toFixed(1)} min`);
     }
-    console.log([...lines, `by skill: ${JSON.stringify(counts)}`].join('\n'));
+    console.log([...lines, `by skill: ${JSON.stringify(counts)}, decisive ${decisive}/${SEEDS.length}`].join('\n'));
     expect(counts.pro).toBeGreaterThan(counts.easy);
-    expect(decisive).toBe(1);
-  }, 600_000);
+    expect(counts.pro).toBeGreaterThanOrEqual(2 * counts.easy);
+    expect(counts.hard).toBeGreaterThanOrEqual(1.3 * counts.easy);
+    expect(decisive).toBe(SEEDS.length);
+  }, 1_800_000);
 
   test('skill table is ordered: better players cover more often, sooner, cleaner', () => {
     const order: Difficulty[] = ['easy', 'medium', 'hard', 'pro'];
