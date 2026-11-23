@@ -16,7 +16,7 @@ const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e)));
 await page.addInitScript((q) => {
-  try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, video: { quality: q, dynamicResolution: false }, onboarding: { howToSeen: true } })); } catch { /* fresh profile */ }
+  try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, video: { quality: q, dynamicResolution: false }, audio: { muted: true }, onboarding: { howToSeen: true } })); } catch { /* fresh profile */ }
 }, quality);
 await page.goto(`${url}/?debug=1&bots=7`);
 await page.getByTestId('play-easy').click();
@@ -67,12 +67,25 @@ console.log('sealed', JSON.stringify(await state()));
 const far = (p) => Math.hypot(map[p.island].center.x - home.center.x, map[p.island].center.z - home.center.z);
 const victim = snap0.players.filter((p) => p.id !== humanId && p.id !== bot.id).sort((a, b) => far(a) - far(b))[3];
 await overview(); await page.waitForTimeout(500);
+// Slow the animation 10× so the screenshots (each ~1 s at ultra) land inside it.
+await page.evaluate(() => { window.__faefight.renderer.beacons.timeScale = 0.1; });
 await dbg('eliminate', victim.id);
-await page.waitForTimeout(250); await shot('day-shutdown-burst');
+await page.waitForTimeout(1000); await shot('day-shutdown-burst');
 console.log('shutdown', JSON.stringify(await state()));
-await page.waitForTimeout(550); await shot('day-shutdown-collapse');
+await page.waitForTimeout(7000); await shot('day-shutdown-collapse');
 console.log('shutdown', JSON.stringify(await state()));
+await page.evaluate(() => { window.__faefight.renderer.beacons.timeScale = 1; });
 await page.waitForTimeout(2000); await shot('day-shutdown-gone');
+
+// Name tags next to their HUD chips: line five bots up in front of the camera.
+const eye = [ux * (L - 14), home.groundY + 1.8, uz * (L - 14)];
+await view(eye, [ux * (L - 24), home.groundY + 1.8, uz * (L - 24)]);
+const lineup = snap0.players.filter((p) => p.id !== humanId && p.id !== victim.id).slice(0, 6);
+for (let k = 0; k < lineup.length; k++) {
+  const side = (k - (lineup.length - 1) / 2) * 2.2, d = L - 24;
+  await dbg('teleport', ux * d - uz * side, uz * d + ux * side, lineup[k].id);
+}
+await page.waitForTimeout(600); await shot('day-tags');
 
 // Night (clear), then the storm (sudden death: every bunker sealed together).
 await dbg('time', 870);

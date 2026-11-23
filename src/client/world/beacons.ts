@@ -14,12 +14,13 @@ import type { SkyLighting } from './sky';
 /** Beam height (m): reaches well above every roof, mast and the cinematic drone's orbit. */
 const HEIGHT = 320;
 /** Beam radius (m) of an open bunker; sealed ones shrink to SEALED_W of it. */
-const RADIUS = 1.5;
+const RADIUS = 1.8;
 const SEALED_W = 0.45;
 /** Far beams widen to stay at least ~this many metres per metre of distance (a few pixels wide anywhere on the map). */
-const MIN_ANGULAR = 0.004;
-/** WebGPURenderer tone-maps unlit materials: pre-boost so the beam reads. */
-const BOOST = 2.4;
+const MIN_ANGULAR = 0.007;
+/** WebGPURenderer tone-maps unlit materials: pre-boost so the beam glows at night. By day a big boost would
+ *  tone-map to white, so it drops to DAY_BOOST and the beam paints over the sky instead (`cover`). */
+const BOOST = 2.4, DAY_BOOST = 1.1;
 const MAX = 16;
 /** ?nobeacons: perf A/B (tests/visual/perfMatch.mjs --query=nobeacons). */
 const NO_BEACONS = perfOff('nobeacons');
@@ -47,13 +48,23 @@ export class IslandBeacons {
   private readonly parA = new THREE.InstancedBufferAttribute(this.par, 4).setUsage(THREE.DynamicDrawUsage);
   /** Day/night/weather brightness. */
   private readonly gain = uniform(1);
+  /** How much the beam covers what's behind it (0 = purely additive glow): by day, additive light on a bright sky
+   *  washes out to white, so it partly paints over the sky in its own colour instead. Same pipeline either way. */
+  private readonly cover = uniform(0);
+  private readonly boost = uniform(BOOST);
+  /** Debug/screenshots: slow the animations down (tests/visual/beacons.mjs). */
+  timeScale = 1;
 
   constructor(private sky: SkyLighting, scene: THREE.Scene) {
     const P = instancedBufferAttribute(this.posA, 'vec4') as unknown as THREE.Node<'vec4'>;
     const C = instancedBufferAttribute(this.colA, 'vec4') as unknown as THREE.Node<'vec4'>;
     const S = instancedBufferAttribute(this.parA, 'vec4') as unknown as THREE.Node<'vec4'>;
     const seal = S.x, cut = S.y, flash = S.z, seed = C.w;
-    const mat = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, fog: false });
+    const mat = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, depthTest: true, blending: THREE.CustomBlending, fog: false });
+    // Premultiplied: out = rgb + dst × (1 − a). a = 0 → additive glow (night); a > 0 → tints over a bright day sky.
+    mat.blendSrc = mat.blendSrcAlpha = THREE.OneFactor;
+    mat.blendDst = mat.blendDstAlpha = THREE.OneMinusSrcAlphaFactor;
+    mat.blendEquation = mat.blendEquationAlpha = THREE.AddEquation;
     mat.name = 'islandBeacon';
 
     // Vertex: an open unit cylinder stretched to the beam; far away it widens so it stays a few pixels across.
@@ -71,7 +82,7 @@ export class IslandBeacons {
     const energy = float(0.72).add(flowA.mul(flowB).mul(0.5));
     // Sealed: dimmer, with brief dropouts like a failing light (two beating sines → irregular off-blinks).
     const blink = sin(time.mul(17).add(seed.mul(5))).mul(sin(time.mul(5.3).add(seed.mul(11))));
-    const sealedLook = float(0.42).mul(float(0.3).add(step(-0.55, blink).mul(0.7)));
+    const sealedLook = float(0.6).mul(float(0.3).add(step(-0.55, blink).mul(0.7)));
     const sealK = mix(float(1), sealedLook, seal);
     // Shutdown: everything above `cut` is gone, with a hot band at the falling edge; the burst brightens it all.
     const below = float(1).sub(smoothstep(cut.sub(0.01), cut, v));
@@ -81,8 +92,8 @@ export class IslandBeacons {
     const near = smoothstep(2, 22, d);
     const far = mix(float(1), float(0.6), smoothstep(150, 900, d));
     const k = core.mul(rise).mul(energy).mul(sealK).mul(below.add(edge)).mul(flash.mul(2.5).add(1)).mul(near).mul(far).mul(this.gain);
-    mat.colorNode = C.xyz.mul(BOOST).add(flash.mul(1.5));
-    mat.opacityNode = k;
+    mat.colorNode = C.xyz.mul(this.boost).add(flash.mul(1.5)).mul(k);
+    mat.opacityNode = k.mul(this.cover).min(0.85);
 
     const cyl = new THREE.CylinderGeometry(1, 1, 1, 20, 1, true).translate(0, 0.5, 0);
     const geo = new THREE.InstancedBufferGeometry();
@@ -120,7 +131,7 @@ export class IslandBeacons {
   /** Per frame. `on` = the Island beacons setting. */
   frame(dt: number, on: boolean) {
     const st = this.states;
-    st.step(dt);
+    st.step(dt * this.timeScale);
     let n = 0;
     if (on && !NO_BEACONS) for (let i = 0; i < st.count && i < this.base.length && n < MAX; i++) {
       const e = st.at(i);
@@ -139,6 +150,9 @@ export class IslandBeacons {
     // Readable by day against a bright sky, soft (not blinding) at night when bloom makes it glow; a bit stronger in
     // the storm's gloom so it cuts through the rain.
     const L = this.sky.lighting;
-    this.gain.value = (1 - 0.45 * L.night) * (1 + 0.2 * L.weather);
+    const day = (1 - L.night) * (1 - L.weather);
+    this.gain.value = (1 + 0.3 * day - 0.35 * L.night) * (1 + 0.6 * L.weather);
+    this.cover.value = 0.85 * day;
+    this.boost.value = BOOST + (DAY_BOOST - BOOST) * day;
   }
 }
