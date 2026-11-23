@@ -13,13 +13,18 @@ const ATTRS = ['position', 'normal', 'uv', 'color', 'pc'] as const;
  * meshes indexed without re-welding vertices (mergeVertices on millions of vertices cost seconds of load).
  */
 export function part(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation = 0xffffff): THREE.BufferGeometry {
-  // indexed with normals: keep only the indexed form; StaticBatch flattens it if the merged mesh stays non-indexed
-  // (two full copies of every part, one always thrown away, were ~300 MB of short-lived buffers while loading)
-  if (geo.index && geo.getAttribute('normal')) return normalise(geo.clone(), m, col);
-  // no normals: the flat-shaded non-indexed copy and the smooth indexed twin differ, so keep both as before
   const g = normalise(geo.index ? geo.toNonIndexed() : geo.clone(), m, col);
   if (geo.index) g.userData.indexed = normalise(geo.clone(), m, col);
   return g;
+}
+
+/**
+ * StaticBatch's part: an indexed source with normals keeps only its indexed form, flattened at build time if the
+ * merged mesh stays non-indexed (two full copies of every part, one always thrown away, were a few hundred MB of
+ * short-lived buffers while the map loads). Without normals the flat and smooth forms differ: part() as before.
+ */
+function batchPart(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation): THREE.BufferGeometry {
+  return geo.index && geo.getAttribute('normal') ? normalise(geo.clone(), m, col) : part(geo, m, col);
 }
 
 /** A part's indexed form, if it has one. */
@@ -136,8 +141,8 @@ export class StaticBatch {
     const key = `${material.uuid}:${+cast}${+receive}`;
     let bin = this.bins.get(key);
     if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
-    bin.parts.push(part(geo, m, col));
-    for (const T of this.copies) bin.parts.push(part(geo, m ? T.clone().multiply(m) : T, col));
+    bin.parts.push(batchPart(geo, m, col));
+    for (const T of this.copies) bin.parts.push(batchPart(geo, m ? T.clone().multiply(m) : T, col));
   }
 
   /** Push a geometry already in merge form (non-indexed; exactly position/normal/uv/color; final space). No copy. */
