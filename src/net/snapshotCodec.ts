@@ -115,6 +115,7 @@ export class SnapshotEncoder {
     if (p.hook) out.hook = { ...p.hook, x: r2(p.hook.x), y: r2(p.hook.y), z: r2(p.hook.z), t0: r3(p.hook.t0), at: r3(p.hook.at) };
     if (!own && !followed) delete (out as Partial<PlayerState>).hookReadyAt;
     delete (out as Partial<PlayerState>).yankedBy; // host bookkeeping (kill credit)
+    delete (out as Partial<PlayerState>).rocketJumpAt; // host bookkeeping (a soft landing after a rocket jump)
     if (own) delete out.stamina; // the owner gets it inside mv (prediction)
     if (followed) {
       // A spectator's view of the player they follow: their whole HUD, but nothing host-side.
