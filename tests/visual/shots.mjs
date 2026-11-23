@@ -8,7 +8,7 @@ const mode = process.argv[3] ?? 'all';
 const base = process.env.LAB_URL ?? 'http://localhost:5299/tests/visual/piece-damage.html';
 mkdirSync(out, { recursive: true });
 
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.log('[page]', m.type(), m.text().slice(0, 300)); });
 page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 500)));

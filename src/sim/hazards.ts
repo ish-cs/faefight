@@ -47,7 +47,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 /** What a non-hazard blast does to hazards: radius and crate damage at the centre. */
 const BLASTS: Record<string, { radius: number; dmg: number }> = {
   grenade: { radius: GRENADE.radius, dmg: GRENADE.dmg },
-  rocket: { radius: ROCKET.radius, dmg: ROCKET.playerDmg },
+  rocket: { radius: ROCKET.radius, dmg: 110 }, // crates keep the pre-2026-11-22 rocket damage (only player damage went x1.5)
   charge: { radius: CHARGE.radius + 1, dmg: 200 },
 };
 

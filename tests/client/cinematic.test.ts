@@ -29,15 +29,15 @@ describe('cinematic interest scoring', () => {
     expect(duelLow).toBeGreaterThan(duelHealthy);
   });
 
-  it('an elimination is the top story and orbits where the victim fell, featuring the killer', () => {
+  it('an elimination is the top story and stays with the killer over the shoulder (no replay)', () => {
     const tr = new InterestTracker();
     const ps = [pl(1), pl(2), pl(3, { kills: 2 })];
     tr.ingest(snap(5, ps));
     const after = [pl(1), pl(2, { alive: false, eliminated: true }), pl(3, { kills: 2 })];
     tr.ingest(snap(6, after, { events: [{ t: 6, type: 'kill', data: { victim: 2, killer: 1 } }, { t: 6, type: 'eliminated', data: { player: 2 } }] }));
     const top = tr.storylines(snap(6.2, after))[0];
-    expect(top).toMatchObject({ reason: 'elimination', playerId: 1, otherId: 2, kind: 'orbit' });
-    expect(top.at).toEqual({ x: 20, y: 0, z: 0 });
+    expect(top).toMatchObject({ reason: 'elimination', playerId: 1, otherId: 2, kind: 'shoulder' });
+    expect(top.at).toBeUndefined();
     // It fades out after a few seconds.
     tr.ingest(snap(20, after));
     expect(tr.storylines(snap(20, after))[0].reason).not.toBe('elimination');
@@ -51,6 +51,13 @@ describe('cinematic interest scoring', () => {
     tr.ingest(snap(6, after, { events: [{ t: 6, type: 'kill', data: { victim: 2, killer: null } }, { t: 6, type: 'eliminated', data: { player: 2 } },
       { t: 6, type: 'elimination', data: { victim: 2, by: 3, assists: [], how: 'trapped', spoils: 200, shares: [[3, 200]] } }] }));
     expect(tr.storylines(snap(6.2, after))[0]).toMatchObject({ reason: 'elimination', playerId: 3, otherId: 2 });
+  });
+
+  it('a duel is a drone shot framing both fighters', () => {
+    const tr = new InterestTracker();
+    const ps = [pl(1, { hp: 40 }), pl(2, { hp: 70 })];
+    tr.ingest(snap(3, ps, { events: [hit(2.9, 1, 2), hit(2.95, 2, 1)] }));
+    expect(tr.storylines(snap(3, ps)).find((l) => l.reason === 'duel')).toMatchObject({ playerId: 1, otherId: 2, kind: 'drone' });
   });
 
   it('a sealed player being hunted, a rocket incoming and sudden death all register', () => {
@@ -67,14 +74,15 @@ describe('cinematic interest scoring', () => {
     expect(lines.find((l) => l.reason === 'rocket')?.playerId).toBe(1); // first in the rocket's path
     const sd = snap(31, ps, { suddenDeath: true, storm: { x: 5, z: 5 } });
     tr.ingest(sd);
-    expect(tr.storylines(sd).find((l) => l.reason === 'suddenDeath')).toMatchObject({ kind: 'drone', at: { x: 5, z: 5 } });
+    expect(tr.storylines(sd).find((l) => l.reason === 'suddenDeath')).toMatchObject({ kind: 'wide', at: { x: 5, z: 5 } });
   });
 
-  it('the dead are never featured (except an orbit on where they fell)', () => {
+  it('the dead are never featured, and nothing is an orbit replay', () => {
     const tr = new InterestTracker();
-    const ps = [pl(1, { alive: false }), pl(2)];
-    tr.ingest(snap(1, ps));
-    for (const l of tr.storylines(snap(1, ps))) if (l.kind !== 'orbit') expect(l.playerId).toBe(2);
+    const ps = [pl(1, { alive: false }), pl(2), pl(3)];
+    tr.ingest(snap(1, [pl(1), pl(2), pl(3)]));
+    tr.ingest(snap(2, ps, { events: [{ t: 2, type: 'kill', data: { victim: 1, killer: 2 } }] }));
+    for (const l of tr.storylines(snap(2, ps))) { expect(l.playerId).not.toBe(1); expect(l.kind).not.toBe('orbit'); }
   });
 });
 
@@ -93,33 +101,57 @@ describe('cinematic director hysteresis', () => {
       const a = Math.floor(t) % 2 === 0;
       return snap(t, [pl(1, { kills: a ? 3 : 0 }), pl(2, { kills: a ? 0 : 3 })]);
     };
-    run(d, 0, 60, mk);
+    run(d, 0, 90, mk);
     expect(shots[0].kind).toBe('wide');
-    for (let i = 2; i < shots.length; i++) expect(shots[i].t - shots[i - 1].t).toBeGreaterThanOrEqual(CUT.minShot - 0.2);
-    // ...but still cuts regularly (max shot length).
-    expect(shots.length).toBeGreaterThanOrEqual(Math.floor(60 / CUT.maxShot));
-    expect(shots.length).toBeLessThanOrEqual(Math.ceil(60 / CUT.minShot) + 1);
+    for (let i = 2; i < shots.length; i++) expect(shots[i].t - shots[i - 1].t).toBeGreaterThanOrEqual(CUT.minShot);
+    // ...but still cuts regularly (max shot length + anticipation).
+    expect(shots.length).toBeGreaterThanOrEqual(Math.floor(90 / (CUT.maxShot + CUT.anticipate)));
+    expect(shots.every((s) => s.kind !== 'orbit')).toBe(true);
   });
 
-  it('a big moment (elimination) interrupts a shot early; a small change does not', () => {
+  it('decides each cut ahead: pending names the next subject ~1 s before the shot starts', () => {
+    const d = new Director();
+    const shots: ShotEvent[] = [];
+    const pend: { at: number; seenAt: number; id: number }[] = [];
+    d.on('shot', (e) => shots.push(e));
+    d.setActive(true);
+    for (let t = 0; t <= 60; t += 1 / 30) {
+      d.update(snap(t, [pl(1), pl(2), pl(3)]));
+      if (d.pending && !pend.some((p) => p.at === d.pending!.at)) pend.push({ at: d.pending.at, seenAt: t, id: d.pending.playerId });
+    }
+    expect(pend.length).toBeGreaterThan(1);
+    for (const p of pend) {
+      const s = shots.find((x) => Math.abs(x.t - p.at) < 0.05);
+      expect(s, `a shot lands at ${p.at.toFixed(2)}`).toBeDefined();
+      expect(s!.playerId).toBe(p.id);
+      expect(p.at - p.seenAt).toBeGreaterThan(CUT.anticipate - 0.1);
+    }
+  });
+
+  it('follows a fight until it resolves, then stays with the winner (no kill replay)', () => {
     const d = new Director();
     const shots: ShotEvent[] = [];
     d.on('shot', (e) => shots.push(e));
     d.setActive(true);
-    const quiet = (t: number) => snap(t, [pl(1, { kills: 1 }), pl(2), pl(3)]);
-    run(d, 0, 6, quiet); // past the opening
-    const n = shots.length;
-    const startT = shots[n - 1].t;
-    run(d, 6 + 1 / 30, startT + 2, quiet);
-    expect(shots.length).toBe(n);
-    // Player 3 is eliminated by player 2.
-    const t0 = startT + 2.1;
-    d.update(snap(t0, [pl(1, { kills: 1 }), pl(2, { kills: 1 }), pl(3, { alive: false, eliminated: true })],
-      { events: [{ t: t0, type: 'kill', data: { victim: 3, killer: 2 } }, { t: t0, type: 'eliminated', data: { player: 3 } }] }));
-    run(d, t0 + 0.2, t0 + 0.5, (t) => snap(t, [pl(1, { kills: 1 }), pl(2, { kills: 1 }), pl(3, { alive: false, eliminated: true })]));
-    const last = shots[shots.length - 1];
-    expect(last).toMatchObject({ reason: 'elimination', playerId: 2, kind: 'orbit' });
-    expect(last.t - startT).toBeLessThan(CUT.minShot);
+    const fighters = (t: number, events: InterestSnap['events'] = []) =>
+      snap(t, [pl(1, { hp: 50 }), pl(2, { hp: 45 }), pl(3, { kills: 4 }), pl(4, { kills: 4 })], { events });
+    // 1 and 2 trade hits every half second for 35 s; 3 and 4 are the (quiet) leaders.
+    let next = 0;
+    for (let t = 0; t <= 35; t += 1 / 30) {
+      const ev = t >= next ? [hit(t, 1, 2), hit(t, 2, 1)] : [];
+      if (t >= next) next = t + 0.5;
+      d.update(fighters(t, ev));
+    }
+    const fightShots = shots.filter((s) => s.t > CUT.opening + CUT.anticipate);
+    expect(fightShots.length).toBeGreaterThan(0);
+    for (const s of fightShots) expect([1, 2]).toContain(s.playerId); // never left for the leaders
+    // 1 kills 2: the camera stays with 1, over the shoulder.
+    const t0 = 35.1;
+    d.update(snap(t0, [pl(1, { hp: 50, kills: 1 }), pl(2, { alive: false, eliminated: true }), pl(3, { kills: 4 }), pl(4, { kills: 4 })],
+      { events: [{ t: t0, type: 'kill', data: { victim: 2, killer: 1 } }, { t: t0, type: 'eliminated', data: { player: 2 } }] }));
+    run(d, t0 + 1 / 30, t0 + 6, (t) => snap(t, [pl(1, { hp: 50, kills: 1 }), pl(2, { alive: false, eliminated: true }), pl(3, { kills: 4 }), pl(4, { kills: 4 })]));
+    expect(d.shot).toMatchObject({ playerId: 1 });
+    expect(shots.every((s) => s.kind !== 'orbit')).toBe(true);
   });
 
   it('summary lists the featured player and top storylines; active events fire', () => {
@@ -142,13 +174,14 @@ describe('cinematic director hysteresis', () => {
 });
 
 describe('cinematic director quiet moments', () => {
-  it('rotates through players when nothing is happening', () => {
+  it('rotates through players when nothing is happening, mostly over the shoulder', () => {
     const d = new Director();
-    const seen = new Set<number>(), kinds = new Set<string>();
-    d.on('shot', (e) => { seen.add(e.playerId); if (e.t > CUT.opening) kinds.add(e.kind); });
+    const seen = new Set<number>();
+    const kinds: string[] = [];
+    d.on('shot', (e) => { seen.add(e.playerId); if (e.t > CUT.opening) kinds.push(e.kind); });
     d.setActive(true);
     for (let t = 0; t <= 120; t += 1 / 30) d.update(snap(t, [pl(1), pl(2), pl(3), pl(4)]));
     expect(seen.size).toBeGreaterThanOrEqual(4);
-    expect([...kinds].sort()).toEqual(['shoulder', 'wide']); // and the angle keeps changing
+    expect(kinds.filter((k) => k === 'shoulder').length).toBeGreaterThan(kinds.length / 2);
   });
 });

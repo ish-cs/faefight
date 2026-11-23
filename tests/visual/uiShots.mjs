@@ -10,7 +10,7 @@ const only = process.argv[4] ? new Set(process.argv[4].split(',')) : null;
 const out = 'docs/screens';
 mkdirSync(out, { recursive: true });
 const want = (n) => !only || only.has(n);
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 const seen = { v: 2, onboarding: { howToSeen: true } };
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 await ctx.addInitScript((s) => { if (!localStorage.getItem('faefight.settings.v1')) localStorage.setItem('faefight.settings.v1', s); }, JSON.stringify(seen));

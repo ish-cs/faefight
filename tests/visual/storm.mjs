@@ -9,7 +9,7 @@ const prefix = process.argv[2] ?? 'storm';
 const mode = process.argv[3] ?? 'all';
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
 const SD = 900;
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
 page.setDefaultTimeout(240_000);
 const errors = [];

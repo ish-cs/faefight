@@ -6,7 +6,7 @@ const out = process.argv[2] ?? 'docs/screens';
 const ts = (process.argv[3] ?? '1.0').split(',');
 const base = process.env.LAB_URL ?? 'http://localhost:5332';
 const extra = process.env.LAB_QS ? `&${process.env.LAB_QS}` : '';
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 for (const t of ts) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 400)));

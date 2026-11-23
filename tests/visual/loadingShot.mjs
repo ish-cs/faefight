@@ -4,7 +4,7 @@ import { chromium } from '@playwright/test';
 
 const base = process.argv[2] ?? 'http://localhost:5199';
 const out = process.argv[3] ?? 'test-results/loading';
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 for (const [tag, viewport] of [['desktop', { width: 1440, height: 900 }], ['narrow', { width: 390, height: 760 }]]) {
   const page = await browser.newPage({ viewport });
   page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });

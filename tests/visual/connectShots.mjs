@@ -9,7 +9,7 @@ const prefix = process.argv[3] ?? 'connect';
 const base = process.env.LAB_URL ?? 'http://localhost:5301/tests/visual/connect.html';
 mkdirSync(out, { recursive: true });
 
-const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
+const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.log('[page]', m.type(), m.text().slice(0, 400)); });
 page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 800)));

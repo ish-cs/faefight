@@ -3,7 +3,7 @@ import { chromium } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 const [url, out, prefix] = process.argv.slice(2);
 mkdirSync(out, { recursive: true });
-const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 500)));
 await page.goto(url);

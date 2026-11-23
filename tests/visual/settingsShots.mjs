@@ -4,7 +4,7 @@ import { chromium } from '@playwright/test';
 
 const base = process.argv[2] ?? 'http://localhost:5199';
 const out = process.argv[3] ?? 'docs/screens';
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });
 

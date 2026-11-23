@@ -61,7 +61,7 @@ The host picks the **Mode** in the game settings: Free-for-all, **2v2v2v2**, **3
 | Key | Action |
 |---|---|
 | WASD / Shift / Space | Move / sprint / jump |
-| Mouse | Aim (click to capture) · LMB fire / place / throw · RMB aim down sights (zoom; rifle 2x scope) · R reload |
+| Mouse | Aim (click to capture) · LMB fire / place / throw · RMB aim down sights (zoom; rifle 2x scope; Ctrl too, on by default on Mac; hold or toggle in Settings) · R reload |
 | 1–9 / wheel | Select hotbar slot: a gun to shoot, a piece to build (click places), a grenade/charge (click throws/places), a medkit (click: +50 HP after 2 s), a potion (click to drink), an empty slot for fists |
 | Q / Ctrl+Q (or Shift+Q) | Drop one from the selected slot / drop the whole stack |
 | I | Inventory: release the mouse and drag hotbar slots to reorder (I again or click the game to resume) |
