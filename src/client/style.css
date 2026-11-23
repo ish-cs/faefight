@@ -637,3 +637,7 @@ canvas.shake { animation: screen-shake 0.55s ease-out; }
 }
 .commentary-caption.on { opacity: 1; transform: translate(-50%, 0); }
 .commentary-caption[data-persona="colour"] { border-left-color: var(--c-teal, #1fc9b6); font-weight: 600; }
+.commentary-status {
+  position: fixed; right: 16px; bottom: 16px; padding: 6px 10px; border-radius: 6px; background: rgba(4, 11, 17, 0.72);
+  font-family: var(--ff-body, inherit); font-size: var(--fs-xs, 12px); color: var(--c-text-dim, #cfc9bf); pointer-events: none; z-index: 40;
+}

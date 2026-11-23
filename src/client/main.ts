@@ -1756,6 +1756,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
       commentary: () => commentary.commentator.log,
+      commentaryVoice: () => ({ state: commentary.neuralState, neural: commentary.tts.neuralActive, synthMs: commentary.tts.neural?.synthMs ?? [] }),
+      commentaryOn: (on: boolean) => settings.update((d) => { d.audio.commentaryOn = on; }),
       killcam: () => killcam.info(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),

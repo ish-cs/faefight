@@ -12,6 +12,7 @@
  */
 import type { MatchEvent, PlayerState, Snapshot } from '../../../sim/types';
 import { fill, KEY_VARS, LINES, PERSONA, weaponPhrase, type LineKey, type Vars } from './lines';
+import { Narrative, type NarrativeHost } from './narrative';
 import type { Persona, Tts } from './tts';
 
 export const REPEAT_SEC = 180;
@@ -92,12 +93,23 @@ export class Commentator {
   private leader: number | null = null;
   private allSealedSaid = false;
   private colourTopic = 0;
+  /** Quiet moments rotate: narrative (strategy, memory) twice, then stats colour. */
+  private narrativeTurn = 0;
   private readonly now: () => number;
   private readonly rng: () => number;
+  /** Storylines, predictions and analysis (narrative.ts). */
+  readonly narrative: Narrative;
 
   constructor(private opts: CommentatorOpts) {
     this.now = opts.now ?? (() => performance.now() / 1000);
     this.rng = opts.rng ?? Math.random;
+    this.narrative = new Narrative({
+      say: (k, v, p, age) => this.say(k, v, p, age),
+      name: (id) => this.name(id),
+      ready: (tag, sec) => this.ready(tag, sec),
+      rng: () => this.rng(),
+      unready: (tag: string) => this.cooldown.delete(tag),
+    } as NarrativeHost);
   }
 
   setActive(on: boolean) {
@@ -117,6 +129,7 @@ export class Commentator {
     this.started = false; this.anyKill = false; this.firstTime = null; this.leader = null; this.allSealedSaid = false;
     for (const m of [this.lastHit, this.hurtAt, this.killTimes, this.killedBy, this.escapedAt, this.cooldown]) m.clear();
     this.drinking.clear();
+    this.narrative.reset();
   }
 
   // ---- input ----
@@ -134,6 +147,7 @@ export class Commentator {
     const elimInBatch = new Set<number>();
     for (const e of s.events) if (e.type === 'eliminated') elimInBatch.add(e.data.player as number);
     const killedInBatch = new Set<number>();
+    this.narrative.onSnapshot(s);
     for (const e of s.events) this.onEvent(e, s, now, elimInBatch, killedInBatch);
     this.watchHeals(s, now);
     this.watchLeader(s);
@@ -143,6 +157,9 @@ export class Commentator {
 
   /** The cinematic director cut to a new shot: low-priority scene-setting line (events speak louder). */
   onShot(e: ShotEvent) {
+    this.narrative.featured = e.playerId;
+    // The camera picked someone: sometimes the colour commentator reads what they're up to.
+    if (this.ready('shotPredict', 20) && this.rng() < 0.5 && this.narrative.predictFor(e.playerId)) return;
     const key = SHOT_KEY[e.reason];
     if (!key || !this.ready(`shot:${e.reason}`, 15)) return;
     const a = this.name(e.playerId);
@@ -158,6 +175,7 @@ export class Commentator {
         const target = d.target as number;
         this.lastHit.set(target, { by: d.by as number | null, weapon: d.weapon as string | undefined, part: d.part as string | undefined, pos: d.pos as never });
         this.hurtAt.set(target, now);
+        this.narrative.onHit(target, d.by as number | null, s.time);
         const victim = this.players.get(target);
         if (d.weapon === 'rocket' && typeof d.by === 'number' && d.by !== target && (d.amount as number) >= 35 && victim && victim.hp > 0 && this.ready('rocketHit', 10))
           this.say('rocketHit', { a: this.name(d.by), b: this.name(target) }, 1);
@@ -170,12 +188,14 @@ export class Commentator {
         const left = s.players.filter((p) => !p.eliminated);
         if (left.length === 2) this.say('finalTwo', { a: this.name(left[0].id), b: this.name(left[1].id) }, TOP);
         else if (left.length > 2) this.say('eliminated', { a: this.name(id), n: left.length }, TOP);
+        this.narrative.onEliminated(id);
         break;
       }
       case 'sealed': {
         const owner = d.owner as number | null, by = d.by as number | null;
         if (owner === null || by === null || by === owner) break; // sudden-death closure / own pieces: not a play
         this.say('sealed', { a: this.name(by), b: this.name(owner) }, 2);
+        this.narrative.onSealed(by, owner, s.time);
         break;
       }
       case 'unsealed': {
@@ -191,6 +211,7 @@ export class Commentator {
       case 'escaped': {
         const id = d.player as number;
         this.escapedAt.set(id, now);
+        this.narrative.onEscaped(id);
         // The sim can re-trap and free the same player in quick succession: call it once.
         if (this.ready(`escaped:${id}`, 45)) {
           const a = this.name(id);
@@ -213,6 +234,7 @@ export class Commentator {
         const others = s.players.filter((p) => p.id !== w).sort((x, y) => y.kills - x.kills);
         const mins = Math.max(1, Math.round((s.time - this.startTime) / 60));
         this.say('recap', { a: this.name(w), b: others[0] ? this.name(others[0].id) : 'the field', n: this.players.get(w)?.kills ?? 0, g: mins }, 2, 20);
+        this.narrative.postMatch(w);
         break;
       }
       default: break;
@@ -251,6 +273,8 @@ export class Commentator {
       const left = s.players.filter((p) => !p.eliminated);
       if (left.length === 2) this.say('finalTwo', { a: this.name(left[0].id), b: this.name(left[1].id) }, TOP);
       else this.say('killElim', { a, b, n: left.length }, TOP);
+      this.narrative.onKill(killer, victim, s.time);
+      this.narrative.onEliminated(victim);
       return;
     }
     let key: LineKey = 'kill', prio: Prio = 2;
@@ -270,8 +294,10 @@ export class Commentator {
     else if (dist >= 40) { key = 'killLong'; vars.d = dist; }
     else if (weapon === 'shotgun' || (dist >= 0 && dist <= 4)) key = 'killClose';
     this.say(key, vars, prio);
-    // The colour commentator chimes in after the big ones, now and then.
-    if (prio >= 3 && this.rng() < 0.4) this.say('react', {}, 1, 12);
+    // Then the story: streaks, rivalries, or why it happened; else a quick reaction to a big one.
+    const before = this.queue.length;
+    this.narrative.onKill(killer, victim, s.time, key === 'killClutch' ? { clutchHp: hp } : {});
+    if (this.queue.length === before && prio >= 3 && this.rng() < 0.4) this.say('react', {}, 1, 12);
   }
 
   private watchHeals(s: Snapshot, now: number) {
@@ -279,6 +305,7 @@ export class Commentator {
       const was = this.drinking.has(p.id);
       if (p.drinking && !was) {
         this.drinking.add(p.id);
+        this.narrative.onDrink(p.id, s.time);
         const hurt = this.hurtAt.get(p.id);
         if (p.alive && p.hp <= 40 && hurt !== undefined && now - hurt <= 4 && this.ready(`heal:${p.id}`, 20))
           this.say('heal', { a: this.name(p.id), n: Math.max(1, Math.round(p.hp)) }, 2);
@@ -406,6 +433,9 @@ export class Commentator {
     const ps = [...this.players.values()];
     const alive = ps.filter((p) => !p.eliminated);
     if (!alive.length) { this.lastEnd = now; return; }
+    // Two quiet moments in three are strategy / memory, when there's a story to tell; the third is stats.
+    this.narrativeTurn = (this.narrativeTurn + 1) % 3;
+    if (this.narrativeTurn !== 2 && this.narrative.quiet()) { this.update(); return; }
     const topics: (() => boolean)[] = [
       () => {
         const r = [...alive].sort((x, y) => y.inv.cash - x.inv.cash)[0];

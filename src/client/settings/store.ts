@@ -26,6 +26,8 @@ export const CROSSHAIR_COLORS = ['#ffffff', '#3ddc84', '#ffd166', '#4dd2ff', '#f
 export const FRAME_CAPS = [0, 30, 60, 120] as const;
 export type FrameCap = (typeof FRAME_CAPS)[number];
 export type CameraMode = 'third' | 'first';
+export const VOICE_ENGINES = ['neural', 'browser'] as const;
+export type VoiceEngine = (typeof VOICE_ENGINES)[number];
 
 /**
  * Stored-format version. v2: the FPS counter became a visible-by-default feature, so loading anything
@@ -46,7 +48,11 @@ export type Settings = {
     /** Sportscaster commentary (cinematic mode): on/off, its volume, captions, and whether it also talks while you spectate. */
     commentaryOn: boolean; commentary: number; captions: boolean; commentarySpectate: boolean;
     /** Browser voice names for play-by-play and colour ('' = pick the best installed automatically). */
-    voicePbp: string; voiceColour: string };
+    voicePbp: string; voiceColour: string;
+    /** 'neural': free Kokoro voice (downloads once, ~92 MB), browser voice until it's ready; 'browser': speechSynthesis only. */
+    voiceEngine: VoiceEngine;
+    /** Kokoro voice ids per commentator ('' = default pair). */
+    neuralPbp: string; neuralColour: string };
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct;
     /** Screen shake + hit-stop strength, 0 (off) .. 1 (full). Accessibility. */ screenShake: number;
     /** First-person camera bob while walking / sprinting. */ cameraBob: boolean };
@@ -66,7 +72,7 @@ export function defaultSettings(): Settings {
     v: SETTINGS_VERSION,
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true, competitive: false },
-    audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false, commentaryOn: true, commentary: 0.9, captions: true, commentarySpectate: false, voicePbp: '', voiceColour: '' },
+    audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false, commentaryOn: true, commentary: 0.9, captions: true, commentarySpectate: false, voicePbp: '', voiceColour: '', voiceEngine: 'neural', neuralPbp: '', neuralColour: '' },
     gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true },
     onboarding: { howToSeen: false },
   };
@@ -125,6 +131,9 @@ export function sanitizeSettings(raw: unknown): Settings {
       commentarySpectate: bool(a.commentarySpectate, d.audio.commentarySpectate),
       voicePbp: voiceName(a.voicePbp),
       voiceColour: voiceName(a.voiceColour),
+      voiceEngine: oneOf(a.voiceEngine, VOICE_ENGINES, d.audio.voiceEngine),
+      neuralPbp: voiceName(a.neuralPbp),
+      neuralColour: voiceName(a.neuralColour),
     },
     gameplay: {
       crosshair: oneOf(g.crosshair, CROSSHAIRS, d.gameplay.crosshair),
