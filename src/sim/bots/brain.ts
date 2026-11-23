@@ -291,7 +291,8 @@ export class Brain {
       { label: 'cut the bridge into my island', act: 'cut', done: !inp.incomingBridge },
       { label: 'build up my home (walls, plugs ready)', act: 'fortify', done: !inp.fortifyWanted },
     ];
-    if (fortify.some((s) => !s.done))
+    // No home building in sudden death (home is outside the ring soon; a bank step out there walks into the storm).
+    if (!inp.suddenDeath && fortify.some((s) => !s.done))
       add('fortify', p.planTurtle * early * (inp.upgraded ? 0.4 : 1) * (inp.suddenDeath ? 0 : 1) * (inp.endgame ? 0.2 : 1) + 0.05,
         inp.upgraded ? 'build up for a late push' : 'gear up before going anywhere', fortify);
 
