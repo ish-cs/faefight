@@ -21,7 +21,7 @@ type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
 const ATTACK_GOALS = new Set(['attack', 'seal', 'bridge', 'raid', 'fight']);
-const IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15, HOME_SIT_M = 6;
+const IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15, HOME_SIT_M = 6, IDLE_AT_M = 3.5;
 /** The 1v1 skill ladder: each scenario pits the higher tier against the one below. */
 const LADDER: Partial<Record<Scenario, [Difficulty, Difficulty]>> = {
   '1v1-pro-vs-hard': ['pro', 'hard'], '1v1-hard-vs-medium': ['hard', 'medium'], '1v1-medium-vs-easy': ['medium', 'easy'],
@@ -65,6 +65,10 @@ type SeatOut = {
   difficulty: Difficulty; kills: number; deaths: number; aliveSec: number; attackSec: number;
   idleHome: number; longestHomeIdle: number; hitDists: number[]; eliminatedAt: number | null;
   archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
+  /** Economy flow (round 11): standing still at my generator / my shop (s), first time off my island and first time on a
+   *  rival's island (s, null = never), rocket launchers acquired and rocket damage dealt to players. */
+  genIdleSec?: number; shopIdleSec?: number; firstLeaveSec?: number | null; firstEnemyIslSec?: number | null;
+  rocketBuys?: number; rocketDmg?: number;
 };
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
@@ -111,7 +115,10 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const seats: SeatOut[] = diffs.map((d, i) => ({
     difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
     archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0,
+    genIdleSec: 0, shopIdleSec: 0, firstLeaveSec: null, firstEnemyIslSec: null, rocketBuys: 0, rocketDmg: 0,
   }));
+  const hadRocket = new Map<number, boolean>();
+  const islandOf = (q: { x: number; z: number }) => m.map.findIndex((isl) => Math.hypot(q.x - isl.center.x, q.z - isl.center.z) < isl.radius + 1);
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, firstSeal: number | null = null;
@@ -127,6 +134,15 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (!p.alive || p.breakoutUntil !== null) continue;
         const s = seats[p.id - 1];
         s.aliveSec += dt;
+        const home = m.map[p.island], still = Math.hypot(p.vel.x, p.vel.z) < 0.5;
+        if (still && Math.hypot(p.pos.x - home.generator.x, p.pos.z - home.generator.z) < IDLE_AT_M) s.genIdleSec! += dt;
+        if (still && Math.hypot(p.pos.x - home.shop.x, p.pos.z - home.shop.z) < IDLE_AT_M) s.shopIdleSec! += dt;
+        const on = islandOf(p.pos);
+        if (s.firstLeaveSec === null && on !== p.island) s.firstLeaveSec = snap.time;
+        if (s.firstEnemyIslSec === null && on >= 0 && on !== p.island && snap.players.some((o) => o.id !== p.id && o.island === on)) s.firstEnemyIslSec = snap.time;
+        const rk = !!(p.inv.weapons as Record<string, unknown>).rocket;
+        if (rk && !hadRocket.get(p.id)) s.rocketBuys!++;
+        hadRocket.set(p.id, rk);
         const goal = brains[p.id - 1]?.currentGoal;
         if (goal && ATTACK_GOALS.has(goal)) s.attackSec += dt;
         const b = bunkers[p.island];
@@ -147,6 +163,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         const a = by != null ? snap.players[by - 1]?.pos : undefined, t = snap.players[target - 1]?.pos;
         if (by == null || by === target || !a || !t) continue;
         seats[by - 1].damage! += Number(e.data.amount) || 0;
+        if (e.data.weapon === 'rocket') seats[by - 1].rocketDmg! += Number(e.data.amount) || 0;
         seats[by - 1].hitDists.push(Math.round(Math.hypot(a.x - t.x, a.z - t.z)));
       } else if (e.type === 'kill') {
         const v = e.data.victim as number, k = e.data.killer as number | null;
@@ -226,6 +243,9 @@ export type ScenarioSummary = {
   /** FFAs with more than one tier: mean final placement per tier (1 = won), its 95% CI and number of seats. */
   placementByTier: Partial<Record<Difficulty, { mean: number; ci95: number; n: number }>> | null;
   shipCheck: { pass: boolean | null; checks: Check[] };
+  /** Economy flow, per bot per game (means; first-visit medians over bots that made it). Absent on old shard files. */
+  flow?: { genIdleSec: number; shopIdleSec: number; medianFirstLeaveSec: number | null; medianFirstEnemyIslSec: number | null;
+    rocketBuysPerGame: number; rocketDmgPerGame: number; killsPerGame: number };
 };
 
 export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary {
@@ -266,6 +286,16 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     proVsHard, ladder, placementByTier,
     shipCheck: { pass: null, checks: [] },
   };
+  if (seats.length && seats[0].genIdleSec !== undefined) {
+    const mean = (f: (x: SeatOut) => number) => seats.reduce((a, x) => a + f(x), 0) / seats.length;
+    const per = (f: (x: SeatOut) => number) => seats.reduce((a, x) => a + f(x), 0) / Math.max(1, games.length);
+    s.flow = {
+      genIdleSec: mean((x) => x.genIdleSec ?? 0), shopIdleSec: mean((x) => x.shopIdleSec ?? 0),
+      medianFirstLeaveSec: median(seats.flatMap((x) => (x.firstLeaveSec != null ? [x.firstLeaveSec] : []))),
+      medianFirstEnemyIslSec: median(seats.flatMap((x) => (x.firstEnemyIslSec != null ? [x.firstEnemyIslSec] : []))),
+      rocketBuysPerGame: per((x) => x.rocketBuys ?? 0), rocketDmgPerGame: per((x) => x.rocketDmg ?? 0), killsPerGame: per((x) => x.kills),
+    };
+  }
   // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%; the ladder bar here is 80% per step, the steward hand-off rule).
   // The shipChecks comparisons against the hand-tuned params need a second series and are not run here.
   const checks: Check[] = [];
@@ -304,6 +334,10 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     ...sums.filter((s) => s.placementByTier).flatMap((s) => [`### ${s.scenario}: average placement by tier (1 = won)`, '',
       '| tier | mean placement | 95% CI | seats |', '|---|---|---|---|',
       ...Object.entries(s.placementByTier!).map(([d, p]) => `| ${d} | ${p!.mean.toFixed(2)} | ± ${p!.ci95.toFixed(2)} | ${p!.n} |`), '']),
+    ...(sums.some((s) => s.flow) ? ['### Economy flow (per bot: idle = standing still within 3.5 m; first visits: median over bots)', '',
+      '| scenario | idle at generator | idle at shop | first off home | first on a rival island | rockets bought / game | rocket dmg / game | kills / game |',
+      '|---|---|---|---|---|---|---|---|',
+      ...sums.filter((s) => s.flow).map((s) => { const f = s.flow!; return `| ${s.scenario} | ${f.genIdleSec.toFixed(0)} s | ${f.shopIdleSec.toFixed(0)} s | ${secs(f.medianFirstLeaveSec)} | ${secs(f.medianFirstEnemyIslSec)} | ${f.rocketBuysPerGame.toFixed(1)} | ${f.rocketDmgPerGame.toFixed(0)} | ${f.killsPerGame.toFixed(1)} |`; }), ''] : []),
     '### Wins by skill',
     ...sums.map((s) => `- ${s.scenario}: ${Object.entries(s.winsByDifficulty).map(([d, n]) => `${d} ${n}`).join(', ') || 'none'}; no winner ${s.noWinner} · ${s.msPerTick.toFixed(2)} ms/tick · slowest game ${s.maxWallSec.toFixed(0)} s wall`),
   ];
