@@ -1,6 +1,6 @@
 import * as dm from './dmath';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { HEAD, PIECES, PLAYER, TICK_HZ } from './constants';
+import { HEAD, PIECES, PLAYER, rampHull, TICK_HZ } from './constants';
 import { generatorZone, islandNoBuildZones, potionZone, type NoBuildZone } from './building';
 import { bunkerSlitBoxes, bunkerWallBoxes, harborCraneBoxes, type IslandLayout, type MapDef } from './map';
 import { defaultPotionShops } from './potions';
@@ -332,9 +332,7 @@ export class Physics {
     const s = PIECES[p.kind];
     let desc: RAPIER.ColliderDesc;
     if (p.kind === 'ramp') {
-      const w = s.w / 2, d = s.d / 2;
-      const pts = new Float32Array([-w, 0, -d, w, 0, -d, -w, 0, d, w, 0, d, -w, s.h, d, w, s.h, d]);
-      const hull = RAPIER.ColliderDesc.convexHull(pts);
+      const hull = RAPIER.ColliderDesc.convexHull(rampHull());
       if (!hull) throw new Error('Physics.addPiece: ramp convex hull failed');
       desc = hull.setTranslation(p.pos.x, p.pos.y, p.pos.z);
     } else {

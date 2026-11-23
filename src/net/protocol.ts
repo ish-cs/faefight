@@ -82,4 +82,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 27; // 27: elimination rewards (spoils of war, victory surge, elimination event; player surgeUntil/bounty; stats elims/assists/spoils). 26: everyone starts with a pistol in hand (sim rule); 25: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 24 (main: stranded bots)
+export const NET_VERSION = 28; // 28: elimination rewards (spoils of war, victory surge, 'elimination' event; player surgeUntil/bounty; stats elims/assists/spoils). 27: ramps are thin sloped slabs, open underneath (collider change) + builds carry the move seq they were checked after (fall-through fix); 26: everyone starts with a pistol in hand (sim rule); 25: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 24 (main: stranded bots)
