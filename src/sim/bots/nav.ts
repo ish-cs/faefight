@@ -21,6 +21,12 @@ const DETOURS = [0.4, -0.4, 0.8, -0.8, 1.2, -1.2, 1.6, -1.6];
 const STEP_UP = 0.35;
 /** Don't walk off anything higher than this when there's another way (falls over ~3.3 m hurt). */
 const MAX_DROP = 3;
+/**
+ * A gap this short between a deck's tip and the land (or deck) beyond is walked across, no jump: measured, a player
+ * walking off a deck crosses 2.0 m (sprinting 2.6 m). The last deck of a bridge often can't go down (a gap shorter
+ * than a deck, with a barrier or a crate on the shore right where it would rest): the bridge counts as finished.
+ */
+export const STEP_GAP = 1.5;
 /** Jump arc check: time step. */
 const JUMP_STEP = 0.1;
 const BUNKER_HALF = MAP.bunker.interior / 2 + MAP.bunker.wall;
@@ -400,9 +406,37 @@ export class Nav {
   }
 
   private solidAhead(l: Lane, s: number): boolean {
-    // Decks laid end to end can leave a few-cm seam; anything wider is a real gap.
-    const p = laneAt(l, s + 0.06);
-    return this.view.groundAt(p.x, p.z) !== null;
+    // Decks laid end to end can leave a few-cm seam; a gap up to STEP_GAP is walked across; anything wider is a real gap.
+    for (let d = 0.06; d <= STEP_GAP; d += 0.12) {
+      const p = laneAt(l, s + d);
+      if (this.view.groundAt(p.x, p.z) !== null) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Walking from p along `dir`: the first gap in the floor (within `look` m) is at most STEP_GAP wide, with a floor
+   * beyond no higher than a step and no lower than a metre (the stride carries me across). True when there's no gap.
+   * Starting over a gap, its width counts back to the floor behind me.
+   */
+  crossable(p: Vec3, dir: Vec3, look = 3): boolean {
+    const l = Math.hypot(dir.x, dir.z);
+    if (l < 1e-6) return false;
+    const ux = dir.x / l, uz = dir.z / l;
+    const at = (d: number) => this.view.groundAt(p.x + ux * d, p.z + uz * d);
+    let gapFrom: number | null = null;
+    if (at(0) === null) {
+      for (let b = 0.12; b <= STEP_GAP + 0.01; b += 0.12) if (at(-b) !== null) { gapFrom = -b; break; }
+      if (gapFrom === null) return false;
+    }
+    for (let d = 0.12; d <= look; d += 0.12) {
+      const y = at(d);
+      if (y === null) {
+        gapFrom ??= d;
+        if (d - gapFrom > STEP_GAP) return false;
+      } else if (gapFrom !== null) return y - p.y <= STEP_UP && p.y - y <= 1;
+    }
+    return gapFrom === null;
   }
 
   lane(from: number, to: number): Lane { return lane(this.nodeList, from, to); }
@@ -707,6 +741,8 @@ export class Nav {
         const i = this.nodeAt(p);
         floor = i >= 0 ? this.nodeList[i].groundY : null;
       }
+      // A short gap ahead with a floor beyond (a bridge's last metre): walked across.
+      if (floor === null && this.crossable(v3(me.x - d.z * o, me.y, me.z + d.x * o), d)) floor = me.y;
       return floor !== null && me.y - floor <= maxDrop && !(this.view.suddenDeath && floor <= this.view.waterY + 0.05);
     }));
     // Rather a hurtful drop than being stuck up there forever.

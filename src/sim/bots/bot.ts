@@ -558,7 +558,8 @@ export class Bot {
     }
     // In the air, steer to come down on something solid; standing on the rim over water, step back onto it.
     const airborne = Math.abs(me.vel.y) > 0.05;
-    if (airborne ? !this.nav.landsOnGround(dir, !!act.sprint) : view.groundAt(me.pos.x, me.pos.z) === null) {
+    // (Mid-stride over a short gap toward a floor, e.g. a bridge's last metre: keep going.)
+    if (airborne ? !this.nav.landsOnGround(dir, !!act.sprint) : view.groundAt(me.pos.x, me.pos.z) === null && !(dir && this.nav.crossable(me.pos, dir))) {
       const back = this.nav.rescue(!!act.sprint);
       if (back) { dir = back; jump = false; }
     }
@@ -679,7 +680,9 @@ export class Bot {
       if (why && this.rng() < H.yankRate * HOOK_CHECK_SEC) it = { why: 'yank', target: e.id, note: why };
     }
     if (it?.why === 'escape' && !this.canReturn(c, it.node)) it = null;
-    if (!it && !e && want !== null && this.nav.nodes[want] && this.canReturn(c, want)) it = crossTo(c.view, H, this.nav.nodes[want]);
+    // Crossing: not with someone close (a rope ride is a free target), but someone far off across the water doesn't
+    // stop a push.
+    if (!it && (!e || c.enemyDist > H.escapeNear) && want !== null && this.nav.nodes[want] && this.canReturn(c, want)) it = crossTo(c.view, H, this.nav.nodes[want]);
     if (it) this.hookIntent = { ...it, until: now + HOOK_HOLD_SEC };
     return it;
   }
@@ -705,7 +708,7 @@ export class Bot {
     const dest = this.nav.nodes[to];
     if (!dest) return null;
     const H = this.P.hook;
-    const inReach = (p: Vec3) => dist2D(p, dest.center) - dest.radius + H.crossInset <= Math.min(H.crossMax, GRAPPLE.range - 0.5) - 1;
+    const inReach = (p: Vec3) => dist2D(p, dest.center) - dest.radius + H.crossInset <= Math.min(H.crossMax, (view.hookRange ?? GRAPPLE.range) - 0.5) - 1;
     const starts = this.nav.startNodes(me.pos);
     let best: Vec3 | null = null, bestD = Infinity;
     const consider = (p: Vec3) => { const d = dist2D(p, me.pos); if (inReach(p) && d < bestD) { bestD = d; best = p; } };
