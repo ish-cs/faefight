@@ -65,6 +65,8 @@ type SeatOut = {
   difficulty: Difficulty; kills: number; deaths: number; aliveSec: number; attackSec: number;
   idleHome: number; longestHomeIdle: number; hitDists: number[]; eliminatedAt: number | null;
   archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
+  /** Vault use (read off snapshots, so it works on any ref): deposits, $ banked, shop buys paid from the vault, respawn restocks. */
+  deposits?: number; banked?: number; vaultPaid?: number; restocks?: number;
 };
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
@@ -111,7 +113,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const seats: SeatOut[] = diffs.map((d, i) => ({
     difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
     archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0,
+    deposits: 0, banked: 0, vaultPaid: 0, restocks: 0,
   }));
+  const lastCash = new Map<number, [number, number]>();
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, firstSeal: number | null = null;
@@ -121,6 +125,15 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   let ticks = 0;
   for (; ticks < maxTicks && snap.winner === null; ticks++) {
     snap = m.tick(new Map());
+    for (const p of snap.players) {
+      const b = lastCash.get(p.id), s = seats[p.id - 1];
+      if (b && s) {
+        const dv = p.vault.cash - b[1], di = p.inv.cash - b[0];
+        if (dv > 0 && di < 0) { s.deposits!++; s.banked! += dv; }
+        else if (dv < 0 && di <= 0) s.vaultPaid!++;
+      }
+      lastCash.set(p.id, [p.inv.cash, p.vault.cash]);
+    }
     if (ticks % SAMPLE_TICKS === 0) {
       const dt = SAMPLE_TICKS / TICK_HZ;
       for (const p of snap.players) {
@@ -156,6 +169,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         const by = e.data.by as number | null | undefined;
         if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
         if (firstSeal === null && by != null && by !== e.data.owner && e.t < SD) firstSeal = e.t;
+      } else if ((e.type as string) === 'restock') {
+        const s = seats[(e.data.player as number) - 1];
+        if (s) s.restocks!++;
       } else if (e.type === 'eliminated') {
         const id = e.data.player as number;
         if (seats[id - 1].eliminatedAt === null) {
@@ -225,6 +241,8 @@ export type ScenarioSummary = {
   ladder: (Share & { higher: Difficulty; lower: Difficulty }) | null;
   /** FFAs with more than one tier: mean final placement per tier (1 = won), its 95% CI and number of seats. */
   placementByTier: Partial<Record<Difficulty, { mean: number; ci95: number; n: number }>> | null;
+  /** Vault use per game (all seats together). */
+  vault: { deposits: number; banked: number; vaultPaid: number; restocks: number };
   shipCheck: { pass: boolean | null; checks: Check[] };
 };
 
@@ -264,6 +282,10 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     msPerTick: games.reduce((a, g) => a + g.msPerTick, 0) / Math.max(1, games.length),
     maxWallSec: Math.max(0, ...games.map((g) => g.wallSec)),
     proVsHard, ladder, placementByTier,
+    vault: (() => {
+      const per = (k: 'deposits' | 'banked' | 'vaultPaid' | 'restocks') => seats.reduce((a, x) => a + (x[k] ?? 0), 0) / Math.max(1, games.length);
+      return { deposits: per('deposits'), banked: per('banked'), vaultPaid: per('vaultPaid'), restocks: per('restocks') };
+    })(),
     shipCheck: { pass: null, checks: [] },
   };
   // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%; the ladder bar here is 80% per step, the steward hand-off rule).
@@ -304,6 +326,9 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     ...sums.filter((s) => s.placementByTier).flatMap((s) => [`### ${s.scenario}: average placement by tier (1 = won)`, '',
       '| tier | mean placement | 95% CI | seats |', '|---|---|---|---|',
       ...Object.entries(s.placementByTier!).map(([d, p]) => `| ${d} | ${p!.mean.toFixed(2)} | ± ${p!.ci95.toFixed(2)} | ${p!.n} |`), '']),
+    '### Vault use per game (all seats)', '',
+    '| scenario | deposits | $ banked | shop buys paid from vault | respawn restocks |', '|---|---|---|---|---|',
+    ...sums.map((s) => `| ${s.scenario} | ${(s.vault?.deposits ?? 0).toFixed(1)} | $${Math.round(s.vault?.banked ?? 0)} | ${(s.vault?.vaultPaid ?? 0).toFixed(1)} | ${(s.vault?.restocks ?? 0).toFixed(1)} |`), '',
     '### Wins by skill',
     ...sums.map((s) => `- ${s.scenario}: ${Object.entries(s.winsByDifficulty).map(([d, n]) => `${d} ${n}`).join(', ') || 'none'}; no winner ${s.noWinner} · ${s.msPerTick.toFixed(2)} ms/tick · slowest game ${s.maxWallSec.toFixed(0)} s wall`),
   ];

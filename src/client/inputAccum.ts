@@ -25,7 +25,7 @@ export class InputAccumulator {
     if (input.slot) p.slot = input.slot;
     if (input.build) p.build = input.build;
     if (input.shop) p.shop = input.shop;
-    if (input.vault) p.vault = input.vault;
+    if (input.vault) p.vault = { ...p.vault, ...input.vault }; // a loadout and a deposit in one frame both count
     if (input.drop) p.drop = p.drop === 'stack' ? 'stack' : input.drop;
     if (input.moveSlot) p.moveSlot = input.moveSlot;
     if (input.useMedkit) p.useMedkit = true;

@@ -1,6 +1,7 @@
 import type { MoveCmd } from '../sim/movement';
 import { PIECES, WEAPONS } from '../sim/constants';
 import { POTION_KINDS, validSlot } from '../sim/hotbar';
+import { sanitizeLoadout } from '../sim/vault';
 import type { BuildRequest, GunKind, Inventory, PieceKind, PlayerInput, ShopItem, TrapRequest, VaultAction, Vec3, WeaponKind } from '../sim/types';
 import { clampSettings, isColor, type GameSettings } from '../sim/settings';
 import { CHAT_MAX_LEN, type ClientMsg, type ViewExtras } from './protocol';
@@ -107,7 +108,8 @@ function vaultAction(x: unknown): VaultAction | null {
   const out: VaultAction = {};
   if (x.deposit !== undefined) { const d = partialInv(x.deposit); if (!d) return null; out.deposit = d; }
   if (x.withdraw !== undefined) { const w = partialInv(x.withdraw); if (!w) return null; out.withdraw = w; }
-  return out.deposit || out.withdraw ? out : null;
+  if (x.loadout !== undefined) { const l = sanitizeLoadout(x.loadout); if (!l) return null; out.loadout = l; }
+  return out.deposit || out.withdraw || out.loadout ? out : null;
 }
 
 function moveSlot(x: unknown): PlayerInput['moveSlot'] {

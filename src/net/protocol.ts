@@ -82,4 +82,4 @@ export type HostMsg =
   | { t: 'ended'; reason: 'host-left' | 'full' | 'started' | 'version' | 'kicked' | 'flood' };
 
 /** Bump when ClientMsg/HostMsg change shape; host rejects mismatched clients with {t:'ended', reason:'version'}. */
-export const NET_VERSION = 26; // 26: everyone starts with a pistol in hand (sim rule); 25: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 24 (main: stranded bots)
+export const NET_VERSION = 27; // 27: vault overhaul (shops pay from the vault, restock loadout on respawn, vault moves ignore busy; VaultAction.loadout, PlayerState.loadout, restock event); 26: everyone starts with a pistol in hand (sim rule); 25: gameplay props (snapshot `props`, wire keys pr/p/q appended) on top of 24 (main: stranded bots)

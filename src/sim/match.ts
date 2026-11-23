@@ -3,6 +3,7 @@ import { damagePiece, snapPlacement, validatePlacement, type Placement } from '.
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
+import { sanitizeLoadout } from './vault';
 import { islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
@@ -310,6 +311,9 @@ export class Match implements MatchApi {
         // Dead: commands are consumed (acked) but do nothing.
         if (cmds?.length) (p.mv ??= newMoveState()).ack = cmds[cmds.length - 1].seq;
         if (p.emote) delete p.emote;
+        // The restock loadout is edited on the death screen too (it acts on the coming respawn).
+        const di = inputs.get(p.id);
+        if (di) this.setLoadout(p, di);
         if (p.hook || p.mv?.pull) clearGrapple(this.grappleCtx, p, now);
         continue;
       }
@@ -584,6 +588,13 @@ export class Match implements MatchApi {
     this.events.push({ t: this.s.time, type: 'eliminated', data: { player: playerId } });
   }
 
+  /** A restock loadout (sim/vault.ts) can be set from anywhere, busy, dead or alive: it only acts on respawn. */
+  private setLoadout(p: PlayerState, input: PlayerInput) {
+    if (!input.vault?.loadout) return;
+    const l = sanitizeLoadout(input.vault.loadout);
+    if (l) p.loadout = l; else console.warn(`match: player ${p.id} sent a bad loadout, ignored`);
+  }
+
   private applyInput(p: PlayerState, input: PlayerInput, now: number, cmds?: MoveCmd[]) {
     p.yaw = input.yaw;
     p.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, input.pitch));
@@ -595,6 +606,7 @@ export class Match implements MatchApi {
     // Sights need a gun in hand and no reload; aiming rules out sprinting (see move).
     p.ads = input.ads && p.alive && p.equipped !== 'fists' && p.reloadUntil === 0;
     if (input.view !== undefined) p.view = input.view === 1 ? 1 : 0;
+    this.setLoadout(p, input);
     if (p.hook) this.events.push(...tickGrapple(this.grappleCtx, p, now));
 
     if (cmds) {
@@ -610,6 +622,15 @@ export class Match implements MatchApi {
     // A build sent while still busy (a held-place stream arriving a little bunched) waits for the busy time
     // to end instead of being dropped; it expires after BUILD.queueSec. The newest request wins.
     if (input.build) this.queuedBuild.set(p.id, { req: input.build, until: now + BUILD.queueSec });
+    // Vault moves aren't held up by the busy time (they set it: hands full at the vault for a second), so the vault
+    // panel's drags go through back to back; they're only accepted at your own vault.
+    if (input.vault?.deposit || input.vault?.withdraw) {
+      const v = this.map[p.island].vault;
+      if (dist2D(v, p.pos) <= ECONOMY.interactRadius && Math.abs(v.y - p.pos.y) < 2) {
+        const { deposit, withdraw } = input.vault;
+        if (vaultTransfer(p, { deposit, withdraw }).ok) p.busyUntil = Math.max(p.busyUntil, now + ECONOMY.vaultSec);
+      }
+    }
     if (now < p.busyUntil) return;
     const isl = this.map[p.island];
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
@@ -641,7 +662,6 @@ export class Match implements MatchApi {
       else if (this.map.some((i) => near(i.shop))) { if (!isHomeOnly(input.shop.buy)) buyAt(p, 'home', input.shop); }
       else if (this.potionShops.some((sh) => near(sh.pos))) buyAt(p, 'potion', input.shop);
     }
-    if (input.vault && near(isl.vault) && vaultTransfer(p, input.vault).ok) p.busyUntil = now + ECONOMY.vaultSec;
     if (input.reload) tryReload(p, now);
     // Attacking ends spawn protection at once.
     if ((input.fire || input.throwGrenade || input.placeCharge) && (p.spawnProtected || p.invulnUntil > now)) {

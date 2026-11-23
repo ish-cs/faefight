@@ -6,6 +6,7 @@ import type { Physics } from './physics';
 import { refillStamina, STAMINA } from './movement';
 import { isSealed } from './seal';
 import { sealBlocker, sidesLeft } from './teams';
+import { restockFromVault } from './vault';
 import { newStorm, type StormCenter, type StormState } from './storm';
 import type { Inventory, LootBag, MatchEvent, PieceState, PlayerState, Vec3 } from './types';
 import { clone, dist, dist2D, rotateY, v3 } from './vec';
@@ -232,6 +233,9 @@ export function tickLifecycle(
     if (p.mv) refillStamina(p.mv);
     p.stamina = STAMINA.max;
     grantLockedGuns(p);
+    // The vault refills the hotbar to the player's restock loadout (sim/vault.ts).
+    const rs = restockFromVault(p);
+    if (rs && rs.moved + rs.bought + rs.cash > 0) out.push(ev(now, 'restock', { player: p.id, ...rs }));
     // Come back with a pistol + one spare mag so a camper with a rifle isn't a guaranteed kill.
     if (!p.inv.weapons.pistol && addKind(p.hotbar, 'pistol') >= 0) p.inv.weapons.pistol = { mag: WEAPONS.pistol.mag, spare: WEAPONS.pistol.mag };
     // Face out through the bunker's front doorway from wherever the free spot put us; level the view.

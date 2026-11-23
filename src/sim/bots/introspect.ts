@@ -10,7 +10,7 @@
  */
 import { AMMO_BOX, CHARGE, GRAPPLE, GRENADE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
 import type { Doorway, IslandLayout } from '../map';
-import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
+import type { Difficulty, Inventory, Loadout, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
 import { dist2D } from '../vec';
 import type { AimProfile, Angles } from './aim';
 import type { Bot, Goal } from './bot';
@@ -68,6 +68,8 @@ export type BrainDigest = {
   aim: [number, number, number] | null; fire: boolean;
   st: {
     hp: number; sh: number; sta: number; cash: number; vault: number; inv: number;
+    /** Restock loadout the vault refills on respawn (sim/vault.ts), e.g. "2 medkit, 8 scaffold · keep $40 · buys". */
+    restock?: string;
     /** Damage stress (s left), winded (saving stamina). */
     stress: number; winded: boolean;
     /** Current aim error (deg), reaction delay (s) and what's left of it on the current target. */
@@ -269,17 +271,16 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const close = !!c.enemy && c.enemyDist < 8;
       const due = I.insuranceDue(me);
       if ((c.reach || (sc > 0 && sc >= need)) && due > 0 && !close) return { f: [['insurance', 0.8]], why: `Heading out: banking $${Math.round(due)} so I can rebuy a gun if I die` };
-      if (me.inv.cash < 100) return zero('little cash on me');
-      const keep = I.plan({ ...c, me: { ...me, vault: { ...me.vault, cash: 0 } } } as Ctx).spent + 25;
+      const keep = I.P.vault.carry;
       const excess = me.inv.cash - keep;
-      if (excess < 80) return zero('cash is earmarked for gear');
+      if (excess < I.P.vault.bankMin) return zero('little cash on me');
       if (close) return zero('enemy too close');
       const k = Math.min(excess, 600) / 600;
       const f: [string, number][] = [['base', 0.2], ['spare cash', 0.3 * k], ['caution', 0.3 * t.caution * k], ['greed', 0.2 * t.greed * k]];
       if (c.danger || I.intruder(c)) f.push(['danger', 0.55]);
       if (c.reach || sc >= need) f.push(['leaving', 0.25]);
       f.push(['walk', -dist2D(me.pos, home.vault) / 80]);
-      return { f, why: `Carrying $${Math.round(me.inv.cash)}, only $${Math.round(keep)} earmarked for gear: banking the rest` };
+      return { f, why: `Carrying $${Math.round(me.inv.cash)} (it drops if I die; the shop pays from the vault): banking all but $${Math.round(keep)}` };
     }
     case 'collect': {
       if (!c.homeReach) return zero("can't walk home");
@@ -714,6 +715,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     st: {
       hp: Math.round(me?.hp ?? 0), sh: Math.round(me?.shield ?? 0), sta: Math.round(me?.stamina ?? 0),
       cash: Math.round(me?.inv.cash ?? 0), vault: Math.round(me?.vault.cash ?? 0), inv: me ? invValue(me.inv) : 0,
+      ...(me?.loadout ? { restock: loadoutLine(me.loadout) } : {}),
       stress: r1(me?.mv?.stress ?? 0), winded: I.winded,
       aimErr: r2(tracking ? Math.hypot(aim.err.yaw, aim.err.pitch) * cone * 180 / Math.PI : aim.p.coneRad * 180 / Math.PI),
       react: r2(aim.p.reactSec), reactLeft: r2(tracking ? Math.max(0, aim.seenAt + aim.p.reactSec - now) : 0),
@@ -770,4 +772,10 @@ export function fitDigest(d: BrainDigest): BrainDigest {
   }
   if (digestBytes(d) > BRAIN_DIGEST_BUDGET) { d.log = []; d.scores = d.scores.slice(0, 6); }
   return d;
+}
+
+/** One line for the brain panel: what the vault restocks on respawn. */
+function loadoutLine(l: Loadout): string {
+  const items = Object.entries(l.items).map(([k, n]) => `${n} ${k}`).join(', ') || 'no items';
+  return `${items}${l.keep ? ` · keep $${l.keep}` : ''}${l.buy ? ' · buys' : ''}`;
 }

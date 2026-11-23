@@ -33,7 +33,14 @@ export type GunKind = Exclude<WeaponKind, 'fists'>;
 export type LockItem = `lock:${GunKind}`;
 export type ShopItem = PieceKind | GunKind | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind | 'genUpgrade' | LockItem | 'trap' | 'grapple';
 export type ShopAction = { buy: ShopItem };
-export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> };
+/**
+ * Restock loadout (sim/vault.ts): on respawn the vault refills the hotbar up to these counts (a gun or the
+ * grappling hook counts as 1), then tops carried cash up to `keep`; with `buy`, what the vault lacks is bought
+ * with vault cash at shop prices.
+ */
+export type Loadout = { items: Partial<Record<HotbarItem, number>>; keep: number; buy: boolean };
+/** Vault moves (only at your own vault, 1 s busy) and/or a new restock loadout (accepted anywhere). */
+export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory>; loadout?: Loadout };
 
 export type BuildRequest = { kind: PieceKind; pos: Vec3; rotY: number; free: boolean };
 /**
@@ -115,6 +122,8 @@ export type PlayerState = {
   lastDamagedAt: number;
   inv: Inventory;
   vault: Inventory;
+  /** Respawn restock loadout (sim/vault.ts); absent = none. Private: only sent to its owner. */
+  loadout?: Loadout;
   /** Guns bought back on every respawn (full mag + one spare). Private: only sent to their owner. */
   locked: GunKind[];
   /** Nine slots of item kinds held; counts are in `inv`. */
@@ -202,7 +211,9 @@ export type MatchEventType =
   /** Spike trap: data { what: 'placed' | 'fired' | 'broken', id, pos, by / owner } (sim/traps.ts). */
   | 'trap'
   /** A wooden pier section broke (docks.ts): data { id, island, row, pos, rotY, by, kind }. */
-  | 'dockBroken';
+  | 'dockBroken'
+  /** Respawn restock from the vault (sim/vault.ts): data { player, moved, bought, cash }. */
+  | 'restock';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
