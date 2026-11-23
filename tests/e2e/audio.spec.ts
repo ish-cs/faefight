@@ -41,7 +41,7 @@ test('audio: context starts on click, sounds play while shooting, M mutes, no co
   await page.locator('canvas.game').click();
   await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null)).toBe('CANVAS');
   const before = await stats(page);
-  // Hold fire (fists by default) for ~1.5 s: the sim emits 'shot' events → own punch sounds.
+  // Hold fire (the starting pistol, or fists) for ~1.5 s: the sim emits 'shot' events → own shot sounds.
   const box = (await page.locator('canvas.game').boundingBox())!;
   // A click while the pointer is free only captures it (never fires); capture first.
   await page.locator('canvas.game').click();
@@ -51,7 +51,7 @@ test('audio: context starts on click, sounds play while shooting, M mutes, no co
   await page.mouse.down();
   await page.waitForTimeout(1500);
   await page.mouse.up();
-  await expect.poll(async () => (await stats(page)).bySound.shot_fists ?? 0, { timeout: 10_000 }).toBeGreaterThan(0);
+  await expect.poll(async () => Object.entries((await stats(page)).bySound).filter(([k]) => k.startsWith('shot_')).reduce((n, [, v]) => n + (v as number), 0), { timeout: 10_000 }).toBeGreaterThan(0);
   const after = await stats(page);
   expect(after.played).toBeGreaterThan(before.played);
 
