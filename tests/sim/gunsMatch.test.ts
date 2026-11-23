@@ -86,6 +86,7 @@ describe('match: aiming, rockets, projectiles', () => {
   test('rocket jump: ≤30 self-damage, ~4 m from standing, a 3-storey top fired a tick into a jump, a long gap at a sprint, soft landing', async () => {
     const run = async (o: { jump?: boolean; sprint?: boolean }) => {
       const { m } = await match();
+      unarmed(m); // no start pistol: the rocket is slot 0
       m.debugGive(1, { weapons: { rocket: { mag: 1, spare: 3 } } });
       const base = { select: 0, yaw: -Math.PI / 2, pitch: -1.4, moveZ: o.sprint ? 1 : 0, sprint: !!o.sprint };
       let s = m.tick(inputs(base));
