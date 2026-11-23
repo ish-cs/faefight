@@ -133,17 +133,43 @@
 .qol-compass .home.threat .qc-label { color: var(--danger); }
 @keyframes qol-threat { 50% { box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.45), 0 0 8px 3px rgba(255, 60, 60, 0.9); transform: rotate(45deg) scale(1.15); } }
 
-/* Killcam: banner under the compass, letterbox + vignette over the replay, recap moved aside meanwhile. */
-.hud .qol-killcam { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); min-width: 320px; max-width: 520px; padding: 10px 16px 12px; display: flex; flex-direction: column; gap: 6px; background: rgba(14, 18, 24, 0.72); border: 1px solid rgba(255, 77, 77, 0.55); border-radius: var(--r-md, 6px); animation: qol-in 0.25s ease-out; z-index: 3; }
-.qol-killcam .kc-top { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
-.qol-killcam .kc-tag { font-size: 11px; font-weight: 800; letter-spacing: 2.5px; color: #ff5a5a; }
-.qol-killcam .kc-tag::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: #ff4040; animation: kc-rec 1s steps(2) infinite; }
-.qol-killcam .kc-skip { font-size: 11.5px; color: var(--muted); font-weight: 600; }
-.qol-killcam .kc-title { font-size: 17px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
-.qol-killcam .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.qol-killcam .kc-bar { height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.15); overflow: hidden; }
-.qol-killcam .kc-fill { height: 100%; background: #ff5a5a; transform-origin: left; transform: scaleX(0); }
-.hud .qol-killcam-frame { position: absolute; inset: 0; pointer-events: none; z-index: 2; box-shadow: inset 0 0 160px rgba(0, 0, 0, 0.65); border-top: 48px solid rgba(0, 0, 0, 0.55); border-bottom: 48px solid rgba(0, 0, 0, 0.55); }
-.hud.killcam-on .qol-recap { top: auto; bottom: 120px; left: auto; right: 18px; transform: none; z-index: 3; }
-.hud.killcam-on .crosshair, .hud.killcam-on .reload-ring { display: none; }
+/* Killcam: letterbox bars (thicker in the slow beat, --kc-slow 0..1) + vignette over the replay, a lower-third
+   card (killer, weapon, distance, what they had left), a fade to black at the end that clears to the live view. */
+.hud .qol-killcam-frame { position: absolute; inset: 0; pointer-events: none; z-index: 2; --kc-slow: 0; box-shadow: inset 0 0 180px rgba(0, 0, 0, 0.55); }
+.qol-killcam-frame::before, .qol-killcam-frame::after { content: ""; position: absolute; left: 0; right: 0; height: 11vh; background: #000; transform-origin: top; transform: scaleY(calc(0.62 + 0.38 * var(--kc-slow))); animation: kc-bar-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.qol-killcam-frame::before { top: 0; }
+.qol-killcam-frame::after { bottom: 0; transform-origin: bottom; }
+@keyframes kc-bar-in { from { transform: scaleY(0); } }
+.hud .qol-killcam { position: absolute; left: 48px; bottom: calc(11vh + 22px); width: min(440px, calc(100vw - 96px)); display: flex; flex-direction: column; gap: 8px; z-index: 3; pointer-events: none; animation: kc-card-in 0.45s 0.1s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes kc-card-in { from { opacity: 0; transform: translateX(-24px); } }
+.qol-killcam .kc-head { display: flex; align-items: center; gap: 14px; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8); }
+.qol-killcam .kc-tag { font-size: 11px; font-weight: 800; letter-spacing: 3px; color: var(--danger); display: flex; align-items: center; }
+.qol-killcam .kc-tag::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--danger); animation: kc-rec 1s steps(2) infinite; }
+.qol-killcam .kc-skip { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; color: var(--muted); }
+.qol-killcam .kc-card { --kc-color: var(--danger); position: relative; display: grid; grid-template-columns: 46px 1fr; align-items: center; column-gap: 14px; row-gap: 10px; padding: 14px 18px 14px 22px;
+  background: var(--glass-strong); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: 0 10px 34px rgba(0, 0, 0, 0.35); }
+.qol-killcam .kc-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--kc-color); }
+.qol-killcam .kc-icon { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 10px; background: rgba(255, 255, 255, 0.07); color: var(--text); font-size: 22px; font-weight: 800; }
+.qol-killcam .kc-icon svg { width: 34px; height: 34px; }
+.qol-killcam .kc-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.qol-killcam .kc-by { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+.qol-killcam .kc-name { font-size: 24px; font-weight: 800; line-height: 1.1; color: var(--kc-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 10px rgba(0, 0, 0, 0.5); }
+.qol-killcam .kc-facts { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text); }
+.qol-killcam .kc-fact + .kc-fact::before { content: "·"; margin-right: 8px; color: var(--muted); }
+.qol-killcam .kc-hs { font-size: 10.5px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; color: #1a1205; background: var(--gold); border-radius: 5px; padding: 2px 6px; }
+.qol-killcam .kc-left { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12px; }
+.qol-killcam .kc-k { color: var(--muted); font-weight: 600; margin-right: 2px; }
+.qol-killcam .kc-meter { width: 72px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.qol-killcam .kc-meter span { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+.qol-killcam .kc-meter.sh { width: 44px; }
+.qol-killcam .kc-meter.sh span { background: #5aa8ff; }
+.qol-killcam .kc-v { font-weight: 800; font-variant-numeric: tabular-nums; }
+.qol-killcam .kc-v.sh { color: #8cc4ff; }
+.qol-killcam .kc-bar { height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
+.qol-killcam .kc-fill { height: 100%; background: var(--text); opacity: 0.8; transform-origin: left; transform: scaleX(0); }
+.hud .qol-killcam-fade { position: absolute; inset: 0; background: #000; pointer-events: none; z-index: 4; opacity: 0; }
+.hud .qol-killcam-fade.out { transition: opacity 0.45s ease-out; }
+.hud.killcam-on .qol-killcam-fade { transition: none; }
+/* A clean frame: only the replay, its card and the kill feed (the card carries the recap's facts; it's back after). */
+.hud.killcam-on > :not(.qol-killcam):not(.qol-killcam-frame):not(.qol-killcam-fade):not(.killfeed) { visibility: hidden; }
 @keyframes kc-rec { to { opacity: 0.2; } }

@@ -152,16 +152,18 @@ describe('snapshot history', () => {
 });
 
 describe('killcam window', () => {
-  it('full KILLCAM_SEC when there is no respawn coming; ends a little after the death', () => {
+  it('KILLCAM_SEC of real time (slow beat included) when there is no respawn coming; ends a little after the death', () => {
     const p = planKillcam(frames(0, 10), 10, A, null)!;
-    expect(p.duration).toBeCloseTo(KILLCAM_SEC);
+    expect(p.real).toBeLessThanOrEqual(KILLCAM_SEC + 1e-6);
+    expect(p.real).toBeGreaterThan(KILLCAM_SEC - 0.05); // starts on a recorded frame
+    expect(p.duration).toBeLessThan(p.real); // the slow beat costs real time
     expect(p.to).toBeCloseTo(10 + TAIL_SEC);
   });
 
   it('shortened to end before the respawn (respawn timing never changes)', () => {
     const p = planKillcam(frames(0, 10), 10, A, 3)!;
-    expect(p.duration).toBeLessThanOrEqual(3 - RESPAWN_MARGIN);
-    expect(p.duration).toBeGreaterThan(3 - RESPAWN_MARGIN - 1 / 30); // starts on a recorded frame
+    expect(p.real).toBeLessThanOrEqual(3 - RESPAWN_MARGIN);
+    expect(p.real).toBeGreaterThan(3 - RESPAWN_MARGIN - 0.1);
   });
 
   it('no killcam when the respawn is too soon, or no killer (fall, water, suicide)', () => {

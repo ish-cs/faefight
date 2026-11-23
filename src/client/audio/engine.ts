@@ -361,6 +361,20 @@ export class AudioSystem {
     this.play(sound === 'shot' ? { sound, kind, pos: null, gain: 1, own: true } : { sound, pos: null, gain: sound === 'headshot' ? 0.7 : 0.6 });
   }
 
+  /** Killcam: the live world (and music) dips under the replay while it plays, and comes back after. */
+  killcamDuck(on: boolean) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.world.gain.setTargetAtTime(on ? 0.35 : 1, ctx.currentTime, on ? 0.08 : 0.35);
+    if (on) this.music?.duck(0.6, 5);
+  }
+
+  /** Killcam: the killing shot lands (2D: a heavy impact, plus the headshot ping). */
+  killcamImpact(headshot: boolean) {
+    this.play({ sound: 'impact', pos: null, gain: 1 });
+    this.play({ sound: headshot ? 'headshot' : 'hitmarker', pos: null, gain: 0.8 });
+  }
+
   /** Your own handling sounds that the sim doesn't report (raising the sights). */
   local(sound: 'ads') {
     this.play({ sound, pos: null, gain: 0.7, own: true });
