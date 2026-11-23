@@ -20,6 +20,8 @@ export type GrappleCtx = {
   players: Map<number, PlayerState>;
   pieces: Map<number, PieceState>;
   waterY: number;
+  /** This map's hook reach (map.ts grappleRange). */
+  range: number;
   /** The hook's ray from the eye: first world / piece / player hit, blocked by firing slits. */
   cast(origin: Vec3, dir: Vec3, maxDist: number, shooter: number): RayHit | null;
   /** True when nothing solid (players aside) sits between a and b. */
@@ -44,10 +46,10 @@ export function fireGrapple(ctx: GrappleCtx, p: PlayerState, now: number): Match
   if (p.hotbar[p.selected] !== 'grapple' || (p.inv.grapples ?? 0) <= 0) return [];
   if (now < (p.hookReadyAt ?? 0) || now < p.busyUntil || p.mv?.pull) return [];
   const eye = eyePos(p), dir = aimDir(p.yaw, p.pitch);
-  const hit = ctx.cast(eye, dir, GRAPPLE.range, p.id);
+  const hit = ctx.cast(eye, dir, ctx.range, p.id);
   const ok = hit !== null && hit.dist >= GRAPPLE.minDist && hit.point.y > ctx.waterY + 0.05;
-  const d = hit ? hit.dist : GRAPPLE.range;
-  const pt = hit ? hit.point : add(eye, scale(dir, GRAPPLE.range));
+  const d = hit ? hit.dist : ctx.range;
+  const pt = hit ? hit.point : add(eye, scale(dir, ctx.range));
   if (!ok) {
     // Out and straight back.
     p.hook = { st: 3, x: pt.x, y: pt.y, z: pt.z, t0: now, at: now + (2 * d) / GRAPPLE.tipSpeed };
@@ -86,7 +88,7 @@ function latch(ctx: GrappleCtx, p: PlayerState, h: NonNullable<PlayerState['hook
     // Teams: a hook never takes a teammate (friendly fire is off; no yanking allies into the water).
     const why = unyankable(q, now) ?? (q && q.id !== p.id && isAlly(p, q) ? 'teammate' : null);
     const c = q ? chest(q) : null;
-    if (!why && q && c && dist(eye, c) <= GRAPPLE.range + 3 && ctx.clear(eye, c)) {
+    if (!why && q && c && dist(eye, c) <= ctx.range + 3 && ctx.clear(eye, c)) {
       spend(p);
       h.st = 2;
       // Drag them in: a target at your feet (a little up, so they come off the ground), stopping short of you.

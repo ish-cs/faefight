@@ -32,8 +32,10 @@ export function crossTo(view: BotView, P: HookParams, node: NavNode): HookIntent
   const dl = Math.hypot(dx, dz);
   if (dl <= node.radius) return null;
   const along = dl - node.radius + P.crossInset;
-  const to = v3(me.pos.x + (dx / dl) * along, node.groundY + 0.3, me.pos.z + (dz / dl) * along);
-  if (dist(eye, to) > Math.min(P.crossMax, GRAPPLE.range - 0.5) || !view.castHook) return null;
+  // Aim into the ground there, not above it: a grazing rope aimed just over the surface flies on past the end of its
+  // reach (26 m) without catching anything.
+  const to = v3(me.pos.x + (dx / dl) * along, node.groundY - 0.1, me.pos.z + (dz / dl) * along);
+  if (dist(eye, to) > Math.min(P.crossMax, (view.hookRange ?? GRAPPLE.range) - 0.5) || !view.castHook) return null;
   const hit = view.castHook(norm(sub(to, eye)));
   if (!hit || hit.player !== null || hit.dist < GRAPPLE.minDist || hit.point.y < view.waterY + 0.5) return null;
   if (dist2D(hit.point, node.center) > node.radius + 0.5) return null;
@@ -60,7 +62,7 @@ export function escapeFrom(view: BotView, P: HookParams, from: Vec3, nodeAt: (p:
 /** Is yanking this enemy worth it now (and why)? `gun`: what I'd fight them with. */
 export function yankReason(view: BotView, P: HookParams, e: PlayerState, d: number, gun: WeaponKind): string | null {
   const me = view.self;
-  if (d < P.yankMin || d > Math.min(P.yankMax, GRAPPLE.range - 1) || unyankable(e, view.now)) return null;
+  if (d < P.yankMin || d > Math.min(P.yankMax, (view.hookRange ?? GRAPPLE.range) - 1) || unyankable(e, view.now)) return null;
   // The rope must reach them: the hook's own ray at their chest catches them first.
   const chest = v3(e.pos.x, e.pos.y + PLAYER.height * 0.6, e.pos.z);
   const hit = view.castHook?.(norm(sub(chest, eyePos(me))));
