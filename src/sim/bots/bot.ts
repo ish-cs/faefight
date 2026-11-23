@@ -659,7 +659,8 @@ export class Bot {
     const e = c.enemy, want = this.hookNode(c);
     let it: HookIntent | null = null;
     if (e && c.enemyDist <= H.escapeNear && me.hp + me.shield < H.escapeHp) it = escapeFrom(c.view, H, e.pos, (p) => this.nav.nodeAt(p));
-    if (!it && e && (me.inv.grapples ?? 0) > (want !== null ? H.keepForTravel : 0)) {
+    // No yanks from a bridge or deck over the water: a miss latches whatever is behind them and reels me off it.
+    if (!it && e && (me.inv.grapples ?? 0) > (want !== null ? H.keepForTravel : 0) && this.nav.nodeAt(me.pos) >= 0) {
       const why = yankReason(c.view, H, e, c.enemyDist, gun);
       if (why && this.rng() < H.yankRate * HOOK_CHECK_SEC) it = { why: 'yank', target: e.id, note: why };
     }

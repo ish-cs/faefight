@@ -2,7 +2,7 @@
 import { chromium } from '@playwright/test';
 const prefix = process.argv[2];
 const q = process.argv[3] ?? 'ultra';
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
 page.setDefaultTimeout(240_000);
 const errors = [];

@@ -43,11 +43,15 @@ test.describe('in a match', () => {
     await expect(page.getByTestId('spectate-banner')).toBeHidden();
 
     const t0 = await page.evaluate(() => performance.now());
-    const kinds = new Set<string>();
+    // Every shot event (sim time + kind), straight from the director's API.
+    await page.evaluate(() => {
+      const w = window as unknown as { __shots: { t: number; kind: string }[]; __cinematic: { on(ev: 'shot', fn: (e: { t: number; kind: string }) => void): void } };
+      w.__shots = [];
+      w.__cinematic.on('shot', (e) => w.__shots.push({ t: e.t, kind: e.kind }));
+    });
     for (let s = 0; s < 60; s += 2) {
       await page.waitForTimeout(2000);
       const c = await cine(page);
-      if (c?.shot) kinds.add(c.shot.kind);
       if (SHOTS && s % 12 === 0) await page.screenshot({ path: `${SHOTS}/cinematic-${s}s-${c?.shot?.kind}-${c?.shot?.reason}.png` });
     }
     const c = (await cine(page))!;
@@ -56,9 +60,17 @@ test.describe('in a match', () => {
       const ints = f.slice(1).map((t, i) => t - f[i]).sort((a, b) => a - b);
       return { n: ints.length, p95: ints[Math.floor(ints.length * 0.95)], max: ints[ints.length - 1], fps: ints.length / ((f[f.length - 1] - f[0]) / 1000) };
     }, t0);
-    console.info(`[cinematic] ${c.cuts} cuts in 60 s, kinds ${[...kinds].join(',')}; ${frames.fps.toFixed(0)} fps, p95 ${frames.p95.toFixed(1)} ms, max ${frames.max.toFixed(0)} ms`);
-    expect(c.cuts).toBeGreaterThanOrEqual(5);
-    expect(kinds.size).toBeGreaterThanOrEqual(2);
+    const shots = await page.evaluate(() => (window as unknown as { __shots: { t: number; kind: string }[] }).__shots);
+    const gaps = shots.slice(1).map((s, i) => s.t - shots[i].t);
+    console.info(`[cinematic] ${shots.length} shots in 60 s (${c.cuts} since start), kinds ${shots.map((s) => s.kind).join(',')}, `
+      + `shortest ${Math.min(...gaps).toFixed(1)} s; ${frames.fps.toFixed(0)} fps, p95 ${frames.p95.toFixed(1)} ms, max ${frames.max.toFixed(0)} ms`);
+    // Calm cutting: a few shots a minute, none shorter than the minimum unless its subject died (fast exit).
+    expect(shots.length).toBeGreaterThanOrEqual(3);
+    expect(shots.length).toBeLessThanOrEqual(10);
+    expect(gaps.filter((g) => g < 6.9).length).toBeLessThanOrEqual(1);
+    // Mostly third-person follow; never a kill-replay orbit.
+    expect(shots.filter((s) => s.kind === 'shoulder').length).toBeGreaterThanOrEqual(shots.length / 2);
+    expect(shots.some((s) => s.kind === 'orbit')).toBe(false);
     expect(errors).toEqual([]);
     expect(frames.p95).toBeLessThanOrEqual(50);
     expect(frames.max).toBeLessThanOrEqual(250);

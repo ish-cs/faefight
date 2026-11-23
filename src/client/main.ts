@@ -22,6 +22,7 @@ import type { BrainDigest } from '../sim/bots/introspect';
 import { adoptSpawnLook, moveForAim } from './aim';
 import { BodyCam, SpectatorCamera, viewedPlayer, KillerLock, followAfterDeath } from './viewed';
 import { AudioSystem } from './audio/engine';
+import { Commentary } from './cinematic/commentary';
 import { errors, installErrorReporting } from './telemetry/errors';
 import { telemetryEnabled } from './telemetry/config';
 import { installReplayUploads, MIN_UNFINISHED_SEC, replayUploader } from './telemetry/replayUpload';
@@ -74,6 +75,7 @@ import { CinematicOverlay } from './cinematic/overlay';
 import { EmoteWheel } from './emoteWheel';
 import { isWheelId, quipLines, type WheelId } from '../sim/emotes';
 // UI theme last: its tokens and skin win over style.css / qol.css / settings.css (docs/ui-style.md).
+import { setLeaveGuard } from './leaveGuard';
 import './ui/theme.css';
 import './ui/skin.css';
 
@@ -89,6 +91,8 @@ const MAP_KEY = 'faefight.map';
 let lastBotMap: MapTemplate | null = null;
 /** Created at load so M-mute works from the menu; the AudioContext itself starts on the first click/key. */
 const audio = new AudioSystem();
+/** Sportscaster voice + captions (cinematic mode, or spectating if enabled in Settings). */
+const commentary = new Commentary((on) => audio.duckForVoice(on));
 
 function toast(msg: string) {
   const t = document.createElement('div');
@@ -568,6 +572,7 @@ function storedName() {
 }
 
 function showMenu() {
+  setLeaveGuard(null);
   const menu = document.createElement('div');
   menu.className = 'menu';
   const card = document.createElement('div');
@@ -1204,6 +1209,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   /** Back to the menu (a page reload) once this match's recording is stored and uploaded (bounded: see both). */
   function leaveToMenu() {
+    setLeaveGuard(null);
     backend.close();
     void savesSettled().then(() => replayUploader?.settled()).then(() => location.reload());
   }
@@ -1419,6 +1425,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   });
   // Replay viewer: always the spectator camera, playback bar at the bottom, interpolation on the playback clock.
   const replay = backend.replay ?? null;
+  // Closing the tab mid-match asks first (a finished match or a replay doesn't).
+  setLeaveGuard(() => !replay && !hud.ended);
   let replayUi: ReplayControls | null = null;
   if (replay) {
     app.classList.add('replay-mode'); // hides the first-person HUD (hotbar, health…): nobody is "you" here
@@ -1685,6 +1693,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Respawned: the sim turned me to face out of my bunker's front door. Snap camera + aim to it once.
     if (adoptSpawnLook(input, s.events, humanId)) console.info(`[main] respawn: facing front door (yaw ${input.yaw.toFixed(2)})`);
     audio.snapshot(s);
+    commentary.onSnapshot(s, watching || spectateChosen);
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
       if (me) { input.yaw = me.yaw; input.pitch = me.pitch; input.selected = me.selected; }
@@ -1810,6 +1819,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         probe.close();
         console.info('[rejoin] host still up; reloading to reclaim the seat');
         markAutoRejoin();
+        setLeaveGuard(null);
         location.reload();
       }, (err) => { console.info('[rejoin] host unreachable', err); hostGone(); });
     },
@@ -1862,6 +1872,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Loot on the ground as drawn: label lines, label shown, model count. */
       loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
+      commentary: () => commentary.commentator.log,
       killcam: () => killcam.info(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
@@ -2110,7 +2121,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         spectator.mode = 'follow';
         spectator.followId = shot.playerId;
         spectator.firstPerson = false;
-        cineCam.frame(shot, snap!.time, dt, (id, out) => renderer.playerPos(id, out), lookOf);
+        cineCam.frame(shot, director.pending, snap!.time, dt, (id, out) => renderer.playerPos(id, out), lookOf);
         const fp = snap!.players.find((p) => p.id === shot.playerId);
         cineOverlay.update(now, fp, shot.reason, director.alive);
       } else spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId: replay ? 0 : humanId, players: snap!.players,

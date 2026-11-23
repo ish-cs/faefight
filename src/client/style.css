@@ -647,3 +647,13 @@ body.cinematic .spectate-banner, body.cinematic .click-hint { display: none !imp
 .cine-alive { position: fixed; top: 18px; right: 24px; font-size: 14px; font-weight: 800; letter-spacing: 1px; padding: 6px 12px; background: rgba(0,0,0,0.45); border-radius: 4px; }
 .cine-hint { font-size: 11px; opacity: 0.55; letter-spacing: 0.5px; }
 @media (max-width: 600px) { .cine-l3 { left: 16px; right: 16px; bottom: 16px; } .cine-card { min-width: 0; } }
+/* Commentary captions (cinematic/commentary): broadcast lower third, above the HUD bars, no input. */
+.commentary-caption {
+  position: fixed; left: 50%; bottom: 132px; transform: translate(-50%, 8px); max-width: min(760px, 86vw);
+  padding: 8px 16px; border-radius: 8px; background: rgba(4, 11, 17, 0.72); border-left: 4px solid var(--c-orange, #ff6a1f);
+  font-family: var(--ff-body, inherit); font-size: var(--fs-lg, 18px); font-weight: 700; line-height: 1.25; color: var(--c-text, #f5efe4);
+  text-align: center; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); pointer-events: none; z-index: 40;
+  opacity: 0; transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.commentary-caption.on { opacity: 1; transform: translate(-50%, 0); }
+.commentary-caption[data-persona="colour"] { border-left-color: var(--c-teal, #1fc9b6); font-weight: 600; }

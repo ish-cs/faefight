@@ -9,7 +9,7 @@ const variants = arg('variants', ',noprops').split(',');
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
 
 for (const v of variants) {
-  const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
+  const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   page.setDefaultTimeout(240_000);
   const t0 = Date.now();
