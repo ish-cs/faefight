@@ -1,10 +1,10 @@
 import { BUILD } from '../sim/constants';
 import { HOTBAR_SIZE, isGunItem, isPieceItem, isPotionItem } from '../sim/hotbar';
 import type { HotbarItem, PieceKind, PlayerInput, TrapRequest } from '../sim/types';
-import { AimLatch, effectiveButton, isCtrlCode, isMacPlatform } from './aimInput';
+import { AimLatch, effectiveButton, isCtrlCode, isMacPlatform, platformNav } from './aimInput';
 import { ClickGate } from './clickGate';
 import { RecoilRecovery } from './recoil';
-import { type Action, isAction, isHeld, keymapSuspended, slotForCode } from './keymap';
+import { type Action, activeKeymap, isAction, isHeld, keymapSuspended, slotForCode } from './keymap';
 import { settings } from './settings/store';
 
 export const PIECE_ORDER: PieceKind[] = ['sandbags', 'wood', 'metal', 'steel', 'scaffold', 'ramp', 'container'];
@@ -70,7 +70,7 @@ export class InputController {
   private unadjusted = true;
   /** Aim keys: hold or toggle (Settings → Controls). */
   private aim = new AimLatch(() => settings.get().controls.aimMode);
-  private mac = isMacPlatform(typeof navigator === 'undefined' ? undefined : navigator);
+  private mac = isMacPlatform(platformNav());
   /** A Mac Ctrl+click (arrives as button 2) taken as a left click is down: its button-2 release is a left release. */
   private ctrlClick = false;
 
@@ -120,6 +120,8 @@ export class InputController {
       if (locked) { this.wantLock = false; this.lockPending = false; }
       this.hooks.lockChange(locked);
     });
+    document.addEventListener('fullscreenchange', () => this.syncKeyboardLock());
+    settings.subscribe((s, prev) => { if (s.controls.ctrlAim !== prev.controls.ctrlAim) this.syncKeyboardLock(); });
     document.addEventListener('pointerlockerror', () => {
       this.lockPending = false;
       console.info('[input] pointer lock error; will retry on the next click or key press');
@@ -166,13 +168,26 @@ export class InputController {
 
   /** Aim key (right mouse or Ctrl by default) held, or toggled on, with a gun in hand: aim down sights. */
   get ads(): boolean {
-    return this.enabled && this.aim.active(isHeld('aim', this.keys)) && isGunItem(this.held);
+    return this.enabled && this.aim.active(isHeld('aim', this.keys) || this.ctrlAiming) && isGunItem(this.held);
   }
 
-  /** A Ctrl key bound to aim is down (Mac: a click with it arrives as a right click). */
+  /** Ctrl aims (Settings → Controls) and a Ctrl key is down (Mac: a click with it arrives as a right click). */
   private get ctrlAiming(): boolean {
-    for (const c of this.keys) if (isCtrlCode(c) && isAction('aim', c)) return true;
-    return false;
+    return settings.get().controls.ctrlAim && (this.keys.has('ControlLeft') || this.keys.has('ControlRight'));
+  }
+
+  /**
+   * Ctrl aims on Windows/Linux: in fullscreen, lock the bound keys so Ctrl+W/T/N etc. reach the game instead
+   * of the browser (Keyboard Lock only works in fullscreen; Chromium only). macOS needs none (Cmd shortcuts).
+   */
+  private syncKeyboardLock() {
+    const kb = (navigator as Navigator & { keyboard?: { lock(codes?: string[]): Promise<void>; unlock(): void } }).keyboard;
+    if (!kb || this.mac) return;
+    if (document.fullscreenElement && settings.get().controls.ctrlAim) {
+      const codes = [...new Set(Object.values(activeKeymap()).flat().filter((c) => !c.startsWith('Mouse')))];
+      kb.lock(codes).then(() => console.info('[input] keyboard lock on (Ctrl aims in fullscreen)'),
+        (err: unknown) => console.info('[input] keyboard lock refused', err));
+    } else kb.unlock();
   }
 
   /**
@@ -280,7 +295,7 @@ export class InputController {
     if (!down) this.keys.delete(e.code); // releases always count, even with the settings panel open
     if (keymapSuspended()) return; // settings panel open / capturing a key
     if (isAction('freePlace', e.code)) e.preventDefault();
-    // Ctrl aims: keep Ctrl+R / Ctrl+S / Ctrl+D (reload page, save, bookmark) from reaching the browser in game.
+    // Ctrl may aim: keep Ctrl+R / S / D / A (reload page, save, bookmark, select all) from the browser in game.
     if (down && e.ctrlKey && this.enabled) e.preventDefault();
     // Jump/scoreboard keys (Space/Tab by default) are ours in game; with a panel open they press/move between buttons as usual.
     if ((isAction('jump', e.code) || isAction('scoreboard', e.code) || e.code === 'Tab') && this.enabled) e.preventDefault();
@@ -289,7 +304,7 @@ export class InputController {
     const first = !e.repeat;
     this.keys.add(e.code);
     if (!first) return;
-    if (isAction('aim', e.code)) this.aim.press();
+    if (isAction('aim', e.code) || (isCtrlCode(e.code) && settings.get().controls.ctrlAim)) this.aim.press();
     const slot = slotForCode(e.code);
     if (slot >= 0 && slot < HOTBAR_SIZE) { this.select(slot); return; }
     if (isAction('drop', e.code)) {

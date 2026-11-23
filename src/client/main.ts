@@ -71,6 +71,7 @@ import { PracticePanel } from './practicePanel';
 import { EmoteWheel } from './emoteWheel';
 import { isWheelId, quipLines, type WheelId } from '../sim/emotes';
 // UI theme last: its tokens and skin win over style.css / qol.css / settings.css (docs/ui-style.md).
+import { setLeaveGuard } from './leaveGuard';
 import './ui/theme.css';
 import './ui/skin.css';
 
@@ -565,6 +566,7 @@ function storedName() {
 }
 
 function showMenu() {
+  setLeaveGuard(null);
   const menu = document.createElement('div');
   menu.className = 'menu';
   const card = document.createElement('div');
@@ -1141,6 +1143,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   /** Back to the menu (a page reload) once this match's recording is stored and uploaded (bounded: see both). */
   function leaveToMenu() {
+    setLeaveGuard(null);
     backend.close();
     void savesSettled().then(() => replayUploader?.settled()).then(() => location.reload());
   }
@@ -1326,6 +1329,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   });
   // Replay viewer: always the spectator camera, playback bar at the bottom, interpolation on the playback clock.
   const replay = backend.replay ?? null;
+  // Closing the tab mid-match asks first (a finished match or a replay doesn't).
+  setLeaveGuard(() => !replay && !hud.ended);
   let replayUi: ReplayControls | null = null;
   if (replay) {
     app.classList.add('replay-mode'); // hides the first-person HUD (hotbar, health…): nobody is "you" here
@@ -1699,6 +1704,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         probe.close();
         console.info('[rejoin] host still up; reloading to reclaim the seat');
         markAutoRejoin();
+        setLeaveGuard(null);
         location.reload();
       }, (err) => { console.info('[rejoin] host unreachable', err); hostGone(); });
     },

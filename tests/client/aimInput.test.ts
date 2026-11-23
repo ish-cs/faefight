@@ -1,23 +1,27 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AimLatch, type AimMode, effectiveButton, isMacPlatform } from '../../src/client/aimInput';
-import { defaultKeymap, isAction, isHeld, sanitizeKeymap, setActiveKeymap } from '../../src/client/keymap';
+import { AimLatch, type AimMode, ctrlAimDefault, effectiveButton, isMacPlatform, platformNav } from '../../src/client/aimInput';
+import { defaultKeymap, setActiveKeymap } from '../../src/client/keymap';
 import { sanitizeSettings } from '../../src/client/settings/store';
 
 afterEach(() => setActiveKeymap(defaultKeymap()));
 
-describe('Ctrl aims', () => {
-  it('either Ctrl key held = aim, as well as right mouse', () => {
-    expect(isHeld('aim', new Set(['ControlLeft']))).toBe(true);
-    expect(isHeld('aim', new Set(['ControlRight']))).toBe(true);
-    expect(isHeld('aim', new Set(['Mouse2']))).toBe(true);
-    expect(isHeld('aim', new Set(['KeyW']))).toBe(false);
-    expect(isAction('aim', 'ControlLeft')).toBe(true);
+describe('Ctrl aims: on by default on macOS only', () => {
+  it('per OS', () => {
+    expect(ctrlAimDefault({ userAgentData: { platform: 'macOS' } })).toBe(true);
+    expect(ctrlAimDefault({ platform: 'MacIntel' })).toBe(true);
+    expect(ctrlAimDefault({ platform: '', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' })).toBe(true);
+    expect(ctrlAimDefault({ userAgentData: { platform: 'Windows' }, platform: 'Win32' })).toBe(false);
+    expect(ctrlAimDefault({ platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64)' })).toBe(false);
+    expect(ctrlAimDefault({ userAgentData: { platform: 'Chrome OS' } })).toBe(false);
+    expect(ctrlAimDefault(undefined)).toBe(false);
   });
-
-  it('old saved maps (aim = right mouse only) gain Ctrl, unless Ctrl is bound elsewhere', () => {
-    expect(sanitizeKeymap({ aim: ['Mouse2'] }).aim).toEqual(['Mouse2', 'ControlLeft', 'ControlRight']);
-    expect(sanitizeKeymap({ aim: ['Mouse2'], drop: ['ControlLeft'] }).aim).toEqual(['Mouse2']);
-    expect(sanitizeKeymap({ aim: ['KeyF'] }).aim).toEqual(['KeyF']);
+  it('the setting keeps a stored choice and rejects junk', () => {
+    expect(sanitizeSettings({ controls: { ctrlAim: true } }).controls.ctrlAim).toBe(true);
+    expect(sanitizeSettings({ controls: { ctrlAim: false } }).controls.ctrlAim).toBe(false);
+    expect(sanitizeSettings({ controls: { ctrlAim: 'yes' } }).controls.ctrlAim).toBe(ctrlAimDefault(platformNav())); // default for this platform
+  });
+  it('right mouse stays the aim key in the keymap (Ctrl is the setting, not a binding)', () => {
+    expect(defaultKeymap().aim).toEqual(['Mouse2']);
   });
 });
 
@@ -29,7 +33,7 @@ describe('Mac Ctrl+click while aiming with Ctrl', () => {
     expect(effectiveButton(2, false, false, true)).toBe(2);
     expect(effectiveButton(2, true, true, false)).toBe(2); // Windows/Linux: Ctrl+right click stays a right click
     expect(effectiveButton(2, false, true, true)).toBe(2);
-    expect(effectiveButton(2, true, false, true)).toBe(2); // Ctrl not held as an aim key
+    expect(effectiveButton(2, true, false, true)).toBe(2); // Ctrl not aiming (setting off)
   });
   it('left clicks are untouched', () => {
     expect(effectiveButton(0, true, true, true)).toBe(0);

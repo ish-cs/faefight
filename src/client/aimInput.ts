@@ -5,11 +5,22 @@ export const AIM_MODES: readonly AimMode[] = ['hold', 'toggle'];
 
 export const isCtrlCode = (code: string) => code === 'ControlLeft' || code === 'ControlRight';
 
-/** macOS (Ctrl+click is a secondary click there). */
-export function isMacPlatform(nav: { platform?: string; userAgent?: string } | undefined): boolean {
+type Nav = { userAgentData?: { platform?: string }; platform?: string; userAgent?: string };
+/** The browser's navigator (undefined outside a browser). */
+export const platformNav = (): Nav | undefined => (typeof navigator === 'undefined' ? undefined : (navigator as Nav));
+
+/** macOS (Ctrl+click is a secondary click there; browser shortcuts use Cmd, not Ctrl). */
+export function isMacPlatform(nav: Nav | undefined): boolean {
   if (!nav) return false;
-  return /Mac/i.test(nav.platform ?? '') || /Macintosh|Mac OS X/i.test(nav.userAgent ?? '');
+  const p = nav.userAgentData?.platform || nav.platform || '';
+  return p ? /mac/i.test(p) : /Macintosh|Mac OS X/i.test(nav.userAgent ?? '');
 }
+
+/**
+ * Ctrl aims by default only on macOS. On Windows/Linux Ctrl+W/T/N close/open tabs and a page can't block
+ * them (outside fullscreen keyboard lock), so holding Ctrl to aim while walking with W would close the game.
+ */
+export const ctrlAimDefault = (nav: Nav | undefined) => isMacPlatform(nav);
 
 /**
  * The button a press really means. macOS turns Ctrl+click into a secondary click (button 2 + contextmenu),
