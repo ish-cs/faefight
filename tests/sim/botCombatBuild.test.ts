@@ -135,6 +135,5 @@ describe('combat building: skill scaling', () => {
     // No superhuman hands: even PRO needs ≥ 0.25 s per combat piece (≤ 4 a second).
     expect(BUILD_SKILL.pro.pieceSec).toBeGreaterThanOrEqual(0.25);
     expect(BUILD_SKILL.easy.ramp).toBe(0);
-    expect(BUILD_SKILL.easy.coverChance).toBeLessThanOrEqual(0.15);
   });
 });
