@@ -66,6 +66,14 @@ export type BotView = {
    * blow. `radius`: blast radius (0 for crates). Absent in hand-made test views.
    */
   hazards?: { id: number; kind: 'barrel' | 'propane' | 'crate'; pos: Vec3; center: Vec3; radius: number; fusing: boolean }[];
+  /**
+   * Gameplay props (crates, drums, IBC tanks, reels, tyres; props.ts) where they are now, as footprints: centre,
+   * radius, and the top's height. Too tall to step over ones are walked round (Nav), not shoved along the way.
+   * A function (worked out when asked; kept out of match checkpoints). Absent in hand-made views.
+   */
+  props?(): { pos: Vec3; r: number; top: number }[];
+  /** Enemies (ids, in `enemies`) whose body is hidden behind a prop but whose head shows over it. */
+  peeking?: number[];
   /** Wooden pier sections still standing (public: anyone sees them); explosions break them. Absent in hand-made views. */
   docks?: readonly DockDef[];
   /** Clear line of fire from my eye to this point (bullets pass firing slits)? */

@@ -8,6 +8,7 @@ import { Physics } from '../../src/sim/physics';
 import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type HotbarItem, type PlayerInput, type PlayerState } from '../../src/sim/types';
 import { add, dist2D, forward, right, scale, v3 } from '../../src/sim/vec';
+import { unarmed } from './unarmed';
 
 const humans1v1 = { players: [{ name: 'you', isBot: false }, { name: 'friend', isBot: false }] };
 const inputs = (id: number, i: Partial<PlayerInput>) => new Map([[id, { ...NO_INPUT, ...i }]]);
@@ -173,6 +174,7 @@ describe('hotbar: in a match', () => {
 
   test('legacy slot selects the hotbar slot holding that gun (bots)', async () => {
     const m = await atShop();
+    unarmed(m);
     m.debugGive(1, { cash: 500 });
     m.tick(inputs(1, { shop: { buy: 'wood' } }));
     m.tick(inputs(1, { shop: { buy: 'smg' } }));
@@ -201,6 +203,7 @@ describe('hotbar: in a match', () => {
 
   test('drop one: gun with its ammo goes into a bag in front; the slot frees', async () => {
     const m = await atShop();
+    unarmed(m);
     m.debugGive(1, { cash: 500 });
     m.tick(inputs(1, { shop: { buy: 'pistol' } }));
     let snap = m.tick(inputs(1, { select: 0 }));
@@ -220,6 +223,7 @@ describe('hotbar: in a match', () => {
 
   test('drop one piece vs the whole stack', async () => {
     const m = await atShop();
+    unarmed(m);
     m.debugGive(1, { pieces: { wood: 3 } });
     let snap = m.tick(inputs(1, { select: 0 }));
     expect(me(snap).hotbar[0]).toBe('wood');
@@ -239,6 +243,7 @@ describe('hotbar: in a match', () => {
 
   test('the dropper cannot re-pick a bag for 1.5 s; others can right away', async () => {
     const m = await atShop();
+    unarmed(m);
     m.debugGive(1, { grenades: 2 });
     let snap = m.tick(inputs(1, { select: 0, drop: 'one' }));
     const bag = snap.loot[0];
@@ -260,6 +265,7 @@ describe('hotbar: in a match', () => {
 
   test('using up the last piece frees its slot', async () => {
     const m = await Match.create(humans1v1);
+    unarmed(m);
     const isl = m.map[0];
     const yaw = isl.bunker.facingYaw;
     const stand = add(add(isl.center, scale(forward(yaw), 4)), scale(right(yaw), 3));
@@ -276,6 +282,7 @@ describe('hotbar: in a match', () => {
 
   test('throwing the last grenade frees its slot', async () => {
     const m = await atShop();
+    unarmed(m);
     m.debugGive(1, { grenades: 1 });
     let snap = m.tick(inputs(1, { select: 0, throwGrenade: true }));
     expect(me(snap).inv.grenades).toBe(0);
@@ -284,6 +291,7 @@ describe('hotbar: in a match', () => {
 
   test('a debug kill clears the hotbar', async () => {
     const m = await atShop();
+    unarmed(m);
     m.debugGive(1, { pieces: { wood: 2 }, grenades: 1 });
     let snap = m.tick(new Map());
     expect(me(snap).hotbar.filter(Boolean)).toHaveLength(2);

@@ -72,7 +72,7 @@ test('bullet holes vanish with the wall they were in (no levitating holes)', asy
   await dbg(page, 'teleport', stand.x, stand.z);
   await dbg(page, 'give', { weapons: { rifle: { mag: 25, spare: 100 } } });
   await page.locator('canvas.game').click();
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   await expect.poll(async () => (await me()).equipped).toBe('rifle');
   // Aim at the wall's middle (eye 1.6 m up, wall centre 1 m up).
   await page.evaluate(([y, p]) => {

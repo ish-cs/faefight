@@ -23,7 +23,7 @@ test('a dropped rifle shows its model, glow and a name + ammo label nearby', asy
   await page.getByTestId('play-easy').click();
   await expect(page.getByTestId('cash')).toHaveText(/\$\d+/, { timeout: 60_000 });
   await dbg(page, 'give', { weapons: { rifle: { mag: 5, spare: 15 } } });
-  await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', 'rifle');
+  await expect(page.getByTestId('hotbar-slot-1')).toHaveAttribute('data-item', 'rifle');
   // Out in the open on the home island.
   const humanId = await dbg<number>(page, 'humanId');
   const island = (await dbg<{ players: { id: number; island: number }[] }>(page, 'snapshot')).players.find((p) => p.id === humanId)!.island;
@@ -31,7 +31,7 @@ test('a dropped rifle shows its model, glow and a name + ammo label nearby', asy
   await dbg(page, 'teleport', home.center.x, home.center.z);
   await page.waitForTimeout(500);
   await page.locator('canvas.game').focus();
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   await page.keyboard.press('KeyQ');
   // Step back so we don't walk over it and pick it up again.
   await page.keyboard.down('KeyS');

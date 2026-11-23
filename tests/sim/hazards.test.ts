@@ -8,6 +8,7 @@ import { dist2D, v3 } from '../../src/sim/vec';
 import { SnapshotEncoder } from '../../src/net/snapshotCodec';
 import { WireDecoder, WireEncoder } from '../../src/net/wire';
 import { newPlayer } from '../../src/sim/player';
+import { unarmed } from './unarmed';
 
 async function match(n = 2, map: 'harbor' | 'yard' = 'harbor', seed = 1) {
   return Match.create({ players: Array.from({ length: n }, (_, i) => ({ name: `p${i + 1}`, isBot: false })), map, seed });
@@ -178,6 +179,7 @@ describe('explosive barrels', () => {
 
   test('fists do nothing to a barrel; bullets stop at it', async () => {
     const m = await match(2);
+    unarmed(m);
     const b = firstOf(m, 'barrel');
     const stand = beside(m, b, 1.2);
     place(m, 1, stand);
@@ -236,6 +238,7 @@ describe('supply crates', () => {
 
   test('ammo-only drops: only someone who owns the gun picks them up', async () => {
     const m = await match(2);
+    unarmed(m);
     const c = firstOf(m, 'crate');
     // Force an ammo roll: try breaks until one is ammo (deterministic per seed).
     m.debugGive(1, { weapons: { smg: { mag: 30, spare: 0 } } });

@@ -37,6 +37,12 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   const map = await dbg<Isl[]>(page, 'map');
   const snap0 = await dbg<Snap>(page, 'snapshot');
   const me0 = snap0.players.find((p) => p.id === humanId)!;
+  // Everyone starts with a pistol + one spare mag in slot 1, already in hand: the first click fires.
+  expect(me0.hotbar[0]).toBe('pistol');
+  expect(me0.selected).toBe(0);
+  expect(me0.equipped).toBe('pistol');
+  for (const p of snap0.players) expect(p.hotbar).toContain('pistol');
+  await expect(page.getByTestId('weapon')).toHaveText(/pistol\s*12\/12/i);
   const home = map[me0.island];
 
   // The seal chip labelled "You" (chips are in island order) is the human's own island.
@@ -54,12 +60,11 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await dbg(page, 'teleport', home.shop.x + (dx / d) * 1.5, home.shop.z + (dz / d) * 1.5);
   await expect(page.getByText('E  Shop')).toBeVisible();
 
-  // Open the shop, buy a pistol: it lands in hotbar slot 1 (index 0).
+  // Open the shop: the starting pistol (hotbar slot 1, index 0) shows as owned and can't be bought twice.
   await page.keyboard.press('KeyE');
   await expect(page.getByTestId('panel')).toBeVisible();
-  await page.getByTestId('buy-pistol').click();
-  await expect(page.getByTestId('cash')).toHaveText(`$${cash - 50}`);
   await expect(page.getByTestId('buy-pistol')).toBeDisabled();
+  await expect(page.getByTestId('cash')).toHaveText(`$${cash}`);
   await expect(page.getByTestId('hotbar-slot-0')).toHaveAttribute('data-item', 'pistol');
   // Slots show the mag only; mag/spare is the big ammo readout bottom-right.
   await expect(page.getByTestId('hotbar-slot-0')).toContainText(/pistol/i);
@@ -70,7 +75,7 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   // A medkit is a hotbar item too: next free slot. Bought from the keyboard (Enter on the focused card).
   await page.getByTestId('buy-medkit').focus();
   await page.keyboard.press('Enter');
-  await expect(page.getByTestId('cash')).toHaveText(`$${cash - 125}`);
+  await expect(page.getByTestId('cash')).toHaveText(`$${cash - 75}`);
   await expect(page.getByTestId('hotbar-slot-1')).toHaveAttribute('data-item', 'medkit');
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('panel')).toBeHidden();
@@ -82,7 +87,7 @@ test('menu → match vs medium bot → shop → build', async ({ page }) => {
   await expect(page.getByTestId('weapon')).toHaveText(/fists/i);
   await page.keyboard.press('Digit1');
   await expect(page.getByTestId('hotbar-slot-0')).toHaveClass(/selected/);
-  await expect(page.getByTestId('weapon')).toHaveText(/pistol\s*12\/36/i);
+  await expect(page.getByTestId('weapon')).toHaveText(/pistol\s*12\/12/i);
   await expect.poll(async () => (await me()).equipped).toBe('pistol');
 
   // I releases the mouse; drag the pistol from slot 1 to slot 5 to reorder.
