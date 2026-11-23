@@ -252,6 +252,8 @@ export class Bot {
   private healRoll = { cover: true, reload: true };
   private healRng: () => number;
   private healHideAt: number | null = null;
+  /** What my hook in flight was fired for (a yank that latches the world instead is let go of at once). */
+  private hookFiredFor: HookIntent['why'] | null = null;
   /** How I'd break line of sight to heal right now (cover close by or a wall to throw), or null: none at hand. */
   private healHideAct: Act | null = null;
   /** When I last started a heal mid-fight (heal.reHealSec commitment). */
@@ -582,6 +584,10 @@ export class Bot {
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
     if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     if (rope || grapple) jump = false; // a jump lets go of the rope
+    // A yank that missed the player and caught the world reels ME toward it, often out over the water between us
+    // (botDrown medium seed 7: pulled off the island and dropped in the sea): let go at once.
+    if (rope && this.hookFiredFor === 'yank') { jump = true; this.hookFiredFor = null; }
+    if (!me.hook && !me.mv?.pull && !grapple) this.hookFiredFor = null;
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
@@ -610,6 +616,7 @@ export class Bot {
       select = me.hotbar.indexOf('grapple');
       useMedkit = false;
       this.hookNote = { t: now, text: hook!.note };
+      this.hookFiredFor = hook!.why;
       this.hookIntent = null;
       this.lastDidAt = now;
     }
@@ -1227,8 +1234,10 @@ export class Bot {
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       // Heals to carry; with the storm coming in, no new ones (the decks and getting inside the ring come first).
+      // Hurt with nothing to heal with: one medkit even below the stock's cash line (a strong player patches up before
+      // heading back out, instead of walking out on low hp).
       medkits: (this.healWant = this.stormPrep(c.view) ? Math.min(hpHealsHeld(c.me), healStock(total, this.difficulty, this.P.heal))
-        : healStock(total, this.difficulty, this.P.heal)),
+        : Math.max(healStock(total, this.difficulty, this.P.heal), c.me.hp <= this.P.heal.safeHp[this.difficulty] && hpHealsHeld(c.me) === 0 ? 1 : 0)),
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
       // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
