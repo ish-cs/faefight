@@ -1191,7 +1191,7 @@ export class Bot {
     const C = this.nav.centerNode;
     const centerReach = C >= 0 && (node === C || this.nav.hop(src, C) !== null);
     let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
-    const hookFrom = rivalIsl && !reach ? this.hookLaunch(view, me, node, home.index, rivalIsl.index) : null;
+    const hookFrom = null as Vec3 | null;
     // Teams: bridge to the teammate whose island is on the way (they lay the rest); already linked to them, wait
     // for their bridge instead of laying a second, longer one of my own.
     const stage = bridgeTo !== null && rival ? this.stageIsland(view, rival) : null;
