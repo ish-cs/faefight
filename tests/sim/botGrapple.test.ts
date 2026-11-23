@@ -6,8 +6,8 @@ import { NO_INPUT } from '../../src/sim/types';
 import type { Difficulty, Snapshot } from '../../src/sim/types';
 
 const LIMIT = 25 * 60 * 30;
-/** Games shorter than this (minutes) are won before a hook comes into it. */
-const SHORT_MIN = 6;
+/** Games at least this long (minutes) count; at least QUALIFY of them, seeds 1..MAX_SEED at most. */
+const LONG_MIN = 5, QUALIFY = 5, MAX_SEED = 40;
 
 type Use = { buys: number; fire: number; latch: number; yank: number; miss: number };
 
@@ -32,25 +32,23 @@ async function play(diffs: Difficulty[], seed: number) {
 
 describe('bots and the grappling hook', () => {
   test('bots buy hooks and use them (cross / escape / yank) in most games', async () => {
-    const games: { diffs: Difficulty[]; seed: number }[] = [
-      { diffs: ['pro', 'hard'], seed: 1 }, { diffs: ['hard', 'medium'], seed: 2 }, { diffs: ['pro', 'medium'], seed: 3 },
-      { diffs: ['hard', 'pro', 'medium', 'hard'], seed: 4 }, { diffs: ['pro', 'hard', 'hard', 'medium'], seed: 5 },
-      { diffs: ['medium', 'hard'], seed: 6 },
-    ];
-    let used = 0, long = 0;
+    // Among games that last at least 5:00, bots buy AND use a hook (a latch or a yank) in >= 60% of them. At least
+    // QUALIFY such games: seeds are added (cycling the line-ups) until there are, never fewer. A 1v1 sealed and won in
+    // the first few minutes never needed a hook, so short games don't count either way.
+    const lineups: Difficulty[][] = [['pro', 'hard'], ['hard', 'medium'], ['pro', 'medium'], ['hard', 'pro', 'medium', 'hard'], ['pro', 'hard', 'hard', 'medium'], ['medium', 'hard']];
+    let qualifying = 0, used = 0;
     const lines: string[] = [];
-    for (const g of games) {
-      const r = await play(g.diffs, g.seed);
-      const latched = r.use.latch + r.use.yank;
-      // A 1v1 sealed and won in the first few minutes (bridge, plug, kill) never needed a hook: count the games that
-      // lasted long enough for one to matter.
-      if (r.min >= SHORT_MIN) { long++; if (latched > 0) used++; }
-      lines.push(`seed ${g.seed} ${g.diffs.join('/')}: ${JSON.stringify(r.use)} winner ${r.winner} at ${r.min.toFixed(1)} min`);
+    for (let seed = 1; qualifying < QUALIFY; seed++) {
+      if (seed > MAX_SEED) throw new Error(`only ${qualifying} games of ${MAX_SEED} lasted ${LONG_MIN}:00:\n  ${lines.join('\n  ')}`);
+      const diffs = lineups[(seed - 1) % lineups.length];
+      const r = await play(diffs, seed);
+      const ok = r.use.buys > 0 && r.use.latch + r.use.yank > 0;
+      if (r.min >= LONG_MIN) { qualifying++; if (ok) used++; }
+      lines.push(`seed ${seed} ${diffs.join('/')}: ${JSON.stringify(r.use)} winner ${r.winner} at ${r.min.toFixed(1)} min${r.min >= LONG_MIN ? (ok ? ' [counts: used]' : ' [counts: not used]') : ''}`);
     }
     console.log(`grappling hook use:\n  ${lines.join('\n  ')}`);
-    expect(long).toBeGreaterThanOrEqual(3);
-    expect(used).toBeGreaterThanOrEqual(Math.ceil(long * 0.6));
-  }, 900_000);
+    expect(used).toBeGreaterThanOrEqual(Math.ceil(qualifying * 0.6));
+  }, 1_800_000);
 
   test('never strands itself: PRO vs a passive opponent, seed 1 (it used to hook to the center with its last hook and stay there)', async () => {
     const m = await Match.create({ players: [{ name: '', isBot: true, difficulty: 'pro' }, { name: '', isBot: true, difficulty: 'easy' }], seed: 1 },
