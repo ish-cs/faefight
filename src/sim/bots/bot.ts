@@ -105,6 +105,8 @@ const STORM_SPARE_DECKS = 2, STORM_SHOP_GRACE = 45;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Walls a bot throws down for cover, best first (sandbags go up two high). */
 const WALLS: PieceKind[] = ['wood', 'metal', 'steel'];
+/** Medium and Easy throw down the toughest wall they hold (main's behaviour; situational choice is a Hard/PRO skill). */
+const PLAIN_WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
 /** Walls for holding a spot (home, a long hold, replacing a cracked wall): toughest first. */
 const STRONG_WALLS: PieceKind[] = ['steel', 'metal', 'wood'];
 /** Generator cash worth grabbing on the way out, and the level at which it is about to be wasted at the cap. */
@@ -1877,7 +1879,7 @@ export class Bot {
     const shore = Math.sqrt(c.home.radius * c.home.radius - 9);
     const out = mirror ? l.length - shore - f.s : f.s - shore;
     const lastWall = this.lastWallS.get(key) ?? -Infinity;
-    const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
+    const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? PLAIN_WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
     if (wall && this.P.buildSkill[this.difficulty].bridgeCover && this.wallsOnBridge && out > this.P.buildTuning.bridgeWallFrom && Math.abs(f.s - lastWall) >= this.P.buildTuning.bridgeWallEvery) {
       this.lastWallS.set(key, f.s);
       const side = flankSide(c.view.map, l);
@@ -2411,7 +2413,7 @@ export class Bot {
   private wallKind(c: Ctx, strong = false): PieceKind | null {
     const inv = c.me.inv;
     const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
-    const pick = () => (strong ? STRONG_WALLS : WALLS).find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
+    const pick = () => (strong ? STRONG_WALLS : this.coverSkilled() ? WALLS : PLAIN_WALLS).find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
     if (tall > c.openDoors.length) return pick();
     if ((inv.pieces.sandbags ?? 0) > 0) return 'sandbags';
     // Masters (reinforce > 0.8) spend a plug on cover when the doors are far off (they'll buy another): staying alive first.
@@ -2428,6 +2430,9 @@ export class Bot {
 
   /** Patching up behind cover with the shooter still in sight takes nerve: Hard and PRO (buildSkill.reinforce > 0.5). */
   skilledHealer(): boolean { return this.P.buildSkill[this.difficulty].reinforce > 0.5; }
+
+  /** Situational wall material and cover on the centre island: Hard and PRO (buildSkill.reinforce > 0.5). */
+  private coverSkilled(): boolean { return this.P.buildSkill[this.difficulty].reinforce > 0.5; }
 
   /** Behind something solid from whoever is shooting at me (heals are safe here even with them in sight). */
   sheltered(c: Ctx): boolean {
@@ -2464,7 +2469,7 @@ export class Bot {
     if (by === null || by === me.id || now - this.mem.lastHurtAt > 1.0) return;
     if (view.suddenDeath || insideBunker(c.home.bunker, me.pos)) return;
     // On land (my island, a rival's, or the centre island), not out on a bridge deck.
-    if (c.on < 0 && this.nav.nodeAt(me.pos) < 0) return;
+    if (c.on < 0 && (!this.coverSkilled() || this.nav.nodeAt(me.pos) < 0)) return;
     const from = this.threatPos(c, by);
     if (!from) return;
     if (this.cover?.threatId === by) { this.cover.threat = from; this.cover.lastContact = now; return; }
