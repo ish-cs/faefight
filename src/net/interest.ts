@@ -299,7 +299,7 @@ export class InterestManager {
       pos = b ? v3(b.x, this.map[p.island].groundY, b.z) : v3(0, -50, 0);
       sent.set(p.id, pos);
     }
-    const { hook: _hook, hookReadyAt: _ready, ...rest } = p;
+    const { hook: _hook, hookReadyAt: _ready, surgeUntil: _surge, ...rest } = p;
     return {
       ...rest, pos, vel: v3(), yaw: 0, pitch: 0, hp: PLAYER.hp, equipped: 'fists', selected: 0, healAt: null,
       reloadUntil: 0, nextFireAt: 0, busyUntil: 0, invulnUntil: 0, lastDamagedAt: 0, breakoutUntil: null,
