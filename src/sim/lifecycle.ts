@@ -80,6 +80,15 @@ export function pickUp(p: PlayerState, bag: Inventory, ammoOnly = false): boolea
   return isEmpty(bag);
 }
 
+/**
+ * Who gets the kill for a death by the environment (water, a fall, the storm): the last player who hurt `p` or
+ * broke the piece they stood on, if that was within LIFECYCLE.envCreditSec. Null when nobody.
+ */
+export function envKiller(s: MatchStateCore, p: PlayerState, now: number): number | null {
+  const h = p.hurtBy;
+  return h && h.by !== p.id && now - h.at <= LIFECYCLE.envCreditSec && s.players.has(h.by) ? h.by : null;
+}
+
 export function killPlayer(
   s: MatchStateCore, physics: Physics, victimId: number, now: number, inWater: boolean, killer: number | null = null,
   /** What killed them when it wasn't a player ('storm', 'lightning'); recorded on the kill event. */
@@ -109,6 +118,7 @@ export function killPlayer(
   p.alive = false;
   p.vel = v3();
   delete p.yankedBy;
+  delete p.hurtBy;
   p.deaths++;
   const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
   if (k) k.kills++;
@@ -190,12 +200,14 @@ export function tickLifecycle(
     out.push(ev(now, 'suddenDeath', {}));
   }
 
-  // Drowned: a grappling hook yank just before it makes it the yanker's kill ("X via grapple").
+  // Drowned: a grappling hook yank just before it makes it the yanker's kill ("X via grapple"); else a player
+  // who hurt them or broke their floor just before ("X via water").
   for (const p of s.players.values()) {
     if (!p.alive || p.pos.y >= s.waterY) continue;
     const y = p.yankedBy;
-    const by = y && now - y.at <= GRAPPLE.yankCreditSec && y.by !== p.id ? y.by : null;
-    out.push(...killPlayer(s, physics, p.id, now, true, by, undefined, by !== null ? 'grapple' : undefined));
+    const yank = y && now - y.at <= GRAPPLE.yankCreditSec && y.by !== p.id ? y.by : null;
+    const by = yank ?? envKiller(s, p, now);
+    out.push(...killPlayer(s, physics, p.id, now, true, by, undefined, yank !== null ? 'grapple' : by !== null ? 'water' : undefined));
   }
 
   for (const p of s.players.values())

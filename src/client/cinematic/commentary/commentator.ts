@@ -242,7 +242,7 @@ export class Commentator {
     }
     let key: LineKey = 'kill', prio: Prio = 2;
     const vars: Vars = { a, b, w };
-    if (d.via) { key = 'killVia'; vars.w = weaponPhrase(d.via); }
+    if (d.via && d.via !== 'water') { key = 'killVia'; vars.w = weaponPhrase(d.via); }
     else if (d.inWater) key = 'killWater';
     else if (times.length >= 3) { key = 'killMulti3'; vars.n = times.length; prio = 3; }
     else if (times.length === 2) { key = 'killMulti2'; prio = 3; }
