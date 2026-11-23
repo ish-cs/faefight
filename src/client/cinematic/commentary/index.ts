@@ -7,6 +7,7 @@ import type { PlayerState, Snapshot } from '../../../sim/types';
 import { settings } from '../../settings/store';
 import { Commentator, type Caption, type ShotEvent } from './commentator';
 import { KEY_VARS, LINES, PERSONA, type LineKey } from './lines';
+import './kokoro'; // registers the neural voice engine (lazy worker)
 import { HybridTts, NEURAL_DEFAULT, voiceTester, type NeuralState } from './neural';
 import type { Persona } from './tts';
 
