@@ -56,6 +56,12 @@ const STUCK_SEC = 2, STUCK_DIST = 0.5, UNSTICK_SEC = 0.6;
 const TURN_RATE = 8;
 /** Beyond this, an enemy on another island isn't worth abandoning the current goal for. */
 const ENGAGE_RANGE = 25;
+/** escape(): a grid path out that moves me less than this in ESCAPE_STALL_SEC is a dead end. */
+const ESCAPE_STALL_M = 0.3, ESCAPE_STALL_SEC = 1;
+/** Attack score in sudden death with no ammo: above collect/shop (≤ 0.9), below storm and survival goals. */
+const SD_FISTS_ATTACK = 0.95;
+/** Feet below the bunker roof (minus a margin): actually inside, not standing on top of it. */
+const underRoof = (home: IslandLayout, p: Vec3) => p.y < home.groundY + MAP.bunker.height - 0.5;
 /** My bunker sealed: clear it first unless an enemy is closer than this (then fight; turning my back loses). */
 const SEALED_HOME_CLEAR = 12;
 const CHEST = 1.2;
@@ -248,6 +254,9 @@ export class Bot {
   private lastTorchAt = -Infinity;
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
+  /** escape(): where I was when my grid path out last made headway; a path that doesn't move me is not a way out. */
+  private escapeRef: { pos: Vec3; t: number } | null = null;
+  private escapeNoPathUntil = 0;
   /** Low on stamina: walk (save it for escapes) until it's back up. */
   private winded = false;
   private lastScores: { goal: string; score: number }[] = [];
@@ -440,7 +449,11 @@ export class Bot {
     let grapple = false;
     const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
     const barrel = enemy && !dock ? this.barrelShot(ctx) : null;
-    if (hook && hook.why !== 'yank') {
+    if (act.shootAt && act.shootFirst && me.breakoutUntil !== null) {
+      // Countdown running: the plug in my way beats everything else (no hook, barrel or pier tricks first).
+      look = hand(lookAt(eye, act.shootAt), TURN_RATE);
+      fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
+    } else if (hook && hook.why !== 'yank') {
       const want = lookAt(eye, hook.to);
       look = hand(want, TURN_RATE * 1.5);
       grapple = angleBetween(look, want) < 0.02;
@@ -1382,7 +1395,9 @@ export class Bot {
         // Someone across the water gets shot at anyway (aim/fire layer on every goal); only drop
         // everything to fight when they're close or on the same island.
         const sameIsland = this.sameGround(me.pos, c.enemy.pos);
-        if (!sameIsland && c.enemyDist > ENGAGE_RANGE) return 0.2;
+        // Sudden death with no ammo: the one I can see is the one to go and punch, however far (else both walk to
+        // each other's islands and pass in the ring until the cap).
+        if (!sameIsland && c.enemyDist > ENGAGE_RANGE) return view.suddenDeath && !gun ? SD_FISTS_ATTACK + 0.05 : 0.2;
         // Sudden death with no ammo left anywhere to buy it: fists are all there is.
         const sealedFoe = !view.suddenDeath && view.sealed[c.enemy.island] ? this.P.drive.sealedHunt : 0;
         return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression + (gun ? sealedFoe : 0);
@@ -1508,7 +1523,9 @@ export class Bot {
         // Respawn window with no kit to seal: wait at their door for the unarmed respawn.
         const push = this.inWindow(c) ? this.P.drive.windowPush * 0.5 : 0;
         if (rivalDown) return (gun && sealKit(me.inv) === 0 ? 0.35 + 0.3 * t.opportunism : 0.3) + push;
-        if (!gun) return 0.1;
+        // Sudden death, out of ammo: generators are off and home is in the storm, so fists are the only way to win
+        // (CI ffa8-hard seed 11: the last two, both empty, walked between shop, generator and ring until the cap).
+        if (!gun) return view.suddenDeath ? SD_FISTS_ATTACK : 0.1;
         const upgraded = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
         // Their bunker is sealed: every death of theirs is an elimination, so hunting them is worth the most.
         const sealedHunt = c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive ? this.P.drive.sealedHunt : 0;
@@ -1578,7 +1595,7 @@ export class Bot {
 
   /** Inside my own sealed bunker (respawned into it, or sealed in alive): getting out is all that matters. */
   private trapped(c: Ctx): boolean {
-    return c.me.breakoutUntil !== null || (c.view.sealed[c.home.index] && !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos));
+    return c.me.breakoutUntil !== null || (c.view.sealed[c.home.index] && !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos) && underRoof(c.home, c.me.pos));
   }
 
   private pick(c: Ctx): Goal {
@@ -1977,7 +1994,14 @@ export class Bot {
       return far && dist2D(far, me.pos) > 0.2 ? { dir: norm(flat(sub(far, me.pos))) } : IDLE;
     }
     this.hideFrom = null;
-    if (here.path) {
+    // The grid says there's a way out but walking it gets me nowhere (a plug the grid misreads, physics disagrees):
+    // stop trusting it for a while and break something instead (replay 7d6d6fa: trapped bots pressed against a wall
+    // for the whole countdown, never firing).
+    if (here.path && now >= this.escapeNoPathUntil) {
+      if (!this.escapeRef || dist2D(this.escapeRef.pos, me.pos) > ESCAPE_STALL_M || now - this.escapeRef.t > ESCAPE_STALL_SEC * 3) this.escapeRef = { pos: clone(me.pos), t: now };
+      else if (now - this.escapeRef.t > ESCAPE_STALL_SEC) { this.escapeNoPathUntil = now + 3; this.escapeRef = null; }
+    }
+    if (here.path && now >= this.escapeNoPathUntil) {
       const wp = here.path[Math.min(here.path.length - 1, 3)];
       const dir = norm(flat(sub(wp, me.pos)));
       // The way out goes over a piece too low to block (a lone sandbag in a doorway): hop it, don't walk into it.
@@ -1996,8 +2020,11 @@ export class Bot {
     const cost = (p: PieceState) => Math.min(breakCost(p, weapon, dps), blastable(p) ? CHARGE.fuseSec + 2 : Infinity);
     const nearDoor = (p: PieceState) => c.home.bunker.doorways.some((d) => dist2D(d.center, p.pos) < 1.8);
     // Nothing I carry gets through anything: still have a go at the weakest doorway plug (a human would).
+    // Last resort (no single piece opens a path, e.g. two layers in every doorway): the weakest doorway plug, then
+    // the nearest blocker. Trapped, standing still is never the answer.
     const target = pieceToBreak(grid, me.pos, cost, nearDoor) ??
-      (pieceToBreak(grid, me.pos, (p) => p.hp, nearDoor));
+      pieceToBreak(grid, me.pos, (p) => p.hp, nearDoor) ??
+      [...grid.blockers].sort((a, b) => (nearDoor(b) ? 1 : 0) - (nearDoor(a) ? 1 : 0) || a.hp - b.hp || dist2D(a.pos, me.pos) - dist2D(b.pos, me.pos))[0] ?? null;
     if (!target) return IDLE;
     const center = v3(target.pos.x, target.pos.y + Math.min(PIECES[target.kind].h / 2, 1.2), target.pos.z);
     const useCharge = blastable(target) && breakCost(target, weapon, dps) > CHARGE.fuseSec + 2;

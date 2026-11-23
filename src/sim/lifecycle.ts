@@ -117,9 +117,10 @@ export function killPlayer(
   const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
   if (k) k.kills++;
   // Out for good: died while trapped in a sealed bunker, or died while your bunker is sealed (2026-11-22, the
-  // user's rule). Sudden death (forcedSeal) keeps its own path: eliminated when the respawn comes due.
+  // user's rule). Sudden death seals every bunker, so a death then is final on the spot too (waiting out the 10 s
+  // respawn only to eliminate would hold the result back; CI ffa8-hard seed 11 hit the time cap that way).
   const reason = p.breakoutUntil !== null ? 'trapped'
-    : map && !s.practice && !s.forcedSeal && islandSealed(s, map, p.island) ? 'sealed' : null;
+    : map && !s.practice && islandSealed(s, map, p.island) ? (s.forcedSeal ? 'suddenDeath' : 'sealed') : null;
   if (reason) {
     p.breakoutUntil = null;
     p.respawnAt = null;
@@ -260,7 +261,10 @@ export function tickLifecycle(
       p.spawnProtected = false;
     }
     // Inside your own bunker while it's sealed (however you got there): the escape clock starts.
-    if (!s.practice && p.breakoutUntil === null && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
+    // Inside means under the roof: standing on top of your own sealed bunker is not being sealed in (replay 7d6d6fa:
+    // a bot that hopped onto its roof got the countdown and was eliminated up there).
+    const underRoof = p.pos.y < map[p.island].groundY + MAP.bunker.height - 0.5;
+    if (!s.practice && p.breakoutUntil === null && underRoof && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
       p.breakoutUntil = now + LIFECYCLE.breakoutSec;
       out.push(ev(now, 'trapped', { player: p.id, until: p.breakoutUntil }));
       continue;

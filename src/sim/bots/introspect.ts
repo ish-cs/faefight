@@ -172,6 +172,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const e = c.enemy;
       if (!e) return zero('no enemy in sight');
       const n = I.nav.nodeAt(me.pos), same = n >= 0 && n === I.nav.nodeAt(e.pos);
+      if (!same && c.enemyDist > 25 && view.suddenDeath && !gun) return { f: [['sudden death, no ammo: go punch', 1]], why: `Sudden death and no ammo: closing in on @${e.id} (${m(c.enemyDist)}) to punch` };
       if (!same && c.enemyDist > 25) return { f: [['far enemy', 0.2]], why: `@${e.id} in sight across the water (${m(c.enemyDist)}), too far to chase` };
       const armed = gun || c.enemyDist < 8;
       return {
@@ -359,7 +360,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
           why: `${rivalName(c)} is dead, back in ${secs(back)}${wait ? ': waiting at their door for the unarmed respawn' : ''}`,
         };
       }
-      if (!gun) return { f: [['unarmed', 0.1]], why: `Going for ${rivalName(c)} without a gun` };
+      if (!gun) return view.suddenDeath
+        ? { f: [['sudden death, no ammo: fists', 0.95]], why: `Sudden death and no ammo: going for ${rivalName(c)} with my fists` }
+        : { f: [['unarmed', 0.1]], why: `Going for ${rivalName(c)} without a gun` };
       const up = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
       const k = 0.5 + 0.5 * Math.max(hp, 1 - t.caution);
       const f: [string, number][] = [['base', 0.3 * k], ['aggression', 0.25 * t.aggression * k]];

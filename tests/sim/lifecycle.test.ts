@@ -165,12 +165,19 @@ describe('lifecycle', () => {
     expect(b.eliminated).toBe(true);
   });
 
-  test('sudden death unchanged: killed after the forced seal → eliminated when the respawn comes due', async () => {
-    const { s, physics, b, run } = await setup();
+  test('sudden death: killed after the forced seal → eliminated on the spot', async () => {
+    const { s, physics, b } = await setup();
     s.forcedSeal = true;
     const evs = killPlayer(s, physics, 2, 0, false, 1, undefined, undefined, map);
-    expect(evs.map((e) => e.type)).toEqual(['kill']);
-    expect(b.eliminated).toBe(false);
+    expect(evs.map((e) => e.type)).toEqual(['kill', 'eliminated']);
+    expect(evs[1].data).toEqual({ player: 2, reason: 'suddenDeath' });
+    expect(b.eliminated).toBe(true);
+  });
+
+  test('sudden death: already dead when it starts → eliminated when the respawn comes due', async () => {
+    const { s, physics, b, run } = await setup();
+    killPlayer(s, physics, 2, 0, false, 1, undefined, undefined, map);
+    s.forcedSeal = true;
     const later = run(0, LIFECYCLE.respawnSec + 0.2);
     expect(b.eliminated).toBe(true);
     expect(later.find((e) => e.type === 'eliminated')?.data).toEqual({ player: 2, reason: 'suddenDeath' });
@@ -253,6 +260,14 @@ describe('trapped inside a sealed bunker at any time', () => {
     evs = run(9.8, 10.4);
     expect(b.eliminated).toBe(true);
     expect(s.winner).toBe(1);
+  });
+  test('standing on the roof of your own sealed bunker is not being sealed in (replay 7d6d6fa p7)', async () => {
+    const { s, b, run } = await setup();
+    b.pos = { ...map[1].spawn, y: map[1].groundY + MAP.bunker.height };
+    sealIsland(s, 1);
+    const evs = run(0, 1);
+    expect(b.breakoutUntil).toBeNull();
+    expect(evs.some((e) => e.type === 'trapped')).toBe(false);
   });
   test('escaping before the countdown ends keeps you in', async () => {
     const { s, b, run } = await setup();
