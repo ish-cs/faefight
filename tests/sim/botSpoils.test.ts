@@ -85,11 +85,12 @@ const facts = (over: Partial<RivalFacts>): RivalFacts => ({
 });
 
 describe('spoils of war in rival choice', () => {
-  const W = { perK: DEFAULT_BOT_PARAMS.drive.spoilsTarget, trapped: DEFAULT_BOT_PARAMS.drive.finishTrapped };
+  const W = { perK: DEFAULT_BOT_PARAMS.drive.spoilsTarget.pro, trapped: DEFAULT_BOT_PARAMS.drive.finishTrapped };
 
   test('the knobs are trainable (PARAM_RANGES)', () => {
     const keys = Object.keys(PARAM_RANGES);
-    expect(keys).toContain('drive.spoilsTarget');
+    expect(keys).toContain('drive.spoilsTarget.pro');
+    expect(DEFAULT_BOT_PARAMS.drive.spoilsTarget.easy).toBe(0); // only skilled bots weigh the money
     expect(keys).toContain('drive.finishTrapped');
   });
 

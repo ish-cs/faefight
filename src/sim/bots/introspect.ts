@@ -531,7 +531,7 @@ export class BrainProbe {
       this.why = this.explained.get(chosen)?.why ?? '';
       // Rivals as chooseTarget weighs them (without its decision noise).
       const facts = I.rivalFacts(c.view);
-      this.rivals = facts.map((f) => [f.id, r2(rivalScore(f, I.t, I.P.drive.sealAwayTarget, { perK: I.P.drive.spoilsTarget, trapped: I.P.drive.finishTrapped }) + I.teamFocus(c.view, f.id))] as [number, number]).sort((a, b) => b[1] - a[1]);
+      this.rivals = facts.map((f) => [f.id, r2(rivalScore(f, I.t, I.P.drive.sealAwayTarget, { perK: I.P.drive.spoilsTarget[I.difficulty], trapped: I.P.drive.finishTrapped }) + I.teamFocus(c.view, f.id))] as [number, number]).sort((a, b) => b[1] - a[1]);
       const tf = facts.find((f) => f.id === I.targetId);
       this.target = tf ? { id: tf.id, why: targetWhy(tf, now, I.mem.seen.get(tf.id)?.t ?? null) } : c.rival ? { id: c.rival.id, why: 'nearest rival (no pick yet)' } : null;
       if (c.homeReach && !c.view.suddenDeath) {

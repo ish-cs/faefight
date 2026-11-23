@@ -893,7 +893,7 @@ export class Bot {
 
   /** Spoils of war in rival choice (params: drive.spoilsTarget, drive.finishTrapped). */
   private get spoilsWeights() {
-    return { perK: this.P.drive.spoilsTarget, trapped: this.P.drive.finishTrapped };
+    return { perK: this.P.drive.spoilsTarget[this.difficulty], trapped: this.P.drive.finishTrapped };
   }
 
   /** Score every rival; keep the current one unless another is clearly better. */
