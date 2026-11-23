@@ -626,3 +626,34 @@ canvas.shake { animation: screen-shake 0.55s ease-out; }
   text-align: center; font-family: var(--ff-body, inherit); font-size: 11px; font-weight: 700; line-height: 1.15; color: var(--c-text, var(--text)); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
 .emote-wheel.cooling .ew-slot { opacity: 0.45; }
 .emote-wheel.cooling .ew-hub { color: var(--c-yellow, var(--gold)); }
+
+/* Cinematic mode (cinematic/*.ts): clean broadcast HUD — no build bar, hotbar or own stats; a lower third instead. */
+.hud.cinematic .tl, .hud.cinematic .bl, .hud.cinematic .br, .hud.cinematic .hotbar, .hud.cinematic .prompt,
+.hud.cinematic .crosshair, .hud.cinematic .reload-ring, .hud.cinematic .scope, .hud.cinematic .stamina,
+.hud.cinematic .lowhp-vignette, .hud.cinematic .damage-flash, .hud.cinematic .brain-panel, .hud.cinematic .sealed-banner,
+.hud.cinematic .heal, .hud.cinematic .center-msg { display: none !important; }
+body.cinematic .spectate-banner, body.cinematic .click-hint { display: none !important; }
+.cine-l3 { position: fixed; left: 32px; bottom: 36px; z-index: 6; pointer-events: none; display: flex; flex-direction: column; gap: 6px; }
+.cine-l3[hidden] { display: none; }
+.cine-card { padding: 10px 16px 12px; min-width: 280px; border-left: 4px solid #ffd34d; }
+.cine-head { display: flex; align-items: baseline; gap: 10px; }
+.cine-tag { font-size: 11px; font-weight: 800; letter-spacing: 1.2px; color: #1a1300; background: #ffd34d; padding: 2px 7px; border-radius: 3px; }
+.cine-name { font-size: 22px; font-weight: 800; letter-spacing: 0.3px; }
+.cine-hp { position: relative; height: 6px; margin: 8px 0 6px; background: rgba(255,255,255,0.15); border-radius: 3px; overflow: hidden; }
+.cine-hp-fill, .cine-sh-fill { position: absolute; left: 0; top: 0; bottom: 0; transition: width 0.25s; }
+.cine-hp-fill { background: #5fe07a; }
+.cine-sh-fill { background: #5fb8ff; opacity: 0.85; height: 2px; top: auto; }
+.cine-info { font-size: 13px; opacity: 0.85; }
+.cine-alive { position: fixed; top: 18px; right: 24px; font-size: 14px; font-weight: 800; letter-spacing: 1px; padding: 6px 12px; background: rgba(0,0,0,0.45); border-radius: 4px; }
+.cine-hint { font-size: 11px; opacity: 0.55; letter-spacing: 0.5px; }
+@media (max-width: 600px) { .cine-l3 { left: 16px; right: 16px; bottom: 16px; } .cine-card { min-width: 0; } }
+/* Commentary captions (cinematic/commentary): broadcast lower third, above the HUD bars, no input. */
+.commentary-caption {
+  position: fixed; left: 50%; bottom: 132px; transform: translate(-50%, 8px); max-width: min(760px, 86vw);
+  padding: 8px 16px; border-radius: 8px; background: rgba(4, 11, 17, 0.72); border-left: 4px solid var(--c-orange, #ff6a1f);
+  font-family: var(--ff-body, inherit); font-size: var(--fs-lg, 18px); font-weight: 700; line-height: 1.25; color: var(--c-text, #f5efe4);
+  text-align: center; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); pointer-events: none; z-index: 40;
+  opacity: 0; transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.commentary-caption.on { opacity: 1; transform: translate(-50%, 0); }
+.commentary-caption[data-persona="colour"] { border-left-color: var(--c-teal, #1fc9b6); font-weight: 600; }

@@ -4,6 +4,13 @@ import { PLAYER } from '../sim/constants';
 import { type Action, isHeld, slotForCode } from './keymap';
 import { ThirdPersonCamera } from './camera';
 import { EarlyKey } from './viewed';
+import { activeKeymap, bindingLabel } from './keymap';
+
+/** "N cinematic" in the banner: the key bound to the cinematic director (rebindable). */
+function cineHint(): string {
+  const km = activeKeymap();
+  return km.cinematic?.length ? ` · ${bindingLabel(km, 'cinematic')} cinematic` : '';
+}
 
 /** Free-fly speeds (m/s) and height limits for the spectator camera. */
 export const SPECTATE = { speed: 14, fastMul: 3, minY: -20, maxY: 250 };
@@ -226,8 +233,8 @@ export class Spectator {
     }
     const who = target ? f.players.find((p) => p.id === this.followId)?.name ?? `#${this.followId}` : null;
     const text = who
-      ? `SPECTATING — following ${who}  ·  click next · V ${this.firstPerson ? 'over the shoulder' : 'first person'} · 0 free fly`
-      : 'SPECTATING — free fly  ·  WASD + mouse · Space up · C down · Shift fast · 1–9/click follow';
+      ? `SPECTATING — following ${who}  ·  click next · V ${this.firstPerson ? 'over the shoulder' : 'first person'} · 0 free fly${cineHint()}`
+      : `SPECTATING — free fly  ·  WASD + mouse · Space up · C down · Shift fast · 1–9/click follow${cineHint()}`;
     if (this.banner.textContent !== text) this.banner.textContent = text;
   }
 

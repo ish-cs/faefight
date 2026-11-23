@@ -3,7 +3,7 @@
 import { chromium } from '@playwright/test';
 
 const headed = process.argv[2] === 'headed';
-const browser = await chromium.launch({ channel: 'chromium', headless: !headed, args: ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
+const browser = await chromium.launch({ channel: 'chromium', headless: !headed, args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 await page.goto(process.env.LAB_URL ?? 'http://localhost:5299/tests/visual/piece-damage.html');
 await page.waitForFunction(() => window.lab?.ready, null, { timeout: 60_000 });

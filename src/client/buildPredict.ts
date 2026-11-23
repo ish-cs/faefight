@@ -8,7 +8,7 @@ export const FADE_MS = 150;
 /** The host's piece matches a prediction when it lands this close (it validates the same spot with the same rules). */
 const MATCH_DIST = 0.75;
 
-type Pending = { piece: PieceState; sentAt: number; afterId: number };
+type Pending = { piece: PieceState; sentAt: number; afterId: number; seq?: number };
 export type Fading = { piece: PieceState; opacity: number };
 
 /**
@@ -33,11 +33,12 @@ export class BuildPredictor {
 
   /**
    * Predict one placement sent now. `afterId`: the highest piece id the client knows of (the host's piece
-   * will be newer).
+   * will be newer). `seq`: the move command it is tied to (BuildRequest.seq), so the host's verdict is known
+   * from the first snapshot that has simulated that command (refusedBy).
    */
-  place(kind: PieceKind, pos: Vec3, rotY: number, owner: number, nowMs: number, afterId: number): PieceState {
+  place(kind: PieceKind, pos: Vec3, rotY: number, owner: number, nowMs: number, afterId: number, seq?: number): PieceState {
     const piece: PieceState = { id: this.nextId--, kind, owner, pos: { ...pos }, rotY, hp: PIECES[kind].hp };
-    this.pending.push({ piece, sentAt: nowMs, afterId });
+    this.pending.push({ piece, sentAt: nowMs, afterId, ...(seq !== undefined ? { seq } : {}) });
     this.readyAt = nowMs + PIECES[kind].placeSec * 1000;
     this.stats.placed++;
     return piece;
@@ -67,6 +68,28 @@ export class BuildPredictor {
     this.stats.rejected += rejected.length;
     if (rejected.length) console.info(`[build] host refused ${rejected.length} predicted piece(s): ${rejected.map((r) => r.kind).join(', ')}`);
     return { confirmed, rejected };
+  }
+
+  /**
+   * The newest host snapshot, as soon as it arrives: a prediction tied to a move command the host has simulated
+   * (`ack` > its seq) while not busy (so not holding it back) and that the snapshot doesn't show was refused.
+   * It is dropped now, before prediction replays from this snapshot, so the local player never stands on a piece
+   * the host doesn't have for longer than one round trip. Returns the refused pieces (they start fading).
+   */
+  refusedBy(hostPieces: readonly PieceState[], ack: number, hostBusy: boolean, nowMs: number): PieceState[] {
+    if (hostBusy) return [];
+    const used = new Set<number>();
+    const out: PieceState[] = [];
+    this.pending = this.pending.filter((p) => {
+      if (this.match(p, hostPieces, used)) return true; // confirmed: reconcile() hands it over when drawn
+      if (p.seq === undefined || ack <= p.seq) return true; // the host places it just before command seq + 1
+      out.push(p.piece);
+      this.fading.push({ piece: p.piece, at: nowMs });
+      return false;
+    });
+    this.stats.rejected += out.length;
+    if (out.length) console.info(`[build] host refused ${out.length} predicted piece(s): ${out.map((r) => r.kind).join(', ')}`);
+    return out;
   }
 
   /** Refused pieces still fading out, with their opacity (1 → 0). */

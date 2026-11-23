@@ -30,6 +30,22 @@ export const PIECES: Record<PieceKind, PieceSpec> = {
   container: { w: 6, h: 2.6, d: 2.4, hp: 2000, price: 300, placeSec: 1.0 },
 };
 
+/** A ramp is a thin sloped deck, open underneath (walk and shoot under it): the slab's vertical thickness (m). */
+export const RAMP_SLAB = 0.2;
+
+/**
+ * The ramp's collider (sim, prediction, debris) and ghost: piece-local convex hull points (origin at the base centre).
+ * Top face: the slope, y=0 at z=-d/2 up to y=h at z=+d/2. Bottom face: RAMP_SLAB lower, clipped at y=0 near the low
+ * edge (so the slab never dips below its base). Profile (y,z): (−d/2,0) → (d/2,h) → (d/2,h−T) → (−d/2+run,0).
+ */
+export function rampHull(): Float32Array {
+  const { w, h, d } = PIECES.ramp;
+  const x = w / 2, z = d / 2, run = (RAMP_SLAB * d) / h;
+  const pts: number[] = [];
+  for (const sx of [-x, x]) pts.push(sx, 0, -z, sx, h, z, sx, h - RAMP_SLAB, z, sx, 0, -z + run);
+  return new Float32Array(pts);
+}
+
 /** Spread cone half-angles in degrees. Bloom grows per shot and recovers at `recover` deg/s. */
 export type SpreadSpec = {
   base: number; ads: number; perShot: number; max: number; recover: number;
@@ -118,12 +134,13 @@ export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
  * `arriveDist` you let go keeping `arriveKeep` of your speed plus a little `arrivePop` up, so you land on the ledge. Jump lets go early. Hooking a
  * player yanks them toward you at `yankSpeed` for at most `yankSec` (their own movement is off meanwhile),
  * stopping `yankStop` m short of you. `cooldownSec` after the hook comes back (a miss: `missCooldownSec`).
+ * Cooldowns 0.5 s / 0.2 s (were 1.5 / 0.6): the user's call, 2026-11-22.
  */
 export const GRAPPLE = {
   price: 90, uses: 3, range: 40, tipSpeed: 90,
   pullSpeed: 22, pullResponse: 7, pullSec: 2.4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.3,
   yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
-  cooldownSec: 1.5, missCooldownSec: 0.6, minDist: 2.5, yankCreditSec: 5,
+  cooldownSec: 0.5, missCooldownSec: 0.2, minDist: 2.5, yankCreditSec: 5,
 };
 /** Shield sits on top of health (blue bar). */
 export const SHIELD_MAX = 100;
@@ -140,12 +157,13 @@ export const SPEED_POTION = { mult: 1.3, sec: 15 };
 export const CHARGE = { price: 250, pieceDmg: 1500, radius: 2, playerRadius: 1, playerDmg: 100, fuseSec: 3 };
 /**
  * Rocket: slow projectile, explodes on contact or after `fuseSec`. Player damage falls off with distance
- * to the body (full inside `fullRadius`; self-damage at `selfMult`, so a rocket jump costs about half your
- * health); pieces take heavy explosive damage measured to their surface (a direct hit breaks steel).
- * `knock`/`knockUp` = push (m/s) at the centre.
+ * to the body (full inside `fullRadius`; self-damage at `selfMult`, so a rocket jump costs most of your
+ * health: 82.5 of 100); pieces take heavy explosive damage measured to their surface (a direct hit breaks steel).
+ * `knock`/`knockUp` = push (m/s) at the centre. `playerDmg` 165 (was 110, x1.5): the user's call, 2026-11-22
+ * ("rockets don't do enough"); `pieceDmg` unchanged.
  */
 export const ROCKET = {
-  speed: 35, gravity: 2.5, fuseSec: 3, radius: 4.5, fullRadius: 0.5, playerDmg: 110, selfMult: 0.5,
+  speed: 35, gravity: 2.5, fuseSec: 3, radius: 4.5, fullRadius: 0.5, playerDmg: 165, selfMult: 0.5,
   pieceDmg: 1300, knock: 9, knockUp: 3.5,
 };
 
@@ -181,7 +199,8 @@ export const LOCK_PRICE_MULT = 4;
 
 /** queueSec: a build that arrives while still busy from the last one is held this long and placed the tick the
  *  busy time ends, so network jitter can't eat a held-place stream (still at most one piece per placeSec). */
-export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5, queueSec: 0.25 };
+/** seqWaitSec: a build tied to a movement command (BuildRequest.seq) waits at most this long for that command. */
+export const BUILD = { gridStep: 0.5, rotStepDeg: 15, reach: 5, queueSec: 0.25, seqWaitSec: 0.5 };
 
 export const LIFECYCLE = {
   /**
