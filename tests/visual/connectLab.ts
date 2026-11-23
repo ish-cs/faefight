@@ -55,6 +55,17 @@ function tower() {
   push();
 }
 
+/** Three ramps chained forward + up (like the practice range), to look at from below and the side. */
+function rampChain() {
+  const { h: rh, d: rd } = PIECES.ramp;
+  const x0 = C.x - 1, z0 = C.z - 6;
+  pieces = [0, 1, 2].map((k) => P('ramp', x0, GY + k * rh, z0 + k * rd));
+  label.textContent = 'ramp chain';
+  cam(x0 + 7, GY + 2.5, z0 + 3, x0, GY + 1.5, z0 + 3);
+  push();
+  return { x0, z0, GY };
+}
+
 /** Two ramps side by side up onto a 2×2 scaffold deck, then two more ramps up onto a second deck. */
 function staircase() {
   const { h: rh, d: rd } = PIECES.ramp, sh = PIECES.scaffold.h, sd = PIECES.scaffold.d;
@@ -118,4 +129,4 @@ async function measure(ms: number) {
   return { frames: a.length, fps: Math.round(1000 / avg), p95ms: +a[Math.floor(a.length * 0.95)].toFixed(2), info: r.info() };
 }
 
-(window as unknown as { lab: unknown }).lab = { wallRun, tower, staircase, field, destroy, measure, ready: true };
+(window as unknown as { lab: unknown }).lab = { wallRun, tower, staircase, field, destroy, measure, cam, rampChain, ready: true };
