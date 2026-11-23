@@ -46,17 +46,18 @@ test('own avatar is drawn in third person from the first second, after a respawn
   await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 45_000 });
   await expect(page.getByTestId('loading')).toHaveCount(0, { timeout: 30_000 });
   expect(await dbg<string>(page, 'cameraMode')).toBe('third');
-  await page.waitForTimeout(2000);
-
-  // Shown from within the first second after the reveal, and on every frame after that.
+  // Shown from within the first second after the reveal (or after the body exists, on a slow load that revealed
+  // before the models were in), and on every frame after that.
   const ev = await page.evaluate(() => (window as unknown as { __faefightLoading: { events(): LoadEvent[] } }).__faefightLoading.events());
   const hideAt = ev.filter((e) => e.kind === 'hide').at(-1)!.t;
-  const after = (await page.evaluate(() => (window as unknown as { __self: Sample[] }).__self)).filter((s) => s.t >= hideAt);
-  expect(after.length).toBeGreaterThan(30);
+  const samples = () => page.evaluate((h) => (window as unknown as { __self: Sample[] }).__self.filter((s) => s.t >= h), hideAt);
+  await expect.poll(async () => { const s = await samples(); return s.length ? s.at(-1)!.t - s[0].t : 0; }, { timeout: 20_000 }).toBeGreaterThan(2000);
+  const after = await samples();
+  const from = after[0].t;
   const firstShown = after.find((s) => s.shown);
   expect(firstShown, `never drawn after the reveal: ${JSON.stringify(after.slice(-3))}`).toBeTruthy();
-  expect(firstShown!.t - hideAt).toBeLessThan(1000);
-  const hidden = after.filter((s) => s.t > hideAt + 1000 && !s.shown);
+  expect(firstShown!.t - from).toBeLessThan(1000);
+  const hidden = after.filter((s) => s.t > from + 1000 && !s.shown);
   expect(hidden, `own avatar hidden on ${hidden.length} frames: ${JSON.stringify(hidden.slice(0, 3))}`).toHaveLength(0);
   await page.screenshot({ path: `${SHOTS}/first-spawn-third-person.png` });
   expect(await selfPixels(page), 'own avatar not on screen (pixel check)').toBeGreaterThan(400);
