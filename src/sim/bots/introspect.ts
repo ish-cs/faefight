@@ -109,7 +109,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
@@ -166,6 +166,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const safe = I.stormSafeR(st);
       if (d > safe) return { f: [['ring closing', easy ? 0.4 : 1.3]], why: `The ring closes past me soon (safe line ${m(safe)}, I'm at ${m(d)}): moving in ahead of it` };
       if (I.needCenterBridge(c)) return { f: [['no center bridge', 1.2]], why: 'The storm ends on the centre island and I have no way onto it: bridging there' };
+      if (I.finalHunt(c)) return { f: [['final circle, nobody in sight', 0.6]], why: 'Final circle and nobody in sight: closing in on its centre to find the last rivals' };
       return zero('safe inside the ring');
     }
     case 'fight': {

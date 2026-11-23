@@ -231,10 +231,12 @@ describe('8 bots and the storm', () => {
     m.debugSetTime(SD - 160);
     const c = m.def.center;
     let snap = m.tick(new Map());
-    let stormKills = 0;
+    let stormKills = 0, hooked = false;
     for (let i = 0; i < 30 * 420 && snap.winner === null; i++) {
       snap = m.tick(new Map());
       for (const e of snap.events) if (e.type === 'kill' && e.data.cause === 'storm') stormKills++;
+      // Bots also hook across to the center (main 2a65276: they bridge and hook); a player standing on it counts.
+      if (!hooked) hooked = snap.players.some((p) => p.alive && Math.hypot(p.pos.x - c.center.x, p.pos.z - c.center.z) < c.radius && p.pos.y > snap.waterY + 1);
     }
     expect(snap.winner, 'match ended').not.toBeNull();
     expect(stormKills).toBeLessThanOrEqual(1);
@@ -245,11 +247,11 @@ describe('8 bots and the storm', () => {
       expect(Math.hypot(w.pos.x - c.center.x, w.pos.z - c.center.z)).toBeLessThan(snap.storm!.r);
       expect(w.pos.y).toBeGreaterThan(snap.waterY + 1); // on land or a deck, not in the sea
     } else expect(snap.players.every((p) => p.id === w.id || p.eliminated)).toBe(true);
-    // Someone actually bridged onto the center island (the last deck may end up to a walkable step short of the shore:
+    // Someone actually got onto the center island (bridge or hook) (the last deck may end up to a walkable step short of the shore:
     // its centre within half a deck + Nav STEP_GAP + a little of the land).
     // (Only when the game lasted until the ring passed the islands' inner shores, ~SD + 85 s at 8 players, plus a margin: a game won
     // before that never needed the center.)
     const bridged = snap.pieces.filter((p) => p.kind === 'scaffold' && Math.hypot(p.pos.x - c.center.x, p.pos.z - c.center.z) < c.radius + 6).length;
-    if (snap.time > SD + 100) expect(bridged, `ended at ${(snap.time - SD).toFixed(0)} s into sudden death`).toBeGreaterThan(0);
+    if (snap.time > SD + 100) expect(bridged > 0 || hooked, `ended at ${(snap.time - SD).toFixed(0)} s into sudden death, nobody on the center island`).toBe(true);
   }, 300_000);
 });

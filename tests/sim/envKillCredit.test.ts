@@ -80,8 +80,8 @@ describe('environmental kill credit', () => {
     (m as unknown as { s: { forcedSeal: boolean } }).s.forcedSeal = true;
     const events = run(m, 6, rocketAt(m, shooter, v3(-40, y + 0.1, 21.5)), (ev) => ev.some((e) => e.type === 'kill'));
     expect(events.find((e) => e.type === 'kill')!.data).toMatchObject({ victim: 2, killer: 1, via: 'water' });
-    const later = run(m, LIFECYCLE.respawnSec + 1, undefined, (ev) => ev.some((e) => e.type === 'eliminated'));
-    expect(later.some((e) => e.type === 'eliminated' && e.data.player === 2)).toBe(true);
+    // A death in sudden death is final on the spot (same tick as the kill).
+    expect(events.some((e) => e.type === 'eliminated' && e.data.player === 2)).toBe(true);
     expect(internal(m, 1).kills).toBe(1);
   }, 30_000);
 

@@ -60,6 +60,8 @@ const ENGAGE_RANGE = 25;
 const ESCAPE_STALL_M = 0.3, ESCAPE_STALL_SEC = 1;
 /** Attack score in sudden death with no ammo: above collect/shop (≤ 0.9), below storm and survival goals. */
 const SD_FISTS_ATTACK = 0.95;
+/** Final circle with nobody in sight: storm goal score for closing in on its centre, and how near counts as there. */
+const FINAL_HUNT = 0.6, FINAL_HUNT_NEAR = 4;
 /** Feet below the bunker roof (minus a margin): actually inside, not standing on top of it. */
 const underRoof = (home: IslandLayout, p: Vec3) => p.y < home.groundY + MAP.bunker.height - 0.5;
 /** My bunker sealed: clear it first unless an enemy is closer than this (then fight; turning my back loses). */
@@ -1467,7 +1469,10 @@ export class Bot {
         if (d > st.r) return this.difficulty === 'easy' ? 0.9 : 1.7;
         if (d > this.stormSafeR(st)) return this.difficulty === 'easy' ? 0.4 : 1.3;
         // No way onto the center island yet: the ring will end there, so the bridge comes first.
-        return this.needCenterBridge(c) ? 1.2 : 0;
+        if (this.needCenterBridge(c)) return 1.2;
+        // Final circle, nobody in sight: the last rivals are in here too, so close in on its centre and find them
+        // (CI storm medium seed 2: two armed bots stood 15 m apart behind cover on the center island until the cap).
+        return this.finalHunt(c) ? FINAL_HUNT : 0;
       }
       case 'fight': {
         if (!c.enemy) return 0;
@@ -2708,13 +2713,32 @@ export class Bot {
     }
     const cover = c.enemy ? this.coverFrom(c, c.enemy) : null;
     if (cover && dist2D(cover, me.pos) > 0.8) return { ...this.goTo(cover, 0.6), sprint: true };
-    return { dir: away, sprint: true };
+    // Straight away from them, or the nearest heading that keeps me on land (measured: botDrown medium seed 3, a bot
+    // landed from a hook escape on an island rim and ran on into the sea).
+    const dir = this.landward(me.pos, away);
+    return dir ? { dir, sprint: true } : IDLE;
+  }
+
+  /** `want`, or the heading closest to it whose ground 2.5 m ahead is dry land or a deck; null if none is. */
+  private landward(from: Vec3, want: Vec3): Vec3 | null {
+    for (const a of [0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4]) {
+      const d = a === 0 ? want : rotateY(want, a);
+      const g = this.view.groundAt(from.x + d.x * 2.5, from.z + d.z * 2.5);
+      if (g !== null && g > this.view.waterY + 0.5) return d;
+    }
+    return null;
   }
 
   /** Radius I want to be inside: the ring as it will be a few seconds from now, minus a margin. */
   private stormSafeR(st: NonNullable<BotView['storm']>): number {
     const ahead = st.r - st.rate * STORM_LEAD[this.difficulty] - STORM_MARGIN[this.difficulty];
     return Math.max(Math.min(st.rf - 2, st.r), ahead);
+  }
+
+  /** Sudden death, the ring at its final size, no enemy in sight, and I'm not yet near its centre. */
+  private finalHunt(c: Ctx): boolean {
+    const st = c.view.storm;
+    return !!st && c.view.suddenDeath && !c.enemy && st.r <= st.rf + 0.5 && Math.hypot(c.me.pos.x - st.x, c.me.pos.z - st.z) > FINAL_HUNT_NEAR;
   }
 
   /**
@@ -2726,6 +2750,10 @@ export class Bot {
     const { view, me } = c;
     const st = view.storm;
     if (!st) return IDLE;
+    if (this.finalHunt(c)) {
+      const walk = this.goTo(v3(st.x, me.pos.y, st.z), FINAL_HUNT_NEAR - 1);
+      if (walk.dir) return walk;
+    }
     const ctr = v3(st.x, me.pos.y, st.z);
     const want = this.stormSafeR(st) - 1;
     const d = dist2D(me.pos, ctr);
