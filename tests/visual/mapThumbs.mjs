@@ -9,7 +9,7 @@ const base = process.env.MAP_URL ?? 'http://localhost:5347';
 const out = 'public/maps';
 mkdirSync(out, { recursive: true });
 
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 for (const tpl of templates) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   await ctx.addInitScript(() => localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true } })));

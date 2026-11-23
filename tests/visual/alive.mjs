@@ -9,7 +9,7 @@ const prefix = process.argv[2] ?? 'alive';
 const mode = process.argv[3] ?? 'all';
 const qualities = (process.argv[4] ?? 'low,high,ultra').split(',');
 const url = process.env.GAME_URL ?? 'http://localhost:5341';
-const ARGS = ['--enable-unsafe-webgpu', '--disable-gpu-vsync', '--disable-frame-rate-limit'];
+const ARGS = ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'];
 const browser = await chromium.launch({ channel: 'chromium', args: ARGS });
 
 async function openGame(quality = 'high') {
