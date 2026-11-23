@@ -154,5 +154,6 @@ the APIs above.
   It needs a running server (`GAME_URL`). `tests/visual/perfAB.mjs` wraps it: it takes the heavy lock, starts one
   vite per source tree, runs each spec, then kills the servers and releases the lock.
   `?debug=1&stress=3` triples every decorative prop.
+- `tests/visual/loadSpikes.mjs`: match-load and quality-key (P) hitches. Long tasks, frame gaps, a second "other tab" page's frame gaps (is the whole browser stalling?), peak JS heap, GPU bytes, sync vs async pipeline builds; `--throttle=4` emulates Low Power Mode, `--profile=1` attributes long tasks.
 - `tests/visual/sceneCensus.mjs`: meshes grouped by name (count, visible, casters, triangles). Use it to find
   what costs draws.
