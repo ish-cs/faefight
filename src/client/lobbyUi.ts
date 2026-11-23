@@ -240,7 +240,7 @@ export class LobbyUi {
       row.classList.toggle('spectating', spectator);
       const name = el('span', 'seat-name');
       if (s.kind === 'human') {
-        name.append(el('span', 'nick', s.name));
+        name.append(Object.assign(el('span', 'nick', s.name), { title: s.name }));
         if (s.isHost) name.append(el('span', 'tagpill', 'host'));
         if (spectator) name.append(Object.assign(el('span', 'tagpill spectator', 'spectator'), { title: 'Hosts the match without playing' }));
         if (i === you) name.append(el('span', 'tagpill you', 'you'));
@@ -251,7 +251,7 @@ export class LobbyUi {
           name.append(pill);
         }
       } else if (s.kind === 'bot') {
-        name.append(el('span', 'nick', s.name ?? 'Bot'));
+        name.append(Object.assign(el('span', 'nick', s.name ?? 'Bot'), { title: s.name ?? 'Bot' }));
         if (teamMode && teams[i] !== null) name.append(el('span', 'tagpill team', `team ${teams[i]! + 1}`));
         // The host's slider already shows the difficulty.
         name.append(el('span', 'tagpill', a ? 'bot' : `bot · ${diffTag(s.difficulty)}`));
