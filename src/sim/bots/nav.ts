@@ -422,6 +422,8 @@ export class Nav {
   crossable(p: Vec3, dir: Vec3, look = 3): boolean {
     const l = Math.hypot(dir.x, dir.z);
     if (l < 1e-6) return false;
+    // Only the end of a bridge: a deck on one side of the gap (never a hole in the ground or an island's rim).
+    if (!this.view.pieces.some((q) => q.kind === 'scaffold' && dist2D(q.pos, p) < 2.6 + STEP_GAP)) return false;
     const ux = dir.x / l, uz = dir.z / l;
     const at = (d: number) => this.view.groundAt(p.x + ux * d, p.z + uz * d);
     let gapFrom: number | null = null;
