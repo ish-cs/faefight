@@ -465,6 +465,21 @@ export class PropSim {
     }
   }
 
+  /**
+   * Every prop's footprint where it is now (bots' Nav walks round them): centre, horizontal radius, and the top's
+   * height. Upright (as it was placed, up to yaw) the placement extents hold; tipped over, the largest ones.
+   */
+  footprints(): { pos: Vec3; r: number; top: number }[] {
+    const up = (q: Quat) => v3(2 * (q[0] * q[1] - q[3] * q[2]), 1 - 2 * (q[0] * q[0] + q[2] * q[2]), 2 * (q[1] * q[2] + q[3] * q[0]));
+    return this.live.map((l) => {
+      const e = PROP_KINDS[l.spawn.kind].ext, p = this.poseOf(l.body);
+      const a = up(p.rot), b = up(l.rest.rot);
+      const upright = a.x * b.x + a.y * b.y + a.z * b.z > 0.9;
+      const [s0, s1, s2] = [e.x, e.y, e.z].sort((m, n) => n - m);
+      return upright ? { pos: p.pos, r: Math.hypot(e.x, e.z), top: p.pos.y + e.y } : { pos: p.pos, r: Math.hypot(s0, s1), top: p.pos.y + s2 };
+    });
+  }
+
   /** Poses of every prop away from its rest pose, ascending id (the snapshot's `props`). */
   poses(): PropPose[] {
     const out: PropPose[] = [];
