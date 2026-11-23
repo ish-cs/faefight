@@ -4,6 +4,13 @@ import { PLAYER } from '../sim/constants';
 import { type Action, isHeld, slotForCode } from './keymap';
 import { ThirdPersonCamera } from './camera';
 import { EarlyKey } from './viewed';
+import { activeKeymap, bindingLabel } from './keymap';
+
+/** "N cinematic" in the banner: the key bound to the cinematic director (rebindable). */
+function cineHint(): string {
+  const km = activeKeymap();
+  return km.cinematic?.length ? ` · ${bindingLabel(km, 'cinematic')} cinematic` : '';
+}
 
 /** Free-fly speeds (m/s) and height limits for the spectator camera. */
 export const SPECTATE = { speed: 14, fastMul: 3, minY: -20, maxY: 250 };
@@ -80,6 +87,8 @@ export class Spectator {
   /** When the spectator last picked a target or flew off themselves (ms): overrides the automatic switch to a killer. */
   manualAt = -Infinity;
   private banner = document.createElement('div');
+  /** Another screen owns the hints (end screen, killcam): the banner stays hidden while spectating. */
+  private muted = false;
   /** A follow key pressed in the frame before the camera started spectating. */
   private early = new EarlyKey();
 
@@ -125,7 +134,7 @@ export class Spectator {
     this.mode = 'free';
     this.followId = null;
     this.pos.copy(from);
-    this.banner.style.display = '';
+    this.syncBanner();
     this.pendingDigit = this.early.take(performance.now());
   }
 
@@ -136,7 +145,18 @@ export class Spectator {
     this.pendingDigit = null;
     this.pendingCycle = false;
     this.firstPerson = false;
-    this.banner.style.display = 'none';
+    this.syncBanner();
+  }
+
+  /** Per frame: hide the spectator hints while the end screen or a killcam is up (one state's hints at a time). */
+  setMuted(m: boolean) {
+    if (m === this.muted) return;
+    this.muted = m;
+    this.syncBanner();
+  }
+
+  private syncBanner() {
+    this.banner.style.display = this.active && !this.muted ? '' : 'none';
   }
 
   /** Per render frame while active: drive the camera and the banner. */
@@ -213,8 +233,8 @@ export class Spectator {
     }
     const who = target ? f.players.find((p) => p.id === this.followId)?.name ?? `#${this.followId}` : null;
     const text = who
-      ? `SPECTATING — following ${who}  ·  click next · V ${this.firstPerson ? 'over the shoulder' : 'first person'} · 0 free fly`
-      : 'SPECTATING — free fly  ·  WASD + mouse · Space up · C down · Shift fast · 1–9/click follow';
+      ? `SPECTATING — following ${who}  ·  click next · V ${this.firstPerson ? 'over the shoulder' : 'first person'} · 0 free fly${cineHint()}`
+      : `SPECTATING — free fly  ·  WASD + mouse · Space up · C down · Shift fast · 1–9/click follow${cineHint()}`;
     if (this.banner.textContent !== text) this.banner.textContent = text;
   }
 

@@ -94,7 +94,7 @@ test('drag-build: holding click lays a straight, flush wall line of 5 exactly wh
   const C = { ...home.center, y: home.groundY };
   await dbg(page, 'give', { pieces: { wood: 5 } });
   await dbg(page, 'teleport', ...((p) => [p.x, p.z])(at(C, F, -3.5, R, 0)));
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   await aimAt(page, at(C, F, 0, R, 0, C.y + 0.3));
   await expect.poll(async () => (await aim(page))?.ok).toBe(true);
   await page.screenshot({ path: 'test-results/build-wall-ghost.png' });
@@ -146,7 +146,7 @@ test('scaffold bridge: 4 segments off the shore, aiming slightly off the line, a
   const C = { ...home.center, y: home.groundY };
   await dbg(page, 'give', { pieces: { scaffold: 4 } });
   await dbg(page, 'teleport', ...((p) => [p.x, p.z])(at(C, R, home.radius - 2.5, F, 0)));
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   // Look at the water ~1 m to the side of straight out: the assist offers the first segment off the shore.
   await aimAt(page, at(C, R, home.radius + 2, F, 1, 0));
   await expect.poll(async () => { const a = await aim(page); return a?.ok && a.tag; }).toBe('shore');
@@ -200,7 +200,7 @@ test('stacked sandbags, an enemy doorway plug when aiming beside it, and the gho
   const C = { ...home.center, y: home.groundY };
   await dbg(page, 'give', { pieces: { sandbags: 4, wood: 1 } });
   await dbg(page, 'teleport', ...((p) => [p.x, p.z])(at(C, F, -3.5, R, 0)));
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   for (let i = 0; i < 3; i++) {
     await aimAt(page, at(C, F, 0, R, 0, C.y + i * 1.0 + 0.02));
     await expect.poll(async () => { const a = await aim(page); return !!a?.ok && (i === 0 || a.tag === 'stack'); }).toBe(true);
@@ -218,7 +218,7 @@ test('stacked sandbags, an enemy doorway plug when aiming beside it, and the gho
   await expectPlacedAsShown(page, bags);
 
   // Scripted sweep: at every aim the local ghost verdict matches the sim's own validation.
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   let checked = 0;
   for (let a = -1.2; a <= 1.2; a += 0.3)
     for (const dist of [1.5, 3, 4.5, 7]) {
@@ -238,7 +238,7 @@ test('stacked sandbags, an enemy doorway plug when aiming beside it, and the gho
   const door = enemy.bunker.doorways[0];
   const out = fwd(door.yaw);
   await dbg(page, 'teleport', ...((p) => [p.x, p.z])(at(door.center, out, 3.2, R, 0)));
-  await page.keyboard.press('Digit2');
+  await page.keyboard.press('Digit3');
   await aimAt(page, at(door.center, rgt(door.yaw), 1.0, out, 0, enemy.groundY + 0.6));
   await expect.poll(async () => { const a = await aim(page); return a?.ok && a.tag; }, { timeout: 10_000 }).toBe('door');
   await page.screenshot({ path: 'test-results/build-door-ghost.png' });

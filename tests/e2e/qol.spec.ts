@@ -9,7 +9,7 @@ const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
     return (api ? api[f as string](...(a as unknown[])) : null) as T;
   }, [fn, args] as const);
 
-type P = { id: number; name: string; isBot: boolean; alive: boolean; island: number; reloadUntil: number;
+type P = { id: number; name: string; isBot: boolean; alive: boolean; island: number; reloadUntil: number; pos: { x: number; y: number; z: number };
   inv: { cash: number; weapons: Record<string, { mag: number; spare: number }>; pieces: Record<string, number> } };
 type Snap = { time: number; players: P[]; winner: number | null; stats?: unknown[] };
 type Isl = { center: { x: number; z: number }; shop: { x: number; z: number }; bunker: { facingYaw: number } };
@@ -117,6 +117,12 @@ test('combat QoL: ammo warnings, auto-reload, R on a full gun, Shift+click bulk 
   const me = async () => (await snapOf(page)).players.find((p) => p.id === humanId)!;
   await page.locator('canvas.game').click();
 
+  // Drop the starting pistol (Q on slot 1) and step away from the bag, so the next give sets its ammo exactly.
+  await page.keyboard.press('Digit1');
+  await page.keyboard.press('KeyQ');
+  await expect.poll(async () => (await me()).inv.weapons.pistol).toBeUndefined();
+  const at = (await me()).pos;
+  await dbg(page, 'teleport', at.x + 6, at.z + 6);
   // Two rounds left and nothing spare: "Last rounds", the slot's count tinted.
   await dbg(page, 'give', { weapons: { pistol: { mag: 2, spare: 0 } } });
   await page.keyboard.press('Digit1');
@@ -181,7 +187,7 @@ test('end screen: match summary with per-player stats and awards', async ({ page
   await dbg(page, 'give', { pieces: { sandbags: 1 } });
   await expect.poll(async () => (await me()).inv.pieces.sandbags ?? 0).toBe(1);
   await page.locator('canvas.game').click();
-  await page.keyboard.press('Digit1');
+  await page.keyboard.press('Digit2');
   await expect(page.getByTestId('hotbar')).toHaveAttribute('data-ghost', 'ok', { timeout: 30_000 });
   await expect(async () => {
     if (((await me()).inv.pieces.sandbags ?? 0) > 0) await page.mouse.click(640, 360);

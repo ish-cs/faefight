@@ -223,6 +223,9 @@ const ITEM_NAME: Record<string, string> = {
   ammo: 'Ammo', medkit: 'Medkit', shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', genUpgrade: 'Generator ↑',
 };
 
+/** Eliminations, with assists after a plus (older hosts send neither: 0). */
+const elimsCell = (s: PlayerStats) => `${s.elims ?? 0}${s.assists ? ` +${s.assists}` : ''}`;
+
 function summaryNode(stats: PlayerStats[], snap: Snapshot, humanId: number): HTMLElement {
   const root = el('div', 'qol-summary glass');
   root.dataset.testid = 'match-summary';
@@ -241,7 +244,7 @@ function summaryNode(stats: PlayerStats[], snap: Snapshot, humanId: number): HTM
   }
   const table = el('table');
   const head = el('tr');
-  for (const h of ['', 'Player', 'Kills', 'Deaths', 'Damage', 'Seals', 'Built', 'Cash', 'Longest life']) head.append(el('th', '', h));
+  for (const h of ['', 'Player', 'Kills', 'Elims', 'Deaths', 'Damage', 'Seals', 'Built', 'Cash', 'Spoils', 'Longest life']) head.append(el('th', '', h));
   table.append(el('thead'));
   table.tHead!.append(head);
   const body = el('tbody');
@@ -255,7 +258,7 @@ function summaryNode(stats: PlayerStats[], snap: Snapshot, humanId: number): HTM
     dc.append(dot);
     const name = el('td', 'qs-name', p?.name ?? `#${s.id}`);
     if (s.id === humanId) name.append(el('span', 'tagpill you', 'you'));
-    tr.append(dc, name, ...[s.kills, s.deaths, s.damage, s.seals, s.built, `$${s.cash}`, fmtLife(s.longestLife)].map((v) => el('td', 'num', String(v))));
+    tr.append(dc, name, ...[s.kills, elimsCell(s), s.deaths, s.damage, s.seals, s.built, `$${s.cash}`, `$${s.spoils ?? 0}`, fmtLife(s.longestLife)].map((v) => el('td', 'num', String(v))));
     body.append(tr);
   }
   table.append(body);
@@ -269,6 +272,9 @@ export class QolHud {
   private compass = new Compass();
   private recap = new RecapTracker();
   private recapNode: HTMLElement | null = null;
+  /** Whose death the recap card is about (the local player, or the one being spectated). */
+  private recapFor = 0;
+  private endEl: HTMLElement | null = null;
   private ammo = el('div', 'qol-ammo');
   private net = el('div', 'qol-net glass');
   private health = new LinkHealth();
@@ -276,6 +282,8 @@ export class QolHud {
   private summaryKey = '';
   private map: IslandLayout[] = [];
   private humanId = 0;
+  /** The local player (humanId follows the viewed player while spectating). */
+  private ownId = 0;
   private myIsland = 0;
   lastBuy: ShopItem | null = null;
 
@@ -295,6 +303,7 @@ export class QolHud {
   setMap(map: IslandLayout[], humanId: number, island: number) {
     this.map = map;
     this.humanId = humanId;
+    this.ownId = humanId;
     this.myIsland = island;
     this.alerts.setMap(map, humanId);
   }
@@ -337,12 +346,36 @@ export class QolHud {
     this.alerts.frame(yaw, me, this.myIsland);
     this.updateNet(now);
     this.updateQuickBuy();
+    this.placeRecap();
+  }
+
+  /**
+   * Your own recap joins the end screen once you're out (between the subtitle and the summary / buttons,
+   * in the screen's flow, so nothing overlaps) and hides with it when you pick Spectate. During the killcam
+   * it stays on the HUD, moved aside by .killcam-on.
+   */
+  private placeRecap() {
+    const n = this.recapNode;
+    if (!n) return;
+    this.endEl ??= this.hudRoot.querySelector<HTMLElement>('.end-screen');
+    const end = this.endEl;
+    const inEnd = !!end?.dataset.key && this.recapFor === this.ownId && !this.hudRoot.classList.contains('killcam-on');
+    // A spectated player's recap never sits over the end screen.
+    const hide = !inEnd && end?.style.display === 'flex' ? 'none' : '';
+    if (n.style.display !== hide) n.style.display = hide;
+    const parent = inEnd ? end! : this.hudRoot;
+    if (n.parentElement === parent) return;
+    n.classList.toggle('in-end', inEnd);
+    if (inEnd) parent.insertBefore(n, parent.querySelector('.qol-summary') ?? parent.querySelector('.end-buttons'));
+    else parent.append(n);
   }
 
   private showRecap(r: Recap) {
     this.recapNode?.remove();
     this.recapNode = recapCard(r);
+    this.recapFor = this.humanId;
     this.hudRoot.append(this.recapNode);
+    this.placeRecap();
   }
 
   private updateAmmo(me: PlayerState, selected: number) {

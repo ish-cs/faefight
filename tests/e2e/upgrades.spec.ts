@@ -45,26 +45,24 @@ test('generator upgrade shows Lv2; a locked pistol comes back after death', asyn
   await page.keyboard.press('KeyE');
   await expect(page.getByTestId('panel')).toBeVisible();
 
-  // Upgrades group: generator card offers Lv2 for $150; no lock cards before owning a gun.
+  // Upgrades group: generator card offers Lv2 for $150; no lock card for a gun you don't own (the smg).
   await expect(page.getByRole('group', { name: 'Upgrades' })).toBeVisible();
   const gen = page.getByTestId('buy-genUpgrade');
   await expect(gen.locator('.ibadge')).toHaveText('Lv2');
   await expect(gen.locator('.iprice')).toHaveText('$150');
-  await expect(page.getByTestId('buy-lock:pistol')).toBeHidden();
+  await expect(page.getByTestId('buy-lock:smg')).toBeHidden();
   await gen.click();
   await expect(page.getByTestId('cash')).toHaveText('$1900');
   await expect(gen.locator('.ibadge')).toHaveText('Lv3');
   await expect(gen.locator('.iprice')).toHaveText('$400');
 
-  // Buy a pistol: its lock card appears ($200 = 4x), lock it.
-  await page.getByTestId('buy-pistol').click();
-  await expect(page.getByTestId('cash')).toHaveText('$1850');
+  // The starting pistol has a lock card ($200 = 4x): lock it.
   const lock = page.getByTestId('buy-lock:pistol');
   await expect(lock).toBeVisible();
   await expect(lock.locator('.iprice')).toHaveText('$200');
   if (env.SHOP_SHOT) { await lock.hover(); await page.waitForTimeout(300); await page.screenshot({ path: env.SHOP_SHOT }); }
   await lock.click();
-  await expect(page.getByTestId('cash')).toHaveText('$1650');
+  await expect(page.getByTestId('cash')).toHaveText('$1700');
   await expect(lock).toHaveAttribute('aria-disabled', 'true');
   await expect(lock.locator('.istatus')).toHaveText('Locked');
   await expect(page.getByTestId('hotbar-slot-0')).toHaveClass(/locked/);

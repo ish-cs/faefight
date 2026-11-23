@@ -4,7 +4,7 @@ import {
   pow, select, sin, smoothstep, step, texture, uv, vec2, vec3, vec4,
 } from 'three/tsl';
 import { applyWet } from './wetness';
-import { PIECES } from '../../sim/constants';
+import { PIECES, RAMP_SLAB, rampHull } from '../../sim/constants';
 import type { PieceKind, PieceState } from '../../sim/types';
 import { DAMAGE_TILE_M, damageTex } from './damageTex';
 import { boxUV, mat, merge, part, strut } from './geo';
@@ -18,19 +18,24 @@ const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
 // ---------------------------------------------------------------- collision/ghost shapes (exact sim hulls)
 
-/** Ramp: 2 wide, rises along local +Z from y=0 at z=-d/2 to y=h at z=+d/2 (matches the physics hull). */
-function rampGeometry(w: number, h: number, d: number): THREE.BufferGeometry {
-  const x = w / 2, z = d / 2;
-  const P = { a: [-x, 0, -z], b: [x, 0, -z], c: [-x, 0, z], e: [x, 0, z], f: [-x, h, z], g: [x, h, z] };
-  const tris: number[][] = [
-    [P.a, P.f, P.g], [P.a, P.g, P.b],
-    [P.c, P.e, P.g], [P.c, P.g, P.f],
-    [P.a, P.b, P.e], [P.a, P.e, P.c],
-    [P.a, P.c, P.f],
-    [P.b, P.g, P.e],
-  ].map((t) => t.flat());
+/**
+ * Ramp: the thin sloped slab of rampHull (the physics collider), open underneath. Profile points 0..3 per side:
+ * low top edge, high top edge, high bottom edge, low bottom edge; side -X first, then +X.
+ */
+function rampGeometry(): THREE.BufferGeometry {
+  const h = rampHull(), P = (i: number) => [h[i * 3], h[i * 3 + 1], h[i * 3 + 2]];
+  const quad = (a: number, b: number, c: number, d: number) => [P(a), P(b), P(c), P(a), P(c), P(d)];
+  const tris = [
+    ...quad(0, 1, 5, 4), // top (slope)
+    ...quad(3, 7, 6, 2), // underside
+    ...quad(1, 2, 6, 5), // high end
+    ...quad(0, 4, 7, 3), // low edge sliver
+    ...quad(0, 3, 2, 1), // -X side
+    ...quad(4, 5, 6, 7), // +X side
+  ];
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(tris.flat(), 3));
+  // counter-clockwise from outside (outward face normals; checked in tests/client/rampShape.test.ts)
   geo.computeVertexNormals();
   return geo;
 }
@@ -38,7 +43,7 @@ function rampGeometry(w: number, h: number, d: number): THREE.BufferGeometry {
 /** Simple hull of a piece (origin at its base centre, like PieceState.pos). Used for ghost + raycasts. */
 export function pieceGeometry(kind: PieceKind): THREE.BufferGeometry {
   const s = PIECES[kind];
-  if (kind === 'ramp') return rampGeometry(s.w, s.h, s.d);
+  if (kind === 'ramp') return rampGeometry();
   const g = new THREE.BoxGeometry(s.w, s.h, s.d);
   g.translate(0, s.h / 2, 0);
   return g;
@@ -232,13 +237,30 @@ function ramp(): Visual {
     const s = k / n;
     push(v, 'wood', boxUV(w - 0.12, 0.025, 0.05, 2), mat(0, s * h + 0.012, -d / 2 + s * d, -a, 0, 0), 0x9a8468);
   }
-  // steel side stringers (triangles) + back frame; side-by-side ramps share one stringer, the back frame gives way
-  // where the top runs into a wall, deck or the next ramp
-  const tri = new THREE.Shape([new THREE.Vector2(-d / 2, 0), new THREE.Vector2(d / 2, 0), new THREE.Vector2(d / 2, h)]);
-  const side = new THREE.ExtrudeGeometry(tri, { depth: 0.03, bevelEnabled: false });
-  // shape x → local +Z, shape y → Y, extrusion → local -X (rotateY(-90°))
-  for (const x of [-w / 2 + 0.03, w / 2]) push(v, 'steel', side, mat(x, 0, 0, 0, -Math.PI / 2, 0), 0x7c8287, [x > 0 ? E(R, TRIM) : 0, 0]);
-  push(v, 'steel', boxUV(w, h - 0.02, 0.04, 1.25), mat(0, (h - 0.02) / 2, d / 2 - 0.02), 0x7c8287, [E(U, TRIM), 0]);
+  // Open underneath (the collider is a thin slab, RAMP_SLAB): steel framing hung under the deck, all inside the slab.
+  // at(k, s): the point k metres below the slope (along its normal) at fraction s of the way up.
+  const at = (k: number, s: number): [number, number] => [s * h - k * Math.cos(a), -d / 2 + s * d + k * Math.sin(a)];
+  const deep = Math.min(0.12, RAMP_SLAB * Math.cos(a) - t - 0.005); // stringer depth under the deck
+  const kS = t + deep / 2;
+  // stringers run from where they meet the base (s0) to just short of the top edge, so nothing pokes below or past
+  const s0 = (t + deep) / Math.cos(a) / h + 0.005, s1 = 0.985;
+  const [sy, sz] = at(kS, (s0 + s1) / 2);
+  // side-by-side ramps share one side stringer (the right one gives way)
+  for (const x of [-w / 2 + 0.035, 0, w / 2 - 0.035])
+    push(v, 'steel', boxUV(0.05, deep, (s1 - s0) * len, 1.25), mat(x, sy, sz, -a, 0, 0), 0x7c8287, [x > 0 ? E(R, TRIM) : 0, 0]);
+  // cross joists between the stringers, and a header across the top end
+  for (const s of [0.3, 0.6, 0.94]) {
+    const [jy, jz] = at(t + 0.035, s);
+    push(v, 'steel', boxUV(w - 0.1, 0.07, 0.05, 1.25), mat(0, jy, jz, -a, 0, 0), 0x737a7f);
+  }
+  // X-bracing straps under the joists (two bays)
+  const kB = t + deep - 0.012;
+  for (const [sa, sb] of [[0.3, 0.6], [0.6, 0.94]]) for (const [xa, xb] of [[-1, 1], [1, -1]]) {
+    const [ya, za] = at(kB, sa), [yb, zb] = at(kB, sb);
+    push(v, 'galv', strut(V(xa * (w / 2 - 0.06), ya, za), V(xb * (w / 2 - 0.06), yb, zb), 0.011, 6), null, 0xa4aaae);
+  }
+  // steel kick plate where the deck meets its base
+  push(v, 'steel', boxUV(w - 0.04, 0.02, 0.12, 1.25), mat(0, 0.01, -d / 2 + 0.3), 0x6f7579);
   // tread-plate lips laid over the joint: onto the surface at the top, off the deck it starts from at the bottom
   push(v, 'steel', boxUV(w - 0.04, 0.016, 0.34, 1.25), mat(0, h + 0.008, d / 2 + 0.07), 0x8c9297, [E(U, JOIN), 0]);
   push(v, 'steel', boxUV(w - 0.04, 0.016, 0.3, 1.25), mat(0, 0.008, -d / 2 - 0.08, 0.05, 0, 0), 0x8c9297, [E(D, JOIN), 0]);

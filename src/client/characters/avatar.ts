@@ -7,6 +7,9 @@ import { chooseClip } from './animState';
 import { EMOTE_BONES, emoteClip, emotePose, type BodyAxis, type EmoteBone } from './emotePose';
 import { QUICK_CHAT, QUIP_SHOW_SEC, type EmoteId, type QuipId } from '../../sim/emotes';
 import { lods } from '../world/lod';
+import { sceneColorFor } from '../world/displayColor';
+import { tagTextColor } from '../colors';
+import { texture, vec4 } from 'three/tsl';
 import { soldierLook } from './body';
 import { breath, flinchEnvelope, LOCOMOTION_CLIPS, StrideIK, strideFor } from './locomotion';
 import { BODY_LOD, HAND_BONE, loadCharacters, makeBody, type Body, type CharacterAssets } from './loader';
@@ -134,23 +137,28 @@ function speechBubble(): { sprite: THREE.Sprite; draw(text: string): void } {
   return { sprite, draw };
 }
 
-/** Name tag sprite (white text on the island colour), drawn above remote players. */
+/**
+ * Name tag sprite: the exact island colour (the same as the HUD chips and the beacon), with black or white text,
+ * whichever reads better on it. The shader undoes the scene's tone mapping + grade (world/displayColor.ts), so the
+ * tag shows the colour as-is instead of drifting in hue (yellow used to come out brown).
+ */
 function nameTag(text: string, color: number): THREE.Sprite {
   const c = document.createElement('canvas');
   c.width = 256; c.height = 64;
   const g = c.getContext('2d')!;
   const col = new THREE.Color(color);
-  g.fillStyle = `rgba(${Math.round(col.r * 160)},${Math.round(col.g * 160)},${Math.round(col.b * 160)},1)`;
+  g.fillStyle = col.getStyle(THREE.SRGBColorSpace);
   g.beginPath(); g.roundRect(8, 10, 240, 44, 22); g.fill();
-  g.fillStyle = '#fff';
+  g.fillStyle = tagTextColor(color);
   g.font = '600 26px "Helvetica Neue", Helvetica, Arial, sans-serif';
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText(text.slice(0, 16), 128, 33);
   const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.colorSpace = THREE.NoColorSpace; // sample the sRGB values as drawn: sceneColorFor wants display values
   // Constant on-screen size so it stays readable across the map; no fog so distance doesn't wash it out.
-  const mat = new THREE.SpriteNodeMaterial({ map: tex, transparent: true, depthWrite: false, sizeAttenuation: false, fog: false });
-  mat.color.setScalar(1.8); // pre-boost against tone mapping (same as render.ts labels)
+  const mat = new THREE.SpriteNodeMaterial({ transparent: true, depthWrite: false, sizeAttenuation: false, fog: false });
+  const t = texture(tex);
+  mat.colorNode = vec4(sceneColorFor(t.rgb), t.a);
   const s = new THREE.Sprite(mat);
   s.scale.set(0.12, 0.03, 1);
   s.renderOrder = 6;
@@ -641,6 +649,9 @@ export class Avatar {
   }
   private chest: THREE.Bone | undefined;
 
+  /** Forget the cached LOD / shadow tier: the next update re-applies them to the meshes. */
+  relod() { this.lod = -1; this.shadowTier = -1; }
+
   /** Body detail + shadow casting by distance (only touches the meshes when something changes). */
   private applyLod() {
     const d = this.lodDist;
@@ -729,6 +740,13 @@ export class CharacterSystem {
 
   get loaded() { return this.assets !== null; }
 
+  /**
+   * Re-apply every avatar's LOD visibility on its next update. The loading warm-up shows every hidden mesh and
+   * then hides them again; a LOD switch during its frames (e.g. the first frame's far LOD → near) would otherwise
+   * leave the cached LOD's mesh hidden, an invisible avatar until the next LOD change.
+   */
+  relod() { for (const a of this.avatars.values()) a.relod(); }
+
   private avatar(p: PlayerState, humanId: number): Avatar {
     let a = this.avatars.get(p.id);
     if (!a) {
@@ -810,16 +828,18 @@ export class CharacterSystem {
       if (hidden?.includes(p.id)) { const h = this.avatars.get(p.id); if (h) { h.group.visible = false; h.alive = false; } continue; }
       const a = this.avatar(p, humanId);
       a.allyMarker(myTeam !== undefined && p.team === myTeam && p.id !== humanId);
+      m.yaw = p.yaw;
+      m.pitch = p.pitch;
+      if (!motionOf(p.id, m)) { m.pos.set(p.pos.x, p.pos.y, p.pos.z); m.vel.set(p.vel.x, p.vel.y, p.vel.z); }
       if (cam) {
-        const pos = a.group.position;
+        // Where it's drawn this frame: alive = this frame's motion; dead = where it fell (a new avatar's
+        // group still sits at the origin, which would pick the far LOD for its first frame).
+        const pos = p.alive ? m.pos : a.group.position;
         a.lodDist = cam.position.distanceTo(pos);
         _sphere.center.set(pos.x, pos.y + 0.9, pos.z);
         _sphere.radius = CHAR_LOD.cullRadius + CHAR_LOD.shadowRadius;
         a.lodOnScreen = this.frustum.intersectsSphere(_sphere);
       }
-      m.yaw = p.yaw;
-      m.pitch = p.pitch;
-      if (!motionOf(p.id, m)) { m.pos.set(p.pos.x, p.pos.y, p.pos.z); m.vel.set(p.vel.x, p.vel.y, p.vel.z); }
       a.update({
         pos: m.pos, vel: m.vel, yaw: p.id === humanId ? localYaw : m.yaw, pitch: m.pitch, alive: p.alive, equipped: p.equipped,
         blinkHidden: simTime < p.invulnUntil && Math.floor(now / 120) % 2 === 0, shield: p.shield ?? 0,

@@ -8,7 +8,7 @@ const templates = (process.argv[3] ?? 'harbor,yard').split(',');
 const shotDir = process.argv[4];
 const base = process.env.MAP_URL ?? 'http://localhost:5331';
 
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 for (const tpl of templates) for (const n of ns) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errors = [];

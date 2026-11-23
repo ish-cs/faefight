@@ -6,6 +6,7 @@ import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type PlayerInput, type Snapshot } from '../../src/sim/types';
 import { sanitizeInput } from '../../src/net/sanitize';
 import { v3 } from '../../src/sim/vec';
+import { unarmed } from './unarmed';
 
 const humans = { players: [{ name: 'you', isBot: false }, { name: 'friend', isBot: false }] };
 const inputs = (i: Partial<PlayerInput>) => new Map([[1, { ...NO_INPUT, ...i }]]);
@@ -47,6 +48,7 @@ describe('shop + hotbar: rocket launcher', () => {
 describe('match: aiming, rockets, projectiles', () => {
   test('ADS needs a gun, slows you down and is cleared by a reload', async () => {
     const { m } = await match();
+    unarmed(m);
     let s = m.tick(inputs({ ads: true, moveZ: 1 }));
     expect(me(s).ads).toBe(false); // fists
     m.debugGive(1, { weapons: { rifle: { mag: 20, spare: 50 } } });
@@ -63,6 +65,7 @@ describe('match: aiming, rockets, projectiles', () => {
   });
   test('a rocket in flight is in the snapshot; a rocket jump lifts you off the ground', async () => {
     const { m } = await match();
+    unarmed(m);
     m.debugGive(1, { weapons: { rocket: { mag: 1, spare: 3 } } });
     let s = m.tick(inputs({ select: 0, pitch: 0.4 }));
     s = m.tick(inputs({ select: 0, pitch: 0.4, fire: true }));
@@ -79,6 +82,36 @@ describe('match: aiming, rockets, projectiles', () => {
     expect(top - y0).toBeGreaterThan(1.5);
     expect(me(s).alive).toBe(true);
     expect(me(s).hp).toBeLessThan(100);
+  });
+  test('rocket jump: ≤30 self-damage, ~4 m from standing, a 3-storey top fired a tick into a jump, a long gap at a sprint, soft landing', async () => {
+    const run = async (o: { jump?: boolean; sprint?: boolean }) => {
+      const { m } = await match();
+      unarmed(m); // no start pistol: the rocket is slot 0
+      m.debugGive(1, { weapons: { rocket: { mag: 1, spare: 3 } } });
+      const base = { select: 0, yaw: -Math.PI / 2, pitch: -1.4, moveZ: o.sprint ? 1 : 0, sprint: !!o.sprint };
+      let s = m.tick(inputs(base));
+      for (let i = 0; i < 20; i++) s = m.tick(inputs(base));
+      const p0 = { ...me(s).pos }, hp0 = me(s).hp;
+      if (o.jump) s = m.tick(inputs({ ...base, jump: true }));
+      s = m.tick(inputs({ ...base, fire: true }));
+      let top = 0, gap = 0, minHp = hp0, landed = false;
+      for (let i = 0; i < 150; i++) {
+        s = m.tick(inputs({ ...base, pitch: 0 }));
+        const p = me(s);
+        top = Math.max(top, p.pos.y - p0.y);
+        minHp = Math.min(minHp, p.hp);
+        if (!landed && top > 1 && p.pos.y - p0.y < 0.5) { landed = true; gap = Math.hypot(p.pos.x - p0.x, p.pos.z - p0.z); }
+      }
+      return { top, gap, loss: hp0 - minHp };
+    };
+    const stand = await run({});
+    expect(stand.top).toBeGreaterThan(3.5); // over a 2.5 m wall
+    expect(stand.loss).toBeLessThanOrEqual(30); // the blast (25) and nothing for the landing
+    const jump = await run({ jump: true });
+    expect(jump.top).toBeGreaterThan(7.5); // three 2.5 m storeys
+    expect(jump.loss).toBeLessThanOrEqual(30); // an ~8 m fall back down doesn't hurt either
+    const sprint = await run({ sprint: true });
+    expect(sprint.gap).toBeGreaterThan(10);
   });
   test('grenades show up as projectiles too', async () => {
     const { m } = await match();

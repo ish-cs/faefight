@@ -12,9 +12,11 @@ const CI = !!env.CI;
 // CI (GitHub Linux runners, no GPU): no WebGPU adapter, so three/webgpu's WebGPURenderer falls back to
 // WebGL2, rendered in software by SwiftShader through ANGLE at ~1 fps. Specs that play a match in real time
 // are skipped on CI (tests/e2e/gpu.ts); the rest get longer timeouts.
-const launchArgs = CI
-  ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
-  : ['--enable-unsafe-webgpu'];
+// --mute-audio: tests never make sound on the machine (Chrome speaks speechSynthesis through the OS even headless).
+const launchArgs = [
+  '--mute-audio',
+  ...(CI ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] : ['--enable-unsafe-webgpu']),
+];
 
 export default defineConfig({
   testDir: 'tests/e2e',

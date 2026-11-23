@@ -6,7 +6,7 @@ import { chromium } from '@playwright/test';
 
 const [port = '5339', quality = 'high', prof = '', secsArg = '30'] = process.argv.slice(2);
 const SECS = Number(secsArg);
-const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', ...(process.env.NOVSYNC ? ['--disable-gpu-vsync', '--disable-frame-rate-limit'] : [])] });
+const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--mute-audio', ...(process.env.NOVSYNC ? ['--disable-gpu-vsync', '--disable-frame-rate-limit'] : [])] });
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 2 });
 const page = await ctx.newPage();
 const logs = [];

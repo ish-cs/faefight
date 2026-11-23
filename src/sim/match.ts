@@ -1,10 +1,10 @@
-import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
+import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, grantStartPistol, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
-import { islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
-import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
+import { envKiller, islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
+import { buildMapDef, grappleRange, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
 import { Cosmetics } from './cosmetics';
 import { Docks, overDock } from './docks';
@@ -13,6 +13,7 @@ import { HAZARD, HEAD } from './constants';
 import { Fire, fireZones, type FireCtx } from './fire';
 import { Traps, validateTrap } from './traps';
 import { DoorwayTracker } from './seal';
+import { bountyOf, newElimLedger, resolveEliminations, type ElimLedger } from './elimination';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import { clearGrapple, fireGrapple, tickGrapple, type GrappleCtx } from './grapple';
 import type { MatchApi, MatchSetup } from './matchApi';
@@ -31,11 +32,11 @@ import type { AllyStatus, BotView, FeedLine, HurtEvent, ShotSeen, TeamSighting }
 import { Bot } from './bots/bot';
 import { Banter } from './bots/banter';
 import { QUIP_SHOW_SEC, WheelLimiter, emoteEnd, isEmoteId, isQuipId, isWheelId, type WheelId } from './emotes';
-import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
+import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PieceState, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
 import { NO_INPUT } from './types';
 import { clampSettings, resolveColors, type GameSettings } from './settings';
 import { TEAM_COLORS, isAlly, islandOrder, resolveTeams, sealBlocker } from './teams';
-import { clone, dist, dist2D, forward, norm, sub, v3 } from './vec';
+import { clone, dist, dist2D, forward, norm, rotateY, sub, v3 } from './vec';
 import { mulberry32, type Rng } from './rng';
 import { deepClone } from './replay/clone';
 
@@ -65,13 +66,19 @@ export class Match implements MatchApi {
   private rng: Rng;
   private makeBot?: MatchOptions['makeBot'];
   private sealed: boolean[];
+  /** Elimination credit bookkeeping (elimination.ts): plain data, so fork() and checkpoints carry it. */
+  private elim: ElimLedger;
   private sealDirty = true;
   private doors: DoorwayTracker;
   private supportDirty = false;
+  /** Player whose damage broke a piece this tick: whatever collapses with it is theirs too (kill credit). */
+  private breaker: number | null = null;
   private kills: { victim: number; killer: number | null }[] = [];
   private ctx: CombatCtx;
   /** Grappling hooks' view of this match (grapple.ts); bound like ctx. */
   private grappleCtx!: GrappleCtx;
+  /** This map's grappling hook reach (map.ts grappleRange). */
+  readonly hookRange: number;
   /** Public recent history a human would have on screen: hits, tracers, kill feed, scoreboard. */
   private hits: (HurtEvent & { target: number })[] = [];
   private shots: ShotSeen[] = [];
@@ -132,6 +139,7 @@ export class Match implements MatchApi {
     islandOf.forEach((isl, i) => { def.colors![isl] = teams[i] === undefined ? picked[i] : TEAM_COLORS[teams[i]!]; });
     this.cosmetics = new Cosmetics(def.cosmetics);
     this.hazards = new Hazards(def.hazards);
+    this.hookRange = grappleRange(map);
     this.docks = new Docks(def.docks ?? []);
     this.hazardSeed = setup.seed ?? 1;
     this.fire = new Fire(def, setup.seed ?? 1, () => this.s.nextId++);
@@ -141,6 +149,7 @@ export class Match implements MatchApi {
     this.s.waterY = def.waterY;
     this.s.stormCenter = stormCenterOf(def.center);
     this.sealed = map.map(() => false);
+    this.elim = newElimLedger(map.length);
     this.doors = new DoorwayTracker(map.map((isl) => isl.bunker));
     const rng = mulberry32(setup.seed ?? 1);
     this.rng = rng;
@@ -156,6 +165,7 @@ export class Match implements MatchApi {
       const isl = islandOf[i];
       const p = newPlayer(id, name, cfg.isBot, isl, map[isl].spawn, this.settings.startCash);
       if (teams[i] !== undefined) p.team = teams[i];
+      grantStartPistol(p);
       p.yaw = spawnYaw(map[isl].bunker, p.pos);
       p.pitch = 0;
       this.s.players.set(id, p);
@@ -192,6 +202,7 @@ export class Match implements MatchApi {
       players: s.players,
       pieces: s.pieces,
       get waterY() { return s.waterY; },
+      range: this.hookRange,
       // The rope never threads a firing slit; aimed at players it is lag-compensated like a shot.
       cast: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, false) : this.rewoundRay(o, d, max, shooter, this.rewindT, false)),
       clear: (a, b) => {
@@ -210,14 +221,19 @@ export class Match implements MatchApi {
       pieces: this.s.pieces,
       explosives: this.explosives,
       nextId: () => this.s.nextId++,
-      onPieceDestroyed: (id) => {
+      onPieceDestroyed: (id, by) => {
+        const pc = this.s.pieces.get(id);
+        if (pc && by !== null && by !== undefined) {
+          this.creditFloor(by, this.s.time, (p) => onPiece(pc, p.pos));
+          this.breaker = by;
+        }
         this.s.pieces.delete(id);
         physics.removePiece(id);
         this.sealDirty = true;
         this.supportDirty = true;
       },
       grounded: (id) => this.s.players.get(id)?.mv?.grounded ?? false,
-      onKnockback: (id, dv) => {
+      onKnockback: (id, dv, rocketJump) => {
         // The movement model keeps momentum (fully in the air, braking on the ground), so a blast is just a
         // velocity change; an upward one lifts you off the ground (rocket jump).
         const p = this.s.players.get(id);
@@ -225,14 +241,19 @@ export class Match implements MatchApi {
         p.vel.x += dv.x; p.vel.z += dv.z;
         p.vel.y = Math.max(p.vel.y, 0) + dv.y;
         if (dv.y > 0 && p.mv) { p.mv.grounded = false; p.mv.airTime = 1; }
+        if (rocketJump && dv.y > 0) p.rocketJumpAt = this.s.time;
       },
       castShot: (o, d, max, shooter) => (this.rewindT === null ? physics.raycast(o, d, max, shooter, true) : this.rewoundRay(o, d, max, shooter, this.rewindT)),
       onKill: (victim, killer, cause) => {
+        // A fatal fall or the storm soon after a player hurt them or broke their floor: that player's kill ("X via fall").
+        const world = cause === 'fall' || cause === 'storm' || cause === 'lightning';
+        const credit = killer === null && world ? envKiller(this.s, this.s.players.get(victim)!, this.s.time) : null;
+        if (credit !== null) killer = credit;
         this.kills.push({ victim, killer });
         // Only environment causes go on the kill event (death recap / feed); weapon kills are told by the killer.
-        const env = killer === null && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
+        const env = (killer === null || credit !== null) && (cause === 'storm' || cause === 'lightning') ? cause : undefined;
         // A barrel / tank someone set off: the feed says "X via barrel".
-        const via = cause === 'barrel' || cause === 'propane' || cause === 'trap' ? cause : undefined;
+        const via = credit !== null ? cause : cause === 'barrel' || cause === 'propane' || cause === 'trap' ? cause : undefined;
         this.events.push(...killPlayer(this.s, physics, victim, this.s.time, false, killer, env, via));
       },
       // Spike traps ride the hazard hooks with negative ids (bullets and fists stop at the nearer of the two).
@@ -343,6 +364,8 @@ export class Match implements MatchApi {
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
     this.updateSeals(now);
+    this.events.push(...resolveEliminations(this.s, this.elim, this.events, now, (i) => this.sealed[i]));
+    for (const p of this.s.players.values()) p.bounty = bountyOf(this.s, p);
     this.remember(now);
     this.stats.onTick(this.events, this.s.players.values(), now);
     for (const b of this.banter.onTick(this.events, this.s.players, now)) if (this.bots.has(b.id)) this.wheel(b.id, b.what);
@@ -407,6 +430,17 @@ export class Match implements MatchApi {
     if (p.mv) p.mv.ack = 0;
   }
 
+  /**
+   * Player `by` broke the floor under everyone `on` picks (a piece, a pier section, or what collapsed with it):
+   * a drowning or fatal fall soon after is their kill (lifecycle envKiller). Not themselves or teammates.
+   */
+  private creditFloor(by: number, now: number, on: (p: PlayerState) => boolean) {
+    const breaker = this.s.players.get(by);
+    if (!breaker) return;
+    for (const p of this.s.players.values())
+      if (p.alive && p.id !== by && !isAlly(breaker, p) && on(p)) p.hurtBy = { by, at: now };
+  }
+
   /** Pieces left with nothing holding them up fall apart (no floating bridges or walls). */
   /** Pier sections this tick's explosions broke: open water there, anything built on them falls, loot sinks. */
   private breakDocks(now: number) {
@@ -415,16 +449,21 @@ export class Match implements MatchApi {
       const d = this.docks.defs.find((x) => x.id === e.data.id)!;
       this.physics.removeDock(d.id);
       this.supportDirty = true;
+      const by = e.data.by, top = d.center.y + d.half.y;
+      if (typeof by === 'number') this.creditFloor(by, now, (p) => overDock(d, p.pos, PLAYER.radius) && p.pos.y - top > -0.3 && p.pos.y - top < 1.5);
       for (const [id, b] of this.s.loot) if (overDock(d, b.pos, 0.3) && Math.abs(b.pos.y - (d.center.y + d.half.y)) < 0.6) this.s.loot.delete(id);
     }
     this.events.push(...out);
   }
 
   private collapseUnsupported(now: number) {
+    const by = this.breaker;
+    this.breaker = null;
     if (!this.supportDirty) return;
     this.supportDirty = false;
     for (const id of unsupportedPieces(this.physics, this.s.pieces)) {
       const p = this.s.pieces.get(id)!;
+      if (by !== null) this.creditFloor(by, now, (q) => onPiece(p, q.pos));
       this.s.pieces.delete(id);
       this.physics.removePiece(id);
       this.sealDirty = true;
@@ -580,7 +619,8 @@ export class Match implements MatchApi {
     p.eliminated = true;
     p.respawnAt = null;
     p.breakoutUntil = null;
-    this.events.push({ t: this.s.time, type: 'eliminated', data: { player: playerId } });
+    // With the kill, in the next tick's events (credited there: elimination.ts), not the tick already returned.
+    this.debugEvents.push({ t: this.s.time, type: 'eliminated', data: { player: playerId } });
   }
 
   private applyInput(p: PlayerState, input: PlayerInput, now: number, cmds?: MoveCmd[]) {
@@ -596,8 +636,21 @@ export class Match implements MatchApi {
     if (input.view !== undefined) p.view = input.view === 1 ? 1 : 0;
     if (p.hook) this.events.push(...tickGrapple(this.grappleCtx, p, now));
 
+    // A build sent while still busy (a held-place stream arriving a little bunched) waits for the busy time
+    // to end instead of being dropped; it expires after BUILD.queueSec. The newest request wins.
+    if (input.build) this.queuedBuild.set(p.id, { req: input.build, until: now + (input.build.seq !== undefined ? BUILD.seqWaitSec : BUILD.queueSec) });
+    // This tick's other actions see the busy state from before a build placed mid-batch (below), as when it went last.
+    let busyBefore: number | null = null;
     if (cmds) {
       for (const c of cmds) {
+        // A build tied to command `seq` goes in right after it, before the next one moves us: where the client's
+        // predicted player stood when it validated the spot and showed the piece.
+        const q = this.queuedBuild.get(p.id);
+        if (q?.req.seq !== undefined && c.seq > q.req.seq && p.alive && now >= p.busyUntil) {
+          this.queuedBuild.delete(p.id);
+          busyBefore ??= p.busyUntil;
+          if (now <= q.until) this.build(p, q.req, now);
+        }
         if (p.alive) this.move(p, c); // a hard landing can kill mid-batch
         else p.mv!.ack = c.seq;
       }
@@ -606,10 +659,7 @@ export class Match implements MatchApi {
     if (input.drop) this.drop(p, input.drop, now);
 
     tickReload(p, now);
-    // A build sent while still busy (a held-place stream arriving a little bunched) waits for the busy time
-    // to end instead of being dropped; it expires after BUILD.queueSec. The newest request wins.
-    if (input.build) this.queuedBuild.set(p.id, { req: input.build, until: now + BUILD.queueSec });
-    if (now < p.busyUntil) return;
+    if (now < (busyBefore ?? p.busyUntil)) return;
     const isl = this.map[p.island];
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
 
@@ -661,7 +711,9 @@ export class Match implements MatchApi {
       try { this.events.push(...fireGrapple(this.grappleCtx, p, now)); } finally { this.rewindT = null; }
     }
     const queued = this.queuedBuild.get(p.id);
-    if (queued) {
+    // One tied to a command waits for the command after it (placed in the move loop). If we were still busy when
+    // that command came (ack past seq), it goes in now that we aren't, as an untied one would; or it expires.
+    if (queued && (queued.req.seq === undefined || queued.req.seq < (p.mv?.ack ?? 0) || now > queued.until)) {
       this.queuedBuild.delete(p.id);
       if (now <= queued.until) this.build(p, queued.req, now);
     }
@@ -748,7 +800,10 @@ export class Match implements MatchApi {
       speedMult(p, this.s.time) * adsSpeed(p));
     mv.ack = cmd.seq;
     p.stamina = mv.stamina;
-    if (landingSpeed > LIFECYCLE.safeFallSpeed)
+    // The landing after your own rocket jump never hurts; the flag is spent on touchdown (or after 6 s).
+    const rocketJump = p.rocketJumpAt !== undefined && this.s.time - p.rocketJumpAt < 6;
+    if (landingSpeed > 0 || !rocketJump) delete p.rocketJumpAt;
+    if (landingSpeed > LIFECYCLE.safeFallSpeed && !rocketJump)
       this.events.push(...applyPlayerDamage(this.ctx, p, (landingSpeed - LIFECYCLE.safeFallSpeed) * LIFECYCLE.fallDmgPerSpeed, null, this.s.time, { bypassShield: true, weapon: 'fall' }));
   }
 
@@ -777,9 +832,17 @@ export class Match implements MatchApi {
         const owner = [...this.s.players.values()].find((p) => p.island === i)?.id ?? null;
         // Credit the seal to whoever placed the newest piece around that bunker (null in sudden death).
         let by: number | null = null, newest = -1;
+        const placers = new Set<number>();
         if (sealed && !this.s.forcedSeal)
           for (const pc of sealPieces(this.s, i))
-            if (pc.id > newest && dist2D(pc.pos, isl.bunker.center) <= SEAL.half) { newest = pc.id; by = pc.owner; }
+            if (dist2D(pc.pos, isl.bunker.center) <= SEAL.half) {
+              if (pc.owner !== owner) placers.add(pc.owner);
+              if (pc.id > newest) { newest = pc.id; by = pc.owner; }
+            }
+        // Elimination credit: the closing plug's owner, other players with pieces in the seal assist. Sudden death's
+        // forced seal keeps whatever physical seal was there.
+        if (!sealed) this.elim.seal[i] = null;
+        else if (by !== null) { placers.delete(by); this.elim.seal[i] = { by, placers: [...placers].sort((a, b) => a - b) }; }
         this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i, owner, by } });
       }
       this.sealed[i] = sealed;
@@ -831,7 +894,7 @@ export class Match implements MatchApi {
       self,
       enemies,
       others: [...this.s.players.values()].filter((o) => !isAlly(o, self))
-        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills })),
+        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills, trapped: o.breakoutUntil !== null, bounty: o.bounty ?? 0 })),
       ...(team ? { allies: team.allies, teamSeen: team.seen } : {}),
       map: this.map,
       center: { island: this.def.center, gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },
@@ -859,8 +922,9 @@ export class Match implements MatchApi {
         const hz = this.hazards.ray(eye, dir, d + 0.5);
         return !hz || dist(add3(eye, dir, hz.dist), to) < 1;
       },
+      hookRange: this.hookRange,
       castHook: (dir) => {
-        const h = this.physics.raycast(eye, dir, GRAPPLE.range, self.id, false);
+        const h = this.physics.raycast(eye, dir, this.hookRange, self.id, false);
         return h ? { point: h.point, dist: h.dist, player: h.hit.type === 'player' ? h.hit.id : null } : null;
       },
       waterY: this.s.waterY,
@@ -971,4 +1035,15 @@ export class Match implements MatchApi {
     if (!p) throw new Error(`Match: no player ${id}`);
     return p;
   }
+}
+
+/** Feet at `pos` on (or just above) piece `pc`'s top: inside its footprint (plus body radius), up to 1.5 m above the deck. */
+function onPiece(pc: PieceState, pos: Vec3): boolean {
+  const s = PIECES[pc.kind];
+  const l = rotateY(v3(pos.x - pc.pos.x, 0, pos.z - pc.pos.z), -pc.rotY);
+  if (Math.abs(l.x) > s.w / 2 + PLAYER.radius || Math.abs(l.z) > s.d / 2 + PLAYER.radius) return false;
+  // A ramp's deck rises from 0 at local z = -d/2 to h at +d/2.
+  const top = pc.kind === 'ramp' ? s.h * Math.min(1, Math.max(0, l.z / s.d + 0.5)) : s.h;
+  const dy = pos.y - (pc.pos.y + top);
+  return dy > -0.3 && dy < 1.5;
 }

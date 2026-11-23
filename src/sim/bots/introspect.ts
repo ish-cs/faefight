@@ -94,7 +94,7 @@ const LOG_LEN = 10;
 type Ctx = {
   view: BotView; me: PlayerState; home: IslandLayout; on: number; src: number;
   rival: OtherStatus | null; rivalIsl: IslandLayout | null; enemy: PlayerState | null; enemyDist: number;
-  reach: boolean; homeReach: boolean; openDoors: Doorway[]; bridgeTo: number | null; centerReach: boolean; danger: boolean;
+  reach: boolean; hookFrom: Vec3 | null; homeReach: boolean; openDoors: Doorway[]; bridgeTo: number | null; centerReach: boolean; danger: boolean;
 };
 type Act = {
   dir: Vec3 | null; face?: Vec3; shootAt?: Vec3; build?: { kind: PieceKind; pos: Vec3; rotY: number };
@@ -350,7 +350,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     }
     case 'attack': {
       const recent = c.rival ? I.mem.recent(c.rival.id, now, 20) : null;
-      if (!c.reach || !c.rival || (view.suddenDeath && !c.enemy && !recent)) {
+      if (!(c.reach || c.hookFrom) || !c.rival || (view.suddenDeath && !c.enemy && !recent)) {
         if (c.reach && view.suddenDeath) return { f: [['sudden death', 0.3]], why: `Sudden death: hunting ${rivalName(c)} down` };
         return zero(!c.rival ? 'no rival' : `no route to ${rivalName(c)}'s island`);
       }
@@ -373,12 +373,12 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (!up) f.push(['patience (no upgrade)', -0.12 * t.patience * k]);
       if (c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive) f.push(['sealed hunt', I.P.drive.sealedHunt]);
       const where = recent ? `seen ${secs(now - recent.t)} ago${recent.island >= 0 && recent.island !== c.rival.island ? ' away from home' : ''}` : 'whereabouts unknown';
-      return { f, why: `Going after ${rivalName(c)} (${where}) with my ${gunName(best(me.inv))}` };
+      return { f, why: `Going after ${rivalName(c)} (${where}) with my ${gunName(best(me.inv))}${!c.reach ? ', hooking over' : ''}` };
     }
     case 'seal': {
       const kit = sealKit(me.inv);
       if (view.suddenDeath) return zero('sudden death');
-      if (!c.reach || !c.rivalIsl) return zero(`no route to ${rivalName(c)}'s island`);
+      if (!(c.reach || c.hookFrom) || !c.rivalIsl) return zero(`no route to ${rivalName(c)}'s island (no bridge, nothing in hook reach)`);
       if (!kit) return zero('no walls to seal with');
       if (!c.openDoors.length) return zero(`${rivalName(c)}'s bunker already sealed`);
       const near = c.on === c.rivalIsl.index && dist2D(me.pos, c.rivalIsl.bunker.center) < 15;
@@ -394,7 +394,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const state = rivalDown
         ? `${died !== undefined ? `died ${secs(now - died)} ago, ` : ''}respawn in ${secs(c.rival!.respawnAt! - now)}`
         : ownerAway ? 'they are away from home' : 'their doors are open';
-      return { f, why: `Sealing ${rivalName(c)}'s bunker: ${state}, I carry ${pieceWord(kit)} for ${c.openDoors.length} door${c.openDoors.length === 1 ? '' : 's'}` };
+      return { f, why: `Sealing ${rivalName(c)}'s bunker: ${state}, I carry ${pieceWord(kit)} for ${c.openDoors.length} door${c.openDoors.length === 1 ? '' : 's'}${!c.reach ? ' (hooking over: no bridge yet)' : ''}` };
     }
     case 'cut': {
       if (!gun) return zero('no gun');
@@ -492,6 +492,8 @@ function targetWhy(f: RivalFacts, now: number, seenAt: number | null): string {
   if (f.respawning) p.push('respawning');
   else if (f.sinceDeath < 15) p.push(`died ${secs(f.sinceDeath)} ago`);
   if (f.sealed) p.push('already sealed');
+  if (f.trapped) p.push('trapped: finish them');
+  if ((f.sealed || f.trapped) && (f.bounty ?? 0) > 0) p.push(`spoils $${f.bounty}`);
   if (f.onMyIsland) p.push('on my island');
   if (f.away) p.push('away from home');
   if (f.seenHp !== null) p.push(`${Math.round(f.seenHp)} hp`);
@@ -517,6 +519,8 @@ export class BrainProbe {
   fire = false;
   /** Latest goTo destination this tick (set by Bot.goTo). */
   dest: Vec3 | null = null;
+  /** No walkable way to my rival but a hook gets me over: where I fire it from. */
+  hookFrom: Vec3 | null = null;
   private lastBuild: { b: NonNullable<BrainDigest['build']>; t: number } | null = null;
 
   constructor(private readonly bot: Bot) {}
@@ -526,6 +530,7 @@ export class BrainProbe {
     const I = inside(this.bot);
     const now = c.view.now;
     this.decidedAt = now;
+    this.hookFrom = c.reach ? null : c.hookFrom;
     this.rows = rows ? rows.slice().sort((a, b) => b.score - a.score) : null;
     sandbox(I, () => {
       this.explained.clear();
@@ -533,7 +538,7 @@ export class BrainProbe {
       this.why = this.explained.get(chosen)?.why ?? '';
       // Rivals as chooseTarget weighs them (without its decision noise).
       const facts = I.rivalFacts(c.view);
-      this.rivals = facts.map((f) => [f.id, r2(rivalScore(f, I.t) + I.teamFocus(c.view, f.id))] as [number, number]).sort((a, b) => b[1] - a[1]);
+      this.rivals = facts.map((f) => [f.id, r2(rivalScore(f, I.t, I.P.drive.sealAwayTarget, { perK: I.P.drive.spoilsTarget[I.difficulty], trapped: I.P.drive.finishTrapped }) + I.teamFocus(c.view, f.id))] as [number, number]).sort((a, b) => b[1] - a[1]);
       const tf = facts.find((f) => f.id === I.targetId);
       this.target = tf ? { id: tf.id, why: targetWhy(tf, now, I.mem.seen.get(tf.id)?.t ?? null) } : c.rival ? { id: c.rival.id, why: 'nearest rival (no pick yet)' } : null;
       if (c.homeReach && !c.view.suddenDeath) {
@@ -615,8 +620,12 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
     case 'disengage': return { steps: ['Break away from the shooter', 'Get behind my bunker'], at: moving ? 0 : 1 };
     case 'defend': return { steps: ['Get to the plugged doorway', 'Clear the plug', 'Walk out'], at: a?.placeCharge || a?.shootAt ? 1 : moving ? 0 : 1 };
     case 'bridge': return { steps: ['Walk to the end of the bridge', 'Lay the next deck', 'Cross over'], at: a?.build ? 1 : moving ? 0 : 1 };
-    case 'attack': return { steps: [`Reach ${rv}'s island`, 'Hunt them / hold their door'], at: moving ? 0 : 1 };
-    case 'seal': return { steps: [`Walk to ${rv}'s nearest open door`, 'Plug it', 'Next door'], at: a?.build ? 1 : moving ? 0 : 1 };
+    case 'attack': return p.hookFrom
+      ? { steps: [`Walk to where I hook over to ${rv}'s island`, 'Hook across', 'Hunt them / hold their door'], at: moving ? 0 : 1 }
+      : { steps: [`Reach ${rv}'s island`, 'Hunt them / hold their door'], at: moving ? 0 : 1 };
+    case 'seal': return p.hookFrom
+      ? { steps: [`Walk to where I hook over to ${rv}'s island`, 'Hook across', 'Plug their doors'], at: moving ? 0 : 1 }
+      : { steps: [`Walk to ${rv}'s nearest open door`, 'Plug it', 'Next door'], at: a?.build ? 1 : moving ? 0 : 1 };
     case 'shop': {
       const items = p.shop?.items ?? [];
       const steps = [...(a?.vault?.withdraw ? ['Withdraw cash from the vault'] : []), 'Walk to the shop', ...items.slice(0, 5).map((i) => `Buy ${i}`)];

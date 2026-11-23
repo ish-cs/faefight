@@ -1,4 +1,5 @@
 import type { Quality } from '../world/sky';
+import { AIM_MODES, type AimMode, ctrlAimDefault, platformNav } from '../aimInput';
 import { type Keymap, sanitizeKeymap, setActiveKeymap } from '../keymap';
 
 /**
@@ -26,6 +27,8 @@ export const CROSSHAIR_COLORS = ['#ffffff', '#3ddc84', '#ffd166', '#4dd2ff', '#f
 export const FRAME_CAPS = [0, 30, 60, 120] as const;
 export type FrameCap = (typeof FRAME_CAPS)[number];
 export type CameraMode = 'third' | 'first';
+export const VOICE_ENGINES = ['neural', 'browser'] as const;
+export type VoiceEngine = (typeof VOICE_ENGINES)[number];
 
 /**
  * Stored-format version. v2: the FPS counter became a visible-by-default feature, so loading anything
@@ -39,13 +42,23 @@ export type GenAlertPct = typeof GEN_ALERT_PCTS[number];
 
 export type Settings = {
   v: typeof SETTINGS_VERSION;
-  controls: { sensitivity: number; invertY: boolean; keys: Keymap };
+  controls: { sensitivity: number; invertY: boolean; keys: Keymap; /** Aim keys (right mouse, Ctrl): hold to aim, or press to toggle. */ aimMode: AimMode;
+    /** Either Ctrl key aims too (trackpads). Default on macOS only (aimInput.ctrlAimDefault). */ ctrlAim: boolean };
   video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; perfDetail: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean; competitive: boolean };
   /** Mixer buses: effects (world SFX), ui (interface + stingers), ambience, music (+ an on/off switch). */
-  audio: { master: number; effects: number; ui: number; ambience: number; music: number; musicOn: boolean; muted: boolean };
+  audio: { master: number; effects: number; ui: number; ambience: number; music: number; musicOn: boolean; muted: boolean;
+    /** Sportscaster commentary (cinematic mode): on/off, its volume, captions, and whether it also talks while you spectate. */
+    commentaryOn: boolean; commentary: number; captions: boolean; commentarySpectate: boolean;
+    /** Browser voice names for play-by-play and colour ('' = pick the best installed automatically). */
+    voicePbp: string; voiceColour: string;
+    /** 'browser': speechSynthesis (default). 'neural': a free neural voice when the build ships one (downloaded once), browser voice until it's ready. */
+    voiceEngine: VoiceEngine;
+    /** Kokoro voice ids per commentator ('' = default pair). */
+    neuralPbp: string; neuralColour: string };
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct;
     /** Screen shake + hit-stop strength, 0 (off) .. 1 (full). Accessibility. */ screenShake: number;
-    /** First-person camera bob while walking / sprinting. */ cameraBob: boolean };
+    /** First-person camera bob while walking / sprinting. */ cameraBob: boolean;
+    /** Light beams in each living player's colour over their bunker (world/beacons.ts). */ islandBeacons: boolean };
   /** One-time things: the How to play card shows by itself until it has been seen once. */
   onboarding: { howToSeen: boolean };
 };
@@ -60,10 +73,10 @@ export const LIMITS = {
 export function defaultSettings(): Settings {
   return {
     v: SETTINGS_VERSION,
-    controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
+    controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null), aimMode: 'hold', ctrlAim: ctrlAimDefault(platformNav()) },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true, competitive: false },
-    audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false },
-    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true },
+    audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false, commentaryOn: true, commentary: 0.9, captions: true, commentarySpectate: false, voicePbp: '', voiceColour: '', voiceEngine: 'browser', neuralPbp: '', neuralColour: '' },
+    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true, islandBeacons: true },
     onboarding: { howToSeen: false },
   };
 }
@@ -83,6 +96,9 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object'
 const HEX = /^#[0-9a-f]{6}$/i;
 
 /** Anything (parsed JSON, partial, wrong types) → a complete valid Settings. */
+/** A stored voice name: any short string ('' = automatic). */
+const voiceName = (v: unknown) => (typeof v === 'string' ? v.slice(0, 120) : '');
+
 export function sanitizeSettings(raw: unknown): Settings {
   const d = defaultSettings();
   const r = obj(raw), c = obj(r.controls), v = obj(r.video), a = obj(r.audio), g = obj(r.gameplay), o = obj(r.onboarding);
@@ -92,6 +108,8 @@ export function sanitizeSettings(raw: unknown): Settings {
       sensitivity: num(c.sensitivity, LIMITS.sensitivity[0], LIMITS.sensitivity[1], d.controls.sensitivity),
       invertY: bool(c.invertY, d.controls.invertY),
       keys: sanitizeKeymap(c.keys),
+      aimMode: oneOf(c.aimMode, AIM_MODES, d.controls.aimMode),
+      ctrlAim: bool(c.ctrlAim, d.controls.ctrlAim),
     },
     video: {
       quality: oneOf(v.quality, QUALITIES, d.video.quality),
@@ -112,6 +130,15 @@ export function sanitizeSettings(raw: unknown): Settings {
       music: num(a.music, 0, 1, d.audio.music),
       musicOn: bool(a.musicOn, d.audio.musicOn),
       muted: bool(a.muted, d.audio.muted),
+      commentaryOn: bool(a.commentaryOn, d.audio.commentaryOn),
+      commentary: num(a.commentary, 0, 1, d.audio.commentary),
+      captions: bool(a.captions, d.audio.captions),
+      commentarySpectate: bool(a.commentarySpectate, d.audio.commentarySpectate),
+      voicePbp: voiceName(a.voicePbp),
+      voiceColour: voiceName(a.voiceColour),
+      voiceEngine: oneOf(a.voiceEngine, VOICE_ENGINES, d.audio.voiceEngine),
+      neuralPbp: voiceName(a.neuralPbp),
+      neuralColour: voiceName(a.neuralColour),
     },
     gameplay: {
       crosshair: oneOf(g.crosshair, CROSSHAIRS, d.gameplay.crosshair),
@@ -121,6 +148,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       genAlertPct: oneOf(g.genAlertPct, GEN_ALERT_PCTS, d.gameplay.genAlertPct),
       screenShake: num(g.screenShake, 0, 1, d.gameplay.screenShake),
       cameraBob: bool(g.cameraBob, d.gameplay.cameraBob),
+      islandBeacons: bool(g.islandBeacons, d.gameplay.islandBeacons),
     },
     onboarding: { howToSeen: bool(o.howToSeen, d.onboarding.howToSeen) },
   };

@@ -14,7 +14,7 @@ const dpr = Number(arg('dpr', '1'));
 /** harbor | props | mid */
 const spot = arg('spot', 'harbor');
 
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', ...(vsync ? [] : ['--disable-gpu-vsync', '--disable-frame-rate-limit'])] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio', ...(vsync ? [] : ['--disable-gpu-vsync', '--disable-frame-rate-limit'])] });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: dpr });
 page.setDefaultTimeout(240_000);
 const errors = [];

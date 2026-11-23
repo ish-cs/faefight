@@ -9,6 +9,8 @@ export const STATUS_LABEL: Record<ScoreStatus, string> = {
 export type ScoreRow = {
   id: number; name: string; island: number; isBot: boolean; isYou: boolean; isHost: boolean;
   kills: number; deaths: number; status: ScoreStatus; sealed: boolean;
+  /** What eliminating them pays now (spoils of war; sim/elimination.ts bountyOf). */
+  bounty: number;
   /** Teams match: the player's team (rows are grouped by it). */
   team?: number;
 };
@@ -27,6 +29,7 @@ export function scoreRows(snap: Snapshot, o: { humanId: number; hostId: number |
   return snap.players.map((p): ScoreRow => ({
     id: p.id, name: p.name, island: p.island, isBot: p.isBot, isYou: p.id === o.humanId, isHost: p.id === o.hostId,
     kills: p.kills ?? 0, deaths: p.deaths ?? 0, status: statusOf(p), sealed: !!snap.sealed[p.island], team: p.team,
+    bounty: p.eliminated ? 0 : p.bounty ?? 0,
   })).sort((a, b) => (a.team ?? 0) - (b.team ?? 0) || GROUP[a.status] - GROUP[b.status] || b.kills - a.kills || a.deaths - b.deaths || a.id - b.id);
 }
 
@@ -62,7 +65,7 @@ export class Scoreboard {
   setVisible(v: boolean) { this.root.style.display = v ? '' : 'none'; }
 
   private setHead(ping: boolean) {
-    const cols = ['', 'Player', 'Kills', 'Deaths', 'Status', 'Bunker', ...(ping ? ['Ping'] : [])];
+    const cols = ['', 'Player', 'Kills', 'Deaths', 'Bounty', 'Status', 'Bunker', ...(ping ? ['Ping'] : [])];
     if (this.head.children.length === cols.length) return;
     this.head.replaceChildren(...cols.map((h) => el('th', '', h)));
   }
@@ -92,6 +95,7 @@ export class Scoreboard {
       const dotCell = el('td');
       dotCell.append(dot);
       tr.append(dotCell, name, el('td', 'num', String(r.kills)), el('td', 'num', String(r.deaths)),
+        el('td', 'num sb-bounty', r.bounty ? `$${r.bounty}` : '–'),
         el('td', 'sb-status', STATUS_LABEL[r.status]), el('td', `sb-seal${r.sealed ? ' sealed' : ''}`, r.sealed ? 'Sealed' : 'Open'));
       if (pings) {
         const cell = el('td', 'num sb-ping', pings[rows.indexOf(r)]);

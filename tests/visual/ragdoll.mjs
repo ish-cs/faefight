@@ -8,7 +8,7 @@ import { chromium } from '@playwright/test';
 
 const prefix = process.argv[2] ?? 'ragdoll';
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
-const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] });
+const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
 const errors = [];
 
 async function open(query) {

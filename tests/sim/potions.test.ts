@@ -9,6 +9,7 @@ import { newPlayer } from '../../src/sim/player';
 import { POTION_SHOP_ITEMS, shopFor, startDrink, tickPotions } from '../../src/sim/potions';
 import { NO_INPUT, type PlayerInput, type PlayerState, type PotionKind } from '../../src/sim/types';
 import { add, forward, right, scale, v3 } from '../../src/sim/vec';
+import { unarmed } from './unarmed';
 
 const player = (cash = 0) => {
   const p = newPlayer(1, 'p', false, 0, v3());
@@ -336,6 +337,7 @@ describe('potions in a match', () => {
 
   test('death drops carried potions as loot that someone else can pick up', async () => {
     const m = await Match.create(humans);
+    unarmed(m);
     const at = spot(m, 6, -3);
     m.debugTeleport(1, at);
     m.debugGive(1, { potions: { shieldSmall: 2, healPotion: 1 } });
@@ -354,6 +356,7 @@ describe('potions in a match', () => {
   test('speed potion makes you move 30% faster for 15 s', async () => {
     const dist = async (speed: boolean) => {
       const m = await Match.create(humans);
+      unarmed(m);
       const at = spot(m, 0, -10);
       m.debugTeleport(1, at);
       const yaw = m.map[0].bunker.facingYaw;

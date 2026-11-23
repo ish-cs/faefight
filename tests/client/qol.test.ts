@@ -180,7 +180,7 @@ describe('death recap', () => {
 });
 
 describe('match summary', () => {
-  const st = (id: number, p: Partial<PlayerStats>): PlayerStats => ({ id, kills: 0, deaths: 0, damage: 0, seals: 0, built: 0, cash: 0, longestLife: 0, headshots: 0, ...p });
+  const st = (id: number, p: Partial<PlayerStats>): PlayerStats => ({ id, kills: 0, deaths: 0, damage: 0, seals: 0, built: 0, cash: 0, longestLife: 0, headshots: 0, elims: 0, assists: 0, spoils: 0, ...p });
   test('awards go to the best at each, nobody wins an award for zero', () => {
     const stats = [st(1, { kills: 3, damage: 420, built: 4 }), st(2, { kills: 1, damage: 300, built: 22, seals: 2, headshots: 5 }), st(3, {})];
     const a = awards(stats);
