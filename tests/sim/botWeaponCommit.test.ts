@@ -13,35 +13,39 @@ import type { Difficulty, PlayerState } from '../../src/sim/types';
 describe('bots commit to a weapon', () => {
   test('few switches; rocket reloads complete', async () => {
     const diffs: Difficulty[] = ['pro', 'hard', 'pro', 'hard'];
-    const bots = new Map<number, Bot>();
-    const m = await Match.create({ players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed: 1 },
-      { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.set(id, b); return b; } });
-    const players = (m as unknown as { s: { players: Map<number, PlayerState> } }).s.players;
-    for (const id of bots.keys()) m.debugGive(id, { weapons: { rocket: { mag: 1, spare: 8 }, rifle: { mag: 25, spare: 100 } } });
-    const prev = new Map<number, { eq: string; rl: number; mag: number }>();
     let switches = 0, rocketSwitches = 0, starts = 0, done = 0, cancelled = 0, botSec = 0;
     const whys = new Set<string>();
-    m.tick(new Map());
-    for (let i = 0; i < 3 * 60 * 30; i++) {
-      const snap = m.tick(new Map());
-      if (snap.winner !== null) break;
-      for (const [id, p] of players) {
-        if (!p.alive) { prev.delete(id); continue; }
-        botSec += 1 / 30;
-        const cur = { eq: p.equipped, rl: p.reloadUntil, mag: p.inv.weapons.rocket?.mag ?? 0 };
-        const was = prev.get(id);
-        if (was && was.eq !== cur.eq) {
-          switches++;
-          if (was.eq === 'rocket' || cur.eq === 'rocket') rocketSwitches++;
-          if (was.eq === 'rocket' && was.rl > 0) cancelled++;
+    // Three seeds pooled: one 3-minute game is a handful of reloads, so a single seed flips on any unrelated change.
+    for (const seed of [1, 2, 3]) {
+      const bots = new Map<number, Bot>();
+      const m = await Match.create({ players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed },
+        { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.set(id, b); return b; } });
+      const players = (m as unknown as { s: { players: Map<number, PlayerState> } }).s.players;
+      for (const id of bots.keys()) m.debugGive(id, { weapons: { rocket: { mag: 1, spare: 8 }, rifle: { mag: 25, spare: 100 } } });
+      const prev = new Map<number, { eq: string; rl: number; mag: number }>();
+      m.tick(new Map());
+      for (let i = 0; i < 3 * 60 * 30; i++) {
+        const snap = m.tick(new Map());
+        if (snap.winner !== null) break;
+        for (const [id, p] of players) {
+          if (!p.alive) { prev.delete(id); continue; }
+          botSec += 1 / 30;
+          const cur = { eq: p.equipped, rl: p.reloadUntil, mag: p.inv.weapons.rocket?.mag ?? 0 };
+          const was = prev.get(id);
+          if (was && was.eq !== cur.eq) {
+            switches++;
+            if (was.eq === 'rocket' || cur.eq === 'rocket') rocketSwitches++;
+            if (was.eq === 'rocket' && was.rl > 0) cancelled++;
+          }
+          if (was && was.eq === 'rocket' && cur.eq === 'rocket') {
+            if (was.rl === 0 && cur.rl > 0) starts++;
+            if (was.mag === 0 && cur.mag === 1) done++;
+          }
+          prev.set(id, cur);
+          if (i % 30 === 0) { const g = debugBrain(bots.get(id)!).weapon; if (g) whys.add(g.split(':')[0]); }
         }
-        if (was && was.eq === 'rocket' && cur.eq === 'rocket') {
-          if (was.rl === 0 && cur.rl > 0) starts++;
-          if (was.mag === 0 && cur.mag === 1) done++;
-        }
-        prev.set(id, cur);
-        if (i % 30 === 0) { const g = debugBrain(bots.get(id)!).weapon; if (g) whys.add(g.split(':')[0]); }
       }
+      m.dispose();
     }
     const perMin = (n: number) => n / (botSec / 60);
     console.log(`switches ${perMin(switches).toFixed(2)}/bot-min (rocket ${perMin(rocketSwitches).toFixed(2)}), rocket reloads ${done}/${starts} done, ${cancelled} cancelled by a switch; intents: ${[...whys].join(' | ')}`);

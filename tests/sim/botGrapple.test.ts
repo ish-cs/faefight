@@ -6,6 +6,8 @@ import { NO_INPUT } from '../../src/sim/types';
 import type { Difficulty, Snapshot } from '../../src/sim/types';
 
 const LIMIT = 25 * 60 * 30;
+/** Minutes a game must last to count toward hook use. */
+const LONG_MIN = 6;
 
 type Use = { buys: number; fire: number; latch: number; yank: number; miss: number };
 
@@ -35,16 +37,18 @@ describe('bots and the grappling hook', () => {
       { diffs: ['hard', 'pro', 'medium', 'hard'], seed: 4 }, { diffs: ['pro', 'hard', 'hard', 'medium'], seed: 5 },
       { diffs: ['medium', 'hard'], seed: 6 },
     ];
-    let used = 0;
+    // Games that last: a 1v1 stomp over in a few minutes never needs a hook (nothing to cross, no one to yank).
+    let used = 0, long = 0;
     const lines: string[] = [];
     for (const g of games) {
       const r = await play(g.diffs, g.seed);
       const latched = r.use.latch + r.use.yank;
-      if (latched > 0) used++;
+      if (r.min >= LONG_MIN) { long++; if (latched > 0) used++; }
       lines.push(`seed ${g.seed} ${g.diffs.join('/')}: ${JSON.stringify(r.use)} winner ${r.winner} at ${r.min.toFixed(1)} min`);
     }
     console.log(`grappling hook use:\n  ${lines.join('\n  ')}`);
-    expect(used).toBeGreaterThanOrEqual(Math.ceil(games.length * 0.6));
+    expect(long).toBeGreaterThanOrEqual(3);
+    expect(used).toBeGreaterThanOrEqual(Math.ceil(long * 0.6));
   }, 900_000);
 
   test('never strands itself: PRO vs a passive opponent, seed 1 (it used to hook to the center with its last hook and stay there)', async () => {
