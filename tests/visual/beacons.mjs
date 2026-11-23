@@ -92,6 +92,8 @@ await dbg('time', 870);
 await page.waitForTimeout(6000);
 await overview(); await page.waitForTimeout(800); await shot('night-overview');
 await ground(); await page.waitForTimeout(800); await shot('night-ground');
+// Sudden death eliminates whoever dies now (likely us, sealed in): hide the HUD/end screen so the scene shows.
+await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
 await dbg('time', 905);
 await page.waitForTimeout(9000); // the weather eases in
 await overview(); await page.waitForTimeout(800); await shot('storm-overview');

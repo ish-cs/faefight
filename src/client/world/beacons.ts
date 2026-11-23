@@ -104,7 +104,7 @@ export class IslandBeacons {
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.name = 'islandBeacons';
     this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = 4;
+    this.mesh.renderOrder = 6; // after the storm wall (5): beacons cut through the storm
     this.mesh.visible = false;
     scene.add(this.mesh);
   }
@@ -151,7 +151,7 @@ export class IslandBeacons {
     // the storm's gloom so it cuts through the rain.
     const L = this.sky.lighting;
     const day = (1 - L.night) * (1 - L.weather);
-    this.gain.value = (1 + 0.3 * day - 0.35 * L.night) * (1 + 0.6 * L.weather);
+    this.gain.value = (1 + 0.3 * day - 0.35 * L.night) * (1 + 1.1 * L.weather);
     this.cover.value = 0.85 * day;
     this.boost.value = BOOST + (DAY_BOOST - BOOST) * day;
   }
