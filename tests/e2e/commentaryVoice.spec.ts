@@ -34,7 +34,7 @@ test('neural commentary voice: loads, speaks promptly, and costs no frame rate',
   await page.setViewportSize({ width: 1280, height: 720 });
   // TTS_QS picks the engine config to measure, e.g. "ttsDevice=webgpu&ttsDtype=fp16" (default: wasm q8).
   const qs = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.TTS_QS ?? '';
-  await page.goto(`/?debug=1&watch=1&bots=6&diff=hard${qs ? `&${qs}` : ''}`);
+  await page.goto(`/?debug=1&watch=1&bots=6&diff=hard&ttsNeural=1${qs ? `&${qs}` : ''}`);
   // ?watch=1 starts the all-bot match in cinematic mode (the director is in the build).
   await expect.poll(() => page.evaluate(() => !!(window as unknown as { __cinematic?: { active: boolean } }).__cinematic?.active), { timeout: 90_000 }).toBe(true);
   const t0 = Date.now();
@@ -62,8 +62,8 @@ test('neural commentary voice: loads, speaks promptly, and costs no frame rate',
   expect(errors, errors.join('\n')).toEqual([]);
   expect(v.neural).toBe(true);
   expect(ms.length).toBeGreaterThan(3);
-  // Fast enough to start within about a second of the event.
-  expect(ms[Math.floor(ms.length / 2)]).toBeLessThan(1500);
+  // Fast enough to start well within a second of the event (WebGPU fp16 measured ~0.25 s per line).
+  expect(ms[Math.floor(ms.length / 2)]).toBeLessThan(800);
   // No visible frame cost: median frame time with the voice within 5% (+0.3 ms) of without.
   const off = (runs[0].p50 + runs[2].p50) / 2, on = (runs[1].p50 + runs[3].p50) / 2;
   expect(on).toBeLessThan(off * 1.05 + 0.3);

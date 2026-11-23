@@ -7,7 +7,7 @@
  *   out: { type: 'progress', pct } | { type: 'ready', ms } | { type: 'error', message }
  *        | { type: 'audio', id, data: Float32Array, rate, ms } | { type: 'failed', id, message }
  */
-import { AutoTokenizer, StyleTextToSpeech2Model, Tensor, type PreTrainedTokenizer } from '@huggingface/transformers';
+import { AutoTokenizer, env, StyleTextToSpeech2Model, Tensor, type PreTrainedTokenizer } from '@huggingface/transformers';
 import { G2P, type Lexicon } from './g2p';
 import { NRL_RULES } from './nrlRules';
 
@@ -21,6 +21,9 @@ type In = { type: 'load'; device?: KokoroDevice; dtype?: KokoroDtype } | { type:
 type Engine = { model: StyleTextToSpeech2Model; tokenizer: PreTrainedTokenizer; g2p: G2P };
 
 const post = (m: unknown, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(m, transfer);
+
+// ONNX Runtime logs a benign "some nodes not assigned to the preferred execution provider" at error level on WebGPU.
+if (env.backends.onnx) (env.backends.onnx as { logLevel?: string }).logLevel = 'fatal';
 
 let engine: Promise<Engine> | null = null;
 let chain: Promise<void> = Promise.resolve();
@@ -53,6 +56,7 @@ function load(device: KokoroDevice = 'wasm', dtype: KokoroDtype = 'q8'): Promise
   let lastPct = -1;
   console.info(`[kokoro] loading ${KOKORO_MODEL} (${dtype}, ${device})`);
   engine = (async () => {
+    if (device === 'webgpu' && !(navigator as Navigator & { gpu?: unknown }).gpu) throw new Error('WebGPU unavailable in this browser');
     const [model, tokenizer, lexicon] = await Promise.all([
       StyleTextToSpeech2Model.from_pretrained(KOKORO_MODEL, {
         dtype, device,
