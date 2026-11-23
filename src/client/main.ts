@@ -1970,6 +1970,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       if (!spectateChosen) hud.setEndVisible(true);
     }
     killcamWas = !!kc;
+    spectator.setMuted(hud.ended || !!kc); // one state's hints at a time: end screen, killcam, or spectating
     if (kc) {
       // (A spectator keeps following: the free-fly / follow camera just waits for the replay.)
       renderer.setReplay({ snap: kc.snap, motion: kc.motion });

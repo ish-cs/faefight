@@ -80,6 +80,8 @@ export class Spectator {
   /** When the spectator last picked a target or flew off themselves (ms): overrides the automatic switch to a killer. */
   manualAt = -Infinity;
   private banner = document.createElement('div');
+  /** Another screen owns the hints (end screen, killcam): the banner stays hidden while spectating. */
+  private muted = false;
   /** A follow key pressed in the frame before the camera started spectating. */
   private early = new EarlyKey();
 
@@ -125,7 +127,7 @@ export class Spectator {
     this.mode = 'free';
     this.followId = null;
     this.pos.copy(from);
-    this.banner.style.display = '';
+    this.syncBanner();
     this.pendingDigit = this.early.take(performance.now());
   }
 
@@ -136,7 +138,18 @@ export class Spectator {
     this.pendingDigit = null;
     this.pendingCycle = false;
     this.firstPerson = false;
-    this.banner.style.display = 'none';
+    this.syncBanner();
+  }
+
+  /** Per frame: hide the spectator hints while the end screen or a killcam is up (one state's hints at a time). */
+  setMuted(m: boolean) {
+    if (m === this.muted) return;
+    this.muted = m;
+    this.syncBanner();
+  }
+
+  private syncBanner() {
+    this.banner.style.display = this.active && !this.muted ? '' : 'none';
   }
 
   /** Per render frame while active: drive the camera and the banner. */
