@@ -47,7 +47,9 @@ describe('bots commit to a weapon', () => {
     console.log(`switches ${perMin(switches).toFixed(2)}/bot-min (rocket ${perMin(rocketSwitches).toFixed(2)}), rocket reloads ${done}/${starts} done, ${cancelled} cancelled by a switch; intents: ${[...whys].join(' | ')}`);
     // Before the fix (seed 1): 8.9 switches/bot-min (6.8 rocket), 1 of 33 rocket reloads done, 31 cancelled.
     // After: ~3.2 (1.6 rocket), 5 of 8 done; the cancels left are a real threat up close (draw the loaded rifle).
-    expect(perMin(switches)).toBeLessThan(4.5);
+    // 2026-11-23 (bots seal and storm sooner: more fights): seeds 1-4 measure 4.1-5.9 on the seal branch, 4.5-5.5 with the
+    // storm fix; any path change moves seed 1 across 4.5. The bar is there to catch the flip-flop (8.9), not that noise.
+    expect(perMin(switches)).toBeLessThan(5.5);
     expect(perMin(rocketSwitches)).toBeLessThan(3);
     expect(done).toBeGreaterThan(0);
     expect(done).toBeGreaterThanOrEqual(starts / 2);
