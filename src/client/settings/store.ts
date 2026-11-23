@@ -1,4 +1,5 @@
 import type { Quality } from '../world/sky';
+import { AIM_MODES, type AimMode } from '../aimInput';
 import { type Keymap, sanitizeKeymap, setActiveKeymap } from '../keymap';
 
 /**
@@ -39,7 +40,7 @@ export type GenAlertPct = typeof GEN_ALERT_PCTS[number];
 
 export type Settings = {
   v: typeof SETTINGS_VERSION;
-  controls: { sensitivity: number; invertY: boolean; keys: Keymap };
+  controls: { sensitivity: number; invertY: boolean; keys: Keymap; /** Aim keys (right mouse, Ctrl): hold to aim, or press to toggle. */ aimMode: AimMode };
   video: { quality: Quality; fovThird: number; fovFirst: number; showFps: boolean; perfDetail: boolean; resolutionScale: number; frameCap: FrameCap; dynamicResolution: boolean; competitive: boolean };
   /** Mixer buses: effects (world SFX), ui (interface + stingers), ambience, music (+ an on/off switch). */
   audio: { master: number; effects: number; ui: number; ambience: number; music: number; musicOn: boolean; muted: boolean };
@@ -60,7 +61,7 @@ export const LIMITS = {
 export function defaultSettings(): Settings {
   return {
     v: SETTINGS_VERSION,
-    controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null) },
+    controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null), aimMode: 'hold' },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true, competitive: false },
     audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false },
     gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true },
@@ -92,6 +93,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       sensitivity: num(c.sensitivity, LIMITS.sensitivity[0], LIMITS.sensitivity[1], d.controls.sensitivity),
       invertY: bool(c.invertY, d.controls.invertY),
       keys: sanitizeKeymap(c.keys),
+      aimMode: oneOf(c.aimMode, AIM_MODES, d.controls.aimMode),
     },
     video: {
       quality: oneOf(v.quality, QUALITIES, d.video.quality),

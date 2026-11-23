@@ -64,10 +64,10 @@ describe('rebind / conflicts', () => {
 
 describe('sanitize (persistence)', () => {
   it('fills missing actions and drops junk', () => {
-    const km = sanitizeKeymap({ jump: ['KeyJ'], forward: 'KeyW', bogus: ['KeyB'], reload: [42, 'Escape', 'KeyT', 'KeyT', 'KeyY', 'KeyU'] });
+    const km = sanitizeKeymap({ jump: ['KeyJ'], forward: 'KeyW', bogus: ['KeyB'], reload: [42, 'Escape', 'KeyT', 'KeyT', 'KeyY', 'KeyU', 'KeyO'] });
     expect(km.jump).toEqual(['KeyJ']);
     expect(km.forward).toEqual(['KeyW']); // not an array → default
-    expect(km.reload).toEqual(['KeyT', 'KeyY']); // deduped, reserved/non-string dropped, max 2
+    expect(km.reload).toEqual(['KeyT', 'KeyY', 'KeyU']); // deduped, reserved/non-string dropped, max 3
     expect((km as Record<string, unknown>).bogus).toBeUndefined();
     expect(sanitizeKeymap(null)).toEqual(defaultKeymap());
     expect(sanitizeKeymap('garbage')).toEqual(defaultKeymap());

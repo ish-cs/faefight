@@ -24,7 +24,8 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'right', label: 'Move right', group: 'Movement', defaults: ['KeyD'] },
   { id: 'sprint', label: 'Sprint', group: 'Movement', defaults: ['ShiftLeft', 'ShiftRight'] },
   { id: 'jump', label: 'Jump', group: 'Movement', defaults: ['Space'] },
-  { id: 'aim', label: 'Aim down sights (hold)', group: 'Actions', defaults: ['Mouse2'] },
+  // Ctrl as well: on a trackpad a right click can't be held while clicking to fire (Mac Ctrl+click: see aimInput.ts).
+  { id: 'aim', label: 'Aim down sights', group: 'Actions', defaults: ['Mouse2', 'ControlLeft', 'ControlRight'] },
   { id: 'reload', label: 'Reload', group: 'Actions', defaults: ['KeyR'] },
   { id: 'interact', label: 'Interact / shop / vault', group: 'Actions', defaults: ['KeyE'] },
   { id: 'drop', label: 'Drop item (+Ctrl/Shift: stack)', group: 'Actions', defaults: ['KeyQ'] },
@@ -52,8 +53,8 @@ export type Keymap = Record<Action, string[]>;
 
 /** Keys that can never be bound: Esc releases the pointer / closes menus, and OS/browser keys. */
 const RESERVED = new Set(['Escape', 'MetaLeft', 'MetaRight', 'ContextMenu', 'F5', 'F11', 'F12']);
-/** Each action can hold at most this many keys (e.g. both Shift keys). */
-const MAX_PER_ACTION = 2;
+/** Each action can hold at most this many keys (e.g. both Shift keys; right mouse + both Ctrl keys). */
+const MAX_PER_ACTION = 3;
 
 export function defaultKeymap(): Keymap {
   const km = {} as Keymap;
@@ -76,6 +77,9 @@ export function sanitizeKeymap(raw: unknown): Keymap {
   }
   // maps saved before ` joined F3 on the FPS key: add it unless the player bound ` elsewhere
   if (km.fps.length === 1 && km.fps[0] === 'F3' && !ACTION_IDS.some((a) => km[a].includes('Backquote'))) km.fps = ['F3', 'Backquote'];
+  // maps saved before Ctrl joined right mouse on the aim key: add both Ctrl keys unless the player bound Ctrl elsewhere
+  const ctrlFree = !ACTION_IDS.some((a) => km[a].includes('ControlLeft') || km[a].includes('ControlRight'));
+  if (km.aim.length === 1 && km.aim[0] === 'Mouse2' && ctrlFree) km.aim = ['Mouse2', 'ControlLeft', 'ControlRight'];
   return km;
 }
 
