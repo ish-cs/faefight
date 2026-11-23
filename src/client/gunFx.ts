@@ -59,10 +59,18 @@ export class GunFx {
   private last = performance.now();
   private warmGroup: THREE.Group | null = null;
   private warmFrames = 0;
+  /** Killcam: the killing shot's line, held through the slow-motion beat (same material setup as the tracers: no new shader). */
+  private beamMat = new THREE.MeshBasicNodeMaterial({ color: new THREE.Color(0xfff2a8).multiplyScalar(UNLIT_BOOST * 1.6), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+  private beam = new THREE.Mesh(this.tracerGeo, this.beamMat);
+  private beamFrom = new THREE.Vector3();
+  private beamOn = false;
 
   constructor(private particles: Particles, private gunPoint: GunPointFn) {
     this.root.name = 'gunFx';
     this.root.add(this.casings.mesh);
+    this.beam.visible = false;
+    this.beam.frustumCulled = false;
+    this.root.add(this.beam);
     for (let i = 0; i < TRACER_POOL; i++) {
       const mat = new THREE.MeshBasicNodeMaterial({ color: new THREE.Color(0xfff2a8).multiplyScalar(UNLIT_BOOST), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
       const mesh = new THREE.Mesh(this.tracerGeo, mat);
@@ -163,6 +171,26 @@ export class GunFx {
     if (weapon === 'rocket') return;
     this.tracer(muzzle, to, by === myId);
     for (const p of (d.tos as Vec3[] | undefined) ?? []) this.tracer(muzzle, p, by === myId, 0.5);
+  }
+
+  /**
+   * Killcam: show the killing shot by `by` from `from` (its eye; the muzzle when the model has one) to `to`, at
+   * strength k (0 hides it). The start point is fixed when it appears, so it stays put while the killer moves on.
+   */
+  killBeam(by: number, from: Vec3 | null, to: Vec3 | null, k: number) {
+    if (!from || !to || k <= 0.01) { if (this.beamOn) { this.beamOn = false; this.beam.visible = false; } return; }
+    if (!this.beamOn) {
+      this.beamOn = true;
+      if (!this.gunPoint(by, 'muzzle', this.beamFrom)) this.beamFrom.set(from.x, from.y, from.z);
+    }
+    const len = this.beamFrom.distanceTo(_d.set(to.x, to.y, to.z));
+    if (len < 0.3) { this.beam.visible = false; return; }
+    this.beam.visible = true;
+    this.beam.position.copy(this.beamFrom);
+    this.beam.lookAt(_d);
+    const w = 0.018 + 0.03 * k;
+    this.beam.scale.set(w, w, len);
+    this.beamMat.opacity = Math.min(1, k);
   }
 
   private tracer(from: THREE.Vector3, to: Vec3, mine: boolean, k = 1) {
