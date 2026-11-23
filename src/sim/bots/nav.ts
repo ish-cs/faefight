@@ -548,7 +548,10 @@ export class Nav {
       // (Not in the storm: heading home first there is walking out into it.)
       if (b < 0 && !this.view.storm) {
         const ld = this.nearestLane(dest);
-        if (ld && !(ld.from === l.from && ld.to === l.to) && !(ld.from === l.to && ld.to === l.from)) {
+        // (A spot on my own lane too isn't on another one: two lanes out of one island can lie on the same line,
+        // and which one is "nearest" to me then swaps every step, walking me back and forth.)
+        const sd = laneS(l, dest), onMine = sd >= 0 && sd <= l.length && laneOff(l, dest) < 1.2;
+        if (ld && !onMine && !(ld.from === l.from && ld.to === l.to) && !(ld.from === l.to && ld.to === l.from)) {
           const shared = [l.from, l.to].find((n) => n === ld.from || n === ld.to);
           if (shared !== undefined) sTarget = this.landS(l, shared);
         }
@@ -560,6 +563,9 @@ export class Nav {
     }
     const sMe = laneS(l, me);
     const gap = sTarget - sMe;
+    // Out on a deck abreast of a spot that isn't on it (a parallel bridge a few metres over): no walking there from
+    // here (stepping straight at it only walks me off the side, and the deck edge turns me back, over and over).
+    if (Math.abs(gap) < 0.5 && a < 0 && b < 0 && laneOff(l, dest) > 2.5) return null;
     if (Math.abs(gap) < 0.5) return b >= 0 && a !== b ? laneAt(l, sTarget) : dest;
     const carrot = laneAt(l, sMe + Math.sign(gap) * Math.min(CARROT, Math.abs(gap)));
     return a >= 0 ? this.within(a, me, carrot) : this.alongDeck(me, carrot);
@@ -686,10 +692,18 @@ export class Nav {
       if (ok(dir, maxDrop)) return dir;
       for (const a of order) {
         const d = rotateY(dir, a);
-        if (ok(d, maxDrop)) { this.detour = { sign: Math.sign(a), at: now }; return d; }
+        if (!ok(d, maxDrop)) continue;
+        if (side && Math.sign(a) !== side) {
+          // Round the other side again so soon: a dead end both ways (a pocket on the rim, a goal across the water).
+          // Stop and let the goal think again, rather than pace back and forth along the edge.
+          if (now - this.detour.swapAt < DETOUR_KEEP_SEC) return null;
+          this.detour.swapAt = now;
+        }
+        this.detour.sign = Math.sign(a); this.detour.at = now;
+        return d;
       }
     }
     return null;
   }
-  private detour = { sign: 0, at: -Infinity };
+  private detour = { sign: 0, at: -Infinity, swapAt: -Infinity };
 }
