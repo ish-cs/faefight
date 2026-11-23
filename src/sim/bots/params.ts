@@ -138,8 +138,11 @@ export type BuildTuning = {
   slotBackoffSec: number;
   /** Ahead by this much health+shield on the shooter: fight instead of building/hiding. */
   pushLead: number;
-  /** A bridge tip where no deck fits: retry this often; after this long go round (alt lane) or leave it this long. */
-  bridgeRetrySec: number; bridgeStuckSec: number; bridgeHoldSec: number;
+  /**
+   * A bridge tip where no deck fits: retry this often; after this long go round (alt lane) or leave it this long.
+   * laneBanSec: a center bridge that stuck is no longer the way to a rival for this long (bridge to them directly).
+   */
+  bridgeRetrySec: number; bridgeStuckSec: number; bridgeHoldSec: number; laneBanSec: number;
   /** Hotbar slots building never takes (guns, medkits, grenades, potions need room too). */
   freeSlots: number;
   /** Goal weights: covering under fire beats fighting in the open; fortifying is a calm-time job. */
@@ -177,7 +180,8 @@ export type TeamParams = {
  * Grappling hook (sim/grapple.ts): when to buy one and when to use it.
  * - buyAt: cash (carried + banked) from which this skill carries a hook (Infinity = never).
  * - crossBuyAt: with a crossing to make (a bridge I'd otherwise build), a hook comes before scaffolds from this much cash.
- * - crossMax: hook over to an island I want but can't walk to once its near edge is this close to my eye.
+ * - crossMax: hook over to an island I want but can't walk to once its near edge is this close to my eye (the hook
+ *   reaches 26 m, the islands are 36 m apart: a few decks out first). Also what counts a rival as hook-reachable.
  * - crossInset: aim this far in from that island's edge (so I land on it, not on the cliff face).
  * - escapeHp: hp + shield under this with an enemy in sight within escapeNear: hook away (at least escapeMin m).
  * - yankMin / yankMax: yank an enemy in this distance band when it pays: open water between us (they drop in), they
@@ -304,7 +308,7 @@ export const BUILD_TUNING: BuildTuning = {
   highGroundRange: [8, 35] as const, highGroundAfter: 2.5, perchSec: 12,
   slotBackoffSec: 30,
   pushLead: 30,
-  bridgeRetrySec: 0.5, bridgeStuckSec: 4, bridgeHoldSec: 20,
+  bridgeRetrySec: 0.5, bridgeStuckSec: 4, bridgeHoldSec: 20, laneBanSec: 90,
   freeSlots: 2,
   coverScore: 1.05, fortifyScore: 0.5,
 };
@@ -320,7 +324,7 @@ export const TEAM: TeamParams = {
 export const HOOK: HookParams = {
   buyAt: D(1200, 450, 350, 300),
   crossBuyAt: D(Infinity, 160, 600, 110),
-  crossMax: 39, crossInset: 2.5,
+  crossMax: 25.5, crossInset: 2.5,
   escapeHp: 45, escapeNear: 20, escapeMin: 12,
   yankMin: 8, yankMax: 30, yankHigh: 2.5, yankFalloff: 1.2, yankRate: 0.6,
   keepForTravel: 1,
@@ -405,9 +409,9 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['buildTuning.coverRetrySec', [1, 15]], ['buildTuning.coverDist.*', [0.9, 2.5]], ['buildTuning.highGroundRange.0', [4, 15]],
   ['buildTuning.highGroundRange.1', [20, 50]], ['buildTuning.highGroundAfter', [0.5, 6]], ['buildTuning.perchSec', [4, 25]],
   ['buildTuning.slotBackoffSec', [10, 90]], ['buildTuning.pushLead', [0, 80]], ['buildTuning.bridgeRetrySec', [0.2, 2]],
-  ['buildTuning.bridgeStuckSec', [1, 10]], ['buildTuning.bridgeHoldSec', [5, 60]], ['buildTuning.freeSlots', [1, 4]],
+  ['buildTuning.bridgeStuckSec', [1, 10]], ['buildTuning.bridgeHoldSec', [5, 60]], ['buildTuning.laneBanSec', [20, 240]], ['buildTuning.freeSlots', [1, 4]],
   ['buildTuning.coverScore', [0.5, 1.5]], ['buildTuning.fortifyScore', [0.1, 1]],
-  ['hook.buyAt.*', [150, 1500]], ['hook.crossBuyAt.*', [90, 600]], ['hook.crossMax', [20, 40]], ['hook.crossInset', [1, 6]],
+  ['hook.buyAt.*', [150, 1500]], ['hook.crossBuyAt.*', [90, 600]], ['hook.crossMax', [15, 26]], ['hook.crossInset', [1, 6]],
   ['hook.escapeHp', [0, 120]], ['hook.escapeNear', [8, 35]], ['hook.escapeMin', [6, 30]],
   ['hook.yankMin', [3, 15]], ['hook.yankMax', [15, 40]], ['hook.yankHigh', [1, 6]], ['hook.yankFalloff', [0.5, 3]],
   ['hook.yankRate', [0, 3]], ['hook.keepForTravel', [0, 2]],
