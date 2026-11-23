@@ -37,6 +37,9 @@ type CameraLike = { matrixWorld: { elements: ArrayLike<number> } };
 
 export type AudioStats = { state: string; played: number; dropped: number; active: number; bySound: Record<string, number>; music: Mood | 'none' };
 
+/** Game-bus level while the commentator speaks (about -4.4 dB): a slight dip, not a mute. */
+export const VOICE_DUCK = 0.6;
+
 export class AudioSystem {
   /** Master volume / mute / bus levels mirror Settings → Audio (the store persists them). */
   volume = 0.8;
@@ -46,6 +49,8 @@ export class AudioSystem {
   ambience = 1;
   musicVol = 0.4;
   musicOn = true;
+  /** Commentary ducking factor on the game buses (1 = none; duckForVoice). */
+  private voiceDuck = 1;
   private ctx: AudioContext | null = null;
   private kit: Kit | null = null;
   private master!: GainNode;
@@ -120,14 +125,30 @@ export class AudioSystem {
     if (this.ctx) {
       const t = this.ctx.currentTime;
       this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, t, 0.02);
-      this.sfxBus.gain.setTargetAtTime(this.effects, t, 0.02);
+      const k = this.voiceDuck;
+      this.sfxBus.gain.setTargetAtTime(this.effects * k, t, 0.02);
       this.echoIn.gain.setTargetAtTime(this.effects, t, 0.02);
       this.uiBus.gain.setTargetAtTime(this.uiVol, t, 0.02);
-      this.ambBus.gain.setTargetAtTime(this.ambience, t, 0.05);
-      this.musicBus.gain.setTargetAtTime(this.musicLevel(), t, 0.05);
+      this.ambBus.gain.setTargetAtTime(this.ambience * k, t, 0.05);
+      this.musicBus.gain.setTargetAtTime(this.musicLevel() * k, t, 0.05);
       if (!this.musicWanted() && this.music) { this.music.dispose(); this.music = null; }
     }
     this.listeners.forEach((fn) => fn());
+  }
+
+  /**
+   * Commentary is talking: world SFX, ambience and music dip to VOICE_DUCK so the voice sits on top (the
+   * speech itself is the browser's, outside this graph). Glides in/out over ~0.1-0.2 s.
+   */
+  duckForVoice(on: boolean) {
+    const k = on ? VOICE_DUCK : 1;
+    if (k === this.voiceDuck) return;
+    this.voiceDuck = k;
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.sfxBus.gain.setTargetAtTime(this.effects * k, t, 0.06);
+    this.ambBus.gain.setTargetAtTime(this.ambience * k, t, 0.1);
+    this.musicBus.gain.setTargetAtTime(this.musicLevel() * k, t, 0.1);
   }
 
   private musicLevel() { return this.musicOn ? this.musicVol * MUSIC_TRIM : 0; }

@@ -22,6 +22,7 @@ import type { BrainDigest } from '../sim/bots/introspect';
 import { adoptSpawnLook, moveForAim } from './aim';
 import { BodyCam, SpectatorCamera, viewedPlayer, KillerLock, followAfterDeath } from './viewed';
 import { AudioSystem } from './audio/engine';
+import { Commentary } from './cinematic/commentary';
 import { errors, installErrorReporting } from './telemetry/errors';
 import { telemetryEnabled } from './telemetry/config';
 import { installReplayUploads, MIN_UNFINISHED_SEC, replayUploader } from './telemetry/replayUpload';
@@ -86,6 +87,8 @@ const MAP_KEY = 'faefight.map';
 let lastBotMap: MapTemplate | null = null;
 /** Created at load so M-mute works from the menu; the AudioContext itself starts on the first click/key. */
 const audio = new AudioSystem();
+/** Sportscaster voice + captions (cinematic mode, or spectating if enabled in Settings). */
+const commentary = new Commentary((on) => audio.duckForVoice(on));
 
 function toast(msg: string) {
   const t = document.createElement('div');
@@ -1581,6 +1584,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Respawned: the sim turned me to face out of my bunker's front door. Snap camera + aim to it once.
     if (adoptSpawnLook(input, s.events, humanId)) console.info(`[main] respawn: facing front door (yaw ${input.yaw.toFixed(2)})`);
     audio.snapshot(s);
+    commentary.onSnapshot(s, watching || spectateChosen);
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
       if (me) { input.yaw = me.yaw; input.pitch = me.pitch; input.selected = me.selected; }
@@ -1751,6 +1755,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Loot on the ground as drawn: label lines, label shown, model count. */
       loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
+      commentary: () => commentary.commentator.log,
       killcam: () => killcam.info(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),

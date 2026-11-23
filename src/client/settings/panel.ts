@@ -260,6 +260,11 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     section('Music');
     toggle('Music', 'Calm while you build, tense in a nearby fight, intense when the storm closes', 'set-music-on', () => a().musicOn, (x) => set((d) => { d.audio.musicOn = x; }));
     slider('Music volume', '', 'set-music', 0, 1, 0.05, () => a().music, (x) => set((d) => { d.audio.music = x; }), pct);
+    section('Commentary');
+    toggle('Commentary', 'A sportscaster calls the action when you watch bots (cinematic mode)', 'set-commentary-on', () => a().commentaryOn, (x) => set((d) => { d.audio.commentaryOn = x; }));
+    slider('Commentary volume', 'Game sound dips a little while the commentator talks', 'set-commentary', 0, 1, 0.05, () => a().commentary, (x) => set((d) => { d.audio.commentary = x; }), pct);
+    toggle('Captions', 'Show what the commentator says on screen', 'set-captions', () => a().captions, (x) => set((d) => { d.audio.captions = x; }));
+    toggle('While spectating', 'Also commentate when you spectate a match', 'set-commentary-spectate', () => a().commentarySpectate, (x) => set((d) => { d.audio.commentarySpectate = x; }));
     section('Output');
     toggle('Mute', `Also on ${keyLabel(settings.get().controls.keys.mute[0] ?? '') || '—'} in game`, 'set-mute', () => a().muted, (x) => set((d) => { d.audio.muted = x; }));
     resetBtn('Reset audio to defaults', () => settings.reset('audio'));
