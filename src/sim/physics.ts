@@ -1,6 +1,6 @@
 import * as dm from './dmath';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { HEAD, PIECES, PLAYER, PROP_HALF, rampHull, TICK_HZ } from './constants';
+import { HEAD, PIECES, PLAYER, rampHull, TICK_HZ } from './constants';
 import { generatorZone, islandNoBuildZones, potionZone, type NoBuildZone } from './building';
 import { bunkerSlitBoxes, bunkerWallBoxes, harborCraneBoxes, type IslandLayout, type MapDef } from './map';
 import { defaultPotionShops } from './potions';
@@ -57,7 +57,7 @@ const CAPSULE_HALF = (PLAYER.height - 2 * PLAYER.radius) / 2;
 const quatY = (r: number) => ({ x: 0, y: dm.sin(r / 2), z: 0, w: dm.cos(r / 2) });
 
 /** Station props (generator, vault, shop NPC) as solid boxes: half extents. */
-export { PROP_HALF } from './constants';
+export const PROP_HALF = { generator: v3(0.6, 0.7, 0.6), vault: v3(0.6, 1.0, 0.5), shop: v3(0.3, 0.9, 0.3) };
 /** Center island stations as solid boxes (the shield well is a flat pad: no collider). */
 export const CENTER_PROP_HALF = { goldGen: v3(0.6, 0.7, 0.6), supplyGen: v3(0.7, 0.6, 0.7), potionShop: v3(0.3, 0.9, 0.3) };
 
