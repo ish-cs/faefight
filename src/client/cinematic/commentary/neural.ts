@@ -5,7 +5,7 @@
  * Latency: each line is synthesized when it's said (a short sentence takes well under a second on a
  * recent Mac); fixed lines are pre-synthesized in idle time and audio is cached per exact text + voice.
  */
-import { BrowserTts, speakable, type Persona, type SpeakOpts, type Tts } from './tts';
+import { automated, BrowserTts, speakable, type Persona, type SpeakOpts, type Tts } from './tts';
 
 /** Kokoro English voices worth offering (VOICES.md grades), best first. */
 export const NEURAL_VOICES = [
@@ -79,10 +79,12 @@ export class NeuralTts implements Tts {
     }
     this.worker.onmessage = (e: MessageEvent<Out>) => this.onMessage(e.data);
     this.worker.onerror = (e) => this.fail(`worker error: ${e.message}`);
-    // Dev/e2e override for measuring: ?ttsDevice=webgpu&ttsDtype=fp16.
+    // WebGPU fp16 (~160 MB, once): ~0.25 s per line on an M-series Mac with no measurable frame cost. WASM
+    // (single-threaded in a worker) takes ~5 s per line, too slow for live calls, so without WebGPU the
+    // worker reports an error and the browser voice stays. Dev/e2e override: ?ttsDevice=wasm&ttsDtype=q8.
     const q = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
-    const device = q?.get('ttsDevice') === 'webgpu' ? 'webgpu' : 'wasm';
-    const dtype = (['q8', 'fp16', 'fp32'] as const).find((d) => d === q?.get('ttsDtype')) ?? 'q8';
+    const device = q?.get('ttsDevice') === 'wasm' ? 'wasm' : 'webgpu';
+    const dtype = (['q8', 'fp16', 'fp32'] as const).find((d) => d === q?.get('ttsDtype')) ?? (device === 'webgpu' ? 'fp16' : 'q8');
     this.worker.postMessage({ type: 'load', device, dtype });
     console.info(`[commentary] loading the neural voice (Kokoro-82M ${dtype} on ${device}; downloaded once, then cached)`);
   }
@@ -196,6 +198,8 @@ export class HybridTts implements Tts {
   /** Load the neural voice (lazy; call when commentary turns on). */
   ensureNeural() {
     if (!this.useNeural || this.neural || !neuralSupported()) return;
+    // Automated browsers (tests, perf scripts) don't download the model unless a test asks for it (?ttsNeural=1).
+    if (automated() && !(typeof location !== 'undefined' && new URLSearchParams(location.search).has('ttsNeural'))) return;
     this.neural = new NeuralTts(this.onState);
     this.neural.load();
   }
