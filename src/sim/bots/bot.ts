@@ -1336,7 +1336,8 @@ export class Bot {
    * getting there first. Real builders fortify anyway.
    */
   private fortWorthIt(c: Ctx): boolean {
-    if (this.t.builder >= this.P.buildTuning.fortEarlyBuilder) return true;
+    const B = this.P.buildTuning;
+    if (this.t.builder >= Math.min(B.fortEarlyBuilder, B.fortSealedRule[this.difficulty])) return true;
     const rivals = c.view.others.filter((o) => !o.eliminated).length;
     return rivals >= this.P.buildTuning.fortMinRivals && !c.reach && sealKit(c.me.inv) >= c.openDoors.length;
   }
@@ -1493,7 +1494,7 @@ export class Bot {
         // Final circle: nowhere left to run (backing off only buys regen, and the fight never ends); fists vs fists
         // in sudden death likewise.
         if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
-        const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
+        const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + this.sealedCaution(c);
         if (hp < low) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
@@ -1678,6 +1679,11 @@ export class Bot {
     }
   }
 
+  /** Extra bail-out hp line while my own bunker is sealed (a death now is final), by tier (drive.sealedCaution). */
+  sealedCaution(c: Ctx): number {
+    return c.view.sealed[c.home.index] && !c.view.suddenDeath ? this.P.drive.sealedCaution[this.difficulty] : 0;
+  }
+
   /** My bunker is sealed and no enemy is close enough to punish me for turning to clear it. */
   private sealedHomeCalm(c: Ctx): boolean {
     return !c.enemy || c.enemyDist > SEALED_HOME_CLEAR;
@@ -1763,7 +1769,7 @@ export class Bot {
       }
       // The center island is where the fights are: worth going for when it pays.
       case 'contest': return s > 0 ? s + this.P.drive.push[this.difficulty] * 0.5 : s;
-      case 'fortify': return this.t.builder >= this.P.buildTuning.fortEarlyBuilder ? s * 0.5 : 0;
+      case 'fortify': return this.t.builder >= Math.min(this.P.buildTuning.fortEarlyBuilder, this.P.buildTuning.fortSealedRule[this.difficulty]) ? s * 0.5 : 0;
       case 'trap': return s * 0.6;
       case 'cut': return this.crossing(c) ? s : s * 0.4;
       // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
