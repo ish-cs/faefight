@@ -15,6 +15,7 @@
 //   Building     placed / destroyed (kind PieceKind)
 //   Blasts       explosion (kind grenade | charge | rocket | barrel | propane), hazard (kind hiss | clang | crateHit | crate)
 //   Interface    click, coin, loot, purchase, vault, tick, ping, alarm (kind '1' | '2'), horn, kill, death, win, lose, draw
+//                elimination (glory sting, kind 'mine' for the eliminator's own)
 //   Round-11 hooks, ready to call:
 //     grapple    grappleFire, grappleAttach (at the hook), grappleReel (~0.6 s ratchet; repeat while reeling), grappleRelease
 //     spike trap spikeArm, spikeTrigger

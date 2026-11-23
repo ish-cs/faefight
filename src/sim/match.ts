@@ -13,7 +13,7 @@ import { HAZARD, HEAD } from './constants';
 import { Fire, fireZones, type FireCtx } from './fire';
 import { Traps, validateTrap } from './traps';
 import { DoorwayTracker } from './seal';
-import { newElimLedger, resolveEliminations, type ElimLedger } from './elimination';
+import { bountyOf, newElimLedger, resolveEliminations, type ElimLedger } from './elimination';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import { clearGrapple, fireGrapple, tickGrapple, type GrappleCtx } from './grapple';
 import type { MatchApi, MatchSetup } from './matchApi';
@@ -349,6 +349,7 @@ export class Match implements MatchApi {
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
     this.updateSeals(now);
     this.events.push(...resolveEliminations(this.s, this.elim, this.events, now, (i) => this.sealed[i]));
+    for (const p of this.s.players.values()) p.bounty = bountyOf(this.s, p);
     this.remember(now);
     this.stats.onTick(this.events, this.s.players.values(), now);
     for (const b of this.banter.onTick(this.events, this.s.players, now)) if (this.bots.has(b.id)) this.wheel(b.id, b.what);
@@ -586,7 +587,8 @@ export class Match implements MatchApi {
     p.eliminated = true;
     p.respawnAt = null;
     p.breakoutUntil = null;
-    this.events.push({ t: this.s.time, type: 'eliminated', data: { player: playerId } });
+    // With the kill, in the next tick's events (credited there: elimination.ts), not the tick already returned.
+    this.debugEvents.push({ t: this.s.time, type: 'eliminated', data: { player: playerId } });
   }
 
   private applyInput(p: PlayerState, input: PlayerInput, now: number, cmds?: MoveCmd[]) {
@@ -845,7 +847,7 @@ export class Match implements MatchApi {
       self,
       enemies,
       others: [...this.s.players.values()].filter((o) => !isAlly(o, self))
-        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills })),
+        .map((o) => ({ id: o.id, island: o.island, alive: o.alive, eliminated: o.eliminated, respawnAt: o.respawnAt, kills: o.kills, trapped: o.breakoutUntil !== null, bounty: o.bounty ?? 0 })),
       ...(team ? { allies: team.allies, teamSeen: team.seen } : {}),
       map: this.map,
       center: { island: this.def.center, gold: this.center.gold, bags: this.center.bags, steel: this.center.steel },

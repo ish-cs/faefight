@@ -133,6 +133,8 @@ export type PlayerState = {
   speedUntil: number;
   /** Victory surge (an elimination credit) lasts until this sim time: extra move speed (ELIM). Absent = never. */
   surgeUntil?: number;
+  /** Public bounty: the spoils eliminating them would pay now, in $10 steps (elimination.ts bountyOf; scoreboard, bots). */
+  bounty?: number;
   reloadUntil: number;
   /** Length of the reload in progress (s), for animation; 0 when not reloading. */
   reloadSec: number;

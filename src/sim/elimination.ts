@@ -76,6 +76,14 @@ export function takeSpoils(s: MatchStateCore, victim: PlayerState, bagId: number
   return vault + carried + gen;
 }
 
+/** What takeSpoils would collect from `p` now (their drop share counted from carried cash), in $10 steps; 0 once out. */
+export function bountyOf(s: MatchStateCore, p: PlayerState): number {
+  if (p.eliminated) return 0;
+  const g = s.generators.find((x) => x.island === p.island);
+  const v = Math.floor(p.vault.cash) + Math.floor(p.inv.cash * ELIM.carriedShare) + Math.floor(g?.stored ?? 0);
+  return Math.floor(v / 10) * 10;
+}
+
 /** Eliminator's and assists' cuts of `total` (integers summing to total; ascending assist ids). */
 export function splitSpoils(total: number, by: number, assists: number[]): [number, number][] {
   if (!assists.length) return [[by, total]];

@@ -61,7 +61,8 @@ test('audio: context starts on click, sounds play while shooting, M mutes, no co
     ...['sandbags', 'wood', 'metal', 'steel', 'scaffold', 'ramp', 'container'].flatMap((kind) => [{ sound: 'placed', kind }, { sound: 'destroyed', kind }]),
     ...['grass', 'sand', 'concrete', 'wood', 'hollow', 'metal'].map((kind) => ({ sound: 'footstep', kind })),
     { sound: 'explosion', kind: 'grenade' }, { sound: 'explosion', kind: 'charge', far: true },
-    ...['impact', 'hurt', 'hitmarker', 'splash', 'coin', 'loot', 'purchase', 'vault', 'kill', 'death', 'eliminated', 'win', 'lose', 'draw', 'alarm', 'escaped', 'horn'].map((sound) => ({ sound })),
+    ...['impact', 'hurt', 'hitmarker', 'splash', 'coin', 'loot', 'purchase', 'vault', 'kill', 'death', 'eliminated', 'elimination', 'win', 'lose', 'draw', 'alarm', 'escaped', 'horn'].map((sound) => ({ sound })),
+    { sound: 'elimination', kind: 'mine' },
     { sound: 'tick', kind: 'normal' }, { sound: 'tick', kind: 'urgent' },
     // Round 11: impacts by surface, equip, jump, wet/gravel steps, UI click and the feature hooks.
     ...['wood', 'metal', 'concrete', 'sand', 'grass', 'water', 'gravel'].map((kind) => ({ sound: 'impact', kind })),

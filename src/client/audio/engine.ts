@@ -24,7 +24,7 @@ import { isAction } from '../keymap';
 import { settings, type Settings } from '../settings/store';
 
 /** 2D cues on the Interface bus: not muffled by low health or reverb. */
-const UI_SOUNDS = new Set(['hitmarker', 'headshot', 'shieldCrack', 'kill', 'death', 'eliminated', 'win', 'lose', 'draw', 'alarm', 'tick', 'escaped', 'horn', 'coin', 'loot', 'purchase', 'vault', 'click', 'ping']);
+const UI_SOUNDS = new Set(['hitmarker', 'headshot', 'shieldCrack', 'kill', 'death', 'eliminated', 'elimination', 'win', 'lose', 'draw', 'alarm', 'tick', 'escaped', 'horn', 'coin', 'loot', 'purchase', 'vault', 'click', 'ping']);
 /** Past this distance a shot or blast arrives late, at the speed of sound (343 m/s), like thunder. */
 const SOUND_DELAY_FROM = 40;
 /** Low-pass cutoff (Hz) and level for a sound behind one wall / two or more. */

@@ -571,6 +571,13 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       tone(k, out, t, { f0: 60, f1: 35, dur: 0.5, peak: 0.8 });
       note(k, out, t, 147, 1.6, 0.2, 'sawtooth', 600);
       return note(k, out, t + 0.05, 220, 1.6, 0.15, 'sawtooth', 600);
+    case 'elimination': {
+      // Glory: a low hit, then a rising brass-ish triad; the eliminator's own gets an octave sparkle on top.
+      tone(k, out, t, { f0: 90, f1: 45, dur: 0.35, peak: 0.7 });
+      [392, 494, 587].forEach((f, i) => note(k, out, t + 0.06 + i * 0.09, f, 0.7, 0.18, 'sawtooth', 1800));
+      if (cue.kind === 'mine') note(k, out, t + 0.33, 1175, 0.9, 0.08, 'sine');
+      return 0.33 + note(k, out, t + 0.33, 784, 1.1, 0.22, 'sawtooth', 2200);
+    }
     case 'draw':
       note(k, out, t, 392, 0.5, 0.25);
       note(k, out, t + 0.45, 392, 1.0, 0.2);
