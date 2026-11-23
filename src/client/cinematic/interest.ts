@@ -4,6 +4,11 @@
  * The director (director.ts) picks shots from these with hysteresis.
  */
 
+/**
+ * shoulder: third-person follow on the featured player. drone: an elevated, slowly tracking shot framing the
+ * featured player and their opponent (fights). wide: a high wide drone for big moments and sudden death.
+ * 'orbit' (the v1 kill replay) is kept in the type for listeners but never chosen any more.
+ */
 export type ShotKind = 'shoulder' | 'wide' | 'orbit' | 'drone';
 export type ShotReason = 'duel' | 'clutch' | 'seal' | 'hunt' | 'rocket' | 'parkour' | 'leader' | 'elimination' | 'suddenDeath' | 'idle';
 
@@ -28,7 +33,7 @@ export interface Storyline {
   score: number;
   /** The shot this storyline wants. */
   kind: ShotKind;
-  /** Where an orbit / drone shot is centred (else the featured player). */
+  /** Where a wide shot is centred (else the featured player). */
   at?: V3;
 }
 
@@ -94,21 +99,21 @@ export class InterestTracker {
     const byId = new Map(s.players.map((p) => [p.id, p]));
     const isAlive = (id: number | null | undefined) => id != null && !!byId.get(id)?.alive;
 
-    // Eliminations and kills: orbit the spot where it happened, featuring the killer when they live.
+    // Eliminations and kills: no replay; stay with the killer, over their shoulder (a kill with no living
+    // killer isn't a story to show).
     for (const e of this.elims) {
       const k = [...this.kills].reverse().find((x) => x.victim === e.player);
-      const who = k?.killer != null && isAlive(k.killer) ? k.killer : e.player;
-      out.push({ reason: 'elimination', playerId: who, otherId: e.player, score: SCORE.elimination - (t - e.t) * 0.3, kind: 'orbit', at: e.at ?? k?.at ?? undefined });
+      if (k?.killer == null || !isAlive(k.killer)) continue;
+      out.push({ reason: 'elimination', playerId: k.killer, otherId: e.player, score: SCORE.elimination - (t - e.t) * 0.3, kind: 'shoulder' });
     }
     for (const k of this.kills) {
-      if (this.elims.some((e) => e.player === k.victim)) continue;
-      const who = k.killer !== null && isAlive(k.killer) ? k.killer : k.victim;
-      out.push({ reason: 'elimination', playerId: who, otherId: k.victim, score: SCORE.kill - (t - k.t) * 0.4, kind: 'orbit', at: k.at ?? undefined });
+      if (this.elims.some((e) => e.player === k.victim) || k.killer === null || !isAlive(k.killer)) continue;
+      out.push({ reason: 'elimination', playerId: k.killer, otherId: k.victim, score: SCORE.kill - (t - k.t) * 0.4, kind: 'shoulder' });
     }
-    // A bunker just sealed: orbit the sealer.
+    // A bunker just sealed: the sealer, over the shoulder.
     for (const sl of this.seals) {
       const who = sl.by !== null && isAlive(sl.by) ? sl.by : sl.owner !== null && isAlive(sl.owner) ? sl.owner : null;
-      if (who !== null) out.push({ reason: 'seal', playerId: who, otherId: sl.owner ?? undefined, score: SCORE.sealDone - (t - sl.t) * 0.3, kind: 'orbit' });
+      if (who !== null) out.push({ reason: 'seal', playerId: who, otherId: sl.owner ?? undefined, score: SCORE.sealDone - (t - sl.t) * 0.3, kind: 'shoulder' });
     }
     // A rocket in flight: the player it is heading for (closest to its path ahead).
     for (const pr of s.projectiles ?? []) {
@@ -122,7 +127,7 @@ export class InterestTracker {
         const off = Math.sqrt(Math.max(0, dx * dx + dy * dy + dz * dz - along * along));
         if (off < 6 && off < bestD) { bestD = off; best = p; }
       }
-      if (best) out.push({ reason: 'rocket', playerId: best.id, score: SCORE.rocket, kind: 'wide', at: { x: pr.pos.x, y: pr.pos.y, z: pr.pos.z } });
+      if (best) out.push({ reason: 'rocket', playerId: best.id, score: SCORE.rocket, kind: 'drone' });
     }
 
     // Per player: fights, clutches, seals in progress, hunted sealed players, movement, the leader.
@@ -139,7 +144,8 @@ export class InterestTracker {
       if (foe !== null && isAlive(foe)) {
         const f = byId.get(foe)!;
         const low = Math.min(life, f.hp + f.shield);
-        if (life <= f.hp + f.shield) out.push({ reason: 'duel', playerId: p.id, otherId: foe, score: SCORE.duel + SCORE.duelLowHp * (1 - Math.min(1, low / HP_MAX)), kind: 'shoulder' });
+        // A drone shot framing both fighters.
+        if (life <= f.hp + f.shield) out.push({ reason: 'duel', playerId: p.id, otherId: foe, score: SCORE.duel + SCORE.duelLowHp * (1 - Math.min(1, low / HP_MAX)), kind: 'drone' });
       }
       // Clutch: nearly dead and still being shot, or several attackers at once.
       if (recentIn.length && life <= 30) out.push({ reason: 'clutch', playerId: p.id, otherId: recentIn[recentIn.length - 1].by, score: SCORE.clutch + (attackers.size >= 2 ? SCORE.outnumbered : 0) + (1 - life / 30), kind: 'shoulder' });
@@ -157,9 +163,9 @@ export class InterestTracker {
     if (s.suddenDeath && alive.length) {
       const lead = alive.reduce((a, b) => (b.kills > a.kills ? b : a));
       const at = s.storm ? { x: s.storm.x, y: lead.pos.y, z: s.storm.z } : undefined;
-      out.push({ reason: 'suddenDeath', playerId: lead.id, score: SCORE.suddenDeath + (alive.length <= 3 ? SCORE.lastFew : 0), kind: 'drone', at });
+      out.push({ reason: 'suddenDeath', playerId: lead.id, score: SCORE.suddenDeath + (alive.length <= 3 ? SCORE.lastFew : 0), kind: 'wide', at });
     }
-    return out.filter((x) => isAlive(x.playerId) || x.kind === 'orbit').sort((a, b) => b.score - a.score || a.playerId - b.playerId);
+    return out.filter((x) => isAlive(x.playerId)).sort((a, b) => b.score - a.score || a.playerId - b.playerId);
   }
 }
 

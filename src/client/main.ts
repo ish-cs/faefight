@@ -2109,7 +2109,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         spectator.mode = 'follow';
         spectator.followId = shot.playerId;
         spectator.firstPerson = false;
-        cineCam.frame(shot, snap!.time, dt, (id, out) => renderer.playerPos(id, out), lookOf);
+        cineCam.frame(shot, director.pending, snap!.time, dt, (id, out) => renderer.playerPos(id, out), lookOf);
         const fp = snap!.players.find((p) => p.id === shot.playerId);
         cineOverlay.update(now, fp, shot.reason, director.alive);
       } else spectator.frame({ cam: renderer.camera, yaw: input.yaw, pitch: input.pitch, dt, humanId: replay ? 0 : humanId, players: snap!.players,
