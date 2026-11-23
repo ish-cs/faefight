@@ -363,7 +363,7 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
 export const WEAPON: WeaponParams = { holdSec: 0.6, rocketHoldSec: 2.5, threatM: 12, hurtSec: 1, shotgunHyst: 2 };
 
 export const VAULT: VaultParams = {
-  medkits: D(0, 1, 2, 2), scaffolds: D(0, 0, 0, 0), keep: D(0, 0, 40, 40), buy: D(0, 0, 1, 1), carry: D(250, 60, 25, 25), bankMin: 80,
+  medkits: D(0, 1, 2, 2), scaffolds: D(0, 0, 0, 0), keep: D(0, 0, 40, 40), buy: D(0, 0, 1, 1), carry: D(400, 60, 25, 25), bankMin: 80,
 };
 
 export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, vault: VAULT });
