@@ -65,30 +65,7 @@ export async function warmUp(r: Renderer, loop: WarmLoop, fpv: Viewmodel, onStep
 
   let compiled = 0;
   try {
-    const pass = r.world.sky.scenePass;
-    if (!pass) throw new Error('no scene pass');
-    // Borrow the renderer state the scene pass renders with (see PassNode.updateBefore), so the pipelines
-    // are exactly the ones the real frames use; the frame loop doesn't draw meanwhile.
-    type Ctx = { contextNode: unknown };
-    type PassCtx = { _getContextNode(g: THREE.WebGPURenderer): unknown; contextNode: unknown };
-    const size = gpu.getDrawingBufferSize(new THREE.Vector2());
-    pass.setSize(size.x, size.y);
-    const keep = { rt: gpu.getRenderTarget(), mrt: gpu.getMRT(), ctx: (gpu as unknown as Ctx).contextNode };
-    loop.setPaused(true);
-    try {
-      gpu.setRenderTarget(pass.renderTarget);
-      gpu.setMRT(pass.getMRT());
-      if ((pass as unknown as PassCtx).contextNode) (gpu as unknown as Ctx).contextNode = (pass as unknown as PassCtx)._getContextNode(gpu);
-      await gpu.compileAsync(r.scene, r.camera, null, (e) => {
-        compiled = e.total;
-        if (e.total > 0) onStep(0.05 + 0.6 * (e.loaded / e.total), `Compiling shaders ${e.loaded}/${e.total}`);
-      });
-    } finally {
-      gpu.setRenderTarget(keep.rt);
-      gpu.setMRT(keep.mrt);
-      (gpu as unknown as Ctx).contextNode = keep.ctx;
-      loop.setPaused(false);
-    }
+    compiled = await compileScenePass(r, loop, (loaded, total) => onStep(0.05 + 0.6 * (loaded / total), `Compiling shaders ${loaded}/${total}`));
   } catch (err) {
     console.warn('[warmup] compileAsync failed; the warm frames below still build every pipeline', err);
   }
@@ -123,4 +100,55 @@ export async function warmUp(r: Renderer, loop: WarmLoop, fpv: Viewmodel, onStep
   }
   onStep(1, 'Warming up the GPU');
   console.info(`[warmup] ${compiled} render objects compiled, ${forced.length} hidden + ${culled.length} culled objects warmed in ${Math.round(performance.now() - t0)} ms`);
+}
+
+/**
+ * compileAsync the whole scene for the post chain's scene pass (its own target/MRT/context, so the pipelines are
+ * exactly the ones the real frames use). Time-sliced by three (yields to the main thread between items, restoring its
+ * state each time) and builds pipelines asynchronously, so the page and the browser stay responsive. Drawing is held
+ * until it's done: a frame drawn meanwhile would build every pending visible material synchronously in one go.
+ * Returns the render-object count.
+ */
+export async function compileScenePass(r: Renderer, loop: Pick<WarmLoop, 'setPaused'>, onProgress?: (loaded: number, total: number) => void): Promise<number> {
+  const gpu = r.gpu;
+  const pass = r.world.sky.scenePass;
+  if (!pass) throw new Error('[warmup] no scene pass to compile for');
+  // Borrow the renderer state the scene pass renders with (see PassNode.updateBefore).
+  type Ctx = { contextNode: unknown };
+  type PassCtx = { _getContextNode(g: THREE.WebGPURenderer): unknown; contextNode: unknown };
+  const size = gpu.getDrawingBufferSize(new THREE.Vector2());
+  pass.setSize(size.x, size.y);
+  const keep = { rt: gpu.getRenderTarget(), mrt: gpu.getMRT(), ctx: (gpu as unknown as Ctx).contextNode };
+  let compiled = 0;
+  loop.setPaused(true);
+  try {
+    gpu.setRenderTarget(pass.renderTarget);
+    gpu.setMRT(pass.getMRT());
+    if ((pass as unknown as PassCtx).contextNode) (gpu as unknown as Ctx).contextNode = (pass as unknown as PassCtx)._getContextNode(gpu);
+    await gpu.compileAsync(r.scene, r.camera, null, (e) => {
+      compiled = e.total;
+      if (e.total > 0) onProgress?.(e.loaded, e.total);
+    });
+  } finally {
+    gpu.setRenderTarget(keep.rt);
+    gpu.setMRT(keep.mrt);
+    (gpu as unknown as Ctx).contextNode = keep.ctx;
+    loop.setPaused(false);
+  }
+  return compiled;
+}
+
+/**
+ * Mid-match graphics change (the quality key P, Settings → Video preset / competitive): the new shadow cascades and
+ * post chain invalidate every lit material. Drawn straight away, the next frame rebuilt what's on screen
+ * synchronously (0.7-1.3 s with the page frozen, and with ~130 synchronous pipeline builds the GPU process stalled
+ * every other tab too). Instead: hold drawing (the last frame stays on screen) while what the camera sees compiles
+ * time-sliced with async pipelines, then draw again. Anything off screen builds when it comes into view, as before.
+ * (Compiling the rest in the background while drawing leaked three's precompile state into frames: invalid
+ * post-chain pipelines. Don't.)
+ */
+export async function recompileScene(r: Renderer, loop: Pick<WarmLoop, 'setPaused'>): Promise<void> {
+  const t0 = performance.now();
+  const n = await compileScenePass(r, loop);
+  console.info(`[warmup] graphics change: ${n} on-screen render objects recompiled in ${Math.round(performance.now() - t0)} ms`);
 }
