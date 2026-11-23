@@ -200,7 +200,7 @@ export const LIFECYCLE = {
   /** Spawn protection: lasts while inside your bunker (max this long), then invulnSec after leaving. */
   spawnProtectMaxSec: 15,
   /** Sudden death: generators stop, every bunker seals for good, and the storm closes in (STORM). */
-  suddenDeathAt: 900,
+  suddenDeathAt: 1500,
   lootPickupRadius: 1.5,
   /** Dropped items land this far in front of you (just past pickup reach)... */
   dropAhead: 1.8,
