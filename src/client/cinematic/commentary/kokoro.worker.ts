@@ -60,6 +60,8 @@ function load(device: KokoroDevice = 'wasm', dtype: KokoroDtype = 'q8'): Promise
     const [model, tokenizer, lexicon] = await Promise.all([
       StyleTextToSpeech2Model.from_pretrained(KOKORO_MODEL, {
         dtype, device,
+        // 3 = errors only: skips ORT's benign "nodes not assigned to the preferred execution provider" notice.
+        session_options: { logSeverityLevel: 3 },
         progress_callback: (p: { status?: string; file?: string; progress?: number }) => {
           if (p.status !== 'progress' || !p.file || typeof p.progress !== 'number') return;
           files.set(p.file, p.progress);

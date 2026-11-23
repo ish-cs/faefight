@@ -23,7 +23,8 @@ export interface DirectorLike {
  * display name from the menu (faefight.name) instead, or "our player" when none is set.
  */
 export function displayName(p: Pick<PlayerState, 'name' | 'isBot'>, stored: () => string | null = storedName): string {
-  if (p.isBot || p.name !== 'You') return p.name;
+  // Watch-bots names carry a difficulty tag ("Ash (hard)"): the commentator just says the name.
+  if (p.isBot || p.name !== 'You') return p.name.replace(/\s*\([^)]*\)\s*$/, '') || p.name;
   const n = stored()?.trim();
   return n || 'our player';
 }

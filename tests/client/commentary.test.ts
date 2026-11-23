@@ -405,6 +405,7 @@ describe('speakable text and names', () => {
     expect(displayName({ name: 'You', isBot: false }, () => '  ')).toBe('our player');
     expect(displayName({ name: 'You', isBot: true }, () => 'Ishaan')).toBe('You');
     expect(displayName({ name: 'Captain_Walrus', isBot: true }, () => 'Ishaan')).toBe('Captain_Walrus');
+    expect(displayName({ name: 'Ash (hard)', isBot: true }, () => 'Ishaan')).toBe('Ash');
     const tts = new FakeTts();
     let t = 0;
     const c = new Commentator({ tts, now: () => t, displayName: (p) => displayName(p, () => 'Ishaan') });
