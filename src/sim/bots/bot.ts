@@ -263,8 +263,6 @@ export class Bot {
   /** When I noticed I'm stranded with no way home (strandedDitch). */
   private strandedSince: number | null = null;
   hookNote: { t: number; text: string } | null = null;
-  /** When I last fired the hook to yank someone: if it caught the world instead, I let go (yankMissed). */
-  private yankFiredAt = -Infinity;
   /** Blowing out a pier section under an enemy (or under the piece they hide behind): which, how, and why. */
   private dockPlan: { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number } | null = null;
   private nextDockRollAt = 0;
@@ -556,8 +554,6 @@ export class Bot {
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
     if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     if (rope || grapple) jump = false; // a jump lets go of the rope
-    // A yank that missed them and caught something behind (a wall over the water) would reel me across: let go.
-    if (rope && now - this.yankFiredAt < 2 * GRAPPLE.range / GRAPPLE.tipSpeed + 0.5) { jump = true; this.yankFiredAt = -Infinity; }
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
@@ -583,7 +579,6 @@ export class Bot {
       select = me.hotbar.indexOf('grapple');
       useMedkit = false;
       this.hookNote = { t: now, text: hook!.note };
-      if (hook!.why === 'yank') this.yankFiredAt = now;
       this.hookIntent = null;
       this.lastDidAt = now;
     }
@@ -662,7 +657,8 @@ export class Bot {
     const e = c.enemy, want = this.hookNode(c);
     let it: HookIntent | null = null;
     if (e && c.enemyDist <= H.escapeNear && me.hp + me.shield < H.escapeHp) it = escapeFrom(c.view, H, e.pos, (p) => this.nav.nodeAt(p));
-    if (!it && e && (me.inv.grapples ?? 0) > (want !== null ? H.keepForTravel : 0)) {
+    // No yanks from a bridge or deck over the water: a miss latches whatever is behind them and reels me off it.
+    if (!it && e && (me.inv.grapples ?? 0) > (want !== null ? H.keepForTravel : 0) && this.nav.nodeAt(me.pos) >= 0) {
       const why = yankReason(c.view, H, e, c.enemyDist, gun);
       if (why && this.rng() < H.yankRate * HOOK_CHECK_SEC) it = { why: 'yank', target: e.id, note: why };
     }
