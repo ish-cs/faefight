@@ -111,6 +111,7 @@ type Internals = {
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
   needs(c: Ctx): Needs; trapped(c: Ctx): boolean; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
+  stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null;
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
   defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
@@ -165,6 +166,8 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (d > st.r) return { f: [['outside ring', easy ? 0.9 : 1.7]], why: `Caught outside the storm ring (${m(d)} from its centre, ring ${m(st.r)}): getting in` };
       const safe = I.stormSafeR(st);
       if (d > safe) return { f: [['ring closing', easy ? 0.4 : 1.3]], why: `The ring closes past me soon (safe line ${m(safe)}, I'm at ${m(d)}): moving in ahead of it` };
+      const go = I.stormLeave(c);
+      if (go) return { f: [['long way in', 1.5]], why: `The walk to the centre island takes ${Math.round(go.sec)} s and the ring is ${Math.round(go.sec + go.slack)} s from me: leaving now` };
       if (I.needCenterBridge(c)) return { f: [['no center bridge', 1.2]], why: 'The storm ends on the centre island and I have no way onto it: bridging there' };
       return zero('safe inside the ring');
     }
@@ -283,6 +286,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     }
     case 'collect': {
       if (!c.homeReach) return zero("can't walk home");
+      if (view.suddenDeath) return zero('sudden death: generators stopped');
       const stored = view.generators[home.index];
       const f: [string, number][] = stored >= 40
         ? [['base', 0.45], ['greed', 0.1 * t.greed], ['stored cash', Math.min(stored, 500) / 1000]]
@@ -298,7 +302,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       return { f, why: stored >= 40 ? `My generator holds $${Math.round(stored)}: collecting it` : 'Nothing better to do: waiting at my generator' };
     }
     case 'shop': {
-      if (!c.homeReach) return zero("can't walk home");
+      const shop = (I as unknown as { shopSpot(c: Ctx): Vec3 | null }).shopSpot(c);
+      if (!shop) return zero('no shop I can walk to');
+      if (view.storm && Math.hypot(shop.x - view.storm.x, shop.z - view.storm.z) > I.stormSafeR(view.storm) - 2) return zero('the shop is out in the storm');
       const plan = I.plan(c);
       if (!plan.items.length) return zero('nothing to buy');
       const blocked = (I as unknown as { buyBlockedUntil: Map<ShopItem, number> }).buyBlockedUntil.get(plan.items[0]) ?? -Infinity;
@@ -608,7 +614,7 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
     case 'contest': return two('Walk to the centre stations', 'Grab gold / pieces');
     case 'assist': return two('Run to the teammate under fire', 'Shoot whoever is on them');
     case 'regroup': return two('Catch up with the push leader', 'Push in together');
-    case 'storm': return { steps: ['Get inside the ring', 'Hold position'], at: moving ? 0 : 1 };
+    case 'storm': return { steps: ['Get inside the ring / onto the centre island', 'Hold position'], at: moving ? 0 : 1 };
     case 'cover': return { steps: ['Get to the cover spot', 'Place a wall', 'Fight from behind it'], at: a?.build ? 1 : moving ? 0 : 2 };
     case 'fortify': return { steps: ['Walk to the next fort slot', 'Build it', 'Next slot'], at: a?.build ? 1 : moving ? 0 : 1 };
     case 'trap': return { steps: ['Walk to a doorway', 'Set a spike trap', 'Next spot'], at: a?.trap ? 1 : moving ? 0 : 1 };
