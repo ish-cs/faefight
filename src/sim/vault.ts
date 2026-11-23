@@ -1,7 +1,10 @@
-import { buy, funds, vaultTransfer } from './economy';
+import { VAULT_INTEREST_SEC, VAULT_LEVELS, VAULT_MAX_LEVEL } from './constants';
+import { buy, funds, pay, vaultTransfer, type Result } from './economy';
 export { funds, pay } from './economy';
 import { countOf, HOTBAR_ITEMS, isGunItem, isHotbarItem } from './hotbar';
-import type { HotbarItem, Inventory, Loadout, PlayerState } from './types';
+import type { IslandLayout } from './map';
+import type { HotbarItem, Inventory, Loadout, PlayerState, VaultAction } from './types';
+import { dist2D } from './vec';
 
 /**
  * The vault beyond plain deposit/withdraw:
@@ -10,12 +13,16 @@ import type { HotbarItem, Inventory, Loadout, PlayerState } from './types';
  * - a restock loadout refills the hotbar from the vault on respawn (`restockFromVault`), optionally buying
  *   what the vault lacks with vault cash;
  * - quick-bank (`bankAboveLoadout`): everything carried above the loadout goes in (hold E at the vault);
- * - spoils (`takeVaultCash`): the elimination-rewards code takes a victim's vault cash through this.
+ * - spoils (`takeVaultCash`): the elimination-rewards code takes a victim's vault cash through this;
+ * - levels (VAULT_LEVELS, bought at the vault): interest on banked cash, more storage and loadout kinds, and
+ *   deposits from anywhere on your own island.
  * Carried cash and items drop as a loot bag on death (lifecycle.killPlayer); the vault is never touched by a death.
  */
 
-/** Most item kinds a loadout may list (stage 2 raises it with the vault level). */
-export const LOADOUT_MAX_KINDS = 4;
+/** Most item kinds a loadout may list at vault level 1 (higher levels allow more: VAULT_LEVELS.kinds). */
+export const LOADOUT_MAX_KINDS: number = VAULT_LEVELS[0].kinds;
+/** Most kinds at the top level: what the wire accepts (the sim then holds you to your level's). */
+export const LOADOUT_ABS_MAX_KINDS: number = VAULT_LEVELS[VAULT_MAX_LEVEL - 1].kinds;
 /** Most of one kind a loadout may ask for (pieces / other stackables); guns and the hook count as 1. */
 export const LOADOUT_MAX_PIECES = 50;
 export const LOADOUT_MAX_OTHER = 10;
@@ -31,8 +38,8 @@ export function emptyLoadout(): Loadout {
   return { items: {}, keep: 0, buy: false };
 }
 
-/** Validates an untrusted loadout (wire, replays): known kinds, integer counts clamped, at most LOADOUT_MAX_KINDS kinds. */
-export function sanitizeLoadout(x: unknown): Loadout | null {
+/** Validates an untrusted loadout (wire, replays): known kinds, integer counts clamped, at most `maxKinds` kinds. */
+export function sanitizeLoadout(x: unknown, maxKinds: number = LOADOUT_ABS_MAX_KINDS): Loadout | null {
   if (typeof x !== 'object' || x === null) return null;
   const o = x as Record<string, unknown>;
   if (typeof o.items !== 'object' || o.items === null) return null;
@@ -44,7 +51,7 @@ export function sanitizeLoadout(x: unknown): Loadout | null {
     if (typeof v !== 'number' || !Number.isFinite(v)) return null;
     const c = Math.min(loadoutMax(k), Math.max(0, Math.floor(v)));
     if (c === 0) continue;
-    if (++n > LOADOUT_MAX_KINDS) return null;
+    if (++n > maxKinds) return null;
     items[k] = c;
   }
   for (const k of Object.keys(o.items)) if (!isHotbarItem(k)) return null;
@@ -112,18 +119,21 @@ export function restockFromVault(p: PlayerState): RestockResult | null {
 
 /**
  * Quick-bank (hold E at the vault): a deposit of everything carried above the loadout: cash above `keep`,
- * stackables above their loadout count. Guns and the hook stay on you. Null when there is nothing to bank.
+ * stackables above their loadout count (as far as the vault has room). Guns and the hook stay on you. Null when
+ * there is nothing to bank.
  */
 export function bankAboveLoadout(p: PlayerState): Partial<Inventory> | null {
   const l = p.loadout ?? emptyLoadout();
   const dep: Partial<Inventory> = {};
   let any = false;
+  let room = vaultSpec(p).storage - itemUnits(p.vault);
   const cash = Math.floor(p.inv.cash) - l.keep;
   if (cash > 0) { dep.cash = cash; any = true; }
   for (const kind of HOTBAR_ITEMS) {
     if (isUnit(kind)) continue;
-    const extra = countOf(p.inv, kind) - (l.items[kind] ?? 0);
+    const extra = Math.min(countOf(p.inv, kind) - (l.items[kind] ?? 0), room);
     if (extra <= 0) continue;
+    room -= extra;
     const r = stackRequest(kind, extra, p.inv);
     if (r.pieces) dep.pieces = { ...dep.pieces, ...r.pieces };
     else if (r.potions) dep.potions = { ...dep.potions, ...r.potions };
@@ -131,4 +141,70 @@ export function bankAboveLoadout(p: PlayerState): Partial<Inventory> | null {
     any = true;
   }
   return any ? dep : null;
+}
+
+/** A player's vault level (1..VAULT_MAX_LEVEL) and what it gives. */
+export const vaultLevel = (p: PlayerState): number => Math.max(1, Math.min(VAULT_MAX_LEVEL, Math.floor(p.vaultLevel ?? 1) || 1));
+export const vaultSpec = (p: PlayerState) => VAULT_LEVELS[vaultLevel(p) - 1];
+/** Price of the next vault level, or null at max. */
+export function vaultUpgradePrice(level: number): number | null {
+  return level >= VAULT_MAX_LEVEL ? null : VAULT_LEVELS[level].price;
+}
+
+/** Buys the next vault level (carried cash first, then vault cash). */
+export function upgradeVault(p: PlayerState): Result {
+  const lv = vaultLevel(p), price = vaultUpgradePrice(lv);
+  if (price === null) return { ok: false, reason: 'vault already at max level' };
+  if (funds(p) < price) return { ok: false, reason: `need $${price}, have $${funds(p)} (carried + vault)` };
+  pay(p, price);
+  p.vaultLevel = lv + 1;
+  return { ok: true };
+}
+
+/** Interest for one payout (every VAULT_INTEREST_SEC × `mult`, the host's economy speed), whole dollars. */
+export function interestDue(p: PlayerState, mult = 1): number {
+  const { rate, base } = vaultSpec(p);
+  return Math.floor(Math.min(p.vault.cash, base) * rate * (VAULT_INTEREST_SEC / 60) * mult);
+}
+
+/** Pays interest into the vault; returns the amount. */
+export function payInterest(p: PlayerState, mult = 1): number {
+  const n = interestDue(p, mult);
+  p.vault.cash += n;
+  return n;
+}
+
+/** Item units in an inventory (cash aside; a gun or the hook is one). */
+export function itemUnits(inv: Inventory): number {
+  let n = 0;
+  for (const k of HOTBAR_ITEMS) { const c = countOf(inv, k); if (c > 0) n += isUnit(k) ? 1 : c; }
+  return n;
+}
+
+/** Item units a deposit request adds. */
+function requestUnits(req: Partial<Inventory>): number {
+  const pieces = Object.values(req.pieces ?? {}).reduce<number>((a, n) => a + (n ?? 0), 0);
+  const potions = Object.values(req.potions ?? {}).reduce<number>((a, n) => a + (n ?? 0), 0);
+  return pieces + potions + (req.grenades ?? 0) + (req.charges ?? 0) + (req.medkits ?? 0) + (req.traps ?? 0) +
+    (req.grapples ? 1 : 0) + Object.keys(req.weapons ?? {}).length;
+}
+
+/** Whether `p` may deposit here: at their own vault, or (remote levels) anywhere on their own island. */
+export function canDepositAt(p: PlayerState, isl: IslandLayout, atVault: boolean): boolean {
+  return atVault || (vaultSpec(p).remote && dist2D(p.pos, isl.center) <= isl.radius + 1);
+}
+
+/**
+ * A vault move with the level's rules: deposits need room (storage counts item units; cash is unlimited);
+ * withdrawals need you at the vault; deposits also work anywhere on your island from a remote level.
+ */
+export function vaultMove(p: PlayerState, isl: IslandLayout, atVault: boolean, a: VaultAction): Result {
+  if (a.withdraw && !atVault) return { ok: false, reason: 'withdraw at your vault' };
+  if (a.deposit && !canDepositAt(p, isl, atVault)) return { ok: false, reason: 'deposit at your vault' };
+  if (!a.deposit && !a.withdraw) return { ok: false, reason: 'nothing to move' };
+  if (a.deposit) {
+    const room = vaultSpec(p).storage - itemUnits(p.vault) + (a.withdraw ? requestUnits(a.withdraw) : 0);
+    if (requestUnits(a.deposit) > room) return { ok: false, reason: `vault full (Lv${vaultLevel(p)} holds ${vaultSpec(p).storage} items)` };
+  }
+  return vaultTransfer(p, { deposit: a.deposit, withdraw: a.withdraw });
 }

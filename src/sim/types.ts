@@ -39,8 +39,11 @@ export type ShopAction = { buy: ShopItem };
  * with vault cash at shop prices.
  */
 export type Loadout = { items: Partial<Record<HotbarItem, number>>; keep: number; buy: boolean };
-/** Vault moves (only at your own vault, 1 s busy) and/or a new restock loadout (accepted anywhere). */
-export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory>; loadout?: Loadout };
+/**
+ * Vault moves (withdraw at your own vault; deposit there or, from vault level 2, anywhere on your island; 1 s busy),
+ * a vault upgrade (at the vault), and/or a new restock loadout (accepted anywhere).
+ */
+export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory>; loadout?: Loadout; upgrade?: true };
 
 /**
  * `seq`: the movement command (MoveCmd.seq) the client placed after, i.e. where its predicted player stood when it
@@ -131,6 +134,8 @@ export type PlayerState = {
   vault: Inventory;
   /** Respawn restock loadout (sim/vault.ts); absent = none. Private: only sent to its owner. */
   loadout?: Loadout;
+  /** Vault level (sim/vault.ts VAULT_LEVELS); absent = 1. Private: only sent to its owner. */
+  vaultLevel?: number;
   /** Guns bought back on every respawn (full mag + one spare). Private: only sent to their owner. */
   locked: GunKind[];
   /** Nine slots of item kinds held; counts are in `inv`. */
@@ -220,7 +225,9 @@ export type MatchEventType =
   /** A wooden pier section broke (docks.ts): data { id, island, row, pos, rotY, by, kind }. */
   | 'dockBroken'
   /** Respawn restock from the vault (sim/vault.ts): data { player, moved, bought, cash }. */
-  | 'restock';
+  | 'restock'
+  /** Bought a vault level: data { player, level }. */
+  | 'vaultUpgrade';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */

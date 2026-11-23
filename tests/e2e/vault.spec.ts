@@ -83,7 +83,8 @@ test('vault panel: drag, split, quick-move, cash, loadout, hold E to quick-bank'
 
   // One click banks all carried cash.
   await page.getByTestId('vault-deposit-all').click();
-  await expect.poll(async () => { const m = await me(); return [m.inv.cash, m.vault.cash]; }).toEqual([0, 550]);
+  // (≥: banked cash earns interest every 10 s.)
+  await expect.poll(async () => { const m = await me(); return m.inv.cash === 0 && m.vault.cash >= 550; }).toBe(true);
   // "Keep $80 on me" takes 80 back out.
   await page.getByTestId('vault-keep-input').fill('80');
   await page.getByTestId('vault-keep').click();
@@ -110,5 +111,49 @@ test('vault panel: drag, split, quick-move, cash, loadout, hold E to quick-bank'
   await expect.poll(wood).toEqual([5, 20]);
   await expect.poll(async () => (await me()).inv.cash).toBe(40);
   await expect(page.getByTestId('panel')).toBeHidden(); // a hold banks, it doesn't open the panel
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+test('vault level: upgrade at the vault, then quick-bank (H) from anywhere on your island', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/?debug=1');
+  await page.getByTestId('play-easy').click();
+  await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });
+  const humanId = await dbg<number>(page, 'humanId');
+  const map = await dbg<Isl[]>(page, 'map');
+  const me = async () => (await dbg<{ players: (Me & { vaultLevel?: number })[] }>(page, 'snapshot')).players.find((p) => p.id === humanId)!;
+  const home = map[(await me()).island];
+  await dbg(page, 'give', { cash: 1000 });
+  await expect.poll(async () => (await me()).inv.cash).toBe(1050);
+
+  // H away from the vault at Lv1: refused (a feed line says why), nothing banked.
+  await dbg(page, 'teleport', home.center.x, home.center.z);
+  await page.locator('canvas.game').focus();
+  await page.keyboard.press('KeyH');
+  await page.waitForTimeout(400);
+  expect((await me()).vault.cash).toBe(0);
+
+  const dx = home.center.x - home.vault.x, dz = home.center.z - home.vault.z, d = Math.hypot(dx, dz);
+  await dbg(page, 'teleport', home.vault.x + (dx / d) * 1.2, home.vault.z + (dz / d) * 1.2);
+  await expect(page.getByText('E  Vault')).toBeVisible();
+  await page.keyboard.press('KeyE');
+  await expect(page.getByTestId('vault-level')).toContainText('Vault Lv1');
+  await expect(page.getByTestId('vault-upgrade')).toHaveText(/Upgrade → Lv2 · \$250/);
+  await page.getByTestId('vault-upgrade').click();
+  await expect.poll(async () => (await me()).vaultLevel).toBe(2);
+  await expect(page.getByTestId('vault-level')).toContainText('Vault Lv2');
+  await expect(page.getByTestId('vault-loadout')).toContainText('/6 kinds');
+  if (env.VAULT_SHOT2) await page.screenshot({ path: env.VAULT_SHOT2 });
+  await page.keyboard.press('Escape');
+
+  // Lv2: H banks from the middle of the island.
+  await dbg(page, 'teleport', home.center.x, home.center.z);
+  await page.locator('canvas.game').focus();
+  await page.keyboard.press('KeyH');
+  await expect.poll(async () => { const m = await me(); return m.inv.cash === 0 && m.vault.cash >= 800; }).toBe(true);
+  await expect(page.getByTestId('home-panel')).toContainText('Lv2');
   expect(errors, errors.join('\n')).toEqual([]);
 });

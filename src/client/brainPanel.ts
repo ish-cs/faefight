@@ -203,7 +203,7 @@ export class BrainInspector {
     const grid = el('div', 'bx-stats');
     const stat = (k: string, v: string) => { const c = el('div', 'bx-stat'); c.append(el('span', 'bx-k', k), el('span', 'bx-n', v)); grid.append(c); };
     stat('HP', `${s.hp}`); stat('Shield', `${s.sh}`); stat('Stamina', `${s.sta}${s.winded ? ' (winded)' : ''}`);
-    stat('Cash', `$${s.cash}`); stat('Vault', `$${s.vault}`); stat('Gear', `$${s.inv}`);
+    stat('Cash', `$${s.cash}`); stat('Vault', `$${s.vault}${s.vaultLv ? ` · Lv${s.vaultLv}` : ''}`); stat('Gear', `$${s.inv}`);
     if (s.restock) stat('Restock', s.restock);
     stat('Stress', s.stress > 0 ? `${s.stress.toFixed(1)} s` : 'calm'); stat('Aim error', `${s.aimErr.toFixed(1)}°`);
     stat('Reaction', `${s.react.toFixed(2)} s${s.reactLeft > 0 ? ` (${s.reactLeft.toFixed(2)} left)` : ''}`);

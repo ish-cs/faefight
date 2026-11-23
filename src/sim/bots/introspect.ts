@@ -70,6 +70,8 @@ export type BrainDigest = {
     hp: number; sh: number; sta: number; cash: number; vault: number; inv: number;
     /** Restock loadout the vault refills on respawn (sim/vault.ts), e.g. "2 medkit, 8 scaffold · keep $40 · buys". */
     restock?: string;
+    /** Vault level (sim/vault.ts). */
+    vaultLv?: number;
     /** Damage stress (s left), winded (saving stamina). */
     stress: number; winded: boolean;
     /** Current aim error (deg), reaction delay (s) and what's left of it on the current target. */
@@ -113,7 +115,7 @@ type Internals = {
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
   needs(c: Ctx): Needs; trapped(c: Ctx): boolean; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
-  stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
+  stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
   defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
   waitFor(c: Ctx): AllyStatus | null; ownFight(c: Ctx): boolean; teamFocus(view: BotView, id: number): number;
@@ -273,13 +275,17 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if ((c.reach || (sc > 0 && sc >= need)) && due > 0 && !close) return { f: [['insurance', 0.8]], why: `Heading out: banking $${Math.round(due)} so I can rebuy a gun if I die` };
       const keep = I.P.vault.carry;
       const excess = me.inv.cash - keep;
-      if (excess < I.P.vault.bankMin) return zero('little cash on me');
       if (close) return zero('enemy too close');
+      if (I.wantsVaultUpgrade(me)) {
+        const lv = me.vaultLevel ?? 1;
+        return { f: [['vault upgrade', I.P.vault.upgradeScore], ['walk', -dist2D(me.pos, home.vault) / 80]], why: `Rich: buying vault level ${lv + 1} (more interest, deposits from anywhere on my island)` };
+      }
+      if (excess < I.P.vault.bankMin) return zero('little cash on me');
       const k = Math.min(excess, 600) / 600;
       const f: [string, number][] = [['base', 0.2], ['spare cash', 0.3 * k], ['caution', 0.3 * t.caution * k], ['greed', 0.2 * t.greed * k]];
       if (c.danger || I.intruder(c)) f.push(['danger', 0.55]);
       if (c.reach || sc >= need) f.push(['leaving', 0.25]);
-      f.push(['walk', -dist2D(me.pos, home.vault) / 80]);
+      if (!(me.vaultLevel && me.vaultLevel >= 2)) f.push(['walk', -dist2D(me.pos, home.vault) / 80]);
       return { f, why: `Carrying $${Math.round(me.inv.cash)} (it drops if I die; the shop pays from the vault): banking all but $${Math.round(keep)}` };
     }
     case 'collect': {
@@ -716,6 +722,7 @@ export function debugBrain(bot: Bot): BrainDigest {
       hp: Math.round(me?.hp ?? 0), sh: Math.round(me?.shield ?? 0), sta: Math.round(me?.stamina ?? 0),
       cash: Math.round(me?.inv.cash ?? 0), vault: Math.round(me?.vault.cash ?? 0), inv: me ? invValue(me.inv) : 0,
       ...(me?.loadout ? { restock: loadoutLine(me.loadout) } : {}),
+      ...(me ? { vaultLv: me.vaultLevel ?? 1 } : {}),
       stress: r1(me?.mv?.stress ?? 0), winded: I.winded,
       aimErr: r2(tracking ? Math.hypot(aim.err.yaw, aim.err.pitch) * cone * 180 / Math.PI : aim.p.coneRad * 180 / Math.PI),
       react: r2(aim.p.reactSec), reactLeft: r2(tracking ? Math.max(0, aim.seenAt + aim.p.reactSec - now) : 0),

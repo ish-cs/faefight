@@ -8,7 +8,7 @@
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump'
-  | 'aim' | 'reload' | 'interact' | 'drop'
+  | 'aim' | 'reload' | 'interact' | 'bank' | 'drop'
   | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8' | 'slot9'
   | 'rotateLeft' | 'rotateRight' | 'freePlace'
   | 'inventory' | 'scoreboard' | 'chat' | 'emote' | 'camera' | 'mute' | 'quality' | 'fps' | 'brain' | 'cinematic';
@@ -27,6 +27,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'aim', label: 'Aim down sights (hold)', group: 'Actions', defaults: ['Mouse2'] },
   { id: 'reload', label: 'Reload', group: 'Actions', defaults: ['KeyR'] },
   { id: 'interact', label: 'Interact / shop / vault', group: 'Actions', defaults: ['KeyE'] },
+  { id: 'bank', label: 'Quick-bank above your restock loadout (at the vault; vault Lv2+: anywhere on your island)', group: 'Actions', defaults: ['KeyH'] },
   { id: 'drop', label: 'Drop item (+Ctrl/Shift: stack)', group: 'Actions', defaults: ['KeyQ'] },
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({ id: `slot${n}` as Action, label: `Hotbar slot ${n}`, group: 'Hotbar' as const, defaults: [`Digit${n}`] })),
   { id: 'rotateLeft', label: 'Rotate piece left', group: 'Building', defaults: ['KeyZ'] },

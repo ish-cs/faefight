@@ -110,7 +110,8 @@ function vaultAction(x: unknown): VaultAction | null {
   if (x.deposit !== undefined) { const d = partialInv(x.deposit); if (!d) return null; out.deposit = d; }
   if (x.withdraw !== undefined) { const w = partialInv(x.withdraw); if (!w) return null; out.withdraw = w; }
   if (x.loadout !== undefined) { const l = sanitizeLoadout(x.loadout); if (!l) return null; out.loadout = l; }
-  return out.deposit || out.withdraw || out.loadout ? out : null;
+  if (x.upgrade === true) out.upgrade = true;
+  return out.deposit || out.withdraw || out.loadout || out.upgrade ? out : null;
 }
 
 function moveSlot(x: unknown): PlayerInput['moveSlot'] {

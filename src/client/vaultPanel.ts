@@ -1,6 +1,7 @@
 import { countOf, HOTBAR_SIZE } from '../sim/hotbar';
 import type { HotbarItem, Loadout, PlayerState, VaultAction } from '../sim/types';
-import { bankAboveLoadout, emptyLoadout, LOADOUT_MAX_KINDS, LOADOUT_MAX_KEEP } from '../sim/vault';
+import { VAULT_LEVELS, VAULT_MAX_LEVEL } from '../sim/constants';
+import { bankAboveLoadout, emptyLoadout, funds, isUnit as isUnitKind, itemUnits, LOADOUT_MAX_KEEP, vaultLevel, vaultSpec, vaultUpgradePrice } from '../sim/vault';
 import { ICONS, iconGroup } from './icons';
 import { bumpLoadout, cellCount, keepCashAction, loadoutKinds, moveAction, moveCount, vaultCells, type MoveMods } from './vaultUi';
 
@@ -39,6 +40,8 @@ export class VaultPanel {
   private loadoutTitle = el('div', 'vault-col-title');
   private loadoutKeep = el('input', 'cash-input');
   private loadoutBuy = el('input');
+  private levelText = el('div', 'vault-level-text');
+  private upgradeBtn = el('button', 'btn small vault-upgrade');
   private drag: Drag | null = null;
   private wheelAcc = 0;
   private sig = '';
@@ -81,6 +84,14 @@ export class VaultPanel {
     );
     const warn = el('div', 'vault-warn', DEATH_HINT);
     warn.dataset.testid = 'vault-death-hint';
+    const level = el('div', 'vault-level');
+    this.levelText.dataset.testid = 'vault-level';
+    this.upgradeBtn.type = 'button';
+    this.upgradeBtn.dataset.testid = 'vault-upgrade';
+    this.upgradeBtn.onclick = () => { if (this.upgradeBtn.getAttribute('aria-disabled') !== 'true') this.send({ upgrade: true }); };
+    this.upgradeBtn.addEventListener('mouseenter', () => { setText(this.info, this.upgradeBtn.title); this.info.classList.add('on'); });
+    this.upgradeBtn.addEventListener('mouseleave', () => { setText(this.info, VAULT_HINT); this.info.classList.remove('on'); });
+    level.append(this.levelText, this.upgradeBtn);
 
     const cols = el('div', 'vault-cols');
     const col = (title: HTMLElement, grid: HTMLElement, side: Side) => {
@@ -116,7 +127,7 @@ export class VaultPanel {
     lo.append(this.loadoutTitle, this.loadoutBox, opts);
 
     this.info.dataset.testid = 'vault-info';
-    this.root.replaceChildren(header, money, warn, cols, amountRow, lo, this.info);
+    this.root.replaceChildren(header, money, warn, level, cols, amountRow, lo, this.info);
     this.root.oncontextmenu = (e) => e.preventDefault(); // Ctrl-click on a Mac is a right click
     this.refresh(me, true);
   }
@@ -125,11 +136,25 @@ export class VaultPanel {
   refresh(me: PlayerState, force = false) {
     this.me = me;
     if (this.drag) return;
-    const sig = JSON.stringify([me.inv, me.vault, me.hotbar, me.loadout ?? null]);
+    const sig = JSON.stringify([me.inv, me.vault, me.hotbar, me.loadout ?? null, me.vaultLevel ?? 1]);
     if (!force && sig === this.sig) return;
     this.sig = sig;
     setText(this.carriedTitle, `Hotbar · $${Math.floor(me.inv.cash)} carried`);
-    setText(this.storedTitle, `Vault · $${Math.floor(me.vault.cash)} banked`);
+    const spec = vaultSpec(me), lv = vaultLevel(me);
+    setText(this.storedTitle, `Vault · $${Math.floor(me.vault.cash)} banked · ${itemUnits(me.vault)}/${spec.storage} items`);
+    const perMin = Math.floor(Math.min(me.vault.cash, spec.base) * spec.rate);
+    setText(this.levelText, `Vault Lv${lv} · ${Math.round(spec.rate * 100)}%/min interest on up to $${spec.base} (now +$${perMin}/min)${spec.remote ? ' · deposits from anywhere on your island (H)' : ''}`);
+    const price = vaultUpgradePrice(lv);
+    if (price === null) {
+      setText(this.upgradeBtn, `Lv${VAULT_MAX_LEVEL} · max`);
+      this.upgradeBtn.setAttribute('aria-disabled', 'true');
+      this.upgradeBtn.title = 'Fully upgraded';
+    } else {
+      const next = VAULT_LEVELS[lv];
+      setText(this.upgradeBtn, `Upgrade → Lv${lv + 1} · $${price}`);
+      this.upgradeBtn.setAttribute('aria-disabled', String(funds(me) < price));
+      this.upgradeBtn.title = `Lv${lv + 1}: ${Math.round(next.rate * 100)}%/min interest on up to $${next.base}, ${next.storage} item storage, ${next.kinds} loadout kinds${next.remote ? ', deposit from anywhere on your island (H)' : ''}${funds(me) < price ? ` · need $${price - funds(me)} more` : ''}`;
+    }
     const carried: HTMLElement[] = [];
     for (let i = 0; i < HOTBAR_SIZE; i++) {
       const k = me.hotbar[i];
@@ -235,6 +260,11 @@ export class VaultPanel {
     if (!d.moved) n = shift ? this.count(d, { shift: false, one: false, drag: false }, true) : this.count(d, { shift: false, one, drag: one });
     else if (target === to) n = this.count(d, { shift, one, drag: true });
     const a = moveAction(d.kind, n, d.from, d.from === 'carried' ? me.inv : me.vault);
+    if (a?.deposit && itemUnits(me.vault) + (isUnitKind(d.kind) ? 1 : n) > vaultSpec(me).storage) {
+      setText(this.info, `Vault full: Lv${vaultLevel(me)} holds ${vaultSpec(me).storage} items (upgrade for more)`);
+      this.info.classList.add('on');
+      return;
+    }
     if (a) this.send(a);
   }
 
@@ -277,7 +307,8 @@ export class VaultPanel {
 
   private renderLoadout(me: PlayerState) {
     const used = Object.values(this.draft.items).filter((n) => (n ?? 0) > 0).length;
-    setText(this.loadoutTitle, `Restock on respawn · ${used}/${LOADOUT_MAX_KINDS} kinds`);
+    const maxKinds = vaultSpec(me).kinds;
+    setText(this.loadoutTitle, `Restock on respawn · ${used}/${maxKinds} kinds`);
     const rows: HTMLElement[] = [];
     for (const kind of loadoutKinds(me.inv, me.vault, this.draft)) {
       const n = this.draft.items[kind] ?? 0;
@@ -290,9 +321,9 @@ export class VaultPanel {
         b.type = 'button';
         b.dataset.testid = `loadout-${id}-${kind}`;
         b.onclick = (e) => {
-          const next = bumpLoadout(this.draft, kind, d * (e.shiftKey ? 5 : 1));
+          const next = bumpLoadout(this.draft, kind, d * (e.shiftKey ? 5 : 1), maxKinds);
           if (next) this.editLoadout(next);
-          else if (d > 0 && n === 0) { setText(this.info, `A loadout holds ${LOADOUT_MAX_KINDS} kinds: take one out first`); this.info.classList.add('on'); }
+          else if (d > 0 && n === 0) { setText(this.info, `Lv${vaultLevel(me)} loadouts hold ${maxKinds} kinds: take one out first (or upgrade the vault)`); this.info.classList.add('on'); }
         };
         return b;
       };

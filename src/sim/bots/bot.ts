@@ -10,6 +10,7 @@ import type {
   BuildRequest, Difficulty, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
 } from '../types';
 import { funds } from '../economy';
+import { vaultLevel, vaultSpec, vaultUpgradePrice } from '../vault';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import { isRng, mulberry32 } from '../rng';
 import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
@@ -1479,12 +1480,16 @@ export class Bot {
         // Shops pay from the vault anywhere and carried cash drops on death: bank all but pocket money.
         const keep = this.P.vault.carry;
         const excess = me.inv.cash - keep;
-        if (excess < this.P.vault.bankMin) return 0;
         const close = c.enemy && c.enemyDist < 8;
         if (close) return 0;
+        // Rich enough for the next vault level (more interest, remote deposits): a trip to the vault to buy it.
+        if (this.wantsVaultUpgrade(me)) return this.P.vault.upgradeScore - dist2D(me.pos, home.vault) / 80;
+        if (excess < this.P.vault.bankMin) return 0;
         const leaving = c.reach || (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c);
         const want = 0.2 + Math.min(excess, 600) / 600 * (0.3 + 0.3 * t.caution + 0.2 * t.greed);
-        return want + (c.danger || this.intruder(c) ? 0.55 : 0) + (leaving ? 0.25 : 0) - dist2D(me.pos, home.vault) / 80;
+        // From vault level 2 a deposit works anywhere on my island: no walk.
+        const walk = vaultSpec(me).remote ? 0 : dist2D(me.pos, home.vault) / 80;
+        return want + (c.danger || this.intruder(c) ? 0.55 : 0) + (leaving ? 0.25 : 0) - walk;
       }
       case 'collect': {
         if (!c.homeReach) return 0;
@@ -1751,12 +1756,21 @@ export class Bot {
 
   private doBank(c: Ctx): Act {
     const me = c.me;
-    const walk = this.goTo(c.home.vault, 1.8);
-    if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > c.view.now) return walk;
+    const upgrade = this.wantsVaultUpgrade(me);
+    // Remote vault level: deposit from right here (on my island); an upgrade still needs the vault itself.
+    const remote = vaultSpec(me).remote && !upgrade;
+    const walk = remote ? IDLE : this.goTo(c.home.vault, 1.8);
+    if ((!remote && dist2D(me.pos, c.home.vault) > USE_RANGE) || me.busyUntil > c.view.now) return walk;
     const cash = Math.max(Math.floor(me.inv.cash - this.P.vault.carry), this.insuranceDue(me));
-    if (cash <= 0) { this.nextScoreAt = c.view.now; return walk; }
+    if (cash <= 0 && !upgrade) { this.nextScoreAt = c.view.now; return walk; }
     this.nextScoreAt = c.view.now + 1.2;
-    return { ...walk, vault: { deposit: { cash } } };
+    return { ...walk, vault: { ...(cash > 0 ? { deposit: { cash } } : {}), ...(upgrade ? { upgrade: true as const } : {}) } };
+  }
+
+  /** The next vault level is affordable with VaultParams.upgradeAt to spare (carried + banked). */
+  wantsVaultUpgrade(me: PlayerState): boolean {
+    const price = vaultUpgradePrice(vaultLevel(me));
+    return price !== null && funds(me) >= price + this.P.vault.upgradeAt[this.difficulty];
   }
 
   /** Grab the center island's gold (and free pieces, when they fit). */

@@ -12,7 +12,7 @@ import type { BotBrainInfo, MatchEvent, PieceState, PlayerState, Snapshot, Vec3 
  * spectator for the one player they follow (`follow`, vetted by net/interest.ts spectateTarget), plus
  * that player's bot brain when it's a bot (`brain`).
  */
-type Private = 'inv' | 'vault' | 'loadout' | 'hotbar' | 'locked' | 'bloom' | 'lastShotAt' | 'burst' | 'reloadUntil' | 'reloadSec' | 'reloadMag' | 'ads' | 'stamina';
+type Private = 'inv' | 'vault' | 'loadout' | 'vaultLevel' | 'hotbar' | 'locked' | 'bloom' | 'lastShotAt' | 'burst' | 'reloadUntil' | 'reloadSec' | 'reloadMag' | 'ads' | 'stamina';
 export type NetPlayer = Omit<PlayerState, Private> & Partial<Pick<PlayerState, Private>>;
 /** A live projectile on the wire: [id, kind (0 grenade, 1 charge, 2 rocket), x, y, z, vx, vy, vz]. */
 export type NetProjectile = [number, number, number, number, number, number, number, number];
@@ -119,12 +119,12 @@ export class SnapshotEncoder {
     if (followed) {
       // A spectator's view of the player they follow: their whole HUD, but nothing host-side.
       const o = out as Partial<PlayerState>;
-      delete o.vault; delete o.loadout; delete o.mv; delete o.busyUntil; delete o.nextFireAt; delete o.lastDamagedAt;
+      delete o.vault; delete o.loadout; delete o.vaultLevel; delete o.mv; delete o.busyUntil; delete o.nextFireAt; delete o.lastDamagedAt;
       out.stamina = Math.round(p.stamina);
       out.lastShotAt = r3(p.lastShotAt);
     } else if (!own) {
       delete out.stamina;
-      delete out.inv; delete out.vault; delete out.loadout; delete out.hotbar; delete out.locked; delete out.doorsBlocked;
+      delete out.inv; delete out.vault; delete out.loadout; delete out.vaultLevel; delete out.hotbar; delete out.locked; delete out.doorsBlocked;
       // Spread/recoil bookkeeping only drives your own crosshair.
       delete out.bloom; delete out.lastShotAt; delete out.burst;
       // Host-side bookkeeping a remote client never reads for other players (keeps 8 players under budget).

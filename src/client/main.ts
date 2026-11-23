@@ -1273,6 +1273,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       else if (station === 'shop' || station === 'potions') openPanel(station);
       else input.queue({ interact: true });
     },
+    bank: () => { if (hud.canBankHere() && hud.quickBank()) audio.ui('vault'); },
     place: () => { placeWantedAt = performance.now(); tryPlace(); },
     lockChange: (locked) => {
       if (!locked) closeWheel(); // Esc while the wheel is open lands here (the browser takes Esc first)

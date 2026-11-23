@@ -51,11 +51,11 @@ export function loadoutKinds(inv: Inventory, vault: Inventory, l: Loadout | unde
  * The loadout with `kind` changed by `delta` (clamped 0..its max). Null when it would add a kind past
  * LOADOUT_MAX_KINDS (or nothing changes).
  */
-export function bumpLoadout(l: Loadout, kind: HotbarItem, delta: number): Loadout | null {
+export function bumpLoadout(l: Loadout, kind: HotbarItem, delta: number, maxKinds = LOADOUT_MAX_KINDS): Loadout | null {
   const now = l.items[kind] ?? 0;
   const next = Math.max(0, Math.min(loadoutMax(kind), now + delta));
   if (next === now) return null;
-  if (now === 0 && Object.values(l.items).filter((n) => (n ?? 0) > 0).length >= LOADOUT_MAX_KINDS) return null;
+  if (now === 0 && Object.values(l.items).filter((n) => (n ?? 0) > 0).length >= maxKinds) return null;
   const items = { ...l.items };
   if (next > 0) items[kind] = next; else delete items[kind];
   return { ...l, items };

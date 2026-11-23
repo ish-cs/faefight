@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { LIFECYCLE, MEDKIT, PIECES, WEAPONS } from '../../src/sim/constants';
+import { LIFECYCLE, MEDKIT, PIECES, VAULT_LEVELS, VAULT_MAX_LEVEL, WEAPONS } from '../../src/sim/constants';
 import { buy, vaultTransfer } from '../../src/sim/economy';
 import { Match } from '../../src/sim/match';
 import { newPlayer } from '../../src/sim/player';
 import { NO_INPUT, type PlayerInput, type Snapshot } from '../../src/sim/types';
-import { bankAboveLoadout, funds, LOADOUT_MAX_KINDS, LOADOUT_MAX_PIECES, pay, restockFromVault, sanitizeLoadout, takeVaultCash } from '../../src/sim/vault';
+import { bankAboveLoadout, funds, interestDue, itemUnits, LOADOUT_MAX_KINDS, LOADOUT_MAX_PIECES, pay, payInterest, restockFromVault, sanitizeLoadout, takeVaultCash, upgradeVault, vaultLevel, vaultMove, vaultSpec } from '../../src/sim/vault';
 import { sanitizeInput } from '../../src/net/sanitize';
 import { add, forward, scale, v3 } from '../../src/sim/vec';
 import { unarmed } from './unarmed';
@@ -93,9 +93,9 @@ describe('restock loadout (C)', () => {
     expect(sanitizeLoadout(null)).toBeNull();
     const many = { wood: 1, metal: 1, steel: 1, medkit: 1, grenade: 1 };
     expect(Object.keys(many).length).toBeGreaterThan(LOADOUT_MAX_KINDS);
-    expect(sanitizeLoadout({ items: many, keep: 0, buy: false })).toBeNull();
+    expect(sanitizeLoadout({ items: many, keep: 0, buy: false }, LOADOUT_MAX_KINDS)).toBeNull();
     // Zero counts don't count against the cap.
-    expect(sanitizeLoadout({ items: { ...many, grenade: 0 }, keep: 0, buy: false })?.items).toEqual({ wood: 1, metal: 1, steel: 1, medkit: 1 });
+    expect(sanitizeLoadout({ items: { ...many, grenade: 0 }, keep: 0, buy: false }, LOADOUT_MAX_KINDS)?.items).toEqual({ wood: 1, metal: 1, steel: 1, medkit: 1 });
   });
 
   test('the wire sanitizer passes a loadout-only vault action', () => {
@@ -232,5 +232,88 @@ describe('stack splitting (vault moves of part of a stack)', () => {
     expect(p.hotbar[3]).toBe('wood');
     expect(vaultTransfer(p, { withdraw: { pieces: { wood: 4 } } }).ok).toBe(true);
     expect([p.inv.pieces.wood, p.vault.pieces.wood]).toEqual([19, 6]);
+  });
+});
+
+describe('vault levels and interest (B, E)', () => {
+  test('interest: rate × banked (up to the level base) per minute, paid every 10 s in whole dollars', () => {
+    const p = player(0);
+    p.vault.cash = 600;
+    // Lv1: 2%/min of $600 = $12/min = $2 per 10 s.
+    expect(interestDue(p)).toBe(2);
+    expect(payInterest(p)).toBe(2);
+    expect(p.vault.cash).toBe(602);
+    // Capped by the level base ($750 at Lv1: $15/min = $2.5 → 2 per payout).
+    p.vault.cash = 100_000;
+    expect(interestDue(p)).toBe(Math.floor(VAULT_LEVELS[0].base * VAULT_LEVELS[0].rate / 6));
+    // Higher levels earn more and on more.
+    p.vaultLevel = 3;
+    expect(interestDue(p)).toBe(Math.floor(VAULT_LEVELS[2].base * VAULT_LEVELS[2].rate / 6));
+    expect(interestDue(p)).toBeGreaterThan(10);
+    // The host's economy speed scales it; nothing banked, nothing earned.
+    expect(interestDue(p, 2)).toBe(Math.floor(VAULT_LEVELS[2].base * VAULT_LEVELS[2].rate / 3));
+    p.vault.cash = 0;
+    expect(interestDue(p)).toBe(0);
+  });
+
+  test('upgrade: pays carried first then vault; max level rejects', () => {
+    const p = player(100);
+    p.vault.cash = 1000;
+    expect(vaultLevel(p)).toBe(1);
+    expect(upgradeVault(p).ok).toBe(true);
+    expect([vaultLevel(p), p.inv.cash, p.vault.cash]).toEqual([2, 0, 1100 - VAULT_LEVELS[1].price]);
+    expect(upgradeVault(p).ok).toBe(true);
+    expect(vaultLevel(p)).toBe(VAULT_MAX_LEVEL);
+    const before = p.vault.cash;
+    expect(upgradeVault(p).ok).toBe(false);
+    expect(p.vault.cash).toBe(before);
+    const poor = player(10);
+    expect(upgradeVault(poor).ok).toBe(false);
+  });
+
+  test('level effects: storage, loadout kinds, remote deposits', () => {
+    const isl = { center: v3(0, 0, 0), radius: 20 } as Parameters<typeof vaultMove>[1];
+    const p = player(0);
+    p.inv.pieces.wood = 50; p.inv.pieces.metal = 80;
+    p.hotbar[0] = 'wood'; p.hotbar[1] = 'metal';
+    // Storage: Lv1 holds 100 item units.
+    expect(vaultMove(p, isl, true, { deposit: { pieces: { metal: 80 } } }).ok).toBe(true);
+    expect(vaultMove(p, isl, true, { deposit: { pieces: { wood: 21 } } }).ok).toBe(false);
+    expect(itemUnits(p.vault)).toBe(80);
+    expect(vaultMove(p, isl, true, { deposit: { pieces: { wood: 20 } } }).ok).toBe(true);
+    // Quick-bank only takes what fits.
+    p.inv.cash = 30;
+    expect(bankAboveLoadout(p)).toEqual({ cash: 30 });
+    // Loadout kinds: 4 at Lv1, 6 at Lv2.
+    const six = { items: { wood: 1, metal: 1, steel: 1, medkit: 1, grenade: 1, trap: 1 }, keep: 0, buy: false };
+    expect(sanitizeLoadout(six, vaultSpec(p).kinds)).toBeNull();
+    // Remote: Lv1 deposits only at the vault, Lv2 anywhere on your island (never off it); withdrawals need the vault.
+    p.pos = v3(10, 0, 0);
+    expect(vaultMove(p, isl, false, { deposit: { cash: 10 } }).ok).toBe(false);
+    p.vaultLevel = 2;
+    expect(sanitizeLoadout(six, vaultSpec(p).kinds)?.items).toEqual(six.items);
+    expect(vaultMove(p, isl, false, { deposit: { cash: 10 } }).ok).toBe(true);
+    expect(vaultMove(p, isl, false, { withdraw: { cash: 5 } }).ok).toBe(false);
+    p.pos = v3(40, 0, 0);
+    expect(vaultMove(p, isl, false, { deposit: { cash: 10 } }).ok).toBe(false);
+    expect(vaultSpec(p).storage).toBeGreaterThan(VAULT_LEVELS[0].storage);
+  });
+
+  test('in a match: interest accrues on banked cash; the upgrade is bought at the vault', async () => {
+    const m = await Match.create(humans1v1);
+    unarmed(m);
+    const isl = m.map[0];
+    m.debugGive(1, { cash: 1000 });
+    m.debugTeleport(1, add(isl.vault, scale(forward(isl.bunker.facingYaw), 1)));
+    m.tick(new Map());
+    let snap = m.tick(inputs(1, { vault: { deposit: { cash: 1000 }, upgrade: true } }));
+    expect(snap.players[0].vaultLevel).toBe(2);
+    const total = 1050 - VAULT_LEVELS[1].price;
+    expect(snap.players[0].inv.cash + snap.players[0].vault.cash).toBe(total);
+    expect(snap.events.some((e) => e.type === 'vaultUpgrade')).toBe(true);
+    const banked = snap.players[0].vault.cash;
+    for (let i = 0; i < 30 * 61; i++) snap = m.tick(new Map());
+    // ~1 min at Lv2 (3%/min): 6 payouts of floor(banked × 0.03 / 6).
+    expect(snap.players[0].vault.cash - banked).toBe(6 * Math.floor(banked * VAULT_LEVELS[1].rate / 6));
   });
 });

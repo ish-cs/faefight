@@ -12,7 +12,7 @@ import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
 import { dragOutcome } from './hotbarDrag';
 import { VaultPanel } from './vaultPanel';
-import { bankAboveLoadout, funds } from '../sim/vault';
+import { bankAboveLoadout, funds, vaultSpec } from '../sim/vault';
 import { SEALED_OUTSIDE_TEXT } from './qol/alerts';
 import { FEED_FADE_MS, FEED_LIFE_MS, FeedList, feedEntries, feedText, type FeedEntry, type FeedMarker } from './qol/killFeed';
 
@@ -227,7 +227,7 @@ export class Hud {
   private panel = el('div', 'panel');
   private panelKind: 'shop' | 'potions' | 'vault' | null = null;
   private vaultPanel = new VaultPanel(this.panel, (a) => this.act.vault(a));
-  /** Under the cash: what's banked, and a warning when a lot is carried (it drops on death). */
+  /** Under the cash: a warning when a lot is carried (it drops on death; the home strip already shows the vault). */
   private bankNote = el('div', 'bank-note');
 
   constructor(parent: HTMLElement, private act: HudActions) {
@@ -596,7 +596,7 @@ export class Hud {
     this.lastCash = inv.cash;
     // Carried cash drops on death; the vault never does (and shops take it). Warn once a fair sum is carried.
     const risky = !this.practice && inv.cash >= CARRY_WARN;
-    setText(this.bankNote, this.practice ? '' : `Vault $${Math.floor(me.vault.cash)}${risky ? ` · $${Math.floor(inv.cash)} carried drops if you die` : ''}`);
+    setText(this.bankNote, risky ? `$${Math.floor(inv.cash)} carried drops if you die · bank it` : '');
     this.bankNote.classList.toggle('risk', risky);
     this.updateStamina(watching ? me.stamina : ctx.stamina ?? me.stamina, me.alive);
     setText(this.watchTag, watching ? `${me.isBot ? 'BOT · ' : ''}${me.name}` : '');
@@ -786,6 +786,8 @@ export class Hud {
         this.addFeed('Sudden death: generators stopped, the storm is closing in', true);
         this.stormWarnUntil = performance.now() + 4000;
         this.stormWarn.style.display = 'flex';
+      } else if (e.type === 'vaultUpgrade' && e.data.player === this.humanId) {
+        this.addFeed(`Vault upgraded to Lv${e.data.level}`);
       } else if (e.type === 'restock' && e.data.player === this.humanId) {
         const d = e.data as { moved: number; bought: number; spent: number; cash: number };
         const parts = [d.moved ? `${d.moved} from the vault` : '', d.bought ? `${d.bought} bought ($${d.spent})` : '', d.cash ? `$${d.cash} cash` : ''].filter(Boolean);
@@ -1078,6 +1080,16 @@ export class Hud {
   private refreshVault() {
     const me = this.panelMe ?? this.me;
     if (me) this.vaultPanel.refresh(me);
+  }
+
+  /** At my vault, or (remote vault level) anywhere on my island. */
+  canBankHere(): boolean {
+    const me = this.me, isl = me ? this.map[me.island] : undefined;
+    if (!me || !isl || !me.alive) return false;
+    if (dist2D(isl.vault, me.pos) <= ECONOMY.interactRadius) return true;
+    if (vaultSpec(me).remote && dist2D(isl.center, me.pos) <= isl.radius + 1) return true;
+    this.addFeed('Quick-bank works at your vault (from vault Lv2: anywhere on your island)');
+    return false;
   }
 
   /** Hold E at the vault (or the panel's button): everything above the restock loadout goes in. */

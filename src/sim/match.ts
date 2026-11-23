@@ -1,9 +1,9 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, grantStartPistol, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
+import { BUILD, DT, ECONOMY, TICK_HZ, VAULT_INTEREST_SEC, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
-import { sanitizeLoadout } from './vault';
+import { payInterest, sanitizeLoadout, upgradeVault, vaultMove, vaultSpec } from './vault';
 import { islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
@@ -341,6 +341,9 @@ export class Match implements MatchApi {
     this.props?.tick(now, this.s.players.values(), this.s.pieces, this.events, this.s.waterY);
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT * this.settings.genMult, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
     tickCenter(this.center, DT * this.settings.genMult, !this.s.suddenDeath);
+    // Vault interest (sim/vault.ts): every VAULT_INTEREST_SEC, like the generators none in sudden death.
+    if (!this.s.suddenDeath && this.tickNo > 0 && this.tickNo % (VAULT_INTEREST_SEC * TICK_HZ) === 0)
+      for (const p of this.s.players.values()) if (!p.eliminated) payInterest(p, this.settings.genMult);
     for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
     this.events.push(...this.cosmetics.onEvents(this.events, now));
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT, this.settings.suddenDeathSec));
@@ -591,7 +594,7 @@ export class Match implements MatchApi {
   /** A restock loadout (sim/vault.ts) can be set from anywhere, busy, dead or alive: it only acts on respawn. */
   private setLoadout(p: PlayerState, input: PlayerInput) {
     if (!input.vault?.loadout) return;
-    const l = sanitizeLoadout(input.vault.loadout);
+    const l = sanitizeLoadout(input.vault.loadout, vaultSpec(p).kinds);
     if (l) p.loadout = l; else console.warn(`match: player ${p.id} sent a bad loadout, ignored`);
   }
 
@@ -634,11 +637,14 @@ export class Match implements MatchApi {
     tickReload(p, now);
     // Vault moves aren't held up by the busy time (they set it: hands full at the vault for a second), so the vault
     // panel's drags go through back to back; they're only accepted at your own vault.
-    if (input.vault?.deposit || input.vault?.withdraw) {
-      const v = this.map[p.island].vault;
-      if (dist2D(v, p.pos) <= ECONOMY.interactRadius && Math.abs(v.y - p.pos.y) < 2) {
-        const { deposit, withdraw } = input.vault;
-        if (vaultTransfer(p, { deposit, withdraw }).ok) p.busyUntil = Math.max(p.busyUntil, now + ECONOMY.vaultSec);
+    if (input.vault?.deposit || input.vault?.withdraw || input.vault?.upgrade) {
+      const home = this.map[p.island], v = home.vault;
+      const atVault = dist2D(v, p.pos) <= ECONOMY.interactRadius && Math.abs(v.y - p.pos.y) < 2;
+      const { deposit, withdraw, upgrade } = input.vault;
+      if ((deposit || withdraw) && vaultMove(p, home, atVault, { deposit, withdraw }).ok) p.busyUntil = Math.max(p.busyUntil, now + ECONOMY.vaultSec);
+      if (upgrade && atVault) {
+        const r = upgradeVault(p);
+        if (r.ok) this.events.push({ t: now, type: 'vaultUpgrade', data: { player: p.id, level: p.vaultLevel } });
       }
     }
     if (now < (busyBefore ?? p.busyUntil)) return;
