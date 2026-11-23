@@ -289,9 +289,8 @@ export const DRIVE: DriveParams = {
   stallDist: 2.5,
   stallBanSec: 20,
   fireRangeMult: 2,
-  // Hard and PRO (measured: ~80% of 8-PRO FFA hits were drive-by shots across water at ~40 m while bridging/sealing;
-  // Hard too since the start pistol: holding fire across the water keeps it ahead of Medium in FFAs. No effect in a 1v1).
-  crossFire: D(Infinity, Infinity, 25, 25),
+  // PRO only (measured: ~80% of 8-PRO FFA hits were drive-by shots across water at ~40 m while bridging/sealing).
+  crossFire: D(Infinity, Infinity, Infinity, 25),
   sealBonus: 0.35,
   sealedHunt: 0.6,
   sealedFocus: 1.6,
