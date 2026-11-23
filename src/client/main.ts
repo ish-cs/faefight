@@ -1,6 +1,6 @@
 import { displayRefresh, FrameQueue, frameBudgetMs } from './refresh';
 import './style.css';
-import type { Object3D } from 'three/webgpu';
+import type { Intersection, Object3D } from 'three/webgpu';
 import type { HostMsg, Slot, ViewExtras } from '../net/protocol';
 import { SnapshotDecoder, type NetSnapshot } from '../net/snapshotCodec';
 import { WireDecoder } from '../net/wire';
@@ -1250,18 +1250,34 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const qol = new QolHud(hud.root, { quickBuy: (item) => buyItem(item), play: (cue) => audio.alert(cue) }, { online, isHost: !!onChat });
   qol.lastBuy = loadPrefs().lastBuy;
   let rejoinTouchedAt = 0;
-  // Killcam: replays your death from the killer's view during the respawn wait (Space skips).
+  // Killcam: replays your death as a short cinematic during the respawn wait (any key / click skips).
   const killcam = new Killcam(hud.root);
-  let killcamCam: InstanceType<typeof ThirdPersonCamera> | null = null;
   let killcamWas = false;
+  /** The camera's FOV before the killcam's push-in (restored when it ends). */
+  let killcamFov = 0;
   /** Whose death the killcam is showing (you, or the player you follow). */
   let killcamFor: number | null = null;
-  window.addEventListener('keydown', (e) => {
-    if (!killcam.active || e.code !== 'Space' || e.repeat || e.target instanceof HTMLInputElement) return;
+  const MODIFIER_KEYS = new Set(['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight']);
+  // The killcam camera's view of the scene (camPath.Raycast): no allocations per ray.
+  const kcRay = new THREE.Raycaster(), kcO = new THREE.Vector3(), kcD = new THREE.Vector3();
+  const kcHits: Intersection[] = [];
+  const killcamRay = (o: { x: number; y: number; z: number }, d: { x: number; y: number; z: number }, far: number): number | null => {
+    kcRay.set(kcO.set(o.x, o.y, o.z), kcD.set(d.x, d.y, d.z));
+    kcRay.far = far;
+    kcHits.length = 0;
+    kcRay.intersectObjects(renderer.collidables, false, kcHits);
+    return kcHits.length ? kcHits[0].distance : null;
+  };
+  const skipKillcam = (e: Event) => {
+    if (!killcam.active || !killcam.trySkip()) return;
     e.preventDefault();
-    e.stopImmediatePropagation(); // not a spectator "fly up"
-    killcam.skip();
+    e.stopImmediatePropagation(); // the skipping key / click does nothing else (no spectator "fly up")
+  };
+  window.addEventListener('keydown', (e) => {
+    if (!killcam.active || e.repeat || MODIFIER_KEYS.has(e.code) || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    skipKillcam(e);
   }, { capture: true });
+  window.addEventListener('pointerdown', (e) => { if (killcam.active && !(e.target instanceof Element && e.target.closest('button, input'))) skipKillcam(e); }, { capture: true });
 
   const input = new InputController(canvas, {
     interact: () => {
@@ -1683,7 +1699,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // Respawned: the sim turned me to face out of my bunker's front door. Snap camera + aim to it once.
     if (adoptSpawnLook(input, s.events, humanId)) console.info(`[main] respawn: facing front door (yaw ${input.yaw.toFixed(2)})`);
     audio.snapshot(s);
-    commentary.onSnapshot(s, watching || spectateChosen);
+    commentary.onSnapshot(s, watching || spectateChosen, killcam.active); // no new lines over a killcam
     if (first) {
       const me = s.players.find((p) => p.id === humanId);
       if (me) { input.yaw = me.yaw; input.pitch = me.pitch; input.selected = me.selected; }
@@ -1723,7 +1739,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const respawnIn = victim && victim.respawnAt !== null && !victim.eliminated ? victim.respawnAt - s.time : null;
       const k = recap?.killer;
       const started = !backend.replay && killcam.start(died.t, killer, respawnIn,
-        k ? { killerName: k.name, island: k.island, weapon: recap.weapon, distance: recap.distance, headshot: recap.headshot } : null);
+        k ? { killerName: k.name, island: k.island, weapon: recap.weapon, distance: recap.distance, headshot: recap.headshot, killerHp: recap.killerHp, killerShield: recap.killerShield } : null,
+        performance.now(), viewer);
       if (started) {
         killcamFor = viewer;
         if (viewer === humanId) hud.setEndVisible(false); // eliminated: the end screen waits for the killcam
@@ -1863,9 +1880,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       loot: () => renderer.lootView.info(),
       audio: () => audio.stats(),
       commentary: () => commentary.commentator.log,
+      commentaryVoice: () => ({ state: commentary.neuralState, neural: commentary.tts.neuralActive, synthMs: commentary.tts.neural?.synthMs ?? [] }),
+      commentaryOn: (on: boolean) => settings.update((d) => { d.audio.commentaryOn = on; }),
       killcam: () => killcam.info(),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
+      updateSettings: (mutate: Parameters<typeof settings.update>[0]) => settings.update(mutate),
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
       predicted: () => ({ active: !!predictor?.active, pos: lastRendered, seq: moveSeq, stats: predictor?.stats ?? null, pending: predictor?.pending ?? 0 }),
       frames: () => frameStats(),
@@ -2047,14 +2067,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (unsent.length > MAX_CMDS_PER_MSG) unsent = unsent.slice(-MAX_CMDS_PER_MSG);
     const predicting = !!predictor && predictor.renderState(liveCmd(moveSeq + 1), moveAcc / DT, dt, predicted);
     renderer.setLocal(predicting ? predicted : null);
-    hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead && !practice?.open ? '' : 'none';
+    hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead && !practice?.open && !killcam.active ? '' : 'none';
 
     const me = snap?.players.find((p) => p.id === humanId);
     if (wheel.open && (!input.enabled || chat.open)) closeWheel();
     // No player of our own (spectating host / handed to a bot), dead (respawning or eliminated), or free
     // fly picked on the end screen: invisible spectator camera.
     const spectating = replay ? !!snap : !!snap && (watching || (!!me && (!me.alive || spectateChosen)));
-    const kc = killcam.active ? killcam.frame(now) : null;
+    const kc = killcam.active ? killcam.frame(now, killcamRay) : null;
     if (snap && killerLock.pending && !kc && !bodyCam.active(killerLock.pending.victim, now / 1000)) {
       // Killcam over: lock onto the killer (unless the spectator picked someone meanwhile).
       const r = killerLock.resolve(snap.players, humanId, spectator.manualAt);
@@ -2076,9 +2096,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         if (next !== null) { spectator.mode = 'follow'; spectator.followId = next; }
       }
     }
+    if (kc && !killcamWas) { killcamFov = renderer.camera.fov; audio.killcamDuck(true); }
     if (!kc && killcamWas) {
       // Killcam over: back to the live world; the normal death flow (free-fly, end screen) carries on.
       renderer.setReplay(null);
+      renderer.gunFx.killBeam(-1, null, null, 0);
+      if (renderer.camera.fov !== killcamFov) { renderer.camera.fov = killcamFov; renderer.camera.updateProjectionMatrix(); }
+      audio.killcamDuck(false);
       if (!spectateChosen) hud.setEndVisible(true);
     }
     killcamWas = !!kc;
@@ -2090,8 +2114,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderer.characters.hiddenId = -1;
       renderer.setGhost(null);
       aim = null;
-      killcamCam ??= new ThirdPersonCamera(renderer.camera, () => renderer.collidables);
-      killcamCam.update(feet.set(kc.feet.x, kc.feet.y, kc.feet.z), kc.yaw, kc.pitch, dt);
+      const cam = renderer.camera;
+      cam.position.set(kc.cam.x, kc.cam.y, kc.cam.z);
+      cam.up.set(0, 1, 0);
+      cam.lookAt(kc.look.x, kc.look.y, kc.look.z); // world up: a level horizon
+      const fov = killcamFov * kc.zoom;
+      if (Math.abs(cam.fov - fov) > 1e-3) { cam.fov = fov; cam.updateProjectionMatrix(); }
+      renderer.gunFx.killBeam(killcam.killer, kc.beam?.from ?? null, kc.beam?.to ?? null, kc.beam?.k ?? 0);
+      if (kc.impact) audio.killcamImpact(kc.headshot);
     } else if (spectating) {
       spectator.enter(renderer.camera.position);
       renderer.characters.hiddenId = replay ? -1 : humanId; // a replay shows everyone

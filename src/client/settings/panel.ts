@@ -6,9 +6,11 @@ import {
   rebind, setKeymapSuspended, unbind,
 } from '../keymap';
 import {
-  CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, GEN_ALERT_PCTS, LIMITS, QUALITIES, type Settings, settings,
+  CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, GEN_ALERT_PCTS, LIMITS, QUALITIES, type Settings, settings, VOICE_ENGINES,
 } from './store';
 import type { Quality } from '../world/sky';
+import { availableVoices, testVoice } from '../cinematic/commentary/tts';
+import { NEURAL_VOICES, neuralEngine, voiceTester } from '../cinematic/commentary/neural';
 
 const PERF_STATS = ['off', 'fps', 'detailed'] as const;
 const PERF_STATS_LABEL: Record<(typeof PERF_STATS)[number], string> = { off: 'Off', fps: 'FPS', detailed: 'Detailed' };
@@ -271,6 +273,34 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     slider('Commentary volume', 'Game sound dips a little while the commentator talks', 'set-commentary', 0, 1, 0.05, () => a().commentary, (x) => set((d) => { d.audio.commentary = x; }), pct);
     toggle('Captions', 'Show what the commentator says on screen', 'set-captions', () => a().captions, (x) => set((d) => { d.audio.captions = x; }));
     toggle('While spectating', 'Also commentate when you spectate a match', 'set-commentary-spectate', () => a().commentarySpectate, (x) => set((d) => { d.audio.commentarySpectate = x; }));
+    // The engine choice only shows in a build that ships a neural voice (neuralEngine).
+    if (neuralEngine.makeWorker) segmented('Voice engine', 'Neural: a free natural voice, downloaded once (~92 MB). Browser: your system voices', 'set-voice-engine',
+      VOICE_ENGINES, (e) => (e === 'neural' ? 'Neural' : 'Browser'), () => a().voiceEngine, (e) => set((d) => { d.audio.voiceEngine = e; }), render);
+    // Voice per commentator. Neural: the Kokoro voices. Browser: the best installed English voices (macOS: add
+    // Premium/Enhanced ones in System Settings → Accessibility → Spoken Content → Manage Voices). '' = Auto.
+    const neural = a().voiceEngine === 'neural' && !!neuralEngine.makeWorker;
+    const voices = neural ? ['', ...NEURAL_VOICES.map((v) => v.id)] : ['', ...availableVoices().slice(0, 14)];
+    const label = (v: string) => (!v ? 'Auto' : neural ? NEURAL_VOICES.find((n) => n.id === v)?.label ?? v : v.replace(/\s*\((English|en)[^)]*\)/i, ''));
+    const voiceRow = (title: string, persona: 'pbp' | 'colour', testid: string, get: () => string, put: (v: string) => void) => {
+      const r = segmented(title, persona === 'pbp' ? 'Calls the action' : 'Analysis, strategy and quiet moments', testid, voices, label, get, put);
+      r.classList.add('set-voice-row');
+      const test = el('button', 'btn small set-voice-test', 'Test voice');
+      test.dataset.testid = `${testid}-test`;
+      test.onclick = () => {
+        const au = a();
+        // The neural voice if it's loaded (Test also starts loading it); else the browser voice.
+        if (neural && voiceTester.neural?.(persona, get())) return;
+        testVoice(persona, neural ? '' : get(), au.muted ? 0 : au.commentary * au.master);
+      };
+      r.append(test);
+    };
+    if (neural) {
+      voiceRow('Play-by-play voice', 'pbp', 'set-voice-pbp', () => a().neuralPbp, (v) => set((d) => { d.audio.neuralPbp = v; }));
+      voiceRow('Colour voice', 'colour', 'set-voice-colour', () => a().neuralColour, (v) => set((d) => { d.audio.neuralColour = v; }));
+    } else {
+      voiceRow('Play-by-play voice', 'pbp', 'set-voice-pbp', () => a().voicePbp, (v) => set((d) => { d.audio.voicePbp = v; }));
+      voiceRow('Colour voice', 'colour', 'set-voice-colour', () => a().voiceColour, (v) => set((d) => { d.audio.voiceColour = v; }));
+    }
     section('Output');
     toggle('Mute', `Also on ${keyLabel(settings.get().controls.keys.mute[0] ?? '') || '—'} in game`, 'set-mute', () => a().muted, (x) => set((d) => { d.audio.muted = x; }));
     resetBtn('Reset audio to defaults', () => settings.reset('audio'));
@@ -303,6 +333,7 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     paint();
     section('Feedback');
     toggle('Damage numbers', 'Floating numbers over players you hit', 'set-dmgnums', () => g().damageNumbers, (x) => set((d) => { d.gameplay.damageNumbers = x; }));
+    toggle('Island beacons', "A light beam in each player's colour over their bunker (thin and flickering while sealed)", 'set-beacons', () => g().islandBeacons, (x) => set((d) => { d.gameplay.islandBeacons = x; }));
     section('Alerts');
     segmented('Generator alert', 'Soft ping + toast when your home generator reaches this', 'set-gen-alert', GEN_ALERT_PCTS,
       (x) => (x === 100 ? 'Full' : x === 0 ? 'Off' : `${x}%`), () => g().genAlertPct, (x) => set((d) => { d.gameplay.genAlertPct = x; }));
