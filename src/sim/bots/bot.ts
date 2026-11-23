@@ -1234,10 +1234,8 @@ export class Bot {
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       // Heals to carry; with the storm coming in, no new ones (the decks and getting inside the ring come first).
-      // Hurt with nothing to heal with: one medkit even below the stock's cash line (a strong player patches up before
-      // heading back out, instead of walking out on low hp).
       medkits: (this.healWant = this.stormPrep(c.view) ? Math.min(hpHealsHeld(c.me), healStock(total, this.difficulty, this.P.heal))
-        : Math.max(healStock(total, this.difficulty, this.P.heal), c.me.hp <= this.P.heal.safeHp[this.difficulty] && hpHealsHeld(c.me) === 0 ? 1 : 0)),
+        : healStock(total, this.difficulty, this.P.heal)),
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
       // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
