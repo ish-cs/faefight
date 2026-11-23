@@ -30,6 +30,22 @@ export const PIECES: Record<PieceKind, PieceSpec> = {
   container: { w: 6, h: 2.6, d: 2.4, hp: 2000, price: 300, placeSec: 1.0 },
 };
 
+/** A ramp is a thin sloped deck, open underneath (walk and shoot under it): the slab's vertical thickness (m). */
+export const RAMP_SLAB = 0.2;
+
+/**
+ * The ramp's collider (sim, prediction, debris) and ghost: piece-local convex hull points (origin at the base centre).
+ * Top face: the slope, y=0 at z=-d/2 up to y=h at z=+d/2. Bottom face: RAMP_SLAB lower, clipped at y=0 near the low
+ * edge (so the slab never dips below its base). Profile (y,z): (−d/2,0) → (d/2,h) → (d/2,h−T) → (−d/2+run,0).
+ */
+export function rampHull(): Float32Array {
+  const { w, h, d } = PIECES.ramp;
+  const x = w / 2, z = d / 2, run = (RAMP_SLAB * d) / h;
+  const pts: number[] = [];
+  for (const sx of [-x, x]) pts.push(sx, 0, -z, sx, h, z, sx, h - RAMP_SLAB, z, sx, 0, -z + run);
+  return new Float32Array(pts);
+}
+
 /** Spread cone half-angles in degrees. Bloom grows per shot and recovers at `recover` deg/s. */
 export type SpreadSpec = {
   base: number; ads: number; perShot: number; max: number; recover: number;

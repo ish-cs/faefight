@@ -1,5 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { CHARGE, GRENADE, PIECES, PLAYER } from '../../sim/constants';
+import { CHARGE, GRENADE, PIECES, PLAYER, rampHull } from '../../sim/constants';
 import { bunkerWallBoxes, type MapDef } from '../../sim/map';
 import { CENTER_PROP_HALF, centerPropYaw, PROP_HALF } from '../../sim/physics';
 import type { PieceState, Vec3 } from '../../sim/types';
@@ -208,8 +208,7 @@ export class DebrisSim {
       const s = PIECES[pc.kind];
       let desc: RAPIER.ColliderDesc | null;
       if (pc.kind === 'ramp') {
-        const w = s.w / 2, d = s.d / 2;
-        desc = RAPIER.ColliderDesc.convexHull(new Float32Array([-w, 0, -d, w, 0, -d, -w, 0, d, w, 0, d, -w, s.h, d, w, s.h, d]));
+        desc = RAPIER.ColliderDesc.convexHull(rampHull());
         if (!desc) { console.warn('[debris] ramp hull failed'); continue; }
         desc.setTranslation(pc.pos.x, pc.pos.y, pc.pos.z);
       } else desc = RAPIER.ColliderDesc.cuboid(s.w / 2, s.h / 2, s.d / 2).setTranslation(pc.pos.x, pc.pos.y + s.h / 2, pc.pos.z);
