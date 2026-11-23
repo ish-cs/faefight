@@ -74,22 +74,44 @@ export type GameOut = {
   lateKills?: number; elims?: number; credited?: number; spoils?: number;
 };
 
+/** What src/sim/bots/params.ts exports, depending on the ref (the trainer branch adds sanitize/toBotParams). */
+type ParamsModule = {
+  withParams?: (over: Record<string, number>) => unknown;
+  sanitize?: (p: Record<string, number>) => Record<string, number>;
+  toBotParams?: (flat: Record<string, number>) => unknown;
+};
+
+/**
+ * A params file (`{ params: { 'drive.push.pro': 0.4, ... } }` or the flat map itself) as the BotParams a Bot takes.
+ * Main's params.ts has withParams (flat overrides on the defaults; unknown keys throw); a trainer ref clamps into
+ * its search box first (sanitize) and builds with toBotParams. Fails loudly if the module has neither.
+ */
+export function paramsFromJson(mod: ParamsModule, json: unknown): unknown {
+  if (!json || typeof json !== 'object') throw new Error('measure: params file is not a JSON object');
+  const j = json as { params?: Record<string, number> } & Record<string, unknown>;
+  const flat = (j.params ?? j) as Record<string, number>;
+  for (const [k, v] of Object.entries(flat)) if (typeof v !== 'number') throw new Error(`measure: params file: ${k} is not a number`);
+  if (mod.sanitize && mod.toBotParams) return mod.toBotParams(mod.sanitize(flat));
+  if (mod.withParams) return mod.withParams(flat);
+  throw new Error('measure: --params given but src/sim/bots/params.ts exports neither withParams nor sanitize/toBotParams');
+}
+
+export async function loadParamsFile(paramsPath: string): Promise<unknown> {
+  // Variable specifier: params.ts exists only on refs with the tunable bot (tsc must pass on refs without it).
+  const paramsModule = '../../src/sim/bots/params';
+  let mod: ParamsModule;
+  try { mod = await import(/* @vite-ignore */ paramsModule); } catch (e) {
+    throw new Error(`measure: --params given but this ref has no src/sim/bots/params.ts (${(e as Error).message})`);
+  }
+  return paramsFromJson(mod, JSON.parse(fs.readFileSync(paramsPath, 'utf8')));
+}
+
 async function runOne(scenario: Scenario, seed: number, paramsPath: string | null): Promise<GameOut> {
   const { Match } = await import('../../src/sim/match');
   const { Bot } = await import('../../src/sim/bots/bot');
   const { LIFECYCLE, TICK_HZ } = await import('../../src/sim/constants');
   if (LIFECYCLE.suddenDeathAt !== SD) throw new Error(`measure: sudden death is at ${LIFECYCLE.suddenDeathAt}s, script assumes ${SD}s — update SD`);
-  let params: unknown = undefined;
-  if (paramsPath) {
-    let mod: { sanitize: (p: Record<string, number>) => unknown };
-    // Variable specifier: params.ts exists only on refs with the trainable bot (tsc must pass on refs without it).
-    const paramsModule = '../../src/sim/bots/params';
-    try { mod = await import(/* @vite-ignore */ paramsModule); } catch (e) {
-      throw new Error(`measure: --params given but this ref has no src/sim/bots/params.ts (${(e as Error).message})`);
-    }
-    const j = JSON.parse(fs.readFileSync(paramsPath, 'utf8')) as { params?: Record<string, number> } & Record<string, number>;
-    params = mod.sanitize(j.params ?? j);
-  }
+  const params = paramsPath ? await loadParamsFile(paramsPath) : undefined;
   const { diffs } = seatsFor(scenario, seed);
   // MEASURE_MAX_SEC: cut games short (smoke tests of this script only; real measurements never set it).
   const maxSec = Number(process.env.MEASURE_MAX_SEC) || seatsFor(scenario, seed).maxSec;
