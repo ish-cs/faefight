@@ -3,7 +3,7 @@
  * director, read structurally from window.__cinematic so this works whether or not it's in the build)
  * or, if Settings → Commentary → While spectating is on, by spectating.
  */
-import type { Snapshot } from '../../../sim/types';
+import type { PlayerState, Snapshot } from '../../../sim/types';
 import { settings } from '../../settings/store';
 import { Commentator, type Caption, type ShotEvent } from './commentator';
 import { BrowserTts, type Tts } from './tts';
@@ -13,6 +13,20 @@ export interface DirectorLike {
   readonly active: boolean;
   on(ev: 'shot', fn: (e: ShotEvent) => void): () => void;
   on(ev: 'active', fn: (active: boolean) => void): () => void;
+}
+
+/**
+ * The name to say: a vs-bot match names the local human "You" (that's for the HUD); the commentator uses the
+ * display name from the menu (faefight.name) instead, or "our player" when none is set.
+ */
+export function displayName(p: Pick<PlayerState, 'name' | 'isBot'>, stored: () => string | null = storedName): string {
+  if (p.isBot || p.name !== 'You') return p.name;
+  const n = stored()?.trim();
+  return n || 'our player';
+}
+
+function storedName(): string | null {
+  try { return localStorage.getItem('faefight.name'); } catch { return null; }
 }
 
 class Captions {
@@ -39,14 +53,21 @@ export class Commentary {
   private spectating = false;
   private lastTime = -1;
 
-  constructor(duck: (on: boolean) => void, tts: Tts = new BrowserTts()) {
+  constructor(duck: (on: boolean) => void, private tts: Tts = new BrowserTts()) {
     this.commentator = new Commentator({
       tts,
+      displayName,
       volume: () => { const a = settings.get().audio; return a.muted ? 0 : a.commentary * a.master; },
       onCaption: (c) => this.captions.show(c && settings.get().audio.captions ? c : null),
       duck,
     });
-    settings.subscribe(() => this.recompute());
+    settings.subscribe(() => { this.applyVoices(); this.recompute(); });
+    this.applyVoices();
+  }
+
+  private applyVoices() {
+    const a = settings.get().audio;
+    if (this.tts instanceof BrowserTts) this.tts.setVoices({ pbp: a.voicePbp || undefined, colour: a.voiceColour || undefined });
   }
 
   /** Each snapshot, with whether we're watching rather than playing. */

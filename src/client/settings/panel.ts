@@ -8,6 +8,7 @@ import {
   CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, GEN_ALERT_PCTS, LIMITS, QUALITIES, type Settings, settings,
 } from './store';
 import type { Quality } from '../world/sky';
+import { availableVoices, testVoice } from '../cinematic/commentary/tts';
 
 const PERF_STATS = ['off', 'fps', 'detailed'] as const;
 const PERF_STATS_LABEL: Record<(typeof PERF_STATS)[number], string> = { off: 'Off', fps: 'FPS', detailed: 'Detailed' };
@@ -265,6 +266,20 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     slider('Commentary volume', 'Game sound dips a little while the commentator talks', 'set-commentary', 0, 1, 0.05, () => a().commentary, (x) => set((d) => { d.audio.commentary = x; }), pct);
     toggle('Captions', 'Show what the commentator says on screen', 'set-captions', () => a().captions, (x) => set((d) => { d.audio.captions = x; }));
     toggle('While spectating', 'Also commentate when you spectate a match', 'set-commentary-spectate', () => a().commentarySpectate, (x) => set((d) => { d.audio.commentarySpectate = x; }));
+    // Voice per commentator: the best installed English voices (macOS: add Premium/Enhanced ones in
+    // System Settings → Accessibility → Spoken Content → Manage Voices), plus Auto.
+    const voices = ['', ...availableVoices().slice(0, 14)];
+    const voiceRow = (label: string, persona: 'pbp' | 'colour', testid: string, get: () => string, put: (v: string) => void) => {
+      const r = segmented(label, persona === 'pbp' ? 'Calls the action' : 'Analysis and quiet moments', testid, voices,
+        (v) => (v ? v.replace(/\s*\((English|en)[^)]*\)/i, '') : 'Auto'), get, put);
+      r.classList.add('set-voice-row');
+      const test = el('button', 'btn small set-voice-test', 'Test voice');
+      test.dataset.testid = `${testid}-test`;
+      test.onclick = () => { const au = a(); testVoice(persona, get(), au.muted ? 0 : au.commentary * au.master); };
+      r.append(test);
+    };
+    voiceRow('Play-by-play voice', 'pbp', 'set-voice-pbp', () => a().voicePbp, (v) => set((d) => { d.audio.voicePbp = v; }));
+    voiceRow('Colour voice', 'colour', 'set-voice-colour', () => a().voiceColour, (v) => set((d) => { d.audio.voiceColour = v; }));
     section('Output');
     toggle('Mute', `Also on ${keyLabel(settings.get().controls.keys.mute[0] ?? '') || '—'} in game`, 'set-mute', () => a().muted, (x) => set((d) => { d.audio.muted = x; }));
     resetBtn('Reset audio to defaults', () => settings.reset('audio'));

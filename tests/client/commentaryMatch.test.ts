@@ -16,7 +16,7 @@ test(`commentary over ${SIM_SEC} s of an 8-bot match`, async () => {
   let snap: Snapshot = m.tick(new Map());
   let seed = 7;
   const c = new Commentator({
-    tts: { available: false, speak: (_t, o) => o.onEnd?.(), cancel() {} },
+    tts: { available: false, speaking: false, speak: (_t, o) => o.onEnd?.(), cancel() {} },
     now: () => snap.time, rng: () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; },
   });
   c.setActive(true);

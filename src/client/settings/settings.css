@@ -117,3 +117,8 @@
   .set-slider input[type=range] { width: 130px; }
   .set-body { padding: 4px 16px 16px; }
 }
+
+/* Commentary voice pickers: a wrapping list of voice chips (can be long on macOS) + a Test voice button. */
+.set-voice-row { flex-wrap: wrap; row-gap: 6px; }
+.set-voice-row .set-seg { flex-wrap: wrap; max-width: 100%; max-height: 96px; overflow-y: auto; }
+.set-voice-row .set-voice-test { margin-left: auto; }
