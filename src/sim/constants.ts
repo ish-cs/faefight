@@ -222,6 +222,13 @@ export const LIFECYCLE = {
   /** ...and you can't pick your own drop back up for this long. */
   dropPickupDelaySec: 1.5,
   regenDelaySec: 8,
+  /**
+   * Environmental kill credit window (s): drowning, a fatal fall or the storm this soon after a player hurt you
+   * (or broke what you stood on) is their kill. 8 s = the regen delay: as long as their damage still "counts"
+   * (no regen yet), so does the kill. Long enough for knocked off / bridge cut → fall → water (≈1-3 s) or a
+   * wounded player fleeing into the storm; short enough that a later unforced misstep is nobody's kill.
+   */
+  envCreditSec: 8,
   regenPerSec: 1,
   /** Landing faster than this (m/s, ≈3 m drop) hurts; damage per m/s above it. */
   safeFallSpeed: 8,
