@@ -138,7 +138,7 @@ export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
  */
 export const GRAPPLE = {
   /** range: the most a hook ever reaches; a map's own reach is grappleRange(islands) (≤ this). gapMargin: see there. */
-  price: 90, uses: 3, range: 26, gapMargin: 8, tipSpeed: 90,
+  price: 90, uses: 3, range: 40, gapMargin: -4, tipSpeed: 90,
   pullSpeed: 22, pullResponse: 7, pullSec: 2.4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.3,
   yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
   cooldownSec: 0.5, missCooldownSec: 0.2, minDist: 2.5, yankCreditSec: 5,

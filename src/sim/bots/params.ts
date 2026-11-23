@@ -324,7 +324,7 @@ export const TEAM: TeamParams = {
 export const HOOK: HookParams = {
   buyAt: D(1200, 450, 350, 300),
   crossBuyAt: D(Infinity, 160, 600, 110),
-  crossMax: 25.5, crossInset: 2.5,
+  crossMax: 39, crossInset: 2.5,
   escapeHp: 45, escapeNear: 20, escapeMin: 12,
   yankMin: 8, yankMax: 30, yankHigh: 2.5, yankFalloff: 1.2, yankRate: 0.6,
   keepForTravel: 1,
