@@ -65,6 +65,9 @@ type SeatOut = {
   difficulty: Difficulty; kills: number; deaths: number; aliveSec: number; attackSec: number;
   idleHome: number; longestHomeIdle: number; hitDists: number[]; eliminatedAt: number | null;
   archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
+  /** Diagnostics (weapon mix by tier): damage dealt / taken by weapon, kills by the killer's weapon, own rocket damage, seconds holding each gun. */
+  dmgBy?: Record<string, number>; takenBy?: Record<string, number>; killsBy?: Record<string, number>; deathsBy?: Record<string, number>;
+  selfRocket?: number; heldSec?: Record<string, number>;
 };
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
@@ -111,7 +114,10 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const seats: SeatOut[] = diffs.map((d, i) => ({
     difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
     archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0,
+    dmgBy: {}, takenBy: {}, killsBy: {}, deathsBy: {}, selfRocket: 0, heldSec: {},
   }));
+  const add = (r: Record<string, number>, k: string, v: number) => { r[k] = (r[k] ?? 0) + v; };
+  const lastHitW = new Map<number, string>();
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, firstSeal: number | null = null;
@@ -137,6 +143,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         homeStreak.set(p.id, st);
         s.longestHomeIdle = Math.max(s.longestHomeIdle, st);
         const w = p.inv.weapons as Record<string, unknown>;
+        for (const k of Object.keys(w)) add(s.heldSec!, k, dt);
         const geared = !!(w.smg || w.rifle || w.shotgun) || p.inv.cash + p.vault.cash >= 150;
         if (geared && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) <= IDLE_M && !nearBunker && !snap.sealed[p.island]) s.idleHome += dt;
       }
@@ -145,6 +152,11 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       if (e.type === 'hit') {
         const by = e.data.by as number | null, target = e.data.target as number;
         const a = by != null ? snap.players[by - 1]?.pos : undefined, t = snap.players[target - 1]?.pos;
+        const wk = String(e.data.weapon ?? 'other'), amt = Number(e.data.amount) || 0;
+        if (seats[target - 1]) add(seats[target - 1].takenBy!, wk, amt);
+        if (by != null) lastHitW.set(target, wk);
+        if (by != null && by === target && wk === 'rocket') seats[by - 1].selfRocket! += amt;
+        if (by != null && by !== target && seats[by - 1]) add(seats[by - 1].dmgBy!, wk, amt);
         if (by == null || by === target || !a || !t) continue;
         seats[by - 1].damage! += Number(e.data.amount) || 0;
         seats[by - 1].hitDists.push(Math.round(Math.hypot(a.x - t.x, a.z - t.z)));
@@ -152,6 +164,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         const v = e.data.victim as number, k = e.data.killer as number | null;
         seats[v - 1].deaths++;
         if (k != null && k !== v) seats[k - 1].kills++;
+        const kw = k == null ? String(e.data.cause ?? (e.data.inWater ? 'water' : 'env')) : k === v ? 'self' : (lastHitW.get(v) ?? 'other');
+        add(seats[v - 1].deathsBy!, kw, 1);
+        if (k != null && k !== v) add(seats[k - 1].killsBy!, kw, 1);
       } else if (e.type === 'sealed') {
         const by = e.data.by as number | null | undefined;
         if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
