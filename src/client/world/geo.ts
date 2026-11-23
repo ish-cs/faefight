@@ -13,10 +13,24 @@ const ATTRS = ['position', 'normal', 'uv', 'color', 'pc'] as const;
  * meshes indexed without re-welding vertices (mergeVertices on millions of vertices cost seconds of load).
  */
 export function part(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation = 0xffffff): THREE.BufferGeometry {
+  // indexed with normals: keep only the indexed form; StaticBatch flattens it if the merged mesh stays non-indexed
+  // (two full copies of every part, one always thrown away, were ~300 MB of short-lived buffers while loading)
+  if (geo.index && geo.getAttribute('normal')) return normalise(geo.clone(), m, col);
+  // no normals: the flat-shaded non-indexed copy and the smooth indexed twin differ, so keep both as before
   const g = normalise(geo.index ? geo.toNonIndexed() : geo.clone(), m, col);
   if (geo.index) g.userData.indexed = normalise(geo.clone(), m, col);
   return g;
 }
+
+/** A part's indexed form, if it has one. */
+const twinOf = (p: THREE.BufferGeometry): THREE.BufferGeometry | undefined => p.index ? p : p.userData.indexed as THREE.BufferGeometry | undefined;
+/** A part in merge form (non-indexed). */
+const flatOf = (p: THREE.BufferGeometry): THREE.BufferGeometry => {
+  if (!p.index) return p;
+  const f = p.toNonIndexed();
+  p.dispose();
+  return f;
+};
 
 function normalise(g: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation): THREE.BufferGeometry {
   if (!g.getAttribute('normal')) g.computeVertexNormals();
@@ -98,7 +112,7 @@ export const STATIC_CHUNKS = {
 /** merged static meshes with at least this many vertices get an index (StaticBatch.build) */
 export const STATIC_INDEX_MIN_VERTS = 30_000;
 
-const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + g.getAttribute('position').count / 3, 0);
+const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + (g.index ? g.index.count : g.getAttribute('position').count) / 3, 0);
 
 type Bin = { material: THREE.Material; cast: boolean; receive: boolean; parts: THREE.BufferGeometry[] };
 
@@ -145,8 +159,8 @@ export class StaticBatch {
     const emit = (bin: Bin, parts: THREE.BufferGeometry[], suffix: string) => {
       // heavy static meshes are drawn by the camera and every shadow cascade: emit them indexed (from the parts'
       // indexed twins) so shared corners are shaded once per pass, not once per triangle
-      const twins = trisOf(parts) * 3 >= STATIC_INDEX_MIN_VERTS && parts.every((p) => p.userData.indexed) ? parts.map((p) => p.userData.indexed as THREE.BufferGeometry) : null;
-      const geo = twins ? merge(twins) : merge(parts);
+      const twins = trisOf(parts) * 3 >= STATIC_INDEX_MIN_VERTS && parts.every((p) => twinOf(p)) ? parts.map((p) => twinOf(p)!) : null;
+      const geo = twins ? merge(twins) : merge(parts.map(flatOf));
       if (twins) for (const p of parts) p.dispose();
       const mesh = new THREE.Mesh(geo, bin.material);
       mesh.castShadow = bin.cast; mesh.receiveShadow = bin.receive;
@@ -211,7 +225,7 @@ export class StaticBatch {
 
   /** Merged geometry per material without creating meshes (instanced props build their own). */
   take(): { material: THREE.Material; geometry: THREE.BufferGeometry; cast: boolean; receive: boolean }[] {
-    const out = [...this.bins.values()].map((b) => ({ material: b.material, geometry: merge(b.parts), cast: b.cast, receive: b.receive }));
+    const out = [...this.bins.values()].map((b) => ({ material: b.material, geometry: merge(b.parts.map(flatOf)), cast: b.cast, receive: b.receive }));
     this.bins.clear();
     return out;
   }
