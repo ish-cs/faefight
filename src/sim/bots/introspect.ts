@@ -202,7 +202,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const how = me.inv.charges > 0 ? 'a charge' : gun ? 'my gun' : 'my fists';
       if (view.sealed[home.index]) {
         return {
-          f: [[can ? 'can clear' : 'cannot clear', can ? 0.85 : 0.1], ...(can && I.sealedHomeCalm(c) ? [['sealed home: death = out', I.P.drive.sealedHome] as [string, number]] : []), ['caution', 0.1 * t.caution]],
+          f: [[can ? 'can clear' : 'cannot clear', can ? 0.85 : 0.1], ...(can && I.sealedHomeCalm(c) ? [['sealed home: death = out', I.P.drive.sealedHome[I.difficulty]] as [string, number]] : []), ['caution', 0.1 * t.caution]],
           why: can ? `My bunker is sealed (${kinds}): clearing it with ${how}` : `My bunker is sealed (${kinds}) and nothing I carry gets through`,
         };
       }

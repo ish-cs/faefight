@@ -316,11 +316,11 @@ describe('game sense', () => {
       bot.think(view);
       return { goal: bot.currentGoal, defend: bot.planScores.find((r) => r.goal === 'defend')?.score ?? 0 };
     };
-    const on = scores(DEFAULT_BOT_PARAMS, null), off = scores(withParams({ 'drive.sealedHome': 0 }), null);
+    const on = scores(DEFAULT_BOT_PARAMS, null), off = scores(withParams({ 'drive.sealedHome.hard': 0 }), null);
     expect(on.goal).toBe('defend');
-    expect(on.defend - off.defend).toBeCloseTo(DEFAULT_BOT_PARAMS.drive.sealedHome, 5);
+    expect(on.defend - off.defend).toBeCloseTo(DEFAULT_BOT_PARAMS.drive.sealedHome.hard, 5);
     // Someone 5 m away: no bonus (turning my back to break a door loses the fight).
-    expect(scores(DEFAULT_BOT_PARAMS, 5).defend).toBeCloseTo(scores(withParams({ 'drive.sealedHome': 0 }), 5).defend, 5);
+    expect(scores(DEFAULT_BOT_PARAMS, 5).defend).toBeCloseTo(scores(withParams({ 'drive.sealedHome.hard': 0 }), 5).defend, 5);
   });
 
   test('one of my doorways gets plugged: clears it before heading out to bridge', () => {

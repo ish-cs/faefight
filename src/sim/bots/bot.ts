@@ -1435,7 +1435,7 @@ export class Bot {
         // Nothing that can clear what's there (steel needs a charge): better to go buy one than stand at the door.
         const can = blockers.some((p) => this.canClear(c, p));
         // Dying while sealed is an instant elimination: unseal before anything else unless someone is on top of me.
-        if (view.sealed[home.index]) return (can ? 0.85 + (this.sealedHomeCalm(c) ? this.P.drive.sealedHome : 0) : 0.1) + 0.1 * t.caution;
+        if (view.sealed[home.index]) return (can ? 0.85 + (this.sealedHomeCalm(c) ? this.P.drive.sealedHome[this.difficulty] : 0) : 0.1) + 0.1 * t.caution;
         // One plugged doorway is most of a seal: clear it before going out. Out of ammo with the money for a box
         // (vault too): fetch it first, punching sandbags out one by one takes a minute (ffa8-mixed seed 18: 61 s).
         const restock = !ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) && me.inv.cash + me.vault.cash >= AMMO_BOX.price;

@@ -82,7 +82,7 @@ export type DriveParams = {
   crossFire: Record<Difficulty, number>;
   sealBonus: number;
   sealedHunt: number;
-  sealedHome: number;
+  sealedHome: Record<Difficulty, number>;
   sealedFocus: number;
   dockShot: Record<Difficulty, number>;
   dockDefend: number;
@@ -275,7 +275,9 @@ export const DRIVE: DriveParams = {
   crossFire: D(Infinity, Infinity, Infinity, 25),
   sealBonus: 0.35,
   sealedHunt: 0.6,
-  sealedHome: 0.4,
+  // Easy doesn't think that far ahead (it fights sealed like any other time); 1v1 Medium vs Easy 40 seeds: 78% with
+  // 0.4 for everyone (main 90%), the one-death-and-out races went Easy's way too often.
+  sealedHome: D(0, 0.4, 0.4, 0.4),
   sealedFocus: 1.6,
   dockShot: D(0.15, 0.45, 0.65, 0.85),
   dockDefend: 0.3,
@@ -397,7 +399,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sealRaceM', [10, 120]], ['drive.windowSlackSec', [0, 6]], ['drive.windowPush', [0, 1.5]],
   ['drive.respawnCautionSec', [0, 30]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]], ['drive.crossFire.*', [15, 60]],
-  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome', [0, 1.2]], ['drive.sealedFocus', [1, 3]],
+  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome.*', [0, 1.2]], ['drive.sealedFocus', [1, 3]],
   ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
