@@ -1,5 +1,5 @@
 /**
- * Free neural commentary voice: Kokoro-82M (Apache-2.0 weights) synthesized in a worker (kokoro.worker.ts),
+ * Free neural commentary voice (e.g. Kokoro-82M, Apache-2.0 weights) synthesized in a worker (neuralEngine),
  * played through a small AudioContext of its own. Lazy: nothing loads until commentary is actually on;
  * until the model is ready (or if it can't load) the browser voice speaks instead (HybridTts).
  * Latency: each line is synthesized when it's said (a short sentence takes well under a second on a
@@ -35,7 +35,14 @@ type Out =
 /** Settings → Test voice hook: the live Commentary installs it (returns false when the neural voice isn't ready). */
 export const voiceTester: { neural: ((persona: Persona, voice: string) => boolean) | null } = { neural: null };
 
-export const neuralSupported = () => typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined' && typeof AudioContext !== 'undefined';
+/**
+ * The neural voice's synthesis worker, registered by the build that ships one (none by default: the Kokoro
+ * worker's phonemizer embeds eSpeak NG, GPL-3.0, so it stays off main until that's decided). Without it the
+ * commentary uses the browser voice and Settings hides the engine choice.
+ */
+export const neuralEngine: { makeWorker: (() => Worker) | null } = { makeWorker: null };
+
+export const neuralSupported = () => !!neuralEngine.makeWorker && typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined' && typeof AudioContext !== 'undefined';
 
 export class NeuralTts implements Tts {
   state: NeuralState = 'off';
@@ -51,7 +58,10 @@ export class NeuralTts implements Tts {
   readonly synthMs: number[] = [];
 
   constructor(private onState: (s: NeuralState, detail: string) => void = () => {},
-    private makeWorker: () => Worker = () => new Worker(new URL('./kokoro.worker.ts', import.meta.url), { type: 'module' })) {}
+    private makeWorker: () => Worker = () => {
+      if (!neuralEngine.makeWorker) throw new Error('no neural voice engine in this build');
+      return neuralEngine.makeWorker();
+    }) {}
 
   get available() { return this.state === 'ready'; }
   get speaking() { return this.playing !== null; }

@@ -10,7 +10,7 @@ import {
 } from './store';
 import type { Quality } from '../world/sky';
 import { availableVoices, testVoice } from '../cinematic/commentary/tts';
-import { NEURAL_VOICES, voiceTester } from '../cinematic/commentary/neural';
+import { NEURAL_VOICES, neuralEngine, voiceTester } from '../cinematic/commentary/neural';
 
 const PERF_STATS = ['off', 'fps', 'detailed'] as const;
 const PERF_STATS_LABEL: Record<(typeof PERF_STATS)[number], string> = { off: 'Off', fps: 'FPS', detailed: 'Detailed' };
@@ -273,11 +273,12 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     slider('Commentary volume', 'Game sound dips a little while the commentator talks', 'set-commentary', 0, 1, 0.05, () => a().commentary, (x) => set((d) => { d.audio.commentary = x; }), pct);
     toggle('Captions', 'Show what the commentator says on screen', 'set-captions', () => a().captions, (x) => set((d) => { d.audio.captions = x; }));
     toggle('While spectating', 'Also commentate when you spectate a match', 'set-commentary-spectate', () => a().commentarySpectate, (x) => set((d) => { d.audio.commentarySpectate = x; }));
-    segmented('Voice engine', 'Neural: a free natural voice, downloaded once (~92 MB). Browser: your system voices', 'set-voice-engine',
+    // The engine choice only shows in a build that ships a neural voice (neuralEngine).
+    if (neuralEngine.makeWorker) segmented('Voice engine', 'Neural: a free natural voice, downloaded once (~92 MB). Browser: your system voices', 'set-voice-engine',
       VOICE_ENGINES, (e) => (e === 'neural' ? 'Neural' : 'Browser'), () => a().voiceEngine, (e) => set((d) => { d.audio.voiceEngine = e; }), render);
     // Voice per commentator. Neural: the Kokoro voices. Browser: the best installed English voices (macOS: add
     // Premium/Enhanced ones in System Settings → Accessibility → Spoken Content → Manage Voices). '' = Auto.
-    const neural = a().voiceEngine === 'neural';
+    const neural = a().voiceEngine === 'neural' && !!neuralEngine.makeWorker;
     const voices = neural ? ['', ...NEURAL_VOICES.map((v) => v.id)] : ['', ...availableVoices().slice(0, 14)];
     const label = (v: string) => (!v ? 'Auto' : neural ? NEURAL_VOICES.find((n) => n.id === v)?.label ?? v : v.replace(/\s*\((English|en)[^)]*\)/i, ''));
     const voiceRow = (title: string, persona: 'pbp' | 'colour', testid: string, get: () => string, put: (v: string) => void) => {
