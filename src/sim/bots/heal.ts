@@ -81,6 +81,8 @@ export function healPlan(s: HealSituation, H: HealParams): HealPlan | null {
     const sh = (['shieldBig', 'shieldSmall'] as const).find((k) => usable(me, k, now));
     return use(me, sh ?? null, 'topping up shield');
   }
+  // Weak players heal only once the fight is over.
+  if (H.midFight[s.diff] < 0.5) return null;
   const burst = s.burst >= H.burst;
   const low = eff <= H.fightHp[s.diff] || (burst && eff <= H.fightHp[s.diff] + H.burstHp);
   if (!low) return null;

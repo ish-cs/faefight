@@ -63,6 +63,18 @@ describe('bot healing decisions (heal.ts)', () => {
     expect(healPlan(sit(p, { foe: foe(10), hurtAgo: 0.2 }), HEAL)).toBeNull();
   });
 
+  test('easy: no heal mid-fight (not even low, far off or in their reload); patches up only once the fight is over, and later', () => {
+    const p = give(player(), 'medkit');
+    p.hp = 15;
+    for (const f of [foe(10), foe(60), foe(10, 100, 2), null])
+      expect(healPlan(sit(p, { diff: 'easy', foe: f, hurtAgo: 0.2, burst: 50 }), HEAL)).toBeNull();
+    expect(healPlan(sit(p, { diff: 'easy' }), HEAL)).toMatchObject({ act: 'use', item: 'medkit' });
+    p.hp = HEAL.safeHp.easy + 1;
+    expect(healPlan(sit(p, { diff: 'easy' }), HEAL)).toBeNull();
+    expect(HEAL.safeHp.easy).toBeLessThan(HEAL.safeHp.medium);
+    expect(HEAL.stockAt.easy).toBeGreaterThan(HEAL.stockAt.medium);
+  });
+
   test('commitment: one heal per exchange (unless a burst lands), and no heal while clearly ahead', () => {
     const p = give(give(player(), 'medkit'), 'healPotion');
     p.hp = 40;

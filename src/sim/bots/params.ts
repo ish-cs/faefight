@@ -244,6 +244,8 @@ export type GunSkill = { recoilComp: number; burstShots: number; burstPause: num
  * - stock / stockAt / stockPer / stockMax: carry `stock` heals (medkits + heal potions) once `stockAt` cash (carried +
  *   banked) is in hand, one more per `stockPer` above that, at most `stockMax`.
  * - safeHp: out of a fight (no enemy in sight, unhurt for quietSec s), patch hp up at or below this.
+ * - midFight: >= 0.5 heals mid-fight too; below that only between fights (Easy: a weak player forgets the medkit
+ *   until the fight is over; with mid-fight heals Easy out-placed Medium in mixed FFAs, 5.01 vs 5.06).
  * - fightHp: in a fight, hp + shield at or below this wants a heal; a burst of `burst` damage (about a second) wants one
  *   up to fightHp + burstHp.
  * - pressHp: the enemy in front of me at or under this hp + shield (and not above me): press the kill, no heal.
@@ -262,7 +264,7 @@ export type GunSkill = { recoilComp: number; burstShots: number; burstPause: num
  */
 export type HealParams = {
   stock: Record<Difficulty, number>; stockAt: Record<Difficulty, number>; stockPer: number; stockMax: number;
-  safeHp: Record<Difficulty, number>; quietSec: number;
+  safeHp: Record<Difficulty, number>; quietSec: number; midFight: Record<Difficulty, number>;
   fightHp: Record<Difficulty, number>; burst: number; burstHp: number; pressHp: number; openDist: number;
   reloadWeight: Record<Difficulty, number>; reloadSlack: number;
   coverFirst: Record<Difficulty, number>; hideSec: number;
@@ -393,8 +395,8 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
 };
 
 export const HEAL: HealParams = {
-  stock: D(1, 1, 1, 2), stockAt: D(600, 350, 220, 200), stockPer: 350, stockMax: 3,
-  safeHp: D(40, 55, 65, 70), quietSec: 2.5,
+  stock: D(1, 1, 1, 2), stockAt: D(900, 350, 220, 200), stockPer: 350, stockMax: 3,
+  safeHp: D(30, 55, 65, 70), quietSec: 2.5, midFight: D(0, 1, 1, 1),
   fightHp: D(25, 35, 40, 45), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
   reloadWeight: D(0, 0.3, 0.5, 1), reloadSlack: 0.3,
   coverFirst: D(0, 0, 0, 0.5), hideSec: 2.5,
@@ -476,7 +478,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
   ['heal.stock.*', [0, 3]], ['heal.stockAt.*', [100, 1200]], ['heal.stockPer', [150, 1000]], ['heal.stockMax', [1, 4]],
-  ['heal.safeHp.*', [30, 95]], ['heal.quietSec', [0.5, 6]], ['heal.fightHp.*', [15, 90]], ['heal.burst', [15, 80]],
+  ['heal.safeHp.*', [30, 95]], ['heal.quietSec', [0.5, 6]], ['heal.midFight.*', [0, 1]], ['heal.fightHp.*', [15, 90]], ['heal.burst', [15, 80]],
   ['heal.burstHp', [0, 50]], ['heal.pressHp', [0, 80]], ['heal.openDist', [15, 70]], ['heal.reloadWeight.*', [0, 1]],
   ['heal.reloadSlack', [-0.5, 1]], ['heal.coverFirst.*', [0, 1]], ['heal.hideSec', [0.5, 6]], ['heal.reHealSec', [0, 20]], ['heal.pressLead', [0, 80]], ['heal.punishHp', [0, 100]], ['heal.hideM', [1, 10]], ['heal.detourM', [0, 40]],
   ['heal.slotValue', [0, 1]], ['heal.keep.*', [0, 1]],
