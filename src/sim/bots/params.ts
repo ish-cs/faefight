@@ -281,6 +281,8 @@ export type GunSkill = { recoilComp: number; burstShots: number; burstPause: num
  * - pressLead: mid-fight, my hp + shield this far above the enemy in front of me: push the kill instead of healing.
  * - punishHp: an enemy in sight healing (medkit or drink) while my hp + shield is at least this: rush them.
  * - detourM: a potion seller this close on my island, short of heals and no enemy in sight: go buy heal potions.
+ * - restock: >= 0.5: retreating on low hp with no heal held, the cash for a medkit and my shop in reach: run to the shop,
+ *   buy one and heal instead of backing off for minutes (PRO; a strong player's reflex).
  * - slotValue / keep: a full hotbar drops its least-wanted item (keep weight under slotValue) to make room for a heal.
  */
 export type HealParams = {
@@ -290,7 +292,7 @@ export type HealParams = {
   reloadWeight: Record<Difficulty, number>; reloadSlack: number;
   coverFirst: Record<Difficulty, number>; hideSec: number;
   reHealSec: number; pressLead: number; punishHp: number; hideM: number;
-  detourM: number;
+  detourM: number; restock: Record<Difficulty, number>;
   slotValue: number;
   keep: { pistol: number; trap: number; ramp: number; speedPotion: number; grapple: number; sandbags: number; grenade: number };
 };
@@ -442,7 +444,7 @@ export const HEAL: HealParams = {
   reloadWeight: D(0, 0.3, 0.5, 1), reloadSlack: 0.3,
   coverFirst: D(0, 0, 0, 0.5), hideSec: 2.5,
   reHealSec: 8, pressLead: 25, punishHp: 40, hideM: 4,
-  detourM: 18,
+  detourM: 18, restock: D(0, 0, 0, 1),
   slotValue: 0.5,
   keep: { pistol: 0.25, trap: 0.3, ramp: 0.35, speedPotion: 0.15, grapple: 0.8, sandbags: 0.4, grenade: 0.6 },
 };
@@ -530,7 +532,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['heal.stock.*', [0, 3]], ['heal.stockAt.*', [100, 1200]], ['heal.stockPer', [150, 1000]], ['heal.stockMax', [1, 4]],
   ['heal.safeHp.*', [30, 95]], ['heal.quietSec', [0.5, 6]], ['heal.midFight.*', [0, 1]], ['heal.fightHp.*', [15, 90]], ['heal.burst', [15, 80]],
   ['heal.burstHp', [0, 50]], ['heal.pressHp', [0, 80]], ['heal.openDist', [15, 70]], ['heal.reloadWeight.*', [0, 1]],
-  ['heal.reloadSlack', [-0.5, 1]], ['heal.coverFirst.*', [0, 1]], ['heal.hideSec', [0.5, 6]], ['heal.reHealSec', [0, 20]], ['heal.pressLead', [0, 80]], ['heal.punishHp', [0, 100]], ['heal.hideM', [1, 10]], ['heal.detourM', [0, 40]],
+  ['heal.reloadSlack', [-0.5, 1]], ['heal.coverFirst.*', [0, 1]], ['heal.hideSec', [0.5, 6]], ['heal.reHealSec', [0, 20]], ['heal.pressLead', [0, 80]], ['heal.punishHp', [0, 100]], ['heal.hideM', [1, 10]], ['heal.detourM', [0, 40]], ['heal.restock.*', [0, 1]],
   ['heal.slotValue', [0, 1]], ['heal.keep.*', [0, 1]],
   ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
   ['vault.medkits.*', [0, 4]], ['vault.scaffolds.*', [0, 15]], ['vault.keep.*', [0, 150]], ['vault.buy.*', [0, 1]],

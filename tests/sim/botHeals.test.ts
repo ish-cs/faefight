@@ -153,6 +153,28 @@ describe('bot healing in a match', () => {
     expect(used).toBe(true);
   }, 30_000);
 
+  test('a low PRO out of heals, an enemy in sight: runs to its shop, buys a medkit and heals (no long retreat on low hp)', async () => {
+    // Round-11 heals CI: PRO sat in 'disengage' ~4× as long as before, every time with no heal held and the cash for
+    // one (seed 5: 100 s at hp 20-35 with $1400, enemies 90-110 m off).
+    const bots: Bot[] = [];
+    const m = await Match.create({ players: [{ name: 'you', isBot: false }, { name: 'b', isBot: true, difficulty: 'pro' }], seed: 5 },
+      { makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.push(b); return b; } });
+    const isl = m.map[1];
+    m.debugGive(2, { cash: 500, weapons: { smg: { mag: 30, spare: 90 } } });
+    const o = m.map[0], dx = isl.center.x - o.center.x, dz = isl.center.z - o.center.z;
+    m.debugTeleport(2, v3(isl.center.x - 0.15 * dx, isl.groundY, isl.center.z - 0.15 * dz));
+    m.debugTeleport(1, v3(o.center.x + 0.15 * dx, o.groundY, o.center.z + 0.15 * dz));
+    m.debugSetHp(2, 25);
+    let bought = false, healed = false;
+    for (let i = 0; i < 30 * 20 && !healed; i++) {
+      const p = m.tick(new Map()).players[1];
+      bought ||= p.inv.medkits > 0;
+      healed = p.healAt !== null;
+    }
+    expect(bought).toBe(true);
+    expect(healed).toBe(true);
+  }, 30_000);
+
   test('mid-fight: a low PRO shot at by someone it can see heals within a few seconds (hides or uses a window)', async () => {
     const bots: Bot[] = [];
     const m = await Match.create({ players: [{ name: 'a', isBot: true, difficulty: 'pro' }, { name: 'b', isBot: true, difficulty: 'pro' }], seed: 7 },

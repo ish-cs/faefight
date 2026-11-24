@@ -10,6 +10,7 @@ import type {
   BuildRequest, Difficulty, HotbarItem, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
 } from '../types';
 import { funds } from '../economy';
+import { canAdd } from '../hotbar';
 import { vaultLevel, vaultSpec, vaultUpgradePrice } from '../vault';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import { isRng, mulberry32 } from '../rng';
@@ -2953,6 +2954,9 @@ export class Bot {
     const me = c.me;
     const from = c.enemy?.pos ?? (this.mem.lastHurtBy !== null ? this.mem.recent(this.mem.lastHurtBy, c.view.now, 5)?.pos : undefined);
     if (!from) { this.nextScoreAt = c.view.now; return IDLE; }
+    // Out of heals: the shop first (buy, heal, re-peek), not minutes of backing off on low hp.
+    const restock = this.restockHeal(c);
+    if (restock) return restock;
     const away = norm(flat(sub(me.pos, from)));
     if (c.homeReach) {
       // Behind my bunker, not inside it (inside, one plug per door seals me in).
@@ -2964,6 +2968,22 @@ export class Bot {
     const cover = c.enemy ? this.coverFrom(c, c.enemy) : null;
     if (cover && dist2D(cover, me.pos) > 0.8) return { ...this.goTo(cover, 0.6), sprint: true };
     return { dir: away, sprint: true };
+  }
+
+  /**
+   * Low and out of heals, with the cash for one and my shop in reach (heal.restock): run to it and buy a medkit; heal.ts
+   * uses it once they're far or out of sight, and the retreat ends. Round-11 heals CI: PRO sat in 'disengage' ~4× as
+   * long as before, always holding no heal with the cash for several (seed 5: 100 s at hp 20-35, $1400, foes 90-110 m off).
+   */
+  private restockHeal(c: Ctx): Act | null {
+    const me = c.me, now = c.view.now;
+    if (this.P.heal.restock[this.difficulty] < 0.5 || !c.homeReach || c.view.suddenDeath || hpHealsHeld(me) > 0 ||
+        this.spendCash(me) < MEDKIT.price || !canAdd(me.hotbar, 'medkit') || this.buyBlocked('medkit')) return null;
+    const walk = { ...this.goTo(c.home.shop, 2.0), sprint: true };
+    this.healNote = { t: now, text: 'out of heals: running to my shop for a medkit' };
+    if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt) return walk;
+    this.nextBuyAt = now + BUY_GAP[this.difficulty];
+    return { ...walk, shop: 'medkit' };
   }
 
   /** Radius I want to be inside: the ring as it will be a few seconds from now, minus a margin. */
