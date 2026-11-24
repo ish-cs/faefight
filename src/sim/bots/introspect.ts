@@ -10,11 +10,12 @@
  */
 import { AMMO_BOX, CHARGE, GRAPPLE, GRENADE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
 import type { Doorway, IslandLayout } from '../map';
-import type { Difficulty, Inventory, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
+import type { Difficulty, Inventory, Loadout, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
 import { dist2D } from '../vec';
 import type { AimProfile, Angles } from './aim';
 import type { Bot, Goal } from './bot';
 import { rivalScore, type Memory, type RivalFacts, type Sighting } from './mind';
+import { hpHealsHeld } from './heal';
 import { islandAt } from './nav';
 import type { Traits } from './personality';
 import { BUILD_TUNING as BT } from './build';
@@ -60,6 +61,8 @@ export type BrainDigest = {
   build: { kind: PieceKind; x: number; y: number; z: number; rotY: number; why: string } | null;
   /** Grappling hook: on a rope now, or its last use (a few seconds), or what it carries it for; absent when none. */
   hook?: string;
+  /** Healing intent (heal.ts): the last heal decision (a few seconds), else heals carried vs the stock it wants. */
+  heal?: string;
   /** Weapon it wants in hand and why ("rocket: reload it between fights"); absent when dead or not yet decided. */
   weapon?: string;
   /** Route ahead: [x, y, z] points from its feet. */
@@ -68,6 +71,10 @@ export type BrainDigest = {
   aim: [number, number, number] | null; fire: boolean;
   st: {
     hp: number; sh: number; sta: number; cash: number; vault: number; inv: number;
+    /** Restock loadout the vault refills on respawn (sim/vault.ts), e.g. "2 medkit, 8 scaffold · keep $40 · buys". */
+    restock?: string;
+    /** Vault level (sim/vault.ts). */
+    vaultLv?: number;
     /** Damage stress (s left), winded (saving stamina). */
     stress: number; winded: boolean;
     /** Current aim error (deg), reaction delay (s) and what's left of it on the current target. */
@@ -111,13 +118,14 @@ type Internals = {
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
   needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
-  stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number;
+  stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
   defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
   waitFor(c: Ctx): AllyStatus | null; ownFight(c: Ctx): boolean; teamFocus(view: BotView, id: number): number;
   pushLead(view: BotView): { id: number; target: number | null } | null; allyIsland(view: BotView, i: number): boolean;
   sieging(c: Ctx): boolean; nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null;
   hookNote: { t: number; text: string } | null;
+  healNote: { t: number; text: string } | null; healWant: number;
   weaponIntent: { want: string; why: string } | null;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
@@ -267,21 +275,25 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     case 'bank': {
       if (c.on !== home.index) return zero('not home');
       if (view.suddenDeath) return zero('sudden death');
+      if (I.stormPrep(view)) return zero('storm coming: no time for the vault');
       const sc = me.inv.pieces.scaffold ?? 0, need = I.scaffoldsNeeded(c);
       const close = !!c.enemy && c.enemyDist < 8;
       const due = I.insuranceDue(me);
       if ((c.reach || (sc > 0 && sc >= need)) && due > 0 && !close) return { f: [['insurance', 0.8]], why: `Heading out: banking $${Math.round(due)} so I can rebuy a gun if I die` };
-      if (me.inv.cash < 100) return zero('little cash on me');
-      const keep = I.plan({ ...c, me: { ...me, vault: { ...me.vault, cash: 0 } } } as Ctx).spent + 25;
+      const keep = I.bankKeep(c);
       const excess = me.inv.cash - keep;
-      if (excess < 80) return zero('cash is earmarked for gear');
       if (close) return zero('enemy too close');
+      if (I.wantsVaultUpgrade(me)) {
+        const lv = me.vaultLevel ?? 1;
+        return { f: [['vault upgrade', I.P.vault.upgradeScore], ['walk', -dist2D(me.pos, home.vault) / 80]], why: `Rich: buying vault level ${lv + 1} (more interest, deposits from anywhere on my island)` };
+      }
+      if (excess < I.P.vault.bankMin) return zero('little cash on me');
       const k = Math.min(excess, 600) / 600;
       const f: [string, number][] = [['base', 0.2], ['spare cash', 0.3 * k], ['caution', 0.3 * t.caution * k], ['greed', 0.2 * t.greed * k]];
       if (c.danger || I.intruder(c)) f.push(['danger', 0.55]);
       if (c.reach || sc >= need) f.push(['leaving', 0.25]);
-      f.push(['walk', -dist2D(me.pos, home.vault) / 80]);
-      return { f, why: `Carrying $${Math.round(me.inv.cash)}, only $${Math.round(keep)} earmarked for gear: banking the rest` };
+      if (!(me.vaultLevel && me.vaultLevel >= 2)) f.push(['walk', -dist2D(me.pos, home.vault) / 80]);
+      return { f, why: `Carrying $${Math.round(me.inv.cash)} (it drops if I die; the shop pays from the vault): banking all but $${Math.round(keep)}` };
     }
     case 'collect': {
       if (!c.homeReach) return zero("can't walk home");
@@ -426,11 +438,12 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       return { f, why: `A loot bag ${m(dist2D(bag, me.pos))} away${gun ? '' : ', maybe a gun'}: picking it up` };
     }
     case 'cover': {
-      const cv = (I as unknown as { cover: unknown }).cover;
+      const cv = (I as unknown as { cover: { threatId: number; placed: number; phase: string; peeks: number } | null }).cover;
       if (!cv) return zero('no cover planned');
       if (c.enemy && c.enemyDist < 5) return zero('enemy too close to build');
       if (c.enemy && c.enemy.hp + c.enemy.shield < me.hp + me.shield - BT.pushLead) return zero('winning the trade: pushing');
-      return { f: [['base', BT.coverScore], ['builder', 0.1 * t.builder]], why: c.enemy ? `Under fire from @${c.enemy.id}: throwing up cover` : 'Throwing up cover' };
+      const state = cv.placed ? `${cv.placed} wall${cv.placed > 1 ? 's' : ''} up, ${cv.phase === 'hide' ? 'hiding' : 'peeking'} (peek ${cv.peeks})` : 'throwing up a wall';
+      return { f: [['base', BT.coverScore], ['builder', 0.1 * t.builder]], why: `Under fire from @${cv.threatId}: ${state}` };
     }
     case 'fortify': {
       if (view.suddenDeath) return zero('sudden death');
@@ -565,7 +578,8 @@ export class BrainProbe {
     this.fire = fire;
     const b = act.build;
     if (b) {
-      const why = act.build!.kind === 'scaffold' ? 'next bridge deck' : inside(this.bot).goal === 'seal' ? 'plugging a doorway' : 'cover from fire';
+      const I = inside(this.bot) as Internals & { buildWhy?: string | null };
+      const why = I.buildWhy ?? (b.kind === 'scaffold' ? 'next bridge deck' : I.goal === 'seal' ? 'plugging a doorway' : I.goal === 'fortify' ? 'fortifying home' : 'cover from fire');
       this.lastBuild = { b: { kind: b.kind, x: r1(b.pos.x), y: r1(b.pos.y), z: r1(b.pos.z), rotY: r2(b.rotY), why }, t: inside(this.bot).view?.now ?? 0 };
     }
   }
@@ -722,12 +736,15 @@ export function debugBrain(bot: Bot): BrainDigest {
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     ...hookLine(I, me, now),
+    ...healLine(I, me, now),
     ...(me?.alive && I.weaponIntent ? { weapon: I.weaponIntent.why } : {}),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
     st: {
       hp: Math.round(me?.hp ?? 0), sh: Math.round(me?.shield ?? 0), sta: Math.round(me?.stamina ?? 0),
       cash: Math.round(me?.inv.cash ?? 0), vault: Math.round(me?.vault.cash ?? 0), inv: me ? invValue(me.inv) : 0,
+      ...(me?.loadout ? { restock: loadoutLine(me.loadout) } : {}),
+      ...(me ? { vaultLv: me.vaultLevel ?? 1 } : {}),
       stress: r1(me?.mv?.stress ?? 0), winded: I.winded,
       aimErr: r2(tracking ? Math.hypot(aim.err.yaw, aim.err.pitch) * cone * 180 / Math.PI : aim.p.coneRad * 180 / Math.PI),
       react: r2(aim.p.reactSec), reactLeft: r2(tracking ? Math.max(0, aim.seenAt + aim.p.reactSec - now) : 0),
@@ -754,6 +771,17 @@ function hookLine(I: Internals, me: PlayerState | undefined, now: number): { hoo
   if (note) return { hook: note };
   const n = me.inv.grapples ?? 0;
   return n > 0 ? { hook: `Carrying one (${n} use${n === 1 ? '' : 's'}): for crossing gaps, getting away, yanking` } : {};
+}
+
+/** The brain panel's healing line: what it's doing about health now, else what it carries. */
+function healLine(I: Internals, me: PlayerState | undefined, now: number): { heal?: string } {
+  if (!me?.alive) return {};
+  if (me.healAt !== null) return { heal: 'Using a medkit' };
+  if (me.drinking) return { heal: `Drinking ${me.drinking.kind}` };
+  if (I.healNote && now - I.healNote.t < 4) return { heal: I.healNote.text };
+  const n = hpHealsHeld(me), sh = (me.inv.potions.shieldSmall ?? 0) + (me.inv.potions.shieldBig ?? 0);
+  if (!n && !sh && !I.healWant) return {};
+  return { heal: `Carrying ${n} heal${n === 1 ? '' : 's'} (wants ${I.healWant})${sh ? `, ${sh} shield potion${sh === 1 ? '' : 's'}` : ''}` };
 }
 
 function nearest(es: PlayerState[], p: Vec3): PlayerState | null {
@@ -784,4 +812,10 @@ export function fitDigest(d: BrainDigest): BrainDigest {
   }
   if (digestBytes(d) > BRAIN_DIGEST_BUDGET) { d.log = []; d.scores = d.scores.slice(0, 6); }
   return d;
+}
+
+/** One line for the brain panel: what the vault restocks on respawn. */
+function loadoutLine(l: Loadout): string {
+  const items = Object.entries(l.items).map(([k, n]) => `${n} ${k}`).join(', ') || 'no items';
+  return `${items}${l.keep ? ` · keep $${l.keep}` : ''}${l.buy ? ' · buys' : ''}`;
 }

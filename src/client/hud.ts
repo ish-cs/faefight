@@ -15,12 +15,16 @@ const ELIM_WHY: Record<string, string> = { sealed: ': bunker sealed', trapped: '
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
 import { dragOutcome } from './hotbarDrag';
+import { VaultPanel } from './vaultPanel';
+import { bankAboveLoadout, funds, vaultSpec } from '../sim/vault';
 import { SEALED_OUTSIDE_TEXT } from './qol/alerts';
 import { FEED_FADE_MS, FEED_LIFE_MS, FeedList, feedEntries, feedText, type FeedEntry, type FeedMarker } from './qol/killFeed';
 
 const MARK_GLYPH: Record<FeedMarker, string> = { headshot: '◎', explosion: '✸', fall: '↓', water: '≈', storm: '≋', lightning: 'ϟ' };
 
 const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
+/** Carried cash at which the HUD warns it would drop on death. */
+const CARRY_WARN = 150;
 const LABEL: Record<string, string> = {
   fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
@@ -232,12 +236,15 @@ export class Hud {
   private brainSig = '';
   private panel = el('div', 'panel');
   private panelKind: 'shop' | 'potions' | 'vault' | null = null;
-  private vaultCash!: HTMLInputElement;
+  private vaultPanel = new VaultPanel(this.panel, (a) => this.act.vault(a));
+  /** Under the cash: a warning when a lot is carried (it drops on death; the home strip already shows the vault). */
+  private bankNote = el('div', 'bank-note');
 
   constructor(parent: HTMLElement, private act: HudActions) {
     this.hp.append(this.hpFill, this.hpText);
     const tl = el('div', 'tl');
-    tl.append(this.cash, this.gen);
+    tl.append(this.cash, this.bankNote, this.gen);
+    this.bankNote.dataset.testid = 'bank-note';
     this.shield.append(this.shieldFill, el('div', 'shield-segs'), this.shieldText);
     this.shield.dataset.testid = 'shield';
     this.speedBuff.innerHTML = ICONS.speedPotion;
@@ -599,6 +606,10 @@ export class Hud {
     // Spent at a shop: the top-left cash ticks down visibly (the shop itself no longer repeats it).
     if (this.panelKind && inv.cash < this.lastCash) this.flash(this.cash, 'spent');
     this.lastCash = inv.cash;
+    // Carried cash drops on death; the vault never does (and shops take it). Warn once a fair sum is carried.
+    const risky = !this.practice && inv.cash >= CARRY_WARN;
+    setText(this.bankNote, risky ? `$${Math.floor(inv.cash)} carried drops if you die · bank it` : '');
+    this.bankNote.classList.toggle('risk', risky);
     this.updateStamina(watching ? me.stamina : ctx.stamina ?? me.stamina, me.alive);
     setText(this.watchTag, watching ? `${me.isBot ? 'BOT · ' : ''}${me.name}` : '');
 
@@ -793,6 +804,12 @@ export class Hud {
         this.addFeed('Sudden death: generators stopped, the storm is closing in', true);
         this.stormWarnUntil = performance.now() + 4000;
         this.stormWarn.style.display = 'flex';
+      } else if (e.type === 'vaultUpgrade' && e.data.player === this.humanId) {
+        this.addFeed(`Vault upgraded to Lv${e.data.level}`);
+      } else if (e.type === 'restock' && e.data.player === this.humanId) {
+        const d = e.data as { moved: number; bought: number; spent: number; cash: number };
+        const parts = [d.moved ? `${d.moved} from the vault` : '', d.bought ? `${d.bought} bought ($${d.spent})` : '', d.cash ? `$${d.cash} cash` : ''].filter(Boolean);
+        this.addFeed(`Restocked: ${parts.join(' · ')}`);
       } else if (e.type === 'kill') {
         const v = this.viewId || this.humanId;
         if (e.data.killer === v && e.data.victim !== v) this.hitmarker(false, true);
@@ -1015,14 +1032,14 @@ export class Hud {
       }
     }
     const panelCash = this.panel.querySelector('.panel-cash') as HTMLElement | null;
-    if (panelCash) setText(panelCash, this.practice ? 'Practice: everything is free' : `Carrying $${me.inv.cash}`);
+    if (panelCash) setText(panelCash, this.practice ? 'Practice: everything is free' : `Carrying $${me.inv.cash} · vault $${Math.floor(me.vault.cash)}`);
     const genLevel = this.snap?.genLevels?.[me.island] ?? 1;
     // Any island's shop NPC sells to you, but upgrades and locks only at your own.
     const atHome = this.practice || (!!this.map[me.island] && dist2D(this.map[me.island].shop, me.pos) <= ECONOMY.interactRadius);
     for (const b of Array.from(this.panel.querySelectorAll<HTMLButtonElement>('.shop-item'))) {
       const item = b.dataset.item as ShopItem;
       const price = priceOf(item, genLevel, me);
-      const poor = me.inv.cash < price;
+      const poor = funds(me) < price;
       const lockGun = lockedGunOf(item);
       let status = '';
       let badge = '';
@@ -1058,7 +1075,7 @@ export class Hud {
       setText(b.querySelector('.ibadge') as HTMLElement, badge);
       b.dataset.st = status;
       // Info-bar text: what it does + why it can't be bought right now.
-      const why = status === 'Home shop' ? ' · only at your home shop' : status && status !== 'Max' ? ` · ${status}` : poor ? ` · need $${price - me.inv.cash} more` : '';
+      const why = status === 'Home shop' ? ' · only at your home shop' : status && status !== 'Max' ? ` · ${status}` : poor ? ` · need $${price - funds(me)} more` : '';
       const details = detailsOf(item, price, genLevel, me) + why;
       if (b.dataset.name !== details) b.dataset.name = details;
       if (this.shopHover === b) setText(this.panel.querySelector('.shop-info') as HTMLElement, details);
@@ -1089,57 +1106,37 @@ export class Hud {
   }
 
   private renderVault() {
-    const cashRow = el('div', 'vault-cash');
-    this.vaultCash = el('input', 'cash-input');
-    this.vaultCash.type = 'number';
-    this.vaultCash.min = '0';
-    this.vaultCash.placeholder = 'Amount';
-    this.vaultCash.dataset.testid = 'vault-amount';
-    const amt = () => Math.max(0, Math.floor(Number(this.vaultCash.value) || 0));
-    const btn = (t: string, f: () => void, id: string) => { const b = el('button', 'btn small', t); b.onclick = f; b.dataset.testid = id; return b; };
-    cashRow.append(this.vaultCash,
-      btn('Deposit', () => amt() && this.act.vault({ deposit: { cash: amt() } }), 'vault-deposit'),
-      btn('Withdraw', () => amt() && this.act.vault({ withdraw: { cash: amt() } }), 'vault-withdraw'),
-      btn('Deposit all', () => this.me && this.me.inv.cash > 0 && this.act.vault({ deposit: { cash: this.me.inv.cash } }), 'vault-deposit-all'),
-      btn('Withdraw all', () => this.me && this.me.vault.cash > 0 && this.act.vault({ withdraw: { cash: this.me.vault.cash } }), 'vault-withdraw-all'));
-    const cols = el('div', 'vault-cols');
-    cols.append(el('div', 'vault-col carried'), el('div', 'vault-col stored'));
-    this.panel.replaceChildren(this.header('Vault'), cashRow, cols);
-    this.refreshVault(true);
-  }
-
-  private vaultSig = '';
-
-  private refreshVault(force = false) {
     const me = this.panelMe ?? this.me;
     if (!me) return;
-    const sig = JSON.stringify([me.inv, me.vault]);
-    if (!force && sig === this.vaultSig) return;
-    this.vaultSig = sig;
-    const col = (side: 'carried' | 'stored') => {
-      const inv: Inventory = side === 'carried' ? me.inv : me.vault;
-      const verb = side === 'carried' ? 'deposit' : 'withdraw';
-      const node = this.panel.querySelector(`.vault-col.${side}`) as HTMLElement;
-      const rows: HTMLElement[] = [el('div', 'vault-col-title', `${side === 'carried' ? 'Carried' : 'In vault'} · $${inv.cash}`)];
-      const row = (label: string, req: VaultAction['deposit']) => {
-        const r = el('div', 'vault-row');
-        const b = el('button', 'btn small', side === 'carried' ? 'Store →' : '← Take');
-        b.onclick = () => this.act.vault({ [verb]: req });
-        r.append(el('span', '', label), b);
-        rows.push(r);
-      };
-      for (const [k, a] of Object.entries(inv.weapons)) if (a) row(`${LABEL[k]}  ${a.mag}/${a.spare}`, { weapons: { [k]: a } });
-      for (const [k, n] of Object.entries(inv.pieces)) if (n) row(`${LABEL[k]} ×${n}`, { pieces: { [k]: n } });
-      if (inv.grenades) row(`Grenades ×${inv.grenades}`, { grenades: inv.grenades });
-      if (inv.charges) row(`Charges ×${inv.charges}`, { charges: inv.charges });
-      if (inv.medkits) row(`Medkits ×${inv.medkits}`, { medkits: inv.medkits });
-      if (inv.traps) row(`Spike traps ×${inv.traps}`, { traps: inv.traps });
-      for (const [k, n] of Object.entries(inv.potions ?? {})) if (n) row(`${LABEL[k]} ×${n}`, { potions: { [k]: n } });
-      if (rows.length === 1) rows.push(el('div', 'vault-empty', 'No gear'));
-      node.replaceChildren(...rows);
-    };
-    col('carried');
-    col('stored');
+    this.vaultPanel.render(this.header('Vault'), me);
+  }
+
+  private refreshVault() {
+    const me = this.panelMe ?? this.me;
+    if (me) this.vaultPanel.refresh(me);
+  }
+
+  /** At my vault, or (remote vault level) anywhere on my island. */
+  canBankHere(): boolean {
+    const me = this.me, isl = me ? this.map[me.island] : undefined;
+    if (!me || !isl || !me.alive) return false;
+    if (dist2D(isl.vault, me.pos) <= ECONOMY.interactRadius) return true;
+    if (vaultSpec(me).remote && dist2D(isl.center, me.pos) <= isl.radius + 1) return true;
+    this.addFeed('Quick-bank works at your vault (from vault Lv2: anywhere on your island)');
+    return false;
+  }
+
+  /** Hold E at the vault (or the panel's button): everything above the restock loadout goes in. */
+  quickBank(): boolean {
+    const me = this.me;
+    if (!me) return false;
+    const dep = bankAboveLoadout(me);
+    if (!dep) { this.addFeed('Nothing to bank above your restock loadout'); return false; }
+    this.act.vault({ deposit: dep });
+    const items = Object.values(dep.pieces ?? {}).reduce((a, n) => a + (n ?? 0), 0) + Object.values(dep.potions ?? {}).reduce((a, n) => a + (n ?? 0), 0) +
+      (dep.grenades ?? 0) + (dep.charges ?? 0) + (dep.medkits ?? 0) + (dep.traps ?? 0);
+    this.addFeed(`Banked${dep.cash ? ` $${dep.cash}` : ''}${dep.cash && items ? ' +' : ''}${items ? ` ${items} item${items === 1 ? '' : 's'}` : ''}`);
+    return true;
   }
 }
 export { BrainInspector } from './brainPanel';

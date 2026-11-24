@@ -33,7 +33,17 @@ export type GunKind = Exclude<WeaponKind, 'fists'>;
 export type LockItem = `lock:${GunKind}`;
 export type ShopItem = PieceKind | GunKind | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind | 'genUpgrade' | LockItem | 'trap' | 'grapple';
 export type ShopAction = { buy: ShopItem };
-export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory> };
+/**
+ * Restock loadout (sim/vault.ts): on respawn the vault refills the hotbar up to these counts (a gun or the
+ * grappling hook counts as 1), then tops carried cash up to `keep`; with `buy`, what the vault lacks is bought
+ * with vault cash at shop prices.
+ */
+export type Loadout = { items: Partial<Record<HotbarItem, number>>; keep: number; buy: boolean };
+/**
+ * Vault moves (withdraw at your own vault; deposit there or, from vault level 2, anywhere on your island; 1 s busy),
+ * a vault upgrade (at the vault), and/or a new restock loadout (accepted anywhere).
+ */
+export type VaultAction = { deposit?: Partial<Inventory>; withdraw?: Partial<Inventory>; loadout?: Loadout; upgrade?: true };
 
 /**
  * `seq`: the movement command (MoveCmd.seq) the client placed after, i.e. where its predicted player stood when it
@@ -122,6 +132,10 @@ export type PlayerState = {
   lastDamagedAt: number;
   inv: Inventory;
   vault: Inventory;
+  /** Respawn restock loadout (sim/vault.ts); absent = none. Private: only sent to its owner. */
+  loadout?: Loadout;
+  /** Vault level (sim/vault.ts VAULT_LEVELS); absent = 1. Private: only sent to its owner. */
+  vaultLevel?: number;
   /** Guns bought back on every respawn (full mag + one spare). Private: only sent to their owner. */
   locked: GunKind[];
   /** Nine slots of item kinds held; counts are in `inv`. */
@@ -221,6 +235,10 @@ export type MatchEventType =
   | 'trap'
   /** A wooden pier section broke (docks.ts): data { id, island, row, pos, rotY, by, kind }. */
   | 'dockBroken'
+  /** Respawn restock from the vault (sim/vault.ts): data { player, moved, bought, cash }. */
+  | 'restock'
+  /** Bought a vault level: data { player, level }. */
+  | 'vaultUpgrade'
   /**
    * Elimination credit (elimination.ts): data { victim, by (eliminator, null = nobody), assists: number[],
    * how: 'killed' | 'sealed' | 'trapped' | 'other', spoils (total $), shares: [id, $][] }.

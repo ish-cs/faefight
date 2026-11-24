@@ -75,6 +75,13 @@ let cdp = null;
 if (throttle > 1) { const t = await ctx.newCDPSession(page); await t.send('Emulation.setCPUThrottlingRate', { rate: throttle }); }
 if (prof) { cdp = await ctx.newCDPSession(page); await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 500 }); await cdp.send('Profiler.start'); }
 const profStart = await page.evaluate(() => performance.now());
+// heap via the inspector (answered on a V8 interrupt, so it also samples inside long tasks, unlike a page timer)
+const heapCdp = await ctx.newCDPSession(page);
+let heapCdpPeak = 0, heapPoll = true, heapCdpN = 0;
+void (async () => { while (heapPoll) { try { const h = await heapCdp.send('Runtime.getHeapUsage'); heapCdpPeak = Math.max(heapCdpPeak, h.usedSize + (h.backingStorageSize ?? 0)); heapCdpN++; } catch { break; } await new Promise((r) => setTimeout(r, 50)); } })();
+// Chrome trace of GC events: heap size before every collection = the true peak, including inside long tasks where
+// the page's own sampler can't run.
+await browser.startTracing(page, { categories: ['devtools.timeline', 'v8', 'disabled-by-default-v8.gc'] });
 console.error(`[t] click at ${((Date.now() - t0wall) / 1000).toFixed(1)}s`);
 await page.getByTestId('play-hard').click();
 const clickAt = await page.evaluate(() => performance.now());
@@ -83,6 +90,16 @@ const phases = await page.evaluate(() => window.__faefightLoading.events().map((
 const hideAt = await page.evaluate(() => [...window.__faefightLoading.events()].reverse().find((e) => e.kind === 'hide').t);
 await page.waitForTimeout(Math.max(0, hideAt + AFTER * 1000 - (await page.evaluate(() => performance.now()))));
 
+heapPoll = false;
+let gcPeakMB = 0, gcCount = 0;
+try {
+  const trace = JSON.parse(String(await browser.stopTracing()));
+  for (const e of trace.traceEvents ?? []) {
+    const before = e.args?.usedHeapSizeBefore ?? e.args?.data?.usedHeapSizeBefore;
+    if (typeof before === 'number' && /GC/.test(e.name)) { gcCount++; gcPeakMB = Math.max(gcPeakMB, Math.round(before / 1048576)); }
+  }
+} catch (err) { errors.push(`trace: ${err}`); }
+const heapCdpPeakMB = Math.round(heapCdpPeak / 1048576);
 // steady state: game fps over 3 s
 await page.evaluate(() => window.__faefight.resetFrames());
 await page.waitForTimeout(3000);
@@ -126,10 +143,11 @@ const out = {
   first10s: win(hideAt, hideAt + AFTER * 1000),
   loadTo10s: win(clickAt, hideAt + AFTER * 1000),
   steadyFps: +(1000 / steady.avg).toFixed(1), steadyCpuMs: +steady.cpuAvg.toFixed(2),
-  gpuPeakMB: +(st.gpuPeak / 1048576).toFixed(0),
+  gpuPeakMB: +(st.gpuPeak / 1048576).toFixed(0), heapCdpPeakMB, heapCdpN, gcPeakMB, gcCount,
   toggles: tv,
   syncLoading: (() => { const c = {}; for (const [t, k, l] of st.pipes) if (t >= clickAt && t < hideAt && k === 'sync') { const n = l.replace(/_\d+$/, ''); c[n] = (c[n] ?? 0) + 1; } return Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, v]) => `${k}×${v}`).join(' '); })(),
   syncToggles: (() => { const c = {}; for (const [t, k, l] of st.pipes) if (t >= (toggles[0]?.[0] ?? endAt) && k === 'sync') { const n = l.replace(/_\d+$/, ''); c[n] = (c[n] ?? 0) + 1; } return Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, v]) => `${k}×${v}`).join(' '); })(),
+  heapCurve: (() => { const out = []; for (let t = clickAt; t < hideAt + 2000; t += 500) { const xs = st.heap.filter(([x]) => x >= t && x < t + 500).map(([, b]) => b); if (xs.length) out.push(`${((t - clickAt) / 1000).toFixed(1)}:${Math.round(Math.max(...xs) / 1048576)}`); } return out.join(' '); })(),
   longList: st.long.filter(([t]) => t >= clickAt && t < hideAt + AFTER * 1000).map(([t, d]) => `${((t - clickAt) / 1000).toFixed(2)}s:${Math.round(d)}`).join(' '),
   loadEvents: phases.filter((e) => e.t >= clickAt).map((e) => `${((e.t - clickAt) / 1000).toFixed(2)} ${e.kind} ${e.phase ?? ''} ${e.label ?? ''}`).filter((x, i, a) => i === 0 || x.split(' ').slice(1, 3).join(' ') !== a[i - 1].split(' ').slice(1, 3).join(' ')).join(' | '),
   logs: logs.slice(-12), errors: errors.slice(0, 12),

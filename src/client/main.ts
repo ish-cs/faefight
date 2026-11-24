@@ -54,6 +54,7 @@ import type { Predictor } from './predict';
 import { MAX_CMDS_PER_MSG } from '../net/sanitize';
 import { SealAnnouncer } from './announce';
 import { BULK_PIECES, BuyQueue } from './qol/combatQol';
+import { HoldTap, VaultQueue } from './vaultUi';
 import { netStatus, QolHud } from './qol/hudExtras';
 import { Killcam } from './qol/killcam';
 import { addInviteButton } from './qol/invite';
@@ -1254,13 +1255,21 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const leave = () => { clearRejoin(); leaveToMenu(); };
   // Shop buys go through a paced queue: Shift+click buys several pieces, one per sim tick.
   const buys = new BuyQueue();
+  // Vault panel moves (drags, splits, cash) go out one per tick, in order.
+  const vaultMoves = new VaultQueue();
+  // E at your vault: tap opens the panel, hold quick-banks everything above the restock loadout.
+  const vaultHold = new HoldTap();
+  window.addEventListener('keyup', (e) => {
+    if (!isAction('interact', e.code) || !vaultHold.pending) return;
+    vaultHold.release(() => openPanel('vault'));
+  });
   const buyItem = (item: ShopItem, bulk = false) => {
     buys.add(item, bulk && isPieceItem(item) ? BULK_PIECES : 1);
     if (qol.lastBuy !== item) { qol.lastBuy = item; savePrefs({ lastBuy: item }); }
   };
   const hud = new Hud(app, {
     buy: (item, bulk) => buyItem(item, bulk),
-    vault: (a) => input.queue({ vault: a }),
+    vault: (a) => vaultMoves.add(a),
     closePanel,
     backToMenu: leave,
     endButtons: (over) => endButtons(end.role, over, {
@@ -1309,9 +1318,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const input = new InputController(canvas, {
     interact: () => {
       const station = hud.nearStation();
-      if (station === 'shop' || station === 'potions' || station === 'vault') openPanel(station);
+      if (station === 'vault') vaultHold.start(() => { if (hud.quickBank()) audio.ui('vault'); });
+      else if (station === 'shop' || station === 'potions') openPanel(station);
       else input.queue({ interact: true });
     },
+    bank: () => { if (hud.canBankHere() && hud.quickBank()) audio.ui('vault'); },
     place: () => { placeWantedAt = performance.now(); tryPlace(); },
     lockChange: (locked) => {
       if (!locked) closeWheel(); // Esc while the wheel is open lands here (the browser takes Esc first)
@@ -1784,55 +1795,75 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     else if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
   };
 
+  function mapReady(def: MapDef, id: number, island: number) {
+    mapDef = def;
+    map = def.islands;
+    if (practice) renderer.dayNight.setCycle(null); // the range has no sudden death: always day
+    loading.progress('map', 1, `Building ${def.name}`);
+    maybeWarm();
+    watching = id === 0;
+    if (id === 0) {
+      // Spectating host: no player of our own; start the free-fly camera high over the islands.
+      const m = map;
+      const cx = m.reduce((a, i) => a + i.center.x, 0) / m.length, cz = m.reduce((a, i) => a + i.center.z, 0) / m.length;
+      const r = Math.max(...m.map((i) => Math.hypot(i.center.x - cx, i.center.z - cz) + i.radius));
+      renderer.camera.position.set(cx, m[0].groundY + r * 0.55, cz + r * 1.05);
+      input.yaw = 0;
+      input.pitch = -0.45;
+    } else
+    // Client-side prediction of our own movement (same movement code + a local collision world).
+    import('./predict').then(({ Predictor: P }) => P.create(def, id)).then((p) => { predictor = p; },
+      (err) => console.error('[predict] could not start; falling back to server positions', err));
+    hud.setMap(map, humanId, island, def.center);
+    hud.suddenDeathAt = def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt;
+    hud.genMult = def.settings?.genMult ?? 1;
+    if (practice && map[island]) practice.setBunker(map[island].bunker);
+    qol.setMap(map, humanId, island);
+    audio.setMap(map, humanId, def.docks ?? []);
+    mapBuilding = false;
+    for (const s of heldSnaps.splice(0)) onSnapshot(s);
+  }
+  function onSnapshot(s: Snapshot) {
+    // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
+    // A predicted piece this snapshot shows the host refused leaves the local world first, so prediction
+    // replays without it (we fall where the host has us fall, instead of standing on it for a second).
+    const mine = s.players.find((p) => p.id === humanId);
+    if (mine?.mv) {
+      const refused = builds.refusedBy(s.pieces, mine.mv.ack, mine.busyUntil > s.time, performance.now());
+      if (refused.length) { for (const p of refused) predictor?.removeLocalPiece(p.id); renderer.setPredictedPieces(builds.pieces); notPlaced(refused); }
+    }
+    predictor?.onSnapshot(s);
+    killcam.push(s);
+    latest = s;
+    if (buffer) qol.onNetSnapshot();
+    shots.reconcile(s.events, humanId, performance.now());
+    renderer.ingest(s);
+    if (buffer) buffer.push(s); else applySnapshot(s);
+  }
+  // The map builds over many short tasks (Renderer.setMap): snapshots arriving meanwhile wait here and are applied
+  // in order once it's done, as they used to queue behind the single 1.5 s build task.
+  let mapBuild: Promise<void> = Promise.resolve();
+  let mapBuilding = false;
+  const heldSnaps: Snapshot[] = [];
   backend.connect({
     map: (def, id, island) => {
-      mapDef = def;
-      map = def.islands;
+      mapBuilding = true;
       humanId = id;
       if (id) selfId = id;
-      console.info(`[main] map: ${def.name} (${def.template}, ${map.length} islands)`);
+      console.info(`[main] map: ${def.name} (${def.template}, ${def.islands.length} islands)`);
       loading.progress('map', 0, `Loading ${def.name}`);
-      renderer.setMap(def, humanId);
-      if (practice) renderer.dayNight.setCycle(null); // the range has no sudden death: always day
-      loading.progress('map', 1, `Building ${def.name}`);
-      maybeWarm();
-      watching = id === 0;
-      if (id === 0) {
-        // Spectating host: no player of our own; start the free-fly camera high over the islands.
-        const m = map;
-        const cx = m.reduce((a, i) => a + i.center.x, 0) / m.length, cz = m.reduce((a, i) => a + i.center.z, 0) / m.length;
-        const r = Math.max(...m.map((i) => Math.hypot(i.center.x - cx, i.center.z - cz) + i.radius));
-        renderer.camera.position.set(cx, m[0].groundY + r * 0.55, cz + r * 1.05);
-        input.yaw = 0;
-        input.pitch = -0.45;
-      } else
-      // Client-side prediction of our own movement (same movement code + a local collision world).
-      import('./predict').then(({ Predictor: P }) => P.create(def, id)).then((p) => { predictor = p; },
-        (err) => console.error('[predict] could not start; falling back to server positions', err));
-      hud.setMap(map, humanId, island, def.center);
-      hud.suddenDeathAt = def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt;
-      hud.genMult = def.settings?.genMult ?? 1;
-      if (practice && map[island]) practice.setBunker(map[island].bunker);
-      qol.setMap(map, humanId, island);
-      audio.setMap(map, humanId, def.docks ?? []);
+      let steps = 0;
+      const t0 = performance.now();
+      mapBuild = mapBuild.then(() => renderer.setMap(def, id, () => loading.progress('map', Math.min(0.95, ++steps / (def.islands.length + 12)), `Building ${def.name}`)))
+        .then(() => {
+          console.info(`[main] map built in ${Math.round(performance.now() - t0)} ms (${steps} steps)`);
+          mapReady(def, id, island);
+        }, (err) => {
+          console.error('[main] map build failed', err);
+          showFatal('Could not build the map', String(err));
+        });
     },
-    snapshot: (s) => {
-      // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
-      // A predicted piece this snapshot shows the host refused leaves the local world first, so prediction
-      // replays without it (we fall where the host has us fall, instead of standing on it for a second).
-      const mine = s.players.find((p) => p.id === humanId);
-      if (mine?.mv) {
-        const refused = builds.refusedBy(s.pieces, mine.mv.ack, mine.busyUntil > s.time, performance.now());
-        if (refused.length) { for (const p of refused) predictor?.removeLocalPiece(p.id); renderer.setPredictedPieces(builds.pieces); notPlaced(refused); }
-      }
-      predictor?.onSnapshot(s);
-      killcam.push(s);
-      latest = s;
-      if (buffer) qol.onNetSnapshot();
-      shots.reconcile(s.events, humanId, performance.now());
-      renderer.ingest(s);
-      if (buffer) buffer.push(s); else applySnapshot(s);
-    },
+    snapshot: (s) => { if (mapBuilding) heldSnaps.push(s); else onSnapshot(s); },
     // Ghost validation is local now (buildAim); the sim's preview only answers debug cross-checks.
     preview: (result, key) => { debugPreviews.get(key)?.(result); debugPreviews.delete(key); },
     chat: (from, text) => chat.add(from, text),
@@ -2079,6 +2110,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // with the live input so a key press shows on the very next frame.
     const nextBuy = buys.take(now);
     if (nextBuy) input.queue({ shop: { buy: nextBuy } });
+    const nextVault = vaultMoves.take(now);
+    if (nextVault) input.queue({ vault: nextVault });
     let sample = input.sample();
     if (sample.jump) jumpLatch = true;
     const liveCmd = (seq: number): MoveCmd => ({ seq, moveX: sample.moveX, moveZ: sample.moveZ, yaw: input.yaw, jump: jumpLatch, sprint: sample.sprint });

@@ -14,7 +14,7 @@ const label = document.getElementById('label')!;
 const r = await Renderer.create(canvas);
 r.world.sky.setQuality('high');
 const def = buildMapDef(2);
-r.setMap(def, 0);
+await r.setMap(def, 0);
 const C = def.islands[0].center, GY = def.islands[0].groundY;
 
 let pieces: PieceState[] = [];

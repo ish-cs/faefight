@@ -15,7 +15,7 @@ const canvas = document.getElementById('c') as HTMLCanvasElement;
 const r = await Renderer.create(canvas);
 const def = buildMapDef(8);
 const HUMAN = 100;
-r.setMap(def, HUMAN);
+await r.setMap(def, HUMAN);
 await r.characters.ready;
 const isl = def.islands[0];
 const yaw0 = isl.bunker.facingYaw;

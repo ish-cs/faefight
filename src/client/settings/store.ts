@@ -51,7 +51,7 @@ export type Settings = {
     commentaryOn: boolean; commentary: number; captions: boolean; commentarySpectate: boolean;
     /** Browser voice names for play-by-play and colour ('' = pick the best installed automatically). */
     voicePbp: string; voiceColour: string;
-    /** 'browser': speechSynthesis (default). 'neural': a free neural voice when the build ships one (downloaded once), browser voice until it's ready. */
+    /** 'browser' (default): speechSynthesis. 'neural' (opt-in, Settings → Neural voice): the free Kokoro voice on WebGPU, downloaded once (~160 MB); the browser voice until it's ready or without WebGPU. */
     voiceEngine: VoiceEngine;
     /** Kokoro voice ids per commentator ('' = default pair). */
     neuralPbp: string; neuralColour: string };

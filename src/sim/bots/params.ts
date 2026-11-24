@@ -107,10 +107,15 @@ export type DriveParams = {
  * - misplace: odds a piece goes somewhere silly (off to the side, skewed).
  * - fort: share of the home fortification plan this player bothers with (before personality).
  * - peekHide / peekOut: seconds behind cover and out shooting when peeking.
+ * - pieceSec: fastest a hand can throw combat pieces one after another (s, human cap; on top of the sim's placeSec).
+ * - ramp: odds a fight calls for a ramp (high ground, or up to a rival standing higher); 0 = never.
+ * - rampChain: ramps chained forward and up toward the rival from a perch (0 = one ramp only).
+ * - reinforce: odds of answering a cracked cover wall with a fresh (stronger) one beside it instead of soaking it.
  */
 export type BuildSkill = {
   coverChance: number; coverDelay: number; gap: number; misplace: number; fort: number;
   peekHide: number; peekOut: number; highGround: boolean; bridgeCover: boolean; altRoute: boolean;
+  pieceSec: number; ramp: number; rampChain: number; reinforce: number;
 };
 
 /** Every building tunable outside the per-skill table. */
@@ -163,6 +168,22 @@ export type BuildTuning = {
   freeSlots: number;
   /** Goal weights: covering under fire beats fighting in the open; fortifying is a calm-time job. */
   coverScore: number; fortifyScore: number;
+  /** A cover wall below this share of its hp counts as cracked (reinforce or move). */
+  crackedAt: number;
+  /** Holding the same cover this long (s), or at home, a fresh wall is the strongest I carry (else the fastest, cheapest). */
+  holdSec: number;
+  /** Wall set this far (m) to the side away from where I peek, so the peek step is short. */
+  coverOffset: number;
+  /** Peek step past the wall's edge (m). */
+  peekStep: number;
+  /** Spare ramps carried by skill (skills with ramp > 0), and metal walls carried beside wood by skilled players once rich. */
+  rampCarry: Record<Difficulty, number>; metalCarry: Record<Difficulty, number>;
+  /** Ramp toward a rival standing at least this much higher (m), within highGroundRange. */
+  rampUpTo: number;
+  /** Ramps bought right after the gun (before bridging gear) by skill, if the cash is there. */
+  rampFirst: Record<Difficulty, number>;
+  /** Masters (reinforce > 0.8) throw a plug piece down as cover when the rival's bunker is further than this (m). */
+  kitCoverM: number;
 };
 
 /**
@@ -250,6 +271,41 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
 export type GunSkill = { recoilComp: number; burstShots: number; burstPause: number; sprayRange: number };
 
 /**
+ * Healing (heal.ts): what a strong player keeps stocked and when they use it, mid-fight included.
+ * - stock / stockAt / stockPer / stockMax: carry `stock` heals (medkits + heal potions) once `stockAt` cash (carried +
+ *   banked) is in hand, one more per `stockPer` above that, at most `stockMax`.
+ * - safeHp: out of a fight (no enemy in sight, unhurt for quietSec s), patch hp up at or below this.
+ * - midFight: >= 0.5 heals mid-fight too; below that only between fights (Easy: a weak player forgets the medkit
+ *   until the fight is over; with mid-fight heals Easy out-placed Medium in mixed FFAs, 5.01 vs 5.06).
+ * - fightHp: in a fight, hp + shield at or below this wants a heal; a burst of `burst` damage (about a second) wants one
+ *   up to fightHp + burstHp.
+ * - pressHp: the enemy in front of me at or under this hp + shield (and not above me): press the kill, no heal.
+ * - openDist: an enemy in sight this far off or more: heal where I stand.
+ * - reloadWeight: chance (per incident) to use an enemy's reload as the heal window (an item that finishes within their
+ *   reload + reloadSlack s).
+ * - coverFirst: chance (per incident) to break line of sight before healing; hideSec: give up hiding after this long
+ *   and heal in the open. Below PRO 0: measured, hiding to heal dragged hard-vs-hard duels out (decisive 29/40 vs 37/40
+ *   on main, ×40) while healing where I stand kept them decisive (39/40). PRO too on the post-seal-fix main (pro-vs-hard decisive).
+ * - hideM: cover this close (or a wall I can throw) is worth breaking line of sight for; farther, heal where I stand.
+ * - reHealSec: after a mid-fight heal, no other one for this long unless a burst lands (one heal per exchange: fights end).
+ * - pressLead: mid-fight, my hp + shield this far above the enemy in front of me: push the kill instead of healing.
+ * - punishHp: an enemy in sight healing (medkit or drink) while my hp + shield is at least this: rush them.
+ * - detourM: a potion seller this close on my island, short of heals and no enemy in sight: go buy heal potions.
+ * - slotValue / keep: a full hotbar drops its least-wanted item (keep weight under slotValue) to make room for a heal.
+ */
+export type HealParams = {
+  stock: Record<Difficulty, number>; stockAt: Record<Difficulty, number>; stockPer: number; stockMax: number;
+  safeHp: Record<Difficulty, number>; quietSec: number; midFight: Record<Difficulty, number>;
+  fightHp: Record<Difficulty, number>; burst: number; burstHp: number; pressHp: number; openDist: number;
+  reloadWeight: Record<Difficulty, number>; reloadSlack: number;
+  coverFirst: Record<Difficulty, number>; hideSec: number;
+  reHealSec: number; pressLead: number; punishHp: number; hideM: number;
+  detourM: number;
+  slotValue: number;
+  keep: { pistol: number; trap: number; ramp: number; speedPotion: number; grapple: number; sandbags: number; grenade: number };
+};
+
+/**
  * Weapon in hand (like a strong human: commit to a weapon, finish a reload, never thrash; a switch cancels a reload).
  * - holdSec: after a switch, keep the new weapon at least this long (unless it's out of ammo, or empty in a close fight);
  *   rocketHoldSec for the rocket launcher (drawn for a shot, it gets fired) unless an enemy is a threat.
@@ -259,7 +315,24 @@ export type GunSkill = { recoilComp: number; burstShots: number; burstPause: num
  */
 export type WeaponParams = { holdSec: number; rocketHoldSec: number; threatM: number; hurtSec: number; shotgunHyst: number };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams };
+/**
+ * The vault (sim/vault.ts), used like a strong player: shops pay from it anywhere, so cash is banked rather than
+ * carried (it drops on death), and a restock loadout refills the hotbar on every respawn.
+ * - medkits / scaffolds: restock loadout counts by skill (0 = not in the loadout).
+ * - keep: carried cash the loadout tops up on respawn (pocket money for a potion seller off-island).
+ * - buy: >= 0.5 lets the vault buy what it lacks for the loadout with vault cash.
+ * - carry: carried cash a bank trip leaves on me, by skill (a weak player carries too much); bankMin: carried excess worth a trip to the vault.
+ * - upgradeAt: cash (carried + banked) to have to spare beyond the next vault level's price before buying it.
+ * - upgradeScore: goal score of the trip to the vault to buy that level.
+ * - healSlot: hotbar slots of the building reserve (buildTuning.freeSlots) a medkit on the hotbar already fills.
+ */
+export type VaultParams = {
+  medkits: Record<Difficulty, number>; scaffolds: Record<Difficulty, number>; keep: Record<Difficulty, number>;
+  buy: Record<Difficulty, number>; carry: Record<Difficulty, number>; bankMin: number; upgradeAt: Record<Difficulty, number>; upgradeScore: number;
+  healSlot: number;
+};
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -307,10 +380,10 @@ export const DRIVE: DriveParams = {
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
-  easy: { coverChance: 0.25, coverDelay: 1.4, gap: 1.6, misplace: 0.35, fort: 0.3, peekHide: 2.0, peekOut: 1.6, highGround: false, bridgeCover: false, altRoute: false },
-  medium: { coverChance: 0.55, coverDelay: 0.8, gap: 0.8, misplace: 0.12, fort: 0.55, peekHide: 1.4, peekOut: 1.3, highGround: false, bridgeCover: true, altRoute: false },
-  hard: { coverChance: 0.7, coverDelay: 0.5, gap: 0.3, misplace: 0.03, fort: 0.85, peekHide: 1.0, peekOut: 1.2, highGround: false, bridgeCover: true, altRoute: true },
-  pro: { coverChance: 0.95, coverDelay: 0.22, gap: 0.05, misplace: 0, fort: 1, peekHide: 0.6, peekOut: 0.9, highGround: true, bridgeCover: true, altRoute: true },
+  easy: { coverChance: 0.25, coverDelay: 1.4, gap: 1.6, misplace: 0.35, fort: 0.3, peekHide: 2.0, peekOut: 1.6, highGround: false, bridgeCover: false, altRoute: false, pieceSec: 1.2, ramp: 0, rampChain: 0, reinforce: 0 },
+  medium: { coverChance: 0.55, coverDelay: 0.8, gap: 0.8, misplace: 0.12, fort: 0.55, peekHide: 1.4, peekOut: 1.3, highGround: false, bridgeCover: true, altRoute: false, pieceSec: 0.7, ramp: 0, rampChain: 0, reinforce: 0 },
+  hard: { coverChance: 0.7, coverDelay: 0.5, gap: 0.3, misplace: 0.03, fort: 0.85, peekHide: 1.0, peekOut: 1.2, highGround: true, bridgeCover: true, altRoute: true, pieceSec: 0.45, ramp: 0, rampChain: 0, reinforce: 0.65 },
+  pro: { coverChance: 0.95, coverDelay: 0.22, gap: 0.05, misplace: 0, fort: 1, peekHide: 0.6, peekOut: 0.9, highGround: true, bridgeCover: true, altRoute: true, pieceSec: 0.3, ramp: 0, rampChain: 1, reinforce: 1 },
 };
 
 export const BUILD_TUNING: BuildTuning = {
@@ -329,12 +402,15 @@ export const BUILD_TUNING: BuildTuning = {
   coverNearSpot: 3, coverForgetSec: 6,
   coverMaxPieces: 3, coverRetrySec: 5,
   coverDist: [1.3, 1.6, 1.05],
-  highGroundRange: [8, 35] as const, highGroundAfter: 2.5, perchSec: 12,
+  highGroundRange: [5, 35] as const, highGroundAfter: 1.2, perchSec: 12,
   slotBackoffSec: 30,
   pushLead: 30,
   bridgeRetrySec: 0.5, bridgeStuckSec: 4, bridgeHoldSec: 20, laneBanSec: 90,
   freeSlots: 2,
   coverScore: 1.05, fortifyScore: 0.5,
+  crackedAt: 0.45, holdSec: 4, coverOffset: 0.45, peekStep: 0.7,
+  rampCarry: D(0, 0, 1, 2), metalCarry: D(0, 0, 1, 1), rampUpTo: 1.2,
+  rampFirst: D(0, 0, 0, 0), kitCoverM: 80,
 };
 
 export const TEAM: TeamParams = {
@@ -375,9 +451,26 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
   pro: { recoilComp: 0.95, burstShots: 4, burstPause: 0.22, sprayRange: 15 },
 };
 
+export const HEAL: HealParams = {
+  stock: D(0, 1, 1, 2), stockAt: D(1200, 350, 220, 200), stockPer: 350, stockMax: 3,
+  safeHp: D(30, 55, 65, 70), quietSec: 2.5, midFight: D(0, 1, 1, 1),
+  fightHp: D(25, 35, 40, 45), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
+  reloadWeight: D(0, 0.3, 0.5, 1), reloadSlack: 0.3,
+  coverFirst: D(0, 0, 0, 0.5), hideSec: 2.5,
+  reHealSec: 8, pressLead: 25, punishHp: 40, hideM: 4,
+  detourM: 18,
+  slotValue: 0.5,
+  keep: { pistol: 0.25, trap: 0.3, ramp: 0.35, speedPotion: 0.15, grapple: 0.8, sandbags: 0.4, grenade: 0.6 },
+};
+
 export const WEAPON: WeaponParams = { holdSec: 0.6, rocketHoldSec: 2.5, threatM: 12, hurtSec: 1, shotgunHyst: 2 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON });
+export const VAULT: VaultParams = {
+  medkits: D(0, 1, 2, 2), scaffolds: D(0, 0, 0, 0), keep: D(0, 0, 40, 40), buy: D(0, 0, 1, 1), carry: D(400, 400, 25, 25), bankMin: 80,
+  upgradeAt: D(Infinity, 500, 200, 100), upgradeScore: 0.75, healSlot: 1,
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -426,7 +519,11 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
-  ['buildSkill.*.peekOut', [0.3, 3]],
+  ['buildSkill.*.peekOut', [0.3, 3]], ['buildSkill.*.pieceSec', [0.25, 2]], ['buildSkill.*.ramp', [0, 1]],
+  ['buildSkill.*.rampChain', [0, 3]], ['buildSkill.*.reinforce', [0, 1]],
+  ['buildTuning.crackedAt', [0.15, 0.8]], ['buildTuning.holdSec', [1, 15]], ['buildTuning.coverOffset', [0, 0.9]],
+  ['buildTuning.peekStep', [0.4, 1.4]], ['buildTuning.rampCarry.*', [0, 3]], ['buildTuning.metalCarry.*', [0, 3]],
+  ['buildTuning.rampUpTo', [0.6, 4]], ['buildTuning.rampFirst.*', [0, 2]], ['buildTuning.kitCoverM', [0, 80]],
   ['buildTuning.fortReserve', [0, 600]], ['buildTuning.fortEarlyBuilder', [0.3, 1]], ['buildTuning.fortMinRivals', [1, 6]], ['buildTuning.fortSealedRule.*', [0, 1]],
   ['buildTuning.coverCarry.*', [0, 4]], ['buildTuning.metalCoverAt', [100, 1500]], ['buildTuning.rampAt', [100, 1000]],
   ['buildTuning.scaffoldsPerBridgeWall', [2, 10]], ['buildTuning.bridgeWallFrom', [3, 20]], ['buildTuning.bridgeWallEvery', [4, 15]],
@@ -446,7 +543,14 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
   ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
+  ['heal.stock.*', [0, 3]], ['heal.stockAt.*', [100, 1200]], ['heal.stockPer', [150, 1000]], ['heal.stockMax', [1, 4]],
+  ['heal.safeHp.*', [30, 95]], ['heal.quietSec', [0.5, 6]], ['heal.midFight.*', [0, 1]], ['heal.fightHp.*', [15, 90]], ['heal.burst', [15, 80]],
+  ['heal.burstHp', [0, 50]], ['heal.pressHp', [0, 80]], ['heal.openDist', [15, 70]], ['heal.reloadWeight.*', [0, 1]],
+  ['heal.reloadSlack', [-0.5, 1]], ['heal.coverFirst.*', [0, 1]], ['heal.hideSec', [0.5, 6]], ['heal.reHealSec', [0, 20]], ['heal.pressLead', [0, 80]], ['heal.punishHp', [0, 100]], ['heal.hideM', [1, 10]], ['heal.detourM', [0, 40]],
+  ['heal.slotValue', [0, 1]], ['heal.keep.*', [0, 1]],
   ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
+  ['vault.medkits.*', [0, 4]], ['vault.scaffolds.*', [0, 15]], ['vault.keep.*', [0, 150]], ['vault.buy.*', [0, 1]],
+  ['vault.carry.*', [0, 400]], ['vault.bankMin', [30, 300]], ['vault.upgradeAt.*', [100, 2000]], ['vault.upgradeScore', [0.1, 1]], ['vault.healSlot', [0, 1]],
   ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {

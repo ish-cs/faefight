@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, MEDKIT, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
@@ -7,8 +7,10 @@ import type { DockDef, Doorway, IslandLayout } from '../map';
 import { overDock } from '../docks';
 import { NO_INPUT } from '../types';
 import type {
-  BuildRequest, Difficulty, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
+  BuildRequest, Difficulty, HotbarItem, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
 } from '../types';
+import { funds } from '../economy';
+import { vaultLevel, vaultSpec, vaultUpgradePrice } from '../vault';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import { isRng, mulberry32 } from '../rng';
 import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
@@ -16,6 +18,7 @@ import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, 
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { DEFAULT_BOT_PARAMS, type BotParams } from './params';
 import { crossTo, escapeFrom, hookReady, yankReason, type HookIntent } from './hook';
+import { dropForHeal, healPlan, healStock, hpHealsHeld, type HealPlan } from './heal';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
@@ -120,7 +123,11 @@ export const inStormShopGrace = (view: Pick<BotView, 'now' | 'suddenDeathAt'>): 
   view.now - (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) < STORM_SHOP_GRACE;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Walls a bot throws down for cover, best first (sandbags go up two high). */
-const WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
+const WALLS: PieceKind[] = ['wood', 'metal', 'steel'];
+/** Medium and Easy throw down the toughest wall they hold (main's behaviour; situational choice is a Hard/PRO skill). */
+const PLAIN_WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
+/** Walls for holding a spot (home, a long hold, replacing a cracked wall): toughest first. */
+const STRONG_WALLS: PieceKind[] = ['steel', 'metal', 'wood'];
 /** Generator cash worth grabbing on the way out, and the level at which it is about to be wasted at the cap. */
 const COLLECT_BEFORE_LEAVING = 40, COLLECT_NEAR_CAP = 400;
 /** Grenades: throw range (outside the blast), minimum gap between throws, how stale a sighting may be. */
@@ -131,8 +138,6 @@ const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, har
 const TORCH_RANGE = [9, 45] as const, TORCH_GAP = 8, TORCH_RICH = 900;
 /** Rebuy money for after a death: pistol + a box of ammo. */
 const INSURANCE = WEAPONS.pistol.price + 25;
-/** HP at or below which a bot uses a medkit it carries. */
-const MEDKIT_AT: Record<Difficulty, number> = { easy: 35, medium: 45, hard: 55, pro: 55 };
 /**
  * Clear of my own bunker (from its center): within SEAL.exitRadius of it while it's sealed starts the 10 s
  * escape countdown, so never hang around closer than this.
@@ -237,10 +242,16 @@ export class Bot {
   private cover: {
     threatId: number; threat: Vec3; lastContact: number; startAt: number; placed: number;
     phase: 'hide' | 'peek'; phaseUntil: number; side: number;
+    /** When I first stood behind a wall in this episode; peeks so far; cracked walls I left (or rolled on). */
+    heldSince: number | null; peeks: number; done: number[];
   } | null = null;
   private coverRollAt = -Infinity;
-  /** Top of a ramp I threw down in a fight (high ground), while it lasts. */
-  private perch: { ramp: Vec3; pos: Vec3; until: number } | null = null;
+  /** Top of a ramp I threw down in a fight (high ground), while it lasts; how many ramps chained on so far. */
+  private perch: { ramp: Vec3; pos: Vec3; until: number; dir: Vec3; chain: number } | null = null;
+  /** This fight (fightSince) wants a ramp: rolled once per fight against buildSkill.ramp. */
+  private rampRoll: { fight: number; yes: boolean } | null = null;
+  /** Why my latest piece went down (spectator brain panel). */
+  buildWhy: string | null = null;
   private fightSince: number | null = null;
   private retreatSince: number | null = null;
   private lastPieceAt = -Infinity;
@@ -276,6 +287,24 @@ export class Bot {
   private targetBan = new Map<number, number>();
   private lastNadeAt = -Infinity;
   private lastTorchAt = -Infinity;
+  /** Healing (heal.ts): hp + shield last tick, damage in the current burst and when it began, last time hurt. */
+  private lastEff = 0;
+  private burst = 0;
+  private burstAt = -Infinity;
+  private lastDmgAt = -Infinity;
+  /** This fight's rolls (coverFirst, reloadWeight), since when I've been breaking line of sight to heal. */
+  private healRoll = { cover: true, reload: true };
+  private healRng: () => number;
+  private healHideAt: number | null = null;
+  /** How I'd break line of sight to heal right now (cover close by or a wall to throw), or null: none at hand. */
+  private healHideAct: Act | null = null;
+  /** When I last started a heal mid-fight (heal.reHealSec commitment). */
+  private fightHealAt = -Infinity;
+  /** Last heal decision (spectators), heals wanted (stock target), slots dropped to fit a heal (not looted back). */
+  private healNote: { t: number; text: string } | null = null;
+  private healWant = 0;
+  private lastHealDropAt = -Infinity;
+  private healDrops: { pos: Vec3; t: number }[] = [];
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
   /** escape(): where I was when my grid path out last made headway; a path that doesn't move me is not a way out. */
@@ -341,6 +370,8 @@ export class Bot {
     const base = isRng(rng) ? rng.state.a : Math.floor(rng() * 4294967296);
     const aimSeed = (base ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
     this.aim = new Aim({ ...AIM[difficulty], recoilComp: P.gunSkill[difficulty].recoilComp }, mulberry32(aimSeed), P.aim.feel[difficulty]);
+    // Heal habits roll on their own stream too (like the aim hand): healing never shifts the match's other rolls.
+    this.healRng = mulberry32((base ^ Math.imul(id, 0x85ebca6b) ^ 0x3c6ef372) >>> 0);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
@@ -403,6 +434,8 @@ export class Bot {
       this.fightSince = null;
       this.hookIntent = null;
       this.strandedSince = null;
+      this.healHideAt = null;
+      this.lastEff = 0;
       this.nextScoreAt = -Infinity;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
@@ -433,6 +466,7 @@ export class Bot {
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
+    this.buildWhy = null;
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
     // Cut off from home: get a hook here and hook home (fighting comes first: enemies in sight keep the goal's act).
     const rescue = this.strandedAct(ctx);
@@ -444,6 +478,13 @@ export class Bot {
     }
     // Never hang around inside my own bunker (one plug per door and I'm sealed in): step out.
     if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) act = { ...act, ...this.escape(ctx) };
+    // Healing (heal.ts), mid-fight included: low with them in my face, break line of sight first (cover, a wall, back off).
+    const heal = this.healDecide(ctx);
+    if (ctx.enemy && this.healHideAct && this.healHideAt !== null && this.goal !== 'storm' && (heal?.act === 'hide' || heal?.act === 'wait')) act = this.healHideAct;
+    // Passing the potion seller short of heals or shields: step over and buy.
+    const detour = !ctx.enemy && !heal && !act.shop && !act.build ? this.sellerDetour(ctx) : null;
+    if (detour) act = detour;
+    const dropSlot = !ctx.enemy && heal?.act !== 'use' && !act.build && !act.shop ? this.healDrop(ctx) : null;
 
     // Aim: enemies first, then whatever the goal wants to look or shoot at, else along the walk.
     const eye = eyePos(me);
@@ -598,19 +639,22 @@ export class Bot {
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
 
-    // Patch up with a medkit when hurt and nobody is in my face (2 s with my hands busy).
-    let select: number | null = null, useMedkit = false;
-    const kit = me.hotbar.indexOf('medkit');
-    if (kit >= 0 && me.inv.medkits > 0 && me.hp <= MEDKIT_AT[this.difficulty] && me.busyUntil <= now && me.healAt === null &&
-        (!enemy || ctx.enemyDist > 30) && now - this.mem.lastHurtAt > 0.5) {
-      select = kit; useMedkit = true; fire = false;
+    // Heals (heal.ts): between fights, and mid-fight out of their sight, while they reload, or when there's no cover.
+    // Using one puts the gun away (a reload in progress is lost): wait for the reload unless I'm low.
+    let select: number | null = null, useMedkit = false, drink = false;
+    const lowNow = me.hp + me.shield <= this.P.heal.fightHp[this.difficulty];
+    if (heal?.act === 'use' && heal.slot >= 0 && !grapple && !act.placeCharge && (me.reloadUntil === 0 || lowNow)) {
+      select = heal.slot; fire = false; throwGrenade = false;
+      if (heal.item === 'medkit') useMedkit = true; else drink = true;
+      this.healNote = { t: now, text: heal.why };
+      if (enemy || now - this.mem.lastHurtAt < this.P.heal.quietSec) this.fightHealAt = now;
     }
     // Stamina (movement.ts): like a human, stop sprinting around when winded and keep the rest for getting away.
     if (me.stamina < 30) this.winded = true; else if (me.stamina > 70) this.winded = false;
     const cv = view.center;
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
       (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
-    if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
+    if (act.shop) this.pendingBuy = { item: act.shop, cash: funds(me), at: now };
     if (act.shop || act.build || act.vault || act.placeCharge || act.trap || fire || throwGrenade) this.lastDidAt = now;
     if (act.build) {
       this.lastPieceAt = now;
@@ -625,20 +669,22 @@ export class Bot {
     this.probe?.acted(act, look, fire);
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
-      sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
-      fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
-      vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
+      sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach || this.healHideAt !== null) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
+      fire, reload: reload && !useMedkit && !drink, interact, slot: useMedkit || drink ? null : slot, select, useMedkit, drink,
+      build: useMedkit || drink ? null : act.build ?? null, shop: act.shop && !useMedkit && !drink ? { buy: act.shop } : null,
+      vault: this.withLoadout(me, act.vault), placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
       ...(grapple ? { grapple: true, build: null, shop: null } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
-    // Shields: stock up at a potion seller, drink out of combat (see potionAction).
-    if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge && !grapple) {
+    // Potions: stock up at a potion seller (heal potions toward the heal stock, then shields), drink out of combat.
+    if (!act.shop && !act.build && !fire && !useMedkit && !drink && !throwGrenade && !act.placeCharge && !grapple) {
       const atSeller = (view.potionShops ?? []).some((s) => dist2D(me.pos, s) <= USE_RANGE);
-      const pot = potionAction(me, now, !!enemy, atSeller);
+      const pot = potionAction(me, now, !!enemy, atSeller, this.healWant);
       if (pot && 'buy' in pot) out.shop = { buy: pot.buy };
       // (Not mid-reload: drinking takes the gun out of my hands and the reload with it; it can wait a moment.)
       else if (pot && me.reloadUntil === 0) Object.assign(out, { select: pot.drink, slot: null, drink: true });
+      else if (dropSlot !== null && select === null) Object.assign(out, { select: dropSlot, slot: null, drop: 'stack' as const });
     }
     return out;
   }
@@ -703,6 +749,9 @@ export class Bot {
       if (why && this.rng() < H.yankRate * HOOK_CHECK_SEC) it = { why: 'yank', target: e.id, note: why };
     }
     if (it?.why === 'escape' && !this.canReturn(c, it.node)) it = null;
+    // Never escape out into the storm.
+    const st = c.view.storm;
+    if (it?.why === 'escape' && st && Math.hypot(it.to.x - st.x, it.to.z - st.z) > this.stormSafeR(st)) it = null;
     // Crossing: not with someone close (a rope ride is a free target), but someone far off across the water doesn't
     // stop a push.
     if (!it && (!e || c.enemyDist > H.escapeNear) && want !== null && this.nav.nodes[want] && this.canReturn(c, want)) it = crossTo(c.view, H, this.nav.nodes[want]);
@@ -788,7 +837,7 @@ export class Bot {
       const rim = add(node.center, scale(d, (node.radius - 0.7) / l));
       return this.goTo(v3(rim.x, node.groundY, rim.z), 0.8);
     }
-    if (me.inv.cash < GRAPPLE.price) return null;
+    if (funds(me) < GRAPPLE.price) return null;
     const seller = (c.view.potionShops ?? []).find((s) => this.nav.nodeAt(s) === node.index);
     if (!seller) return null;
     if (dist2D(me.pos, seller) <= USE_RANGE) return { dir: null, face: seller, shop: 'grapple' };
@@ -807,7 +856,7 @@ export class Bot {
     if ((me.inv.grapples ?? 0) > 0 && held < 2 * STRANDED_LAST_SEC) return null;
     const node = this.nav.nodeAt(me.pos);
     const seller = (c.view.potionShops ?? []).some((s) => this.nav.nodeAt(s) === node);
-    if (seller && me.inv.cash >= GRAPPLE.price) return null;
+    if (seller && funds(me) >= GRAPPLE.price) return null;
     return norm(flat(sub(c.home.center, me.pos)));
   }
 
@@ -853,7 +902,7 @@ export class Bot {
     const p = this.pendingBuy;
     if (!p || now - p.at < DT * 1.5) return;
     this.pendingBuy = null;
-    if (me.inv.cash < p.cash) { this.buyFails.delete(p.item); return; }
+    if (funds(me) < p.cash) { this.buyFails.delete(p.item); return; }
     const n = (this.buyFails.get(p.item) ?? 0) + 1;
     this.buyFails.set(p.item, n);
     if (n >= BUY_RETRIES) {
@@ -1281,7 +1330,9 @@ export class Bot {
       // A hard plug in my own doorway: only a charge gets through.
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
-      medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
+      // Heals to carry; with the storm coming in, no new ones (the decks and getting inside the ring come first).
+      medkits: (this.healWant = this.stormPrep(c.view) ? Math.min(hpHealsHeld(c.me), healStock(total, this.difficulty, this.P.heal))
+        : healStock(total, this.difficulty, this.P.heal)),
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
       // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
@@ -1289,6 +1340,7 @@ export class Bot {
         : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
+      combatKit: this.combatKit(c),
     };
   }
 
@@ -1311,24 +1363,43 @@ export class Bot {
     const b: Partial<Record<PieceKind, number>> = {};
     // Hotbar room: a new kind takes a slot; always leave this.P.buildTuning.freeSlots open for guns, heals and the like.
     let free = me.hotbar.filter((k) => k === null).length;
+    const reserve = this.buildReserve(me);
     const add1 = (k: PieceKind, n = 1) => {
       if (n <= 0) return;
-      if (!b[k] && !me.hotbar.includes(k)) { if (free <= this.P.buildTuning.freeSlots) return; free--; }
+      if (!b[k] && !me.hotbar.includes(k)) { if (free <= reserve) return; free--; }
       b[k] = (b[k] ?? 0) + n;
     };
     if (total >= this.P.buildTuning.fortReserve * (1 - t.builder) && this.fortWorthIt(c))
       for (const [i, s] of this.fortSlots().entries())
         if (!slotBuilt(view.pieces, s) && (this.slotBackoff.get(i) ?? -Infinity) <= view.now) add1(s.kind);
     const walls = Math.round(this.P.buildTuning.coverCarry[this.difficulty] * (0.4 + t.builder));
-    const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
-    // Cover walls of the kind I already carry for plugs (one hotbar slot), metal once rich.
-    const wall: PieceKind = me.hotbar.includes('metal') || (skilled && total >= this.P.buildTuning.metalCoverAt) ? 'metal' : 'wood';
+    // Cover walls: wood (fast, cheap) for fights, unless metal already takes a slot for plugs and wood doesn't.
+    const wall: PieceKind = me.hotbar.includes('metal') && !me.hotbar.includes('wood') ? 'metal' : 'wood';
     add1(wall, walls);
+    // Once rich, a couple of metal walls beside them for holding a spot and replacing a cracked wall.
+    if (sk.reinforce > 0 && total >= this.P.buildTuning.metalCoverAt) add1('metal', this.P.buildTuning.metalCarry[this.difficulty]);
     const scaffolds = this.scaffoldsNeeded(c);
     if (sk.bridgeCover && this.wallsOnBridge && scaffolds >= 2 * this.P.buildTuning.scaffoldsPerBridgeWall)
       add1(wall, Math.floor(scaffolds / this.P.buildTuning.scaffoldsPerBridgeWall));
-    if (sk.highGround && total >= this.P.buildTuning.rampAt && t.builder >= 0.3) add1('ramp');
+    if (sk.highGround && sk.ramp > 0 && total >= this.P.buildTuning.rampAt && t.builder >= 0.3) add1('ramp', this.P.buildTuning.rampCarry[this.difficulty]);
     return b;
+  }
+
+  /** Ramps carried from the first shop visit on (skills that ramp in fights; never with a full hotbar). */
+  private combatKit(c: Ctx): Partial<Record<PieceKind, number>> | undefined {
+    const n = this.P.buildTuning.rampFirst[this.difficulty];
+    if (c.view.suddenDeath || n < 1 || !this.P.buildSkill[this.difficulty].highGround) return undefined;
+    if (!c.me.hotbar.includes('ramp') && c.me.hotbar.filter((k) => k === null).length <= this.buildReserve(c.me)) return undefined;
+    return { ramp: Math.round(n) };
+  }
+
+  /**
+   * Empty hotbar slots building pieces leave alone. The reserve is for guns and heals: a medkit already on the
+   * hotbar (the restock loadout puts one there after every respawn) fills its heal share (VaultParams.healSlot), or
+   * the medkit pushes cover walls off the hotbar for good (vault-2: PRO bought half the wood).
+   */
+  private buildReserve(me: PlayerState): number {
+    return this.P.buildTuning.freeSlots - (me.hotbar.includes('medkit') ? Math.round(this.P.vault.healSlot) : 0);
   }
 
   /**
@@ -1394,8 +1465,34 @@ export class Bot {
     return Math.max(0, Math.min(me.inv.cash, this.insurance() - me.vault.cash));
   }
 
+  /** Cash I may spend at a shop: carried plus banked above the insurance (all of it while I have no working gun). */
+  private spendCash(me: PlayerState): number {
+    return me.inv.cash + (ownsGun(me.inv) ? this.spendable(me) : me.vault.cash);
+  }
+
+  /** Adds my restock loadout to the vault action while the sim doesn't have it yet (set from anywhere, once). */
+  private withLoadout(me: PlayerState, v: VaultAction | undefined): VaultAction | null {
+    const want = this.restockLoadout();
+    if (!want || me.loadout) return v ?? null;
+    return { ...v, loadout: want };
+  }
+
+  /** My restock loadout (sim/vault.ts) by skill, from VaultParams; null for none. */
+  restockLoadout(): Loadout | null {
+    const v = this.P.vault, d = this.difficulty;
+    const items: Loadout['items'] = {};
+    const med = Math.round(v.medkits[d]), sc = Math.round(v.scaffolds[d]);
+    if (med > 0) items.medkit = med;
+    if (sc > 0) items.scaffold = sc;
+    const keep = Math.round(v.keep[d]);
+    if (!med && !sc && keep <= 0) return null;
+    return { items, keep, buy: v.buy[d] >= 0.5 };
+  }
+
   /** Vault cash I may spend on gear (everything above the insurance). */
   private spendable(me: PlayerState): number {
+    // A weak player forgets what they banked: shops only with carried cash (the vault still rebuys a lost gun).
+    if (this.difficulty === 'easy') return 0;
     return Math.max(0, me.vault.cash - this.insurance());
   }
 
@@ -1415,6 +1512,10 @@ export class Bot {
     for (const p of c.view.loot) {
       const d = dist2D(p, c.me.pos);
       if (d >= bestD || p.y < c.view.waterY + 0.2) continue;
+      if (this.healDrops.some((h) => dist2D(h.pos, p) < 3)) continue; // dropped to make room for a heal
+      // Out past the storm's safe line: stormFence never lets me walk there (a bag I'd stand and stare at).
+      const st = c.view.storm;
+      if (st && this.difficulty !== 'easy' && Math.hypot(p.x - st.x, p.z - st.z) > this.stormSafeR(st) - 0.5) continue;
       // No route, even on my own island (e.g. past a wall): goTo would idle on it forever (measured: two medium bots
       // stood 160 s in the final ring, out of ammo, each "looting" a bag it couldn't reach; the watchdog is off then).
       if (!this.nav.routeTo(p)) continue;
@@ -1517,7 +1618,7 @@ export class Bot {
       }
       case 'heal': {
         // Health comes back slowly out of combat: low and away from home, go back and recover.
-        if (view.suddenDeath || c.enemy || c.on === home.index || !c.homeReach || me.inv.medkits > 0) return 0;
+        if (view.suddenDeath || c.enemy || c.on === home.index || !c.homeReach || hpHealsHeld(me) > 0) return 0;
         const low = 0.35 + 0.25 * t.caution - 0.15 * t.aggression;
         return hp < low ? 0.75 + (low - hp) : 0;
       }
@@ -1546,19 +1647,24 @@ export class Bot {
         return (0.4 + 0.45 * t.caution) * (0.5 + 0.5 * fresh) + (gun ? 0.1 : -0.2);
       }
       case 'bank': {
-        if (c.on !== home.index || view.suddenDeath) return 0;
+        // Storm coming: getting to the center beats a trip to the vault (the shop takes vault cash anyway).
+        if (c.on !== home.index || view.suddenDeath || this.stormPrep(view)) return 0;
         // Death insurance: before heading out, leave enough in the vault to rebuy a gun after a death.
         const leavingSoon = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
         if (leavingSoon && this.insuranceDue(me) > 0 && !(c.enemy && c.enemyDist < 8)) return 0.8;
-        if (me.inv.cash < 100) return 0;
-        const keep = shoppingPlan(me, this.needs(c), this.difficulty, this.style).spent + 25;
+        // Shops pay from the vault anywhere and carried cash drops on death: bank all but pocket money.
+        const keep = this.bankKeep(c);
         const excess = me.inv.cash - keep;
-        if (excess < 80) return 0;
         const close = c.enemy && c.enemyDist < 8;
         if (close) return 0;
+        // Rich enough for the next vault level (more interest, remote deposits): a trip to the vault to buy it.
+        if (this.wantsVaultUpgrade(me)) return this.P.vault.upgradeScore - dist2D(me.pos, home.vault) / 80;
+        if (excess < this.P.vault.bankMin) return 0;
         const leaving = c.reach || (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c);
         const want = 0.2 + Math.min(excess, 600) / 600 * (0.3 + 0.3 * t.caution + 0.2 * t.greed);
-        return want + (c.danger || this.intruder(c) ? 0.55 : 0) + (leaving ? 0.25 : 0) - dist2D(me.pos, home.vault) / 80;
+        // From vault level 2 a deposit works anywhere on my island: no walk.
+        const walk = vaultSpec(me).remote ? 0 : dist2D(me.pos, home.vault) / 80;
+        return want + (c.danger || this.intruder(c) ? 0.55 : 0) + (leaving ? 0.25 : 0) - walk;
       }
       case 'collect': {
         if (!c.homeReach) return 0;
@@ -1574,10 +1680,13 @@ export class Bot {
         if (!c.homeReach) return 0;
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
-        if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return 0.9;
+        if (dist2D(me.pos, home.shop) < 4 && plan.spent <= this.spendCash(me)) return 0.9;
+        // Topping up heals is no reason for a trip home once I hold one (they're bought on the next visit anyway).
+        const items = hpHealsHeld(me) > 0 ? plan.items.filter((i) => i !== 'medkit') : plan.items;
+        if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
         // An empty gun is as good as none: restocking it is as urgent as buying one.
-        const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv));
-        return (urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0) - away;
+        const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv));
+        return (urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0) - away;
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
@@ -1827,18 +1936,11 @@ export class Bot {
 
   private doShop(c: Ctx): Act {
     const me = c.me, now = c.view.now;
-    // Short of cash for the plan but some is in the vault: fetch it first.
-    const plan = this.plan(c);
-    // Live or die, keep the rebuy money in the vault (unless the gun is what I'm buying).
-    const short = Math.min(plan.items[0] === 'pistol' || plan.items[0] === 'ammo' ? me.vault.cash : this.spendable(me), plan.spent - me.inv.cash);
-    if (short > 0) {
-      const walk = this.goTo(c.home.vault, 1.8);
-      if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > now) return walk;
-      return { ...walk, vault: { withdraw: { cash: short } } };
-    }
+    // The shop pays from the vault (carried cash first): no trip to fetch it. The rebuy insurance stays banked
+    // unless the gun (or its ammo) is what I'm buying.
     const walk = this.goTo(c.home.shop, 2.0);
     if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt) return walk;
-    let item = nextPurchase(me, this.needs(c), this.difficulty, this.style);
+    let item = nextPurchase({ ...me, inv: { ...me.inv, cash: this.spendCash(me) } }, this.needs(c), this.difficulty, this.style);
     if (!item || this.buyBlocked(item)) { this.nextScoreAt = now; return walk; }
     if (this.difficulty === 'easy' && item in PIECES && item !== 'scaffold' && this.rng() < EASY_MISBUY && me.inv.cash >= PIECES.sandbags.price) item = 'sandbags';
     this.nextBuyAt = now + BUY_GAP[this.difficulty];
@@ -1847,13 +1949,32 @@ export class Bot {
 
   private doBank(c: Ctx): Act {
     const me = c.me;
-    const walk = this.goTo(c.home.vault, 1.8);
-    if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > c.view.now) return walk;
-    const keep = shoppingPlan(me, this.needs(c), this.difficulty, this.style).spent + 25;
-    const cash = Math.max(Math.floor(me.inv.cash - keep), this.insuranceDue(me));
-    if (cash <= 0) { this.nextScoreAt = c.view.now; return walk; }
+    const upgrade = this.wantsVaultUpgrade(me);
+    // Remote vault level: deposit from right here (on my island); an upgrade still needs the vault itself.
+    const remote = vaultSpec(me).remote && !upgrade;
+    const walk = remote ? IDLE : this.goTo(c.home.vault, 1.8);
+    if ((!remote && dist2D(me.pos, c.home.vault) > USE_RANGE) || me.busyUntil > c.view.now) return walk;
+    const cash = Math.max(Math.floor(me.inv.cash - this.bankKeep(c)), this.insuranceDue(me));
+    if (cash <= 0 && !upgrade) { this.nextScoreAt = c.view.now; return walk; }
     this.nextScoreAt = c.view.now + 1.2;
-    return { ...walk, vault: { deposit: { cash } } };
+    return { ...walk, vault: { ...(cash > 0 ? { deposit: { cash } } : {}), ...(upgrade ? { upgrade: true as const } : {}) } };
+  }
+
+  /**
+   * Carried cash a bank trip leaves on me: VaultParams.carry by skill in calm times; before a risky moment (danger
+   * at home, an intruder, heading out) anyone but easy banks down to pocket money (min with the hard/PRO carry).
+   */
+  bankKeep(c: Ctx): number {
+    const carry = this.P.vault.carry[this.difficulty];
+    if (this.difficulty === 'easy') return carry;
+    const leaving = c.reach || (c.me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c);
+    return c.danger || this.intruder(c) || leaving ? Math.min(carry, this.P.vault.carry.hard) : carry;
+  }
+
+  /** The next vault level is affordable with VaultParams.upgradeAt to spare (carried + banked). */
+  wantsVaultUpgrade(me: PlayerState): boolean {
+    const price = vaultUpgradePrice(vaultLevel(me));
+    return price !== null && funds(me) >= price + this.P.vault.upgradeAt[this.difficulty];
   }
 
   /** Grab the center island's gold (and free pieces, when they fit). */
@@ -1904,12 +2025,12 @@ export class Bot {
     const shore = Math.sqrt(c.home.radius * c.home.radius - 9);
     const out = mirror ? l.length - shore - f.s : f.s - shore;
     const lastWall = this.lastWallS.get(key) ?? -Infinity;
-    const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
+    const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? PLAIN_WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
     if (wall && this.P.buildSkill[this.difficulty].bridgeCover && this.wallsOnBridge && out > this.P.buildTuning.bridgeWallFrom && Math.abs(f.s - lastWall) >= this.P.buildTuning.bridgeWallEvery) {
       this.lastWallS.set(key, f.s);
       const side = flankSide(c.view.map, l);
       const p = add(at(-1.6), scale(right(yawOf(l.dir)), side * 0.85));
-      const act = this.place(c, wall, v3(p.x, c.me.pos.y, p.z), yawOf(l.dir) + Math.PI / 2, ahead);
+      const act = this.place(c, wall, v3(p.x, c.me.pos.y, p.z), yawOf(l.dir) + Math.PI / 2, ahead, `bridge side wall (${wall})`);
       if (act) return act;
     }
     const rotY = yawOf(l.dir);
@@ -2384,6 +2505,12 @@ export class Bot {
       this.strafeFlipAt = now + 0.6 + this.rng() * 0.8;
     }
     const to = norm(flat(sub(e.pos, me.pos)));
+    // They're healing (hands busy for a second or two) and I'm fit to fight: rush them before it lands.
+    if ((e.healAt !== null || e.drinking) && me.hp + me.shield >= this.P.heal.punishHp && this.difficulty !== 'easy') {
+      this.healNote = { t: now, text: `@${e.id} is healing: rushing them` };
+      const wp = this.sameGround(me.pos, e.pos) ? null : this.nav.routeTo(e.pos);
+      if (this.sameGround(me.pos, e.pos) || wp) return { dir: norm(flat(sub(wp ?? e.pos, me.pos))), sprint: true, approach: true };
+    }
     const gun = bestGun(me.inv, c.enemyDist);
     const pref = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
     // Skilled players close in rather than trade shots from afar.
@@ -2395,7 +2522,8 @@ export class Bot {
     if (this.perch && (now > this.perch.until || !c.view.pieces.some((p) => p.kind === 'ramp' && dist2D(p.pos, this.perch!.ramp) < 0.3))) this.perch = null;
     if (this.perch) {
       const d = dist2D(me.pos, this.perch.pos);
-      return d > 0.35 ? { dir: norm(flat(sub(this.perch.pos, me.pos))) } : { dir: null };
+      if (d > 0.35) return { dir: norm(flat(sub(this.perch.pos, me.pos))) };
+      return this.chainRamp(c, e) ?? { dir: null };
     }
     const ramp = this.highGround(c, e, to, gun, sameIsland);
     if (ramp) return ramp;
@@ -2425,25 +2553,55 @@ export class Bot {
   // ---------------------------------------------------------------- building
 
   /** Place a piece if the sim would take it and it keeps my own bunker open; null otherwise. */
-  private place(c: Ctx, kind: PieceKind, pos: Vec3, rotY: number, face: Vec3): Act | null {
+  private place(c: Ctx, kind: PieceKind, pos: Vec3, rotY: number, face: Vec3, why?: string): Act | null {
     const r = c.view.canPlace(kind, pos, rotY);
     if (!r.ok) return null;
     if (!c.view.suddenDeath && !ownBunkerSafe(c.home.bunker, c.view.pieces, ghost(kind, r.pos, rotY, c.me.id))) return null;
+    this.buildWhy = why ?? null;
     return { dir: null, face, build: { kind, pos, rotY, free: true } };
   }
 
   /** Busy placing, or still between two pieces of a sequence (better players chain them tighter). */
-  private building(c: Ctx, kind?: PieceKind): boolean {
-    const gap = this.P.buildSkill[this.difficulty].gap;
-    return c.me.busyUntil > c.view.now || c.view.now < this.lastPieceAt + (kind ? PIECES[kind].placeSec : 0) + gap;
+  private building(c: Ctx, kind?: PieceKind, combat = false): boolean {
+    const sk = this.P.buildSkill[this.difficulty];
+    const wait = Math.max((kind ? PIECES[kind].placeSec : 0) + sk.gap, combat ? sk.pieceSec : 0);
+    return c.me.busyUntil > c.view.now || c.view.now < this.lastPieceAt + wait;
   }
 
-  /** Walls I may throw down for cover: tall pieces beyond the seal kit, else sandbags. */
-  private wallKind(c: Ctx): PieceKind | null {
+  /**
+   * Walls I may throw down for cover: tall pieces beyond the seal kit, else sandbags. Mid-fight the fastest, cheapest
+   * wall (wood) does; `strong` (holding a spot, at home, replacing a cracked wall) takes the toughest I carry.
+   */
+  private wallKind(c: Ctx, strong = false): PieceKind | null {
     const inv = c.me.inv;
     const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
-    if (tall > c.openDoors.length) return WALLS.find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
-    return (inv.pieces.sandbags ?? 0) > 0 ? 'sandbags' : null;
+    const pick = () => (strong ? STRONG_WALLS : this.coverSkilled() ? WALLS : PLAIN_WALLS).find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
+    if (tall > c.openDoors.length) return pick();
+    if ((inv.pieces.sandbags ?? 0) > 0) return 'sandbags';
+    // Masters (reinforce > 0.8) spend a plug on cover when the doors are far off (they'll buy another): staying alive first.
+    const far = !c.rivalIsl || dist2D(c.me.pos, c.rivalIsl.bunker.center) > this.P.buildTuning.kitCoverM;
+    return tall > 0 && false && far ? pick() : null;
+  }
+
+  /** Should the next cover wall be the strongest I carry: at home, rich enough to spend it, or I've held this spot a while. */
+  private strongCover(c: Ctx): boolean {
+    const cv = this.cover;
+    return c.on === c.home.index || c.me.inv.cash + c.me.vault.cash >= this.P.buildTuning.metalCoverAt ||
+      (!!cv && cv.heldSince !== null && c.view.now - cv.heldSince >= this.P.buildTuning.holdSec);
+  }
+
+  /** Patching up behind cover with the shooter still in sight takes nerve: Hard and PRO (buildSkill.reinforce > 0.5). */
+  skilledHealer(): boolean { return this.P.buildSkill[this.difficulty].reinforce > 0.5; }
+
+  /** Situational wall material: Hard and PRO (buildSkill.reinforce > 0.5). */
+  private coverSkilled(): boolean { return this.P.buildSkill[this.difficulty].reinforce > 0.5; }
+
+  /** Behind something solid from whoever is shooting at me (heals are safe here even with them in sight). */
+  sheltered(c: Ctx): boolean {
+    const from = this.cover?.threat ?? c.enemy?.pos;
+    if (!from) return false;
+    const eye = add(from, v3(0, PLAYER.eyeHeight, 0)), chest = add(c.me.pos, v3(0, CHEST, 0));
+    return c.view.pieces.some((p) => dist2D(p.pos, c.me.pos) < 3 && shields(p, eye, chest));
   }
 
   /** Where the shooter with this id is (seen now, their tracer, or last sighting). */
@@ -2471,7 +2629,8 @@ export class Bot {
     }
     const by = this.mem.lastHurtBy;
     if (by === null || by === me.id || now - this.mem.lastHurtAt > 1.0) return;
-    if (view.suddenDeath || c.on < 0 || insideBunker(c.home.bunker, me.pos)) return;
+    if (view.suddenDeath || insideBunker(c.home.bunker, me.pos)) return;
+    if (c.on < 0) return;
     const from = this.threatPos(c, by);
     if (!from) return;
     if (this.cover?.threatId === by) { this.cover.threat = from; this.cover.lastContact = now; return; }
@@ -2490,17 +2649,108 @@ export class Bot {
     if (this.rng() >= sk.coverChance * Math.min(1, 0.55 + this.t.builder)) return;
     this.cover = {
       threatId: by, threat: from, lastContact: now, startAt: now + sk.coverDelay * (0.7 + 0.6 * this.rng()), placed: 0,
-      phase: 'hide', phaseUntil: 0, side: this.rng() < 0.5 ? -1 : 1,
+      phase: 'hide', phaseUntil: 0, side: this.rng() < 0.5 ? -1 : 1, heldSince: null, peeks: 0, done: [],
     };
     this.nextScoreAt = Math.min(this.nextScoreAt, now + sk.coverDelay * 0.5);
   }
 
+  /** What healing wants this tick (heal.ts); tracks damage bursts and rolls this fight's habits on its first hit. */
+  private healDecide(c: Ctx): HealPlan | null {
+    const me = c.me, now = c.view.now, H = this.P.heal;
+    const eff = me.hp + me.shield;
+    if (eff < this.lastEff) {
+      if (now - this.lastDmgAt > H.quietSec) {
+        this.healRoll = { cover: this.healRng() < H.coverFirst[this.difficulty], reload: this.healRng() < H.reloadWeight[this.difficulty] };
+      }
+      if (now - this.burstAt > 1) { this.burst = 0; this.burstAt = now; }
+      this.burst += this.lastEff - eff;
+      this.lastDmgAt = now;
+    }
+    this.lastEff = eff;
+    const e = c.enemy;
+    // Hiding only works with cover at hand (or a wall to throw): backing off across the map just drags the fight out.
+    this.healHideAct = e && eff <= H.fightHp[this.difficulty] + H.burstHp ? this.healHide(c, e) : null;
+    const plan = healPlan({
+      me, now, diff: this.difficulty,
+      foe: e ? { dist: c.enemyDist, eff: e.hp + e.shield, reloadLeft: e.reloadUntil > now ? e.reloadUntil - now : 0 } : null,
+      hurtAgo: now - this.mem.lastHurtAt, burst: now - this.burstAt <= 1.5 ? this.burst : 0,
+      hidingFor: this.healHideAt === null ? null : now - this.healHideAt,
+      // Racing the storm or near its edge: no hiding (backing off walks me out into it), heal where I am.
+      coverFirst: this.healRoll.cover && !!this.healHideAct && this.goal !== 'storm' && !this.nearStormEdge(c), useReload: this.healRoll.reload, sheltered: false,
+      sinceFightHeal: now - this.fightHealAt,
+    }, H);
+    if (plan?.act === 'hide') { this.healHideAt ??= now; this.healNote = { t: now, text: plan.why }; }
+    // Stay hidden only while the heal itself is going (a "wait" to trade or press means fight on, not keep hiding).
+    else if (!(plan?.act === 'wait' && plan.why === 'healing') || !e) this.healHideAt = null;
+    if (plan?.act === 'wait' && plan.why !== 'healing') this.healNote = { t: now, text: plan.why };
+    return plan;
+  }
+
+  /** Within a few metres of (or past) the line the storm is about to close to. */
+  private nearStormEdge(c: Ctx): boolean {
+    const st = c.view.storm;
+    return !!st && Math.hypot(c.me.pos.x - st.x, c.me.pos.z - st.z) > this.stormSafeR(st) - 4;
+  }
+
+  /** Low with an enemy in sight: get out of their line of sight to heal (cover within heal.hideM, or a wall thrown down); null: none at hand. */
+  private healHide(c: Ctx, e: PlayerState): Act | null {
+    const me = c.me, face = add(e.pos, v3(0, CHEST, 0));
+    const got = this.coverWall(c, e.pos);
+    if (got) return dist2D(me.pos, got.hide) > 0.35 ? { dir: norm(flat(sub(got.hide, me.pos))), face, sprint: true } : { dir: null, face };
+    const spot = this.coverFrom(c, e);
+    if (spot && dist2D(spot, me.pos) < this.P.heal.hideM) return { ...this.goTo(spot, 0.4), face, sprint: true };
+    const kind = c.enemyDist >= 5 ? this.wallKind(c) : null;
+    if (kind && !this.building(c, kind)) {
+      const to = norm(flat(sub(e.pos, me.pos)));
+      for (const d of this.P.buildTuning.coverDist) {
+        const a = this.place(c, kind, add(me.pos, scale(to, d)), yawOf(to), face);
+        if (a) return a;
+      }
+    }
+    return null;
+  }
+
+  /** A potion seller close by on this island while I'm short of heals it would sell me: walk over. */
+  private sellerDetour(c: Ctx): Act | null {
+    const me = c.me, H = this.P.heal;
+    if (H.detourM <= 0 || c.view.suddenDeath || ['storm', 'disengage', 'defend', 'cover'].includes(this.goal)) return null;
+    const node = this.nav.nodeAt(me.pos);
+    if (node < 0) return null;
+    const s = (c.view.potionShops ?? []).find((p) => dist2D(p, me.pos) <= H.detourM && this.nav.nodeAt(p) === node);
+    if (!s || dist2D(me.pos, s) <= USE_RANGE - 0.3) return null;
+    // Only for heals (shields are bought when at the counter anyway, not worth a detour).
+    const buy = potionAction(me, c.view.now, false, true, this.healWant);
+    if (!buy || !('buy' in buy) || buy.buy !== 'healPotion') return null;
+    return this.goTo(s, USE_RANGE - 0.3);
+  }
+
+  /**
+   * A full hotbar keeping a heal out (none held, the stock wants one, cash for a medkit, at home): the least-wanted
+   * slot (HealParams keep weights) to drop, or null. At most one drop per 5 s.
+   */
+  private healDrop(c: Ctx): number | null {
+    const me = c.me, now = c.view.now;
+    this.healDrops = this.healDrops.filter((h) => now - h.t < 90);
+    if (now - this.lastHealDropAt < 5 || c.on !== c.home.index || me.hotbar.includes(null) || hpHealsHeld(me) > 0) return null;
+    const n = this.needs(c);
+    if ((n.medkits ?? 0) <= 0 || this.spendCash(me) < MEDKIT.price) return null;
+    const needed = new Set<HotbarItem>(Object.keys(n.build ?? {}) as PieceKind[]);
+    if (n.grapple === 'cross' || this.strandedSince !== null) needed.add('grapple');
+    if ((n.traps ?? 0) > 0) needed.add('trap');
+    const slot = dropForHeal(me, this.P.heal, needed);
+    if (slot === null) return null;
+    this.lastHealDropAt = now;
+    this.healDrops.push({ pos: clone(me.pos), t: now });
+    this.healNote = { t: now, text: `dropping ${me.hotbar[slot]} to make room for a heal` };
+    return slot;
+  }
+
   /** A piece near me that shields a spot just behind it from the threat, and that spot. */
-  private coverWall(c: Ctx, threat: Vec3): { wall: PieceState; hide: Vec3 } | null {
+  private coverWall(c: Ctx, threat: Vec3, skip: number[] = []): { wall: PieceState; hide: Vec3 } | null {
     const eye = add(threat, v3(0, PLAYER.eyeHeight, 0));
     let best: { wall: PieceState; hide: Vec3 } | null = null, bestD = 4;
     for (const p of c.view.pieces) {
-      if (p.kind === 'scaffold' || p.kind === 'ramp') continue;
+      if (p.kind === 'scaffold' || p.kind === 'ramp' || skip.includes(p.id)) continue;
       const d = dist2D(p.pos, c.me.pos);
       if (d >= bestD || Math.abs(p.pos.y - c.me.pos.y) > 1.2) continue;
       const away = norm(flat(sub(p.pos, threat)));
@@ -2519,23 +2769,27 @@ export class Bot {
     const now = view.now;
     const sk = this.P.buildSkill[this.difficulty];
     const face = add(cv.threat, v3(0, CHEST, 0));
-    const got = this.coverWall(c, cv.threat);
+    const got = this.coverWall(c, cv.threat, cv.done);
     if (!got) {
-      if (now < cv.startAt || this.building(c)) return c.enemy ? this.doFight(c) : { dir: null, face };
-      const kind = this.wallKind(c);
+      if (now < cv.startAt || this.building(c, undefined, true)) return c.enemy ? this.doFight(c) : { dir: null, face };
+      const strong = this.strongCover(c);
+      const kind = this.wallKind(c, strong);
       if (!kind || cv.placed >= this.P.buildTuning.coverMaxPieces) { this.cover = null; this.nextScoreAt = now; return IDLE; }
       const to = norm(flat(sub(cv.threat, me.pos)));
       // A bag already lying between us: stack the next one on it.
       const low = kind === 'sandbags' ? view.pieces.find((p) => p.kind === 'sandbags' && p.owner === me.id && dist2D(p.pos, me.pos) < 2.2 &&
         Math.abs(p.pos.y - me.pos.y) < 0.3 && (p.pos.x - me.pos.x) * to.x + (p.pos.z - me.pos.z) * to.z > 0.5) : undefined;
       if (low) {
-        const act = this.place(c, kind, v3(low.pos.x, me.pos.y + 0.4, low.pos.z), low.rotY, face);
+        const act = this.place(c, kind, v3(low.pos.x, me.pos.y + 0.4, low.pos.z), low.rotY, face, `cover: second bag vs @${cv.threatId}`);
         if (act) { cv.placed++; return act; }
       }
+      // Set off to the side away from where I'll peek, so stepping out to shoot is one short step.
+      const off = scale(right(yawOf(to)), -cv.side * this.P.buildTuning.coverOffset);
+      const why = `cover: ${kind} vs @${cv.threatId} (${strong ? 'strongest: home, rich or holding' : 'fast, cheap'})`;
       for (const d of this.P.buildTuning.coverDist) {
-        let pos = add(me.pos, scale(to, d)), rotY = yawOf(to);
+        let pos = add(add(me.pos, scale(to, d)), off), rotY = yawOf(to);
         if (this.rng() < sk.misplace) ({ pos, rotY } = fumble(pos, rotY, this.rng));
-        const act = this.place(c, kind, pos, rotY, face);
+        const act = this.place(c, kind, pos, rotY, face, why);
         if (act) { cv.placed++; return act; }
       }
       // Nowhere to put it: fight it out.
@@ -2546,30 +2800,76 @@ export class Bot {
     // Peek rhythm: hide behind the wall, step out to the side and shoot, back in.
     const { wall, hide } = got;
     const away = norm(flat(sub(wall.pos, cv.threat)));
-    const peek = add(hide, scale(right(yawOf(away)), cv.side * (PIECES[wall.kind].w / 2 + 0.7)));
+    const along = right(yawOf(away));
+    cv.heldSince ??= now;
+    // The wall is cracking: a fresh one (the strongest I carry) beside it on my peek side, and move behind that.
+    if (wall.hp < PIECES[wall.kind].hp * this.P.buildTuning.crackedAt && !cv.done.includes(-wall.id - 1) && !this.building(c, undefined, true)) {
+      cv.done.push(wall.id);
+      const kind = cv.placed < this.P.buildTuning.coverMaxPieces && this.rng() < sk.reinforce ? this.wallKind(c, true) : null;
+      if (kind) {
+        const pos = add(v3(wall.pos.x, me.pos.y, wall.pos.z), scale(along, cv.side * (PIECES[wall.kind].w / 2 + PIECES[kind].w / 2 + 0.05)));
+        const act = this.place(c, kind, pos, yawOf(away), face, `reinforce: ${wall.kind} wall cracked (${Math.round(wall.hp)} hp), ${kind} beside it`);
+        if (act) { cv.placed++; cv.phase = 'hide'; cv.phaseUntil = 0; return act; }
+      }
+      cv.done.pop(); // nothing went up: keep using the cracked wall (no second roll on it)
+      cv.done.push(-wall.id - 1);
+    }
+    const peek = add(hide, scale(along, cv.side * (PIECES[wall.kind].w / 2 + this.P.buildTuning.peekStep)));
+    // Patching up (medkit) or in the middle of placing: stay in behind the wall till it's done.
+    const busy = me.healAt !== null || me.busyUntil > now;
+    if (busy && cv.phase === 'peek') { cv.phase = 'hide'; cv.phaseUntil = 0; }
     const spot = cv.phase === 'hide' ? hide : peek;
     const there = dist2D(me.pos, spot) < 0.35;
     if (there && cv.phaseUntil === 0) cv.phaseUntil = now + (cv.phase === 'hide' ? sk.peekHide : sk.peekOut) * (0.75 + 0.5 * this.rng());
-    if (cv.phaseUntil > 0 && now >= cv.phaseUntil) {
+    if (cv.phaseUntil > 0 && now >= cv.phaseUntil && !busy) {
       cv.phase = cv.phase === 'hide' ? 'peek' : 'hide';
       cv.phaseUntil = 0;
-      if (cv.phase === 'peek' && this.rng() < 0.3) cv.side = -cv.side;
+      if (cv.phase === 'peek') { cv.peeks++; if (this.rng() < 0.3) cv.side = -cv.side; }
     }
     return there ? { dir: null, face } : { dir: norm(flat(sub(spot, me.pos))), face };
   }
 
-  /** Mid-range fight on the same island for a while: a ramp toward them and fight from its top. */
+  /**
+   * Mid-range fight on the same island for a while (sooner if they stand above me): a ramp toward them and fight
+   * from its top. Whether this fight calls for one is rolled once per fight (buildSkill.ramp).
+   */
   private highGround(c: Ctx, e: PlayerState, to: Vec3, gun: WeaponKind, sameIsland: boolean): Act | null {
     const { me, view } = c;
     const now = view.now;
-    const [lo, hi] = this.P.buildTuning.highGroundRange;
-    if (!this.P.buildSkill[this.difficulty].highGround || (me.inv.pieces.ramp ?? 0) === 0 || !sameIsland || gun === 'fists' ||
-      c.enemyDist < lo || c.enemyDist > hi || this.fightSince === null || now - this.fightSince < this.P.buildTuning.highGroundAfter ||
-      c.on < 0 || me.pos.y - view.map[c.on].groundY > 0.3 || e.pos.y - me.pos.y > 1 || this.building(c)) return null;
+    const sk = this.P.buildSkill[this.difficulty], bt = this.P.buildTuning;
+    const [lo, hi] = bt.highGroundRange;
+    if (!sk.highGround || (me.inv.pieces.ramp ?? 0) === 0 || !sameIsland || gun === 'fists' || this.fightSince === null ||
+      c.enemyDist < lo || c.enemyDist > hi || c.on < 0 || me.pos.y - view.map[c.on].groundY > 0.3) return null;
+    const above = e.pos.y - me.pos.y;
+    // Up to someone standing higher (a ramp reaches 1.5 m, two of them 3 m); a level fight after highGroundAfter.
+    if (above > PIECES.ramp.h * 2.2 || (above < bt.rampUpTo && now - this.fightSince < bt.highGroundAfter)) return null;
+    if (this.rampRoll?.fight !== this.fightSince) this.rampRoll = { fight: this.fightSince, yes: this.rng() < sk.ramp };
+    if (!this.rampRoll.yes || this.building(c, 'ramp', true)) return null;
     const pos = add(me.pos, scale(to, 2.1));
-    const act = this.place(c, 'ramp', pos, yawOf(to) + Math.PI, add(e.pos, v3(0, CHEST, 0)));
+    const why = above >= bt.rampUpTo ? `ramp: up to @${e.id} (${above.toFixed(1)} m above me)` : `ramp: high ground on @${e.id}`;
+    const act = this.place(c, 'ramp', pos, yawOf(to) + Math.PI, add(e.pos, v3(0, CHEST, 0)), why);
     if (!act) return null;
-    this.perch = { ramp: v3(pos.x, me.pos.y, pos.z), pos: add(pos, scale(to, 1.0)), until: now + this.P.buildTuning.perchSec };
+    this.perch = { ramp: v3(pos.x, me.pos.y, pos.z), pos: add(pos, scale(to, 1.0)), until: now + bt.perchSec, dir: to, chain: 0 };
+    return act;
+  }
+
+  /**
+   * On my perch with the rival still out of reach (or above me): chain the next ramp on from this one's top, forward
+   * and up toward them, and move the perch to its top (buildSkill.rampChain ramps per fight at most).
+   */
+  private chainRamp(c: Ctx, e: PlayerState): Act | null {
+    const pr = this.perch!, me = c.me, now = c.view.now;
+    const sk = this.P.buildSkill[this.difficulty], bt = this.P.buildTuning;
+    if (pr.chain >= sk.rampChain || (me.inv.pieces.ramp ?? 0) === 0 || this.building(c, 'ramp', true)) return null;
+    const toE = norm(flat(sub(e.pos, me.pos)));
+    // Still facing them (they didn't go round me), and still worth closing: far, or higher than my perch.
+    if (toE.x * pr.dir.x + toE.z * pr.dir.z < 0.8) return null;
+    if (c.enemyDist < bt.highGroundRange[0] + PIECES.ramp.d && e.pos.y - me.pos.y < bt.rampUpTo) return null;
+    const top = pr.ramp.y + PIECES.ramp.h;
+    const pos = v3(pr.ramp.x + pr.dir.x * PIECES.ramp.d, top, pr.ramp.z + pr.dir.z * PIECES.ramp.d);
+    const act = this.place(c, 'ramp', pos, yawOf(pr.dir) + Math.PI, add(e.pos, v3(0, CHEST, 0)), `ramp: chained forward and up toward @${e.id}`);
+    if (!act) return null;
+    pr.ramp = pos; pr.pos = add(pos, scale(pr.dir, 1.0)); pr.chain++; pr.until = now + bt.perchSec;
     return act;
   }
 
@@ -2696,7 +2996,7 @@ export class Bot {
     const walk = this.goTo(v3(stand.x, home.groundY, stand.z), 0.6);
     if (walk.dir) return walk;
     if (this.building(c, slot.kind)) return { dir: null, face };
-    const act = this.place(c, slot.kind, slot.pos, slot.rotY, face);
+    const act = this.place(c, slot.kind, slot.pos, slot.rotY, face, `fortify: ${slot.tag} ${slot.kind}`);
     if (act) return act;
     this.slotBackoff.set(i, view.now + this.P.buildTuning.slotBackoffSec);
     this.nextScoreAt = view.now;
@@ -2785,8 +3085,7 @@ export class Bot {
       // Stock up in one shop visit (not one deck per trip) while still on my island.
       // Only while the shop (and the vault, if I need cash from it) is still inside the ring: a trip out into the
       // storm to shop kills just as surely.
-      const shopSafe = [c.home.shop, ...(me.inv.cash < PIECES.scaffold.price ? [c.home.vault] : [])]
-        .every((p) => dist2D(p, ctr) < st.r - 2) || inStormShopGrace(view);
+      const shopSafe = dist2D(c.home.shop, ctr) < st.r - 2 || inStormShopGrace(view);
       const buy = have < need && c.homeReach && shopSafe && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
       if (buy) return buy;
       if (have > 0) {
@@ -2798,15 +3097,10 @@ export class Bot {
     return { ...this.goTo(best, 1), sprint: true };
   }
 
-  /** Walk to my shop and buy scaffolds (cash from the vault if needed); null when I can't afford one. */
+  /** Walk to my shop and buy scaffolds (the shop takes vault cash too); null when I can't afford one. */
   private buyDecks(c: Ctx): Act | null {
     const me = c.me, now = c.view.now, price = PIECES.scaffold.price;
-    if (me.inv.cash < price) {
-      if (me.vault.cash < price) return null;
-      const walk = this.goTo(c.home.vault, 1.8);
-      if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > now) return walk;
-      return { ...walk, vault: { withdraw: { cash: Math.min(me.vault.cash, price * 20) } } };
-    }
+    if (funds(me) < price) return null;
     const walk = this.goTo(c.home.shop, 2.0);
     if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt || this.buyBlocked('scaffold')) return { ...walk, sprint: true };
     this.nextBuyAt = now + BUY_GAP[this.difficulty];

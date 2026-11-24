@@ -18,6 +18,25 @@ export function part(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: TH
   return g;
 }
 
+/**
+ * StaticBatch's part: an indexed source with normals keeps only its indexed form, flattened at build time if the
+ * merged mesh stays non-indexed (two full copies of every part, one always thrown away, were a few hundred MB of
+ * short-lived buffers while the map loads). Without normals the flat and smooth forms differ: part() as before.
+ */
+function batchPart(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation): THREE.BufferGeometry {
+  return geo.index && geo.getAttribute('normal') ? normalise(geo.clone(), m, col) : part(geo, m, col);
+}
+
+/** A part's indexed form, if it has one. */
+const twinOf = (p: THREE.BufferGeometry): THREE.BufferGeometry | undefined => p.index ? p : p.userData.indexed as THREE.BufferGeometry | undefined;
+/** A part in merge form (non-indexed). */
+const flatOf = (p: THREE.BufferGeometry): THREE.BufferGeometry => {
+  if (!p.index) return p;
+  const f = p.toNonIndexed();
+  p.dispose();
+  return f;
+};
+
 function normalise(g: THREE.BufferGeometry, m: THREE.Matrix4 | null, col: THREE.ColorRepresentation): THREE.BufferGeometry {
   if (!g.getAttribute('normal')) g.computeVertexNormals();
   const n = g.getAttribute('position').count;
@@ -98,7 +117,7 @@ export const STATIC_CHUNKS = {
 /** merged static meshes with at least this many vertices get an index (StaticBatch.build) */
 export const STATIC_INDEX_MIN_VERTS = 30_000;
 
-const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + g.getAttribute('position').count / 3, 0);
+const trisOf = (parts: THREE.BufferGeometry[]) => parts.reduce((a, g) => a + (g.index ? g.index.count : g.getAttribute('position').count) / 3, 0);
 
 type Bin = { material: THREE.Material; cast: boolean; receive: boolean; parts: THREE.BufferGeometry[] };
 
@@ -122,8 +141,8 @@ export class StaticBatch {
     const key = `${material.uuid}:${+cast}${+receive}`;
     let bin = this.bins.get(key);
     if (!bin) { bin = { material, cast, receive, parts: [] }; this.bins.set(key, bin); }
-    bin.parts.push(part(geo, m, col));
-    for (const T of this.copies) bin.parts.push(part(geo, m ? T.clone().multiply(m) : T, col));
+    bin.parts.push(batchPart(geo, m, col));
+    for (const T of this.copies) bin.parts.push(batchPart(geo, m ? T.clone().multiply(m) : T, col));
   }
 
   /** Push a geometry already in merge form (non-indexed; exactly position/normal/uv/color; final space). No copy. */
@@ -145,8 +164,8 @@ export class StaticBatch {
     const emit = (bin: Bin, parts: THREE.BufferGeometry[], suffix: string) => {
       // heavy static meshes are drawn by the camera and every shadow cascade: emit them indexed (from the parts'
       // indexed twins) so shared corners are shaded once per pass, not once per triangle
-      const twins = trisOf(parts) * 3 >= STATIC_INDEX_MIN_VERTS && parts.every((p) => p.userData.indexed) ? parts.map((p) => p.userData.indexed as THREE.BufferGeometry) : null;
-      const geo = twins ? merge(twins) : merge(parts);
+      const twins = trisOf(parts) * 3 >= STATIC_INDEX_MIN_VERTS && parts.every((p) => twinOf(p)) ? parts.map((p) => twinOf(p)!) : null;
+      const geo = twins ? merge(twins) : merge(parts.map(flatOf));
       if (twins) for (const p of parts) p.dispose();
       const mesh = new THREE.Mesh(geo, bin.material);
       mesh.castShadow = bin.cast; mesh.receiveShadow = bin.receive;
@@ -211,7 +230,7 @@ export class StaticBatch {
 
   /** Merged geometry per material without creating meshes (instanced props build their own). */
   take(): { material: THREE.Material; geometry: THREE.BufferGeometry; cast: boolean; receive: boolean }[] {
-    const out = [...this.bins.values()].map((b) => ({ material: b.material, geometry: merge(b.parts), cast: b.cast, receive: b.receive }));
+    const out = [...this.bins.values()].map((b) => ({ material: b.material, geometry: merge(b.parts.map(flatOf)), cast: b.cast, receive: b.receive }));
     this.bins.clear();
     return out;
   }

@@ -65,8 +65,25 @@ function archetypesFor(scenario: Scenario, seed: number, names: readonly string[
 type SeatOut = {
   difficulty: Difficulty; kills: number; deaths: number; aliveSec: number; attackSec: number;
   idleHome: number; longestHomeIdle: number; hitDists: number[]; eliminatedAt: number | null;
+  /** Heals (medkits, heal/shield potions): got (bought or picked up), used, used mid-fight (an enemy within 30 m or hurt
+   * in the last 3 s), and deaths after at least 3 s at hp + shield ≤ 50 (a heal could have saved them). Optional: older shards. */
+  healsGot?: number; healsUsed?: number; healsUsedFight?: number; lowHpDeaths?: number;
+  /** Combat building (optional: shard files from older measure.ts lack it). */
+  build?: BuildOut;
   archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
+  /** Vault use (read off snapshots, so it works on any ref): deposits, $ banked, shop buys paid from the vault, respawn restocks. */
+  deposits?: number; banked?: number; vaultPaid?: number; restocks?: number; interest?: number; vaultLv?: number;
 };
+/**
+ * Building in fights, per seat. A fight: bullets/blasts exchanged with anyone, closed by 8 s without one, a death or a
+ * kill (won = got a kill and lived). Combat pieces: anything but a bridge deck placed during a fight. Blocked: a bullet
+ * stopped by one of my own pieces within 4 m of me while I'm in a fight. High: my hits on someone ≥ 1.2 m below me.
+ */
+export type BuildOut = {
+  fights: number; built: number; builtWon: number; plainWon: number; pieces: number; kinds: Record<string, number>;
+  bulletsTaken: number; bulletsBlocked: number; hits: number; highHits: number;
+};
+const FIGHT_GAP = 8, BLOCK_M = 4, HIGH_M = 1.2;
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
   time: number; decisive: boolean; preSdElims: number; preSdSeals?: number; firstSeal: number | null; msPerTick: number; wallSec: number;
@@ -135,17 +152,47 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   );
   const seats: SeatOut[] = diffs.map((d, i) => ({
     difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
-    archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0,
+    archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0, healsGot: 0, healsUsed: 0, healsUsedFight: 0, lowHpDeaths: 0,
+    deposits: 0, banked: 0, vaultPaid: 0, restocks: 0, interest: 0, vaultLv: 1,
   }));
+  type HealSeen = { alive: boolean; n: number; healAt: unknown; drinking: { kind: string } | null; lowSince: number | null; hurtAt: number };
+  const healSeen: HealSeen[] = diffs.map(() => ({ alive: false, n: 0, healAt: null, drinking: null, lowSince: null, hurtAt: -99 }));
+  type HealP = { id: number; alive: boolean; hp: number; shield: number; pos: { x: number; z: number }; healAt?: unknown; drinking?: { kind: string } | null; inv: { medkits: number; potions?: Record<string, number | undefined> } };
+  const healN = (p: HealP) => p.inv.medkits + (p.inv.potions?.healPotion ?? 0) + (p.inv.potions?.shieldSmall ?? 0) + (p.inv.potions?.shieldBig ?? 0);
+  const lastCash = new Map<number, [number, number]>();
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, preSdSeals = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
+  const bo: BuildOut[] = diffs.map(() => ({ fights: 0, built: 0, builtWon: 0, plainWon: 0, pieces: 0, kinds: {}, bulletsTaken: 0, bulletsBlocked: 0, hits: 0, highHits: 0 }));
+  const fight: ({ last: number; pieces: number; kill: boolean } | null)[] = diffs.map(() => null);
+  const pieceOwner = new Map<number, number>();
+  const endFight = (i: number, died: boolean) => {
+    const f = fight[i];
+    if (!f) return;
+    const b = bo[i];
+    b.fights++;
+    if (f.pieces > 0) b.built++;
+    if (f.kill && !died) { if (f.pieces > 0) b.builtWon++; else b.plainWon++; }
+    fight[i] = null;
+  };
+  const touch = (i: number, t: number) => { fight[i] ??= { last: t, pieces: 0, kill: false }; fight[i]!.last = t; };
   const maxTicks = Math.round(maxSec * TICK_HZ);
   const w0 = performance.now();
   let snap = m.tick(new Map());
   let ticks = 0;
   for (; ticks < maxTicks && snap.winner === null; ticks++) {
     snap = m.tick(new Map());
+    for (const p of snap.players) {
+      const b = lastCash.get(p.id), s = seats[p.id - 1];
+      if (b && s) {
+        const dv = p.vault.cash - b[1], di = p.inv.cash - b[0];
+        if (dv > 0 && di < 0) { s.deposits!++; s.banked! += dv; }
+        else if (dv > 0 && di === 0) s.interest! += dv; // vault interest (refs with it)
+        else if (dv < 0 && di <= 0) s.vaultPaid!++;
+        s.vaultLv = Math.max(s.vaultLv ?? 1, (p as { vaultLevel?: number }).vaultLevel ?? 1);
+      }
+      lastCash.set(p.id, [p.inv.cash, p.vault.cash]);
+    }
     if (ticks % SAMPLE_TICKS === 0) {
       const dt = SAMPLE_TICKS / TICK_HZ;
       for (const p of snap.players) {
@@ -166,17 +213,57 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (geared && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) <= IDLE_M && !nearBunker && !snap.sealed[p.island]) s.idleHome += dt;
       }
     }
+    // Heals: per tick (a drink or medkit starts and finishes within a sample interval).
+    for (const p of snap.players as unknown as HealP[]) {
+      const h = healSeen[p.id - 1], s = seats[p.id - 1];
+      const n = healN(p), drinking = p.drinking ?? null, healAt = p.healAt ?? null;
+      if (p.alive && h.alive) {
+        const started = (healAt !== null && h.healAt === null) || (!!drinking && !h.drinking && drinking.kind !== 'speedPotion');
+        if (started) {
+          s.healsUsed!++;
+          const foe = (snap.players as unknown as HealP[]).some((o) => o.id !== p.id && o.alive && Math.hypot(o.pos.x - p.pos.x, o.pos.z - p.pos.z) < THREAT_M);
+          if (foe || snap.time - h.hurtAt < 3) s.healsUsedFight!++;
+        }
+        const got = n - h.n + (started ? 1 : 0);
+        if (got > 0) s.healsGot! += got;
+      }
+      if (p.alive && p.hp + p.shield <= 50) h.lowSince ??= snap.time; else if (p.alive) h.lowSince = null;
+      h.alive = p.alive; h.n = n; h.healAt = healAt; h.drinking = drinking;
+    }
+    for (let i = 0; i < fight.length; i++) if (fight[i] && snap.time - fight[i]!.last > FIGHT_GAP) endFight(i, false);
     for (const e of snap.events) {
+      if (e.type === 'placed') {
+        const by = e.data.by as number, kind = e.data.kind as string;
+        pieceOwner.set(e.data.piece as number, by);
+        const f = fight[by - 1];
+        if (f && kind !== 'scaffold') { f.pieces++; bo[by - 1].pieces++; bo[by - 1].kinds[kind] = (bo[by - 1].kinds[kind] ?? 0) + 1; }
+      } else if (e.type === 'pieceHit') {
+        const owner = pieceOwner.get(e.data.piece as number), by = e.data.by as number | null, at = e.data.pos as { x: number; z: number } | undefined;
+        if (owner === undefined || by == null || by === owner || e.data.source !== 'bullet' || !at || !fight[owner - 1]) continue;
+        const o = snap.players[owner - 1];
+        if (o?.alive && Math.hypot(o.pos.x - at.x, o.pos.z - at.z) < BLOCK_M) bo[owner - 1].bulletsBlocked++;
+      }
       if (e.type === 'hit') {
         const by = e.data.by as number | null, target = e.data.target as number;
+        if (by != null && by !== target && healSeen[target - 1]) healSeen[target - 1].hurtAt = e.t;
         const a = by != null ? snap.players[by - 1]?.pos : undefined, t = snap.players[target - 1]?.pos;
         if (by == null || by === target || !a || !t) continue;
         seats[by - 1].damage! += Number(e.data.amount) || 0;
         seats[by - 1].hitDists.push(Math.round(Math.hypot(a.x - t.x, a.z - t.z)));
+        touch(by - 1, e.t); touch(target - 1, e.t);
+        bo[by - 1].hits++;
+        if (a.y - t.y >= HIGH_M) bo[by - 1].highHits++;
+        const w = e.data.weapon as string | undefined;
+        if (w && w !== 'fists' && w !== 'rocket' && w !== 'grenade' && w !== 'charge') bo[target - 1].bulletsTaken++;
       } else if (e.type === 'kill') {
         const v = e.data.victim as number, k = e.data.killer as number | null;
         seats[v - 1].deaths++;
+        const ls = healSeen[v - 1].lowSince;
+        if (ls !== null && e.t - ls >= 3) seats[v - 1].lowHpDeaths!++;
+        healSeen[v - 1].lowSince = null;
         if (k != null && k !== v) { seats[k - 1].kills++; if (e.t >= SD) lateKills++; }
+        if (k != null && k !== v && fight[k - 1]) { fight[k - 1]!.kill = true; endFight(k - 1, false); }
+        endFight(v - 1, true);
       } else if (e.type === 'sealed') {
         const by = e.data.by as number | null | undefined;
         if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
@@ -184,6 +271,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (by != null && by !== e.data.owner && e.t < SD) preSdSeals++;
       } else if ((e.type as string) === 'elimination') {
         if (e.data.by != null) { credited++; spoils += Number(e.data.spoils) || 0; }
+      } else if ((e.type as string) === 'restock') {
+        const s = seats[(e.data.player as number) - 1];
+        if (s) s.restocks!++;
       } else if (e.type === 'eliminated') {
         const id = e.data.player as number;
         if (seats[id - 1].eliminatedAt === null) {
@@ -194,6 +284,8 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       }
     }
   }
+  for (let i = 0; i < fight.length; i++) endFight(i, false);
+  seats.forEach((s, i) => { s.build = bo[i]; });
   const msPerTick = (performance.now() - w0) / Math.max(1, ticks);
   // Rapier worlds live in WASM memory and are never garbage collected.
   (m as unknown as { physics?: { world?: { free?: () => void } } }).physics?.world?.free?.();
@@ -256,10 +348,32 @@ export type ScenarioSummary = {
   ladder: (Share & { higher: Difficulty; lower: Difficulty }) | null;
   /** FFAs with more than one tier: mean final placement per tier (1 = won), its 95% CI and number of seats. */
   placementByTier: Partial<Record<Difficulty, { mean: number; ci95: number; n: number }>> | null;
+  /** Per game (all seats): heals got, used, used mid-fight, deaths after ≥ 3 s at ≤ 50 hp + shield. Null: shards without heal data. */
+  heals: { got: number; used: number; usedFight: number; lowHpDeaths: number; deaths: number } | null;
+  /** Combat building per skill (absent when the shards predate it). */
+  build?: Record<string, BuildSummary>;
+  /** Vault use per game (all seats together). */
+  vault: { deposits: number; banked: number; vaultPaid: number; restocks: number; interest: number; upgrades: number };
   shipCheck: { pass: boolean | null; checks: Check[] };
   /** Means per game (absent on old shard files): kills at 15:00+, eliminations, credited eliminations, spoils paid. */
   perGame?: { lateKills: number; elims: number; credited: number; spoils: number };
 };
+
+export type BuildSummary = {
+  fights: number; piecesPerFight: number; builtShare: number; winBuilt: number | null; winPlain: number | null;
+  blockedPct: number; highPct: number; kinds: Record<string, number>;
+};
+export function buildSummary(outs: BuildOut[]): BuildSummary {
+  const sum = (f: (b: BuildOut) => number) => outs.reduce((a, b) => a + f(b), 0);
+  const fights = sum((b) => b.fights), built = sum((b) => b.built), taken = sum((b) => b.bulletsTaken), blocked = sum((b) => b.bulletsBlocked);
+  const kinds: Record<string, number> = {};
+  for (const b of outs) for (const [k, n] of Object.entries(b.kinds)) kinds[k] = (kinds[k] ?? 0) + n;
+  return {
+    fights, piecesPerFight: sum((b) => b.pieces) / Math.max(1, fights), builtShare: built / Math.max(1, fights),
+    winBuilt: built ? sum((b) => b.builtWon) / built : null, winPlain: fights - built ? sum((b) => b.plainWon) / (fights - built) : null,
+    blockedPct: (100 * blocked) / Math.max(1, blocked + taken), highPct: (100 * sum((b) => b.highHits)) / Math.max(1, sum((b) => b.hits)), kinds,
+  };
+}
 
 export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary {
   const seats = games.flatMap((g) => g.seats);
@@ -298,10 +412,30 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     msPerTick: games.reduce((a, g) => a + g.msPerTick, 0) / Math.max(1, games.length),
     maxWallSec: Math.max(0, ...games.map((g) => g.wallSec)),
     proVsHard, ladder, placementByTier,
+    heals: seats.every((x) => x.healsUsed !== undefined) ? {
+      got: seats.reduce((a, x) => a + x.healsGot!, 0) / Math.max(1, games.length),
+      used: seats.reduce((a, x) => a + x.healsUsed!, 0) / Math.max(1, games.length),
+      usedFight: seats.reduce((a, x) => a + x.healsUsedFight!, 0) / Math.max(1, games.length),
+      lowHpDeaths: seats.reduce((a, x) => a + x.lowHpDeaths!, 0) / Math.max(1, games.length),
+      deaths: seats.reduce((a, x) => a + x.deaths, 0) / Math.max(1, games.length),
+    } : null,
+    vault: (() => {
+      const per = (k: 'deposits' | 'banked' | 'vaultPaid' | 'restocks' | 'interest') => seats.reduce((a, x) => a + (x[k] ?? 0), 0) / Math.max(1, games.length);
+      const upgrades = seats.reduce((a, x) => a + ((x.vaultLv ?? 1) - 1), 0) / Math.max(1, games.length);
+      return { deposits: per('deposits'), banked: per('banked'), vaultPaid: per('vaultPaid'), restocks: per('restocks'), interest: per('interest'), upgrades };
+    })(),
     shipCheck: { pass: null, checks: [] },
     perGame: (['lateKills', 'elims', 'credited', 'spoils'] as const).reduce((o, k) => ({ ...o, [k]: games.reduce((a, g) => a + (g[k] ?? 0), 0) / Math.max(1, games.length) }),
       {} as { lateKills: number; elims: number; credited: number; spoils: number }),
   };
+  const withBuild = seats.filter((x) => x.build);
+  if (withBuild.length) {
+    s.build = {};
+    for (const d of ['pro', 'hard', 'medium', 'easy']) {
+      const outs = withBuild.filter((x) => x.difficulty === d).map((x) => x.build!);
+      if (outs.length) s.build[d] = buildSummary(outs);
+    }
+  }
   // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%; the ladder bar here is 80% per step, the steward hand-off rule).
   // The shipChecks comparisons against the hand-tuned params need a second series and are not run here.
   const checks: Check[] = [];
@@ -334,6 +468,11 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '### Ship-check details',
     ...sums.flatMap((s) => s.shipCheck.checks.map((c) => `- ${s.scenario}: ${c.pass ? '✅' : '❌'} ${c.name} (${c.value})`)),
     '',
+    '### Heals per game (all seats)',
+    '| scenario | heals got | heals used | used mid-fight | low-hp deaths (≥3 s at ≤50) | deaths |',
+    '|---|---|---|---|---|---|',
+    ...sums.map((s) => s.heals ? `| ${s.scenario} | ${s.heals.got.toFixed(1)} | ${s.heals.used.toFixed(1)} | ${s.heals.usedFight.toFixed(1)} | ${s.heals.lowHpDeaths.toFixed(1)} | ${s.heals.deaths.toFixed(1)} |` : `| ${s.scenario} | - | - | - | - | - |`),
+    '',
     ...(sums.some((s) => s.ladder) ? ['### 1v1 ladder', '',
       '| matchup | higher tier wins | 95% CI | games |', '|---|---|---|---|',
       ...sums.filter((s) => s.ladder).map((s) => `| ${s.ladder!.higher} vs ${s.ladder!.lower} | ${(100 * s.ladder!.share).toFixed(0)}% | ± ${(100 * s.ladder!.ci95).toFixed(0)} | ${s.ladder!.games} |`), ''] : []),
@@ -343,6 +482,14 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '### Eliminations per game (means)', '',
     '| scenario | kills 15:00+ | eliminations | credited | spoils paid |', '|---|---|---|---|---|',
     ...sums.filter((s) => s.perGame).map((s) => `| ${s.scenario} | ${s.perGame!.lateKills.toFixed(1)} | ${s.perGame!.elims.toFixed(1)} | ${s.perGame!.credited.toFixed(1)} | $${s.perGame!.spoils.toFixed(0)} |`), '',
+    '### Combat building',
+    '| scenario | skill | fights | pieces / fight | fights with building | win % building | win % not | bullets blocked by own cover | hits from high ground | pieces |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+    ...sums.flatMap((s) => Object.entries(s.build ?? {}).map(([d, b]) => `| ${s.scenario} | ${d} | ${b.fights} | ${b.piecesPerFight.toFixed(2)} | ${pct(100 * b.builtShare)} | ${b.winBuilt === null ? '-' : pct(100 * b.winBuilt)} | ${b.winPlain === null ? '-' : pct(100 * b.winPlain)} | ${b.blockedPct.toFixed(1)}% | ${b.highPct.toFixed(1)}% | ${Object.entries(b.kinds).map(([k, n]) => `${k} ${n}`).join(', ') || '-'} |`)),
+    '',
+    '### Vault use per game (all seats)', '',
+    '| scenario | deposits | $ banked | shop buys paid from vault | respawn restocks | $ interest | vault levels bought |', '|---|---|---|---|---|---|---|',
+    ...sums.map((s) => `| ${s.scenario} | ${(s.vault?.deposits ?? 0).toFixed(1)} | $${Math.round(s.vault?.banked ?? 0)} | ${(s.vault?.vaultPaid ?? 0).toFixed(1)} | ${(s.vault?.restocks ?? 0).toFixed(1)} | $${Math.round(s.vault?.interest ?? 0)} | ${(s.vault?.upgrades ?? 0).toFixed(1)} |`), '',
     '### Wins by skill',
     ...sums.map((s) => `- ${s.scenario}: ${Object.entries(s.winsByDifficulty).map(([d, n]) => `${d} ${n}`).join(', ') || 'none'}; no winner ${s.noWinner} · ${s.msPerTick.toFixed(2)} ms/tick · slowest game ${s.maxWallSec.toFixed(0)} s wall`),
   ];
