@@ -31,7 +31,8 @@ describe('bots commit to a weapon', () => {
         const cur = { eq: p.equipped, rl: p.reloadUntil, mag: p.inv.weapons.rocket?.mag ?? 0 };
         const was = prev.get(id);
         if (was && was.eq !== cur.eq) {
-          switches++;
+          // Gun to gun only: a hand going empty (fists) is a respawn, an empty gun, a hook or a heal in hand, not thrash.
+          if (was.eq !== 'fists' && cur.eq !== 'fists') switches++;
           if (was.eq === 'rocket' || cur.eq === 'rocket') rocketSwitches++;
           if (was.eq === 'rocket' && was.rl > 0) cancelled++;
         }
