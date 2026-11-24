@@ -54,6 +54,7 @@ import type { Predictor } from './predict';
 import { MAX_CMDS_PER_MSG } from '../net/sanitize';
 import { SealAnnouncer } from './announce';
 import { BULK_PIECES, BuyQueue } from './qol/combatQol';
+import { HoldTap, VaultQueue } from './vaultUi';
 import { netStatus, QolHud } from './qol/hudExtras';
 import { Killcam } from './qol/killcam';
 import { addInviteButton } from './qol/invite';
@@ -1254,13 +1255,21 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const leave = () => { clearRejoin(); leaveToMenu(); };
   // Shop buys go through a paced queue: Shift+click buys several pieces, one per sim tick.
   const buys = new BuyQueue();
+  // Vault panel moves (drags, splits, cash) go out one per tick, in order.
+  const vaultMoves = new VaultQueue();
+  // E at your vault: tap opens the panel, hold quick-banks everything above the restock loadout.
+  const vaultHold = new HoldTap();
+  window.addEventListener('keyup', (e) => {
+    if (!isAction('interact', e.code) || !vaultHold.pending) return;
+    vaultHold.release(() => openPanel('vault'));
+  });
   const buyItem = (item: ShopItem, bulk = false) => {
     buys.add(item, bulk && isPieceItem(item) ? BULK_PIECES : 1);
     if (qol.lastBuy !== item) { qol.lastBuy = item; savePrefs({ lastBuy: item }); }
   };
   const hud = new Hud(app, {
     buy: (item, bulk) => buyItem(item, bulk),
-    vault: (a) => input.queue({ vault: a }),
+    vault: (a) => vaultMoves.add(a),
     closePanel,
     backToMenu: leave,
     endButtons: (over) => endButtons(end.role, over, {
@@ -1309,9 +1318,11 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const input = new InputController(canvas, {
     interact: () => {
       const station = hud.nearStation();
-      if (station === 'shop' || station === 'potions' || station === 'vault') openPanel(station);
+      if (station === 'vault') vaultHold.start(() => { if (hud.quickBank()) audio.ui('vault'); });
+      else if (station === 'shop' || station === 'potions') openPanel(station);
       else input.queue({ interact: true });
     },
+    bank: () => { if (hud.canBankHere() && hud.quickBank()) audio.ui('vault'); },
     place: () => { placeWantedAt = performance.now(); tryPlace(); },
     lockChange: (locked) => {
       if (!locked) closeWheel(); // Esc while the wheel is open lands here (the browser takes Esc first)
@@ -2099,6 +2110,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // with the live input so a key press shows on the very next frame.
     const nextBuy = buys.take(now);
     if (nextBuy) input.queue({ shop: { buy: nextBuy } });
+    const nextVault = vaultMoves.take(now);
+    if (nextVault) input.queue({ vault: nextVault });
     let sample = input.sample();
     if (sample.jump) jumpLatch = true;
     const liveCmd = (seq: number): MoveCmd => ({ seq, moveX: sample.moveX, moveZ: sample.moveZ, yaw: input.yaw, jump: jumpLatch, sprint: sample.sprint });

@@ -1,8 +1,9 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, grantStartPistol, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
 import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
-import { BUILD, DT, ECONOMY, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
+import { BUILD, DT, ECONOMY, TICK_HZ, VAULT_INTEREST_SEC, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
+import { payInterest, sanitizeLoadout, upgradeVault, vaultMove, vaultSpec } from './vault';
 import { envKiller, islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, grappleRange, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
@@ -330,6 +331,9 @@ export class Match implements MatchApi {
         // Dead: commands are consumed (acked) but do nothing.
         if (cmds?.length) (p.mv ??= newMoveState()).ack = cmds[cmds.length - 1].seq;
         if (p.emote) delete p.emote;
+        // The restock loadout is edited on the death screen too (it acts on the coming respawn).
+        const di = inputs.get(p.id);
+        if (di) this.setLoadout(p, di);
         if (p.hook || p.mv?.pull) clearGrapple(this.grappleCtx, p, now);
         continue;
       }
@@ -357,6 +361,9 @@ export class Match implements MatchApi {
     this.props?.tick(now, this.s.players.values(), this.s.pieces, this.events, this.s.waterY);
     for (const g of this.s.generators) g.stored = tickGenerator(g.stored, DT * this.settings.genMult, !this.s.suddenDeath, this.s.genLevels[g.island] ?? 1);
     tickCenter(this.center, DT * this.settings.genMult, !this.s.suddenDeath);
+    // Vault interest (sim/vault.ts): every VAULT_INTEREST_SEC, like the generators none in sudden death.
+    if (!this.s.suddenDeath && this.tickNo > 0 && this.tickNo % (VAULT_INTEREST_SEC * TICK_HZ) === 0)
+      for (const p of this.s.players.values()) if (!p.eliminated) payInterest(p, this.settings.genMult);
     for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
     this.events.push(...this.cosmetics.onEvents(this.events, now));
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT, this.settings.suddenDeathSec));
@@ -623,6 +630,13 @@ export class Match implements MatchApi {
     this.debugEvents.push({ t: this.s.time, type: 'eliminated', data: { player: playerId } });
   }
 
+  /** A restock loadout (sim/vault.ts) can be set from anywhere, busy, dead or alive: it only acts on respawn. */
+  private setLoadout(p: PlayerState, input: PlayerInput) {
+    if (!input.vault?.loadout) return;
+    const l = sanitizeLoadout(input.vault.loadout, vaultSpec(p).kinds);
+    if (l) p.loadout = l; else console.warn(`match: player ${p.id} sent a bad loadout, ignored`);
+  }
+
   private applyInput(p: PlayerState, input: PlayerInput, now: number, cmds?: MoveCmd[]) {
     p.yaw = input.yaw;
     p.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, input.pitch));
@@ -634,6 +648,7 @@ export class Match implements MatchApi {
     // Sights need a gun in hand and no reload; aiming rules out sprinting (see move).
     p.ads = input.ads && p.alive && p.equipped !== 'fists' && p.reloadUntil === 0;
     if (input.view !== undefined) p.view = input.view === 1 ? 1 : 0;
+    this.setLoadout(p, input);
     if (p.hook) this.events.push(...tickGrapple(this.grappleCtx, p, now));
 
     // A build sent while still busy (a held-place stream arriving a little bunched) waits for the busy time
@@ -659,6 +674,18 @@ export class Match implements MatchApi {
     if (input.drop) this.drop(p, input.drop, now);
 
     tickReload(p, now);
+    // Vault moves aren't held up by the busy time (they set it: hands full at the vault for a second), so the vault
+    // panel's drags go through back to back; they're only accepted at your own vault.
+    if (input.vault?.deposit || input.vault?.withdraw || input.vault?.upgrade) {
+      const home = this.map[p.island], v = home.vault;
+      const atVault = dist2D(v, p.pos) <= ECONOMY.interactRadius && Math.abs(v.y - p.pos.y) < 2;
+      const { deposit, withdraw, upgrade } = input.vault;
+      if ((deposit || withdraw) && vaultMove(p, home, atVault, { deposit, withdraw }).ok) p.busyUntil = Math.max(p.busyUntil, now + ECONOMY.vaultSec);
+      if (upgrade && atVault) {
+        const r = upgradeVault(p);
+        if (r.ok) this.events.push({ t: now, type: 'vaultUpgrade', data: { player: p.id, level: p.vaultLevel } });
+      }
+    }
     if (now < (busyBefore ?? p.busyUntil)) return;
     const isl = this.map[p.island];
     const near = (pt: Vec3) => dist2D(p.pos, pt) <= ECONOMY.interactRadius && Math.abs(p.pos.y - pt.y) < 2;
@@ -690,7 +717,6 @@ export class Match implements MatchApi {
       else if (this.map.some((i) => near(i.shop))) { if (!isHomeOnly(input.shop.buy)) buyAt(p, 'home', input.shop); }
       else if (this.potionShops.some((sh) => near(sh.pos))) buyAt(p, 'potion', input.shop);
     }
-    if (input.vault && near(isl.vault) && vaultTransfer(p, input.vault).ok) p.busyUntil = now + ECONOMY.vaultSec;
     if (input.reload) tryReload(p, now);
     // Attacking ends spawn protection at once.
     if ((input.fire || input.throwGrenade || input.placeCharge) && (p.spawnProtected || p.invulnUntil > now)) {

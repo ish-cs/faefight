@@ -26,6 +26,8 @@ export function saveSensitivity(v: number) {
 export type InputHooks = {
   /** E outside build mode (main decides: shop panel, vault panel, or generator collect). */
   interact(): void;
+  /** Quick-bank key (H): everything above the restock loadout into the vault (main checks you can reach it). */
+  bank?(): void;
   /** Left click while in build mode. */
   place(): void;
   /** Pointer lock gained/lost. */
@@ -315,6 +317,7 @@ export class InputController {
     if (isAction('rotateLeft', e.code)) this.rotate(-1);
     if (isAction('rotateRight', e.code)) this.rotate(1);
     if (isAction('interact', e.code)) this.hooks.interact();
+    if (isAction('bank', e.code)) this.hooks.bank?.();
     if (isAction('reload', e.code)) this.oneShot.reload = true;
     if (isAction('inventory', e.code)) this.setInventory(!this.inventory);
     if (isAction('jump', e.code)) this.oneShot.jump = true;

@@ -53,7 +53,8 @@ export class AlertHud {
     this.doors.append(this.doorsArrow, this.doorsLabel);
     const bar = el('span', 'qh-bar');
     bar.append(this.homeFill);
-    this.home.append(el('span', 'qh-k', 'Home'), this.homeGen, bar, this.homeVault, this.homeLv, this.homeThreat);
+    // Generator level next to the generator, vault level next to the vault (one "Lv" read as the vault's).
+    this.home.append(el('span', 'qh-k', 'Home'), this.homeGen, this.homeLv, bar, this.homeVault, this.homeThreat);
     for (const n of [this.doors, this.reopened, this.home, this.genToast, this.homeThreat]) show(n, false);
     const tl = hudRoot.querySelector('.tl');
     if (tl) tl.append(this.home, this.genToast);
@@ -116,8 +117,8 @@ export class AlertHud {
     setText(this.homeGen, `$${stored}`);
     this.homeFill.style.width = `${pct}%`;
     this.home.classList.toggle('full', stored >= cap);
-    setText(this.homeVault, `Vault $${me.vault.cash}`);
-    setText(this.homeLv, `Lv${lv}`);
+    setText(this.homeVault, `Vault $${Math.floor(me.vault.cash)} · Lv${me.vaultLevel ?? 1}`);
+    setText(this.homeLv, `Gen Lv${lv}`);
     this.home.title = `Generator ${pct}% full`;
     const enemies = enemiesOnIsland(s, me, isl);
     show(this.homeThreat, enemies > 0);
