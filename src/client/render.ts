@@ -180,11 +180,12 @@ export class Renderer {
     this.local = null;
   }
 
-  setMap(def: MapDef, humanId: number) {
+  /** Build the map spread over tasks (World.setMapAsync), then the renderer's own per-map parts. */
+  async setMap(def: MapDef, humanId: number, onStep?: () => void) {
     this.map = def.islands;
     this.humanId = humanId;
     setIslandPalette(def.colors);
-    this.world.setMap(def, def.islands.map((isl) => islandColor(isl.index)));
+    await this.world.setMapAsync(def, def.islands.map((isl) => islandColor(isl.index)), onStep);
     this.npcs.sync(); // keepers registered by the map art (before the loading warm-up compiles the scene)
     const map = def.islands;
     this.storm.setMap(map, def.center);

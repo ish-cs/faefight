@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { runSteps } from './steps';
 import { overDock } from '../../sim/docks';
 import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
 import { bunkerSlitBoxes, bunkerWallBoxes, harborBackdropFrame, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
@@ -107,7 +108,13 @@ export function islandMask(isl: IslandLayout) {
   return { data: s.maskData, size: s.maskSize, R: isl.radius };
 }
 
+/** Build in one go (labs, tests). The game uses buildIslandsSteps through World.setMapAsync. */
 export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatter, dock?: PropLayer): IslandsOut {
+  return runSteps(buildIslandsSteps(def, teamColors, scatter, dock));
+}
+
+/** buildIslands in steps: yields after each island and between the big merges, so loading can paint in between. */
+export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: Scatter, dock?: PropLayer): Generator<void, IslandsOut> {
   const map = def.islands;
   const yard = def.template === 'yard';
   const root = new THREE.Group();
@@ -132,6 +139,7 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
   const topGeo = new THREE.CircleGeometry(R, 128).rotateX(-Math.PI / 2);
 
   const tops: THREE.BufferGeometry[] = [], walls: THREE.BufferGeometry[] = [];
+  yield;
   for (const isl of map) {
     const yaw = isl.bunker.facingYaw;
     const L = new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, 0, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
@@ -212,6 +220,7 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
       root.add(s);
     }
 
+    yield;
     if (scatter) scatterIsland(scatter, isl);
     if (dock) {
       // dense dock clusters (clusters.ts): low clutter on the playable disc, full clusters on the backdrop quay
@@ -221,13 +230,16 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
       const Q = L.clone().multiply(mat(0, qf.top, 0));
       for (const p of quayClusters(qf, 31 + isl.index * 7919)) dock.place(p, Q, dress);
     }
+    yield;
     dressIslandDetail(dress, L, isl);
+    yield;
     if (yard) {
       buildYardBackdrop(dress, L, rng, isl, n);
     } else {
       buildBackdrop(dress, L, rng, isl, n, scatter);
       dressIsland(dress, L, isl); // sand/grass-bed pebbles + harbor clutter: harbor only (the yard is bare asphalt)
     }
+    yield;
   }
 
   // built-in cover: container stacks on the player islands, concrete barriers on the center island.
@@ -248,6 +260,7 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
     collidables.push(proxy);
   });
 
+  yield;
   buildCenter(def, root, dress, collidables, wallMat, QUAY_DEPTH, labelSprite);
   if (dock) {
     const C = mat(def.center.center.x, def.center.groundY, def.center.center.z);
@@ -267,12 +280,14 @@ export function buildIslands(def: MapDef, teamColors: number[], scatter?: Scatte
     root.add(top, wall);
     slabs.push(top, wall);
   }
+  yield;
   const bunkers = solid.build(root, 'bunkers', { chunked: true });
   // camera/aim rays test raycast-only per-cell splits, not the map-wide merged draws (raycastProxy.ts): the merged
   // island tops/walls (8 × 384 tris) and bunker walls (3.5k) were tested whole by 2–3 rays every frame
   for (const m of [...slabs, ...bunkers]) {
     for (const p of raycastProxies(m, 24)) { if (p !== m) root.add(p); collidables.push(p); }
   }
+  yield;
   dress.build(root, 'dressing', { chunked: true });
   return { collidables, root };
 }
