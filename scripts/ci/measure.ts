@@ -71,6 +71,8 @@ type SeatOut = {
   /** Combat building (optional: shard files from older measure.ts lack it). */
   build?: BuildOut;
   archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
+  /** Vault use (read off snapshots, so it works on any ref): deposits, $ banked, shop buys paid from the vault, respawn restocks. */
+  deposits?: number; banked?: number; vaultPaid?: number; restocks?: number; interest?: number; vaultLv?: number;
 };
 /**
  * Building in fights, per seat. A fight: bullets/blasts exchanged with anyone, closed by 8 s without one, a death or a
@@ -151,11 +153,13 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const seats: SeatOut[] = diffs.map((d, i) => ({
     difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
     archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0, healsGot: 0, healsUsed: 0, healsUsedFight: 0, lowHpDeaths: 0,
+    deposits: 0, banked: 0, vaultPaid: 0, restocks: 0, interest: 0, vaultLv: 1,
   }));
   type HealSeen = { alive: boolean; n: number; healAt: unknown; drinking: { kind: string } | null; lowSince: number | null; hurtAt: number };
   const healSeen: HealSeen[] = diffs.map(() => ({ alive: false, n: 0, healAt: null, drinking: null, lowSince: null, hurtAt: -99 }));
   type HealP = { id: number; alive: boolean; hp: number; shield: number; pos: { x: number; z: number }; healAt?: unknown; drinking?: { kind: string } | null; inv: { medkits: number; potions?: Record<string, number | undefined> } };
   const healN = (p: HealP) => p.inv.medkits + (p.inv.potions?.healPotion ?? 0) + (p.inv.potions?.shieldSmall ?? 0) + (p.inv.potions?.shieldBig ?? 0);
+  const lastCash = new Map<number, [number, number]>();
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, preSdSeals = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
@@ -178,6 +182,17 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   let ticks = 0;
   for (; ticks < maxTicks && snap.winner === null; ticks++) {
     snap = m.tick(new Map());
+    for (const p of snap.players) {
+      const b = lastCash.get(p.id), s = seats[p.id - 1];
+      if (b && s) {
+        const dv = p.vault.cash - b[1], di = p.inv.cash - b[0];
+        if (dv > 0 && di < 0) { s.deposits!++; s.banked! += dv; }
+        else if (dv > 0 && di === 0) s.interest! += dv; // vault interest (refs with it)
+        else if (dv < 0 && di <= 0) s.vaultPaid!++;
+        s.vaultLv = Math.max(s.vaultLv ?? 1, (p as { vaultLevel?: number }).vaultLevel ?? 1);
+      }
+      lastCash.set(p.id, [p.inv.cash, p.vault.cash]);
+    }
     if (ticks % SAMPLE_TICKS === 0) {
       const dt = SAMPLE_TICKS / TICK_HZ;
       for (const p of snap.players) {
@@ -256,6 +271,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (by != null && by !== e.data.owner && e.t < SD) preSdSeals++;
       } else if ((e.type as string) === 'elimination') {
         if (e.data.by != null) { credited++; spoils += Number(e.data.spoils) || 0; }
+      } else if ((e.type as string) === 'restock') {
+        const s = seats[(e.data.player as number) - 1];
+        if (s) s.restocks!++;
       } else if (e.type === 'eliminated') {
         const id = e.data.player as number;
         if (seats[id - 1].eliminatedAt === null) {
@@ -334,6 +352,8 @@ export type ScenarioSummary = {
   heals: { got: number; used: number; usedFight: number; lowHpDeaths: number; deaths: number } | null;
   /** Combat building per skill (absent when the shards predate it). */
   build?: Record<string, BuildSummary>;
+  /** Vault use per game (all seats together). */
+  vault: { deposits: number; banked: number; vaultPaid: number; restocks: number; interest: number; upgrades: number };
   shipCheck: { pass: boolean | null; checks: Check[] };
   /** Means per game (absent on old shard files): kills at 15:00+, eliminations, credited eliminations, spoils paid. */
   perGame?: { lateKills: number; elims: number; credited: number; spoils: number };
@@ -399,6 +419,11 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
       lowHpDeaths: seats.reduce((a, x) => a + x.lowHpDeaths!, 0) / Math.max(1, games.length),
       deaths: seats.reduce((a, x) => a + x.deaths, 0) / Math.max(1, games.length),
     } : null,
+    vault: (() => {
+      const per = (k: 'deposits' | 'banked' | 'vaultPaid' | 'restocks' | 'interest') => seats.reduce((a, x) => a + (x[k] ?? 0), 0) / Math.max(1, games.length);
+      const upgrades = seats.reduce((a, x) => a + ((x.vaultLv ?? 1) - 1), 0) / Math.max(1, games.length);
+      return { deposits: per('deposits'), banked: per('banked'), vaultPaid: per('vaultPaid'), restocks: per('restocks'), interest: per('interest'), upgrades };
+    })(),
     shipCheck: { pass: null, checks: [] },
     perGame: (['lateKills', 'elims', 'credited', 'spoils'] as const).reduce((o, k) => ({ ...o, [k]: games.reduce((a, g) => a + (g[k] ?? 0), 0) / Math.max(1, games.length) }),
       {} as { lateKills: number; elims: number; credited: number; spoils: number }),
@@ -462,6 +487,9 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '|---|---|---|---|---|---|---|---|---|---|',
     ...sums.flatMap((s) => Object.entries(s.build ?? {}).map(([d, b]) => `| ${s.scenario} | ${d} | ${b.fights} | ${b.piecesPerFight.toFixed(2)} | ${pct(100 * b.builtShare)} | ${b.winBuilt === null ? '-' : pct(100 * b.winBuilt)} | ${b.winPlain === null ? '-' : pct(100 * b.winPlain)} | ${b.blockedPct.toFixed(1)}% | ${b.highPct.toFixed(1)}% | ${Object.entries(b.kinds).map(([k, n]) => `${k} ${n}`).join(', ') || '-'} |`)),
     '',
+    '### Vault use per game (all seats)', '',
+    '| scenario | deposits | $ banked | shop buys paid from vault | respawn restocks | $ interest | vault levels bought |', '|---|---|---|---|---|---|---|',
+    ...sums.map((s) => `| ${s.scenario} | ${(s.vault?.deposits ?? 0).toFixed(1)} | $${Math.round(s.vault?.banked ?? 0)} | ${(s.vault?.vaultPaid ?? 0).toFixed(1)} | ${(s.vault?.restocks ?? 0).toFixed(1)} | $${Math.round(s.vault?.interest ?? 0)} | ${(s.vault?.upgrades ?? 0).toFixed(1)} |`), '',
     '### Wins by skill',
     ...sums.map((s) => `- ${s.scenario}: ${Object.entries(s.winsByDifficulty).map(([d, n]) => `${d} ${n}`).join(', ') || 'none'}; no winner ${s.noWinner} · ${s.msPerTick.toFixed(2)} ms/tick · slowest game ${s.maxWallSec.toFixed(0)} s wall`),
   ];

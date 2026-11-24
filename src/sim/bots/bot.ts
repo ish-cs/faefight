@@ -7,8 +7,10 @@ import type { DockDef, Doorway, IslandLayout } from '../map';
 import { overDock } from '../docks';
 import { NO_INPUT } from '../types';
 import type {
-  BuildRequest, Difficulty, HotbarItem, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
+  BuildRequest, Difficulty, HotbarItem, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
 } from '../types';
+import { funds } from '../economy';
+import { vaultLevel, vaultSpec, vaultUpgradePrice } from '../vault';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import { isRng, mulberry32 } from '../rng';
 import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
@@ -629,7 +631,7 @@ export class Bot {
     const cv = view.center;
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
       (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
-    if (act.shop) this.pendingBuy = { item: act.shop, cash: me.inv.cash, at: now };
+    if (act.shop) this.pendingBuy = { item: act.shop, cash: funds(me), at: now };
     if (act.shop || act.build || act.vault || act.placeCharge || act.trap || fire || throwGrenade) this.lastDidAt = now;
     if (act.build) {
       this.lastPieceAt = now;
@@ -647,7 +649,7 @@ export class Bot {
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach || this.healHideAt !== null) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload: reload && !useMedkit && !drink, interact, slot: useMedkit || drink ? null : slot, select, useMedkit, drink,
       build: useMedkit || drink ? null : act.build ?? null, shop: act.shop && !useMedkit && !drink ? { buy: act.shop } : null,
-      vault: act.vault ?? null, placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
+      vault: this.withLoadout(me, act.vault), placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
       ...(grapple ? { grapple: true, build: null, shop: null } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
@@ -812,7 +814,7 @@ export class Bot {
       const rim = add(node.center, scale(d, (node.radius - 0.7) / l));
       return this.goTo(v3(rim.x, node.groundY, rim.z), 0.8);
     }
-    if (me.inv.cash < GRAPPLE.price) return null;
+    if (funds(me) < GRAPPLE.price) return null;
     const seller = (c.view.potionShops ?? []).find((s) => this.nav.nodeAt(s) === node.index);
     if (!seller) return null;
     if (dist2D(me.pos, seller) <= USE_RANGE) return { dir: null, face: seller, shop: 'grapple' };
@@ -831,7 +833,7 @@ export class Bot {
     if ((me.inv.grapples ?? 0) > 0 && held < 2 * STRANDED_LAST_SEC) return null;
     const node = this.nav.nodeAt(me.pos);
     const seller = (c.view.potionShops ?? []).some((s) => this.nav.nodeAt(s) === node);
-    if (seller && me.inv.cash >= GRAPPLE.price) return null;
+    if (seller && funds(me) >= GRAPPLE.price) return null;
     return norm(flat(sub(c.home.center, me.pos)));
   }
 
@@ -877,7 +879,7 @@ export class Bot {
     const p = this.pendingBuy;
     if (!p || now - p.at < DT * 1.5) return;
     this.pendingBuy = null;
-    if (me.inv.cash < p.cash) { this.buyFails.delete(p.item); return; }
+    if (funds(me) < p.cash) { this.buyFails.delete(p.item); return; }
     const n = (this.buyFails.get(p.item) ?? 0) + 1;
     this.buyFails.set(p.item, n);
     if (n >= BUY_RETRIES) {
@@ -1338,9 +1340,10 @@ export class Bot {
     const b: Partial<Record<PieceKind, number>> = {};
     // Hotbar room: a new kind takes a slot; always leave this.P.buildTuning.freeSlots open for guns, heals and the like.
     let free = me.hotbar.filter((k) => k === null).length;
+    const reserve = this.buildReserve(me);
     const add1 = (k: PieceKind, n = 1) => {
       if (n <= 0) return;
-      if (!b[k] && !me.hotbar.includes(k)) { if (free <= this.P.buildTuning.freeSlots) return; free--; }
+      if (!b[k] && !me.hotbar.includes(k)) { if (free <= reserve) return; free--; }
       b[k] = (b[k] ?? 0) + n;
     };
     if (total >= this.P.buildTuning.fortReserve * (1 - t.builder) && this.fortWorthIt(c))
@@ -1363,8 +1366,17 @@ export class Bot {
   private combatKit(c: Ctx): Partial<Record<PieceKind, number>> | undefined {
     const n = this.P.buildTuning.rampFirst[this.difficulty];
     if (c.view.suddenDeath || n < 1 || !this.P.buildSkill[this.difficulty].highGround) return undefined;
-    if (!c.me.hotbar.includes('ramp') && c.me.hotbar.filter((k) => k === null).length <= this.P.buildTuning.freeSlots) return undefined;
+    if (!c.me.hotbar.includes('ramp') && c.me.hotbar.filter((k) => k === null).length <= this.buildReserve(c.me)) return undefined;
     return { ramp: Math.round(n) };
+  }
+
+  /**
+   * Empty hotbar slots building pieces leave alone. The reserve is for guns and heals: a medkit already on the
+   * hotbar (the restock loadout puts one there after every respawn) fills its heal share (VaultParams.healSlot), or
+   * the medkit pushes cover walls off the hotbar for good (vault-2: PRO bought half the wood).
+   */
+  private buildReserve(me: PlayerState): number {
+    return this.P.buildTuning.freeSlots - (me.hotbar.includes('medkit') ? Math.round(this.P.vault.healSlot) : 0);
   }
 
   /**
@@ -1429,8 +1441,34 @@ export class Bot {
     return Math.max(0, Math.min(me.inv.cash, this.insurance() - me.vault.cash));
   }
 
+  /** Cash I may spend at a shop: carried plus banked above the insurance (all of it while I have no working gun). */
+  private spendCash(me: PlayerState): number {
+    return me.inv.cash + (ownsGun(me.inv) ? this.spendable(me) : me.vault.cash);
+  }
+
+  /** Adds my restock loadout to the vault action while the sim doesn't have it yet (set from anywhere, once). */
+  private withLoadout(me: PlayerState, v: VaultAction | undefined): VaultAction | null {
+    const want = this.restockLoadout();
+    if (!want || me.loadout) return v ?? null;
+    return { ...v, loadout: want };
+  }
+
+  /** My restock loadout (sim/vault.ts) by skill, from VaultParams; null for none. */
+  restockLoadout(): Loadout | null {
+    const v = this.P.vault, d = this.difficulty;
+    const items: Loadout['items'] = {};
+    const med = Math.round(v.medkits[d]), sc = Math.round(v.scaffolds[d]);
+    if (med > 0) items.medkit = med;
+    if (sc > 0) items.scaffold = sc;
+    const keep = Math.round(v.keep[d]);
+    if (!med && !sc && keep <= 0) return null;
+    return { items, keep, buy: v.buy[d] >= 0.5 };
+  }
+
   /** Vault cash I may spend on gear (everything above the insurance). */
   private spendable(me: PlayerState): number {
+    // A weak player forgets what they banked: shops only with carried cash (the vault still rebuys a lost gun).
+    if (this.difficulty === 'easy') return 0;
     return Math.max(0, me.vault.cash - this.insurance());
   }
 
@@ -1578,19 +1616,24 @@ export class Bot {
         return (0.4 + 0.45 * t.caution) * (0.5 + 0.5 * fresh) + (gun ? 0.1 : -0.2);
       }
       case 'bank': {
-        if (c.on !== home.index || view.suddenDeath) return 0;
+        // Storm coming: getting to the center beats a trip to the vault (the shop takes vault cash anyway).
+        if (c.on !== home.index || view.suddenDeath || this.stormPrep(view)) return 0;
         // Death insurance: before heading out, leave enough in the vault to rebuy a gun after a death.
         const leavingSoon = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
         if (leavingSoon && this.insuranceDue(me) > 0 && !(c.enemy && c.enemyDist < 8)) return 0.8;
-        if (me.inv.cash < 100) return 0;
-        const keep = shoppingPlan(me, this.needs(c), this.difficulty, this.style).spent + 25;
+        // Shops pay from the vault anywhere and carried cash drops on death: bank all but pocket money.
+        const keep = this.bankKeep(c);
         const excess = me.inv.cash - keep;
-        if (excess < 80) return 0;
         const close = c.enemy && c.enemyDist < 8;
         if (close) return 0;
+        // Rich enough for the next vault level (more interest, remote deposits): a trip to the vault to buy it.
+        if (this.wantsVaultUpgrade(me)) return this.P.vault.upgradeScore - dist2D(me.pos, home.vault) / 80;
+        if (excess < this.P.vault.bankMin) return 0;
         const leaving = c.reach || (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c);
         const want = 0.2 + Math.min(excess, 600) / 600 * (0.3 + 0.3 * t.caution + 0.2 * t.greed);
-        return want + (c.danger || this.intruder(c) ? 0.55 : 0) + (leaving ? 0.25 : 0) - dist2D(me.pos, home.vault) / 80;
+        // From vault level 2 a deposit works anywhere on my island: no walk.
+        const walk = vaultSpec(me).remote ? 0 : dist2D(me.pos, home.vault) / 80;
+        return want + (c.danger || this.intruder(c) ? 0.55 : 0) + (leaving ? 0.25 : 0) - walk;
       }
       case 'collect': {
         if (!c.homeReach) return 0;
@@ -1606,7 +1649,7 @@ export class Bot {
         if (!c.homeReach) return 0;
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
-        if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return 0.9;
+        if (dist2D(me.pos, home.shop) < 4 && plan.spent <= this.spendCash(me)) return 0.9;
         // Topping up heals is no reason for a trip home once I hold one (they're bought on the next visit anyway).
         const items = hpHealsHeld(me) > 0 ? plan.items.filter((i) => i !== 'medkit') : plan.items;
         if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
@@ -1847,18 +1890,11 @@ export class Bot {
 
   private doShop(c: Ctx): Act {
     const me = c.me, now = c.view.now;
-    // Short of cash for the plan but some is in the vault: fetch it first.
-    const plan = this.plan(c);
-    // Live or die, keep the rebuy money in the vault (unless the gun is what I'm buying).
-    const short = Math.min(plan.items[0] === 'pistol' || plan.items[0] === 'ammo' ? me.vault.cash : this.spendable(me), plan.spent - me.inv.cash);
-    if (short > 0) {
-      const walk = this.goTo(c.home.vault, 1.8);
-      if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > now) return walk;
-      return { ...walk, vault: { withdraw: { cash: short } } };
-    }
+    // The shop pays from the vault (carried cash first): no trip to fetch it. The rebuy insurance stays banked
+    // unless the gun (or its ammo) is what I'm buying.
     const walk = this.goTo(c.home.shop, 2.0);
     if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt) return walk;
-    let item = nextPurchase(me, this.needs(c), this.difficulty, this.style);
+    let item = nextPurchase({ ...me, inv: { ...me.inv, cash: this.spendCash(me) } }, this.needs(c), this.difficulty, this.style);
     if (!item || this.buyBlocked(item)) { this.nextScoreAt = now; return walk; }
     if (this.difficulty === 'easy' && item in PIECES && item !== 'scaffold' && this.rng() < EASY_MISBUY && me.inv.cash >= PIECES.sandbags.price) item = 'sandbags';
     this.nextBuyAt = now + BUY_GAP[this.difficulty];
@@ -1867,13 +1903,32 @@ export class Bot {
 
   private doBank(c: Ctx): Act {
     const me = c.me;
-    const walk = this.goTo(c.home.vault, 1.8);
-    if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > c.view.now) return walk;
-    const keep = shoppingPlan(me, this.needs(c), this.difficulty, this.style).spent + 25;
-    const cash = Math.max(Math.floor(me.inv.cash - keep), this.insuranceDue(me));
-    if (cash <= 0) { this.nextScoreAt = c.view.now; return walk; }
+    const upgrade = this.wantsVaultUpgrade(me);
+    // Remote vault level: deposit from right here (on my island); an upgrade still needs the vault itself.
+    const remote = vaultSpec(me).remote && !upgrade;
+    const walk = remote ? IDLE : this.goTo(c.home.vault, 1.8);
+    if ((!remote && dist2D(me.pos, c.home.vault) > USE_RANGE) || me.busyUntil > c.view.now) return walk;
+    const cash = Math.max(Math.floor(me.inv.cash - this.bankKeep(c)), this.insuranceDue(me));
+    if (cash <= 0 && !upgrade) { this.nextScoreAt = c.view.now; return walk; }
     this.nextScoreAt = c.view.now + 1.2;
-    return { ...walk, vault: { deposit: { cash } } };
+    return { ...walk, vault: { ...(cash > 0 ? { deposit: { cash } } : {}), ...(upgrade ? { upgrade: true as const } : {}) } };
+  }
+
+  /**
+   * Carried cash a bank trip leaves on me: VaultParams.carry by skill in calm times; before a risky moment (danger
+   * at home, an intruder, heading out) anyone but easy banks down to pocket money (min with the hard/PRO carry).
+   */
+  bankKeep(c: Ctx): number {
+    const carry = this.P.vault.carry[this.difficulty];
+    if (this.difficulty === 'easy') return carry;
+    const leaving = c.reach || (c.me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c);
+    return c.danger || this.intruder(c) || leaving ? Math.min(carry, this.P.vault.carry.hard) : carry;
+  }
+
+  /** The next vault level is affordable with VaultParams.upgradeAt to spare (carried + banked). */
+  wantsVaultUpgrade(me: PlayerState): boolean {
+    const price = vaultUpgradePrice(vaultLevel(me));
+    return price !== null && funds(me) >= price + this.P.vault.upgradeAt[this.difficulty];
   }
 
   /** Grab the center island's gold (and free pieces, when they fit). */
@@ -2622,7 +2677,7 @@ export class Bot {
     this.healDrops = this.healDrops.filter((h) => now - h.t < 90);
     if (now - this.lastHealDropAt < 5 || c.on !== c.home.index || me.hotbar.includes(null) || hpHealsHeld(me) > 0) return null;
     const n = this.needs(c);
-    if ((n.medkits ?? 0) <= 0 || me.inv.cash < MEDKIT.price) return null;
+    if ((n.medkits ?? 0) <= 0 || this.spendCash(me) < MEDKIT.price) return null;
     const needed = new Set<HotbarItem>(Object.keys(n.build ?? {}) as PieceKind[]);
     if (n.grapple === 'cross' || this.strandedSince !== null) needed.add('grapple');
     if ((n.traps ?? 0) > 0) needed.add('trap');
@@ -2951,8 +3006,7 @@ export class Bot {
       // Stock up in one shop visit (not one deck per trip) while still on my island.
       // Only while the shop (and the vault, if I need cash from it) is still inside the ring: a trip out into the
       // storm to shop kills just as surely.
-      const shopSafe = [c.home.shop, ...(me.inv.cash < PIECES.scaffold.price ? [c.home.vault] : [])]
-        .every((p) => dist2D(p, ctr) < st.r - 2) || view.now - LIFECYCLE.suddenDeathAt < STORM_SHOP_GRACE;
+      const shopSafe = dist2D(c.home.shop, ctr) < st.r - 2 || view.now - LIFECYCLE.suddenDeathAt < STORM_SHOP_GRACE;
       const buy = have < need && c.homeReach && shopSafe && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
       if (buy) return buy;
       if (have > 0) {
@@ -2964,15 +3018,10 @@ export class Bot {
     return { ...this.goTo(best, 1), sprint: true };
   }
 
-  /** Walk to my shop and buy scaffolds (cash from the vault if needed); null when I can't afford one. */
+  /** Walk to my shop and buy scaffolds (the shop takes vault cash too); null when I can't afford one. */
   private buyDecks(c: Ctx): Act | null {
     const me = c.me, now = c.view.now, price = PIECES.scaffold.price;
-    if (me.inv.cash < price) {
-      if (me.vault.cash < price) return null;
-      const walk = this.goTo(c.home.vault, 1.8);
-      if (dist2D(me.pos, c.home.vault) > USE_RANGE || me.busyUntil > now) return walk;
-      return { ...walk, vault: { withdraw: { cash: Math.min(me.vault.cash, price * 20) } } };
-    }
+    if (funds(me) < price) return null;
     const walk = this.goTo(c.home.shop, 2.0);
     if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt || this.buyBlocked('scaffold')) return { ...walk, sprint: true };
     this.nextBuyAt = now + BUY_GAP[this.difficulty];

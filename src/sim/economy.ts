@@ -6,6 +6,19 @@ import type { GunKind, HotbarItem, Inventory, LockItem, PieceKind, PlayerState, 
 export type Result = { ok: true } | { ok: false; reason: string };
 const fail = (reason: string): Result => ({ ok: false, reason });
 
+/** Cash a player can spend at a shop: carried plus banked (sim/vault.ts). */
+export function funds(p: PlayerState): number {
+  return p.inv.cash + p.vault.cash;
+}
+
+/** Pays `price` from carried cash first, then the vault. The caller checks `funds` first. */
+export function pay(p: PlayerState, price: number): void {
+  if (price > funds(p)) throw new Error(`pay: player ${p.id} short of $${price} (has $${funds(p)})`);
+  const fromInv = Math.min(p.inv.cash, price);
+  p.inv.cash -= fromInv;
+  p.vault.cash -= price - fromInv;
+}
+
 export function emptyInventory(): Inventory {
   return { cash: 0, weapons: {}, pieces: {}, grenades: 0, charges: 0, medkits: 0, potions: {}, traps: 0 };
 }
@@ -88,7 +101,7 @@ export function buy(player: PlayerState, action: ShopAction, genLevels?: number[
   const lockGun = lockedGunOf(item);
   if (lockGun) return lock(player, lockGun);
   const price = priceOf(item, player);
-  if (player.inv.cash < price) return fail(`need $${price}, carrying $${player.inv.cash}`);
+  if (funds(player) < price) return fail(`need $${price}, have $${funds(player)} (carried + vault)`);
   const inv = player.inv;
   // A new kind needs a free hotbar slot; more of a kind you hold (or ammo) doesn't.
   const slotKind = isHotbarItem(item) ? item : null;
@@ -118,7 +131,7 @@ export function buy(player: PlayerState, action: ShopAction, genLevels?: number[
   } else {
     inv.charges += 1;
   }
-  inv.cash -= price;
+  pay(player, price);
   if (slotKind) addKind(player.hotbar, slotKind);
   return { ok: true };
 }
@@ -128,8 +141,8 @@ function upgradeGenerator(player: PlayerState, genLevels: number[] | undefined):
   const level = genLevels[player.island] ?? 1;
   const price = genUpgradePrice(level);
   if (price === null) return fail('generator already at max level');
-  if (player.inv.cash < price) return fail(`need $${price}, carrying $${player.inv.cash}`);
-  player.inv.cash -= price;
+  if (funds(player) < price) return fail(`need $${price}, have $${funds(player)} (carried + vault)`);
+  pay(player, price);
   genLevels[player.island] = level + 1;
   return { ok: true };
 }
@@ -138,8 +151,8 @@ function lock(player: PlayerState, gun: GunKind): Result {
   if (!player.inv.weapons[gun]) return fail(`buy a ${gun} before locking it`);
   if (player.locked.includes(gun)) return fail(`${gun} already locked`);
   const price = lockPrice(gun);
-  if (player.inv.cash < price) return fail(`need $${price}, carrying $${player.inv.cash}`);
-  player.inv.cash -= price;
+  if (funds(player) < price) return fail(`need $${price}, have $${funds(player)} (carried + vault)`);
+  pay(player, price);
   player.locked.push(gun);
   return { ok: true };
 }

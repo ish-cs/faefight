@@ -189,6 +189,21 @@ export const ECONOMY = {
   vaultSec: 1,
 };
 
+/**
+ * Vault levels (sim/vault.ts), index 0 = level 1. Price = cost to reach that level (bought at your own vault,
+ * paid carried-first then vault). Interest: `rate` of banked cash per minute, on at most `base` dollars, so at most
+ * rate·base $/min (paid every VAULT_INTEREST_SEC, scaled by the host's generator speed, none in sudden death).
+ * `storage`: item units the vault holds (cash unlimited); `kinds`: restock loadout kinds; `remote`: deposits
+ * (quick-bank) accepted anywhere on your own island, not just at the vault.
+ */
+export const VAULT_LEVELS = [
+  { price: 0, rate: 0.02, base: 750, storage: 100, kinds: 4, remote: false },
+  { price: 250, rate: 0.03, base: 1200, storage: 250, kinds: 6, remote: true },
+  { price: 600, rate: 0.04, base: 1800, storage: 600, kinds: 8, remote: true },
+] as const;
+export const VAULT_MAX_LEVEL = VAULT_LEVELS.length;
+export const VAULT_INTEREST_SEC = 10;
+
 /** Generator upgrade levels (index 0 = level 1, the starting generator). Price = cost to reach that level. */
 export const GENERATOR_LEVELS = [
   { price: 0, rate: ECONOMY.generatorRate, cap: ECONOMY.generatorCap },
