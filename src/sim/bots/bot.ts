@@ -1303,9 +1303,10 @@ export class Bot {
     const b: Partial<Record<PieceKind, number>> = {};
     // Hotbar room: a new kind takes a slot; always leave this.P.buildTuning.freeSlots open for guns, heals and the like.
     let free = me.hotbar.filter((k) => k === null).length;
+    const reserve = this.buildReserve(me);
     const add1 = (k: PieceKind, n = 1) => {
       if (n <= 0) return;
-      if (!b[k] && !me.hotbar.includes(k)) { if (free <= this.P.buildTuning.freeSlots) return; free--; }
+      if (!b[k] && !me.hotbar.includes(k)) { if (free <= reserve) return; free--; }
       b[k] = (b[k] ?? 0) + n;
     };
     if (total >= this.P.buildTuning.fortReserve * (1 - t.builder) && this.fortWorthIt(c))
@@ -1328,8 +1329,17 @@ export class Bot {
   private combatKit(c: Ctx): Partial<Record<PieceKind, number>> | undefined {
     const n = this.P.buildTuning.rampFirst[this.difficulty];
     if (c.view.suddenDeath || n < 1 || !this.P.buildSkill[this.difficulty].highGround) return undefined;
-    if (!c.me.hotbar.includes('ramp') && c.me.hotbar.filter((k) => k === null).length <= this.P.buildTuning.freeSlots) return undefined;
+    if (!c.me.hotbar.includes('ramp') && c.me.hotbar.filter((k) => k === null).length <= this.buildReserve(c.me)) return undefined;
     return { ramp: Math.round(n) };
+  }
+
+  /**
+   * Empty hotbar slots building pieces leave alone. The reserve is for guns and heals: a medkit already on the
+   * hotbar (the restock loadout puts one there after every respawn) fills its heal share (VaultParams.healSlot), or
+   * the medkit pushes cover walls off the hotbar for good (vault-2: PRO bought half the wood).
+   */
+  private buildReserve(me: PlayerState): number {
+    return this.P.buildTuning.freeSlots - (me.hotbar.includes('medkit') ? Math.round(this.P.vault.healSlot) : 0);
   }
 
   /**
