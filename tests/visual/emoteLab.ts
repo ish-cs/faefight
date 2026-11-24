@@ -14,7 +14,7 @@ const freeze = q.has('t') ? Number(q.get('t')) : null;
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const r = await Renderer.create(canvas);
 const def = buildMapDef(8);
-r.setMap(def, 0);
+await r.setMap(def, 0);
 await r.characters.ready;
 const isl = def.islands[0], C = isl.center, GY = isl.groundY;
 const quips: (QuipId | null)[] = [null, 'gg', null, 'niceShot', null];

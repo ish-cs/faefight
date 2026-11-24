@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { lods } from '../world/lod';
 import { npcLook } from './body';
+import { lookTurn } from './npcLook';
 import { bodyLod, CHAR_LOD } from './avatar';
 import { loadCharacters, makeBody, type Body, type CharacterAssets } from './loader';
 import { npcSpots, npcSpotsVersion, type NpcSpot as Spot } from './npcSpots';
@@ -19,7 +20,7 @@ const WAVE_COOLDOWN_S = 9;
 const ACTIVE_RANGE = 70; // m: beyond this (or off screen) the keeper is not animated
 const NECK_SHARE = 0.35;
 
-const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _axis = new THREE.Vector3();
+const _v = new THREE.Vector3(), _w = new THREE.Vector3();
 const _sphere = new THREE.Sphere(), _frustum = new THREE.Frustum(), _proj = new THREE.Matrix4();
 
 class Npc {
@@ -30,6 +31,12 @@ class Npc {
   private current: THREE.AnimationAction;
   private head: THREE.Bone | undefined;
   private neck: THREE.Bone | undefined;
+  /** head / neck rest pose: restored before the mixer runs, so a bone the clips don't animate never keeps the look */
+  private headRest = new THREE.Quaternion();
+  private neckRest = new THREE.Quaternion();
+  /** this frame's clip pose of head / neck: the look turn is set relative to it */
+  private headBase = new THREE.Quaternion();
+  private neckBase = new THREE.Quaternion();
   private yaw = 0;
   private pitch = 0;
   private nextIdleSwap: number;
@@ -70,6 +77,8 @@ class Npc {
     this.nextIdleSwap = 5 + r * 6;
     this.head = model.getObjectByName('Head') as THREE.Bone | undefined;
     this.neck = model.getObjectByName('Neck') as THREE.Bone | undefined;
+    if (this.head) this.headRest.copy(this.head.quaternion);
+    if (this.neck) this.neckRest.copy(this.neck.quaternion);
     this.mixer.addEventListener('finished', (e) => {
       if (e.action === this.wave) this.fadeTo(this.idle[0], 0.45);
     });
@@ -102,7 +111,13 @@ class Npc {
       this.nextIdleSwap = t + 6 + Math.random() * 7;
       this.fadeTo(this.current === this.idle[0] ? this.idle[1] : this.idle[0], 1.2);
     }
+    // Head look is set from the clip pose each frame. It used to be premultiplied onto the bone's current rotation,
+    // and the clips don't animate Head/Neck, so the turn compounded every frame: the keeper's head spun.
+    this.head?.quaternion.copy(this.headRest);
+    this.neck?.quaternion.copy(this.neckRest);
     this.mixer.update(dt);
+    if (this.head) this.headBase.copy(this.head.quaternion);
+    if (this.neck) this.neckBase.copy(this.neck.quaternion);
 
     // head follow: yaw toward the target (clamped to a natural neck turn), a little pitch
     let wantYaw = 0, wantPitch = 0;
@@ -118,20 +133,9 @@ class Npc {
     this.pitch += (wantPitch - this.pitch) * k;
     if (Math.abs(this.yaw) + Math.abs(this.pitch) > 1e-3) {
       this.root.updateMatrixWorld(true);
-      this.turn(this.neck, this.yaw * NECK_SHARE, this.pitch * NECK_SHARE);
-      this.turn(this.head, this.yaw * (1 - NECK_SHARE), this.pitch * (1 - NECK_SHARE));
+      if (this.neck) lookTurn(this.neck, this.neckBase, this.yaw * NECK_SHARE, this.pitch * NECK_SHARE, this.fwd);
+      if (this.head) lookTurn(this.head, this.headBase, this.yaw * (1 - NECK_SHARE), this.pitch * (1 - NECK_SHARE), this.fwd);
     }
-  }
-
-  /** Rotate a bone about world up (yaw) then about the keeper's right axis (pitch, + = look up). */
-  private turn(bone: THREE.Bone | undefined, yaw: number, pitch: number) {
-    if (!bone?.parent) return;
-    bone.parent.getWorldQuaternion(_q);
-    _axis.set(this.fwd.z, 0, -this.fwd.x); // keeper's right... (fwd × up)
-    _q2.setFromAxisAngle(_w.set(0, 1, 0), yaw).multiply(new THREE.Quaternion().setFromAxisAngle(_axis, -pitch));
-    const inv = _q.clone().invert();
-    bone.quaternion.premultiply(_q).premultiply(_q2).premultiply(inv);
-    bone.updateMatrixWorld(true);
   }
 
   dispose() {

@@ -6,7 +6,7 @@ import {
   rebind, setKeymapSuspended, unbind,
 } from '../keymap';
 import {
-  CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, GEN_ALERT_PCTS, LIMITS, QUALITIES, type Settings, settings, VOICE_ENGINES,
+  CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, GEN_ALERT_PCTS, LIMITS, QUALITIES, type Settings, settings,
 } from './store';
 import type { Quality } from '../world/sky';
 import { availableVoices, testVoice } from '../cinematic/commentary/tts';
@@ -273,9 +273,13 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     slider('Commentary volume', 'Game sound dips a little while the commentator talks', 'set-commentary', 0, 1, 0.05, () => a().commentary, (x) => set((d) => { d.audio.commentary = x; }), pct);
     toggle('Captions', 'Show what the commentator says on screen', 'set-captions', () => a().captions, (x) => set((d) => { d.audio.captions = x; }));
     toggle('While spectating', 'Also commentate when you spectate a match', 'set-commentary-spectate', () => a().commentarySpectate, (x) => set((d) => { d.audio.commentarySpectate = x; }));
-    // The engine choice only shows in a build that ships a neural voice (neuralEngine).
-    if (neuralEngine.makeWorker) segmented('Voice engine', 'Neural: a free natural voice, downloaded once (~92 MB). Browser: your system voices', 'set-voice-engine',
-      VOICE_ENGINES, (e) => (e === 'neural' ? 'Neural' : 'Browser'), () => a().voiceEngine, (e) => set((d) => { d.audio.voiceEngine = e; }), render);
+    // Opt-in neural voice (only in a build that ships one): off = the model is never fetched; on = it downloads
+    // once (progress shows in the corner while watching) and the browser voice speaks until it's ready.
+    if (neuralEngine.makeWorker) {
+      const r = toggle('Neural voice (≈160 MB one-time download)', 'A free, more natural commentator voice. Needs WebGPU; until it has loaded (or without WebGPU) your system voice speaks', 'set-neural-voice',
+        () => a().voiceEngine === 'neural', (x) => { set((d) => { d.audio.voiceEngine = x ? 'neural' : 'browser'; }); render(); });
+      r.classList.add('set-neural-row');
+    }
     // Voice per commentator. Neural: the Kokoro voices. Browser: the best installed English voices (macOS: add
     // Premium/Enhanced ones in System Settings → Accessibility → Spoken Content → Manage Voices). '' = Auto.
     const neural = a().voiceEngine === 'neural' && !!neuralEngine.makeWorker;

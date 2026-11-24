@@ -76,6 +76,8 @@ export type Needs = {
   traps?: number;
   /** Pieces wanted for building (fortifications, combat cover, bridge walls) on top of the seal kit. */
   build?: Partial<Record<PieceKind, number>>;
+  /** Combat pieces bought right after the gun and its ammo (before bridging gear), when the cash is there. */
+  combatKit?: Partial<Record<PieceKind, number>>;
 };
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
@@ -117,6 +119,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   const healShort = cash >= MEDKIT.price && inv.medkits + (inv.potions.healPotion ?? 0) < (needs.medkits ?? 0) && !p.hotbar.includes('medkit') && !p.hotbar.includes('healPotion');
   const room = (k: HotbarItem) => countOf(inv, k) > 0 ||
     (canAdd(p.hotbar, k) && (!healShort || k === 'medkit' || k === 'grapple' || p.hotbar.filter((x) => x === null).length >= 2));
+  // A ramp in the pocket for fights (skilled players): cheap, never saved up for.
+  for (const [k, n] of Object.entries(needs.combatKit ?? {}) as [PieceKind, number][])
+    if ((inv.pieces[k] ?? 0) < n && room(k) && cash >= PIECES[k].price) return k;
   if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   // The first heal before bridging gear when the cash covers the decks too (it never holds up a crossing).
   const heals = inv.medkits + (inv.potions.healPotion ?? 0);

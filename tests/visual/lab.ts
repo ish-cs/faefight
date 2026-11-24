@@ -14,7 +14,7 @@ const tiersEl = document.getElementById('tiers')!;
 const r = await Renderer.create(canvas);
 const def = buildMapDef(2);
 const map = def.islands;
-r.setMap(def, 0);
+await r.setMap(def, 0);
 const C = map[0].center, GY = map[0].groundY;
 
 let pieces: PieceState[] = [];

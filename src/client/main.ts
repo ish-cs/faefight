@@ -1784,55 +1784,75 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     else if (hud.ended && input.enabled) { input.enabled = false; if (document.pointerLockElement) document.exitPointerLock(); }
   };
 
+  function mapReady(def: MapDef, id: number, island: number) {
+    mapDef = def;
+    map = def.islands;
+    if (practice) renderer.dayNight.setCycle(null); // the range has no sudden death: always day
+    loading.progress('map', 1, `Building ${def.name}`);
+    maybeWarm();
+    watching = id === 0;
+    if (id === 0) {
+      // Spectating host: no player of our own; start the free-fly camera high over the islands.
+      const m = map;
+      const cx = m.reduce((a, i) => a + i.center.x, 0) / m.length, cz = m.reduce((a, i) => a + i.center.z, 0) / m.length;
+      const r = Math.max(...m.map((i) => Math.hypot(i.center.x - cx, i.center.z - cz) + i.radius));
+      renderer.camera.position.set(cx, m[0].groundY + r * 0.55, cz + r * 1.05);
+      input.yaw = 0;
+      input.pitch = -0.45;
+    } else
+    // Client-side prediction of our own movement (same movement code + a local collision world).
+    import('./predict').then(({ Predictor: P }) => P.create(def, id)).then((p) => { predictor = p; },
+      (err) => console.error('[predict] could not start; falling back to server positions', err));
+    hud.setMap(map, humanId, island, def.center);
+    hud.suddenDeathAt = def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt;
+    hud.genMult = def.settings?.genMult ?? 1;
+    if (practice && map[island]) practice.setBunker(map[island].bunker);
+    qol.setMap(map, humanId, island);
+    audio.setMap(map, humanId, def.docks ?? []);
+    mapBuilding = false;
+    for (const s of heldSnaps.splice(0)) onSnapshot(s);
+  }
+  function onSnapshot(s: Snapshot) {
+    // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
+    // A predicted piece this snapshot shows the host refused leaves the local world first, so prediction
+    // replays without it (we fall where the host has us fall, instead of standing on it for a second).
+    const mine = s.players.find((p) => p.id === humanId);
+    if (mine?.mv) {
+      const refused = builds.refusedBy(s.pieces, mine.mv.ack, mine.busyUntil > s.time, performance.now());
+      if (refused.length) { for (const p of refused) predictor?.removeLocalPiece(p.id); renderer.setPredictedPieces(builds.pieces); notPlaced(refused); }
+    }
+    predictor?.onSnapshot(s);
+    killcam.push(s);
+    latest = s;
+    if (buffer) qol.onNetSnapshot();
+    shots.reconcile(s.events, humanId, performance.now());
+    renderer.ingest(s);
+    if (buffer) buffer.push(s); else applySnapshot(s);
+  }
+  // The map builds over many short tasks (Renderer.setMap): snapshots arriving meanwhile wait here and are applied
+  // in order once it's done, as they used to queue behind the single 1.5 s build task.
+  let mapBuild: Promise<void> = Promise.resolve();
+  let mapBuilding = false;
+  const heldSnaps: Snapshot[] = [];
   backend.connect({
     map: (def, id, island) => {
-      mapDef = def;
-      map = def.islands;
+      mapBuilding = true;
       humanId = id;
       if (id) selfId = id;
-      console.info(`[main] map: ${def.name} (${def.template}, ${map.length} islands)`);
+      console.info(`[main] map: ${def.name} (${def.template}, ${def.islands.length} islands)`);
       loading.progress('map', 0, `Loading ${def.name}`);
-      renderer.setMap(def, humanId);
-      if (practice) renderer.dayNight.setCycle(null); // the range has no sudden death: always day
-      loading.progress('map', 1, `Building ${def.name}`);
-      maybeWarm();
-      watching = id === 0;
-      if (id === 0) {
-        // Spectating host: no player of our own; start the free-fly camera high over the islands.
-        const m = map;
-        const cx = m.reduce((a, i) => a + i.center.x, 0) / m.length, cz = m.reduce((a, i) => a + i.center.z, 0) / m.length;
-        const r = Math.max(...m.map((i) => Math.hypot(i.center.x - cx, i.center.z - cz) + i.radius));
-        renderer.camera.position.set(cx, m[0].groundY + r * 0.55, cz + r * 1.05);
-        input.yaw = 0;
-        input.pitch = -0.45;
-      } else
-      // Client-side prediction of our own movement (same movement code + a local collision world).
-      import('./predict').then(({ Predictor: P }) => P.create(def, id)).then((p) => { predictor = p; },
-        (err) => console.error('[predict] could not start; falling back to server positions', err));
-      hud.setMap(map, humanId, island, def.center);
-      hud.suddenDeathAt = def.settings?.suddenDeathSec ?? LIFECYCLE.suddenDeathAt;
-      hud.genMult = def.settings?.genMult ?? 1;
-      if (practice && map[island]) practice.setBunker(map[island].bunker);
-      qol.setMap(map, humanId, island);
-      audio.setMap(map, humanId, def.docks ?? []);
+      let steps = 0;
+      const t0 = performance.now();
+      mapBuild = mapBuild.then(() => renderer.setMap(def, id, () => loading.progress('map', Math.min(0.95, ++steps / (def.islands.length + 12)), `Building ${def.name}`)))
+        .then(() => {
+          console.info(`[main] map built in ${Math.round(performance.now() - t0)} ms (${steps} steps)`);
+          mapReady(def, id, island);
+        }, (err) => {
+          console.error('[main] map build failed', err);
+          showFatal('Could not build the map', String(err));
+        });
     },
-    snapshot: (s) => {
-      // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
-      // A predicted piece this snapshot shows the host refused leaves the local world first, so prediction
-      // replays without it (we fall where the host has us fall, instead of standing on it for a second).
-      const mine = s.players.find((p) => p.id === humanId);
-      if (mine?.mv) {
-        const refused = builds.refusedBy(s.pieces, mine.mv.ack, mine.busyUntil > s.time, performance.now());
-        if (refused.length) { for (const p of refused) predictor?.removeLocalPiece(p.id); renderer.setPredictedPieces(builds.pieces); notPlaced(refused); }
-      }
-      predictor?.onSnapshot(s);
-      killcam.push(s);
-      latest = s;
-      if (buffer) qol.onNetSnapshot();
-      shots.reconcile(s.events, humanId, performance.now());
-      renderer.ingest(s);
-      if (buffer) buffer.push(s); else applySnapshot(s);
-    },
+    snapshot: (s) => { if (mapBuilding) heldSnaps.push(s); else onSnapshot(s); },
     // Ghost validation is local now (buildAim); the sim's preview only answers debug cross-checks.
     preview: (result, key) => { debugPreviews.get(key)?.(result); debugPreviews.delete(key); },
     chat: (from, text) => chat.add(from, text),
