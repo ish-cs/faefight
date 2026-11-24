@@ -74,6 +74,8 @@ export type Needs = {
   traps?: number;
   /** Pieces wanted for building (fortifications, combat cover, bridge walls) on top of the seal kit. */
   build?: Partial<Record<PieceKind, number>>;
+  /** Combat pieces bought right after the gun and its ammo (before bridging gear), when the cash is there. */
+  combatKit?: Partial<Record<PieceKind, number>>;
 };
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
@@ -112,6 +114,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
   const room = (k: HotbarItem) => countOf(inv, k) > 0 || canAdd(p.hotbar, k);
+  // A ramp in the pocket for fights (skilled players): cheap, never saved up for.
+  for (const [k, n] of Object.entries(needs.combatKit ?? {}) as [PieceKind, number][])
+    if ((inv.pieces[k] ?? 0) < n && room(k) && cash >= PIECES[k].price) return k;
   if (style.buildFirst) { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   if (needs.grapple === 'cross' && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0)) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
@@ -120,8 +125,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     const skilled = difficulty === 'hard' || difficulty === 'pro';
     const wantMetal = skilled ? cash >= PIECES.metal.price
       : (difficulty === 'medium' || style.metal) && cash >= 2 * PIECES.metal.price;
-    if (wantMetal) return 'metal';
-    return cash >= PIECES.wood.price ? 'wood' : null;
+    // Never a kind the hotbar can't take (the shop would refuse it every tick).
+    if (wantMetal && room('metal')) return 'metal';
+    return cash >= PIECES.wood.price && room('wood') ? 'wood' : null;
   }
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
@@ -137,7 +143,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (inv.traps < (needs.traps ?? 0) && room('trap') && cash >= TRAP.price) return 'trap';
   if (style.closeGun && !inv.weapons.shotgun && room('shotgun') && cash >= WEAPONS.shotgun.price) return 'shotgun';
   const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
-  if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price) return 'wood';
+  if (tall < needs.kit + style.coverWood && cash >= PIECES.wood.price && room('wood')) return 'wood';
   // Rich: invest in the generator, then lock the favourite gun so a death doesn't leave me unarmed.
   if (genPrice !== null && cash >= 3 * genPrice) return 'genUpgrade';
   const fav = GUNS.find((g) => inv.weapons[g]);

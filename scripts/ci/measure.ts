@@ -65,8 +65,20 @@ function archetypesFor(scenario: Scenario, seed: number, names: readonly string[
 type SeatOut = {
   difficulty: Difficulty; kills: number; deaths: number; aliveSec: number; attackSec: number;
   idleHome: number; longestHomeIdle: number; hitDists: number[]; eliminatedAt: number | null;
+  /** Combat building (optional: shard files from older measure.ts lack it). */
+  build?: BuildOut;
   archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
 };
+/**
+ * Building in fights, per seat. A fight: bullets/blasts exchanged with anyone, closed by 8 s without one, a death or a
+ * kill (won = got a kill and lived). Combat pieces: anything but a bridge deck placed during a fight. Blocked: a bullet
+ * stopped by one of my own pieces within 4 m of me while I'm in a fight. High: my hits on someone ≥ 1.2 m below me.
+ */
+export type BuildOut = {
+  fights: number; built: number; builtWon: number; plainWon: number; pieces: number; kinds: Record<string, number>;
+  bulletsTaken: number; bulletsBlocked: number; hits: number; highHits: number;
+};
+const FIGHT_GAP = 8, BLOCK_M = 4, HIGH_M = 1.2;
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
   time: number; decisive: boolean; preSdElims: number; preSdSeals?: number; firstSeal: number | null; msPerTick: number; wallSec: number;
@@ -140,6 +152,19 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, preSdSeals = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
+  const bo: BuildOut[] = diffs.map(() => ({ fights: 0, built: 0, builtWon: 0, plainWon: 0, pieces: 0, kinds: {}, bulletsTaken: 0, bulletsBlocked: 0, hits: 0, highHits: 0 }));
+  const fight: ({ last: number; pieces: number; kill: boolean } | null)[] = diffs.map(() => null);
+  const pieceOwner = new Map<number, number>();
+  const endFight = (i: number, died: boolean) => {
+    const f = fight[i];
+    if (!f) return;
+    const b = bo[i];
+    b.fights++;
+    if (f.pieces > 0) b.built++;
+    if (f.kill && !died) { if (f.pieces > 0) b.builtWon++; else b.plainWon++; }
+    fight[i] = null;
+  };
+  const touch = (i: number, t: number) => { fight[i] ??= { last: t, pieces: 0, kill: false }; fight[i]!.last = t; };
   const maxTicks = Math.round(maxSec * TICK_HZ);
   const w0 = performance.now();
   let snap = m.tick(new Map());
@@ -166,17 +191,36 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (geared && Math.hypot(p.pos.x - b.x, p.pos.z - b.z) <= IDLE_M && !nearBunker && !snap.sealed[p.island]) s.idleHome += dt;
       }
     }
+    for (let i = 0; i < fight.length; i++) if (fight[i] && snap.time - fight[i]!.last > FIGHT_GAP) endFight(i, false);
     for (const e of snap.events) {
+      if (e.type === 'placed') {
+        const by = e.data.by as number, kind = e.data.kind as string;
+        pieceOwner.set(e.data.piece as number, by);
+        const f = fight[by - 1];
+        if (f && kind !== 'scaffold') { f.pieces++; bo[by - 1].pieces++; bo[by - 1].kinds[kind] = (bo[by - 1].kinds[kind] ?? 0) + 1; }
+      } else if (e.type === 'pieceHit') {
+        const owner = pieceOwner.get(e.data.piece as number), by = e.data.by as number | null, at = e.data.pos as { x: number; z: number } | undefined;
+        if (owner === undefined || by == null || by === owner || e.data.source !== 'bullet' || !at || !fight[owner - 1]) continue;
+        const o = snap.players[owner - 1];
+        if (o?.alive && Math.hypot(o.pos.x - at.x, o.pos.z - at.z) < BLOCK_M) bo[owner - 1].bulletsBlocked++;
+      }
       if (e.type === 'hit') {
         const by = e.data.by as number | null, target = e.data.target as number;
         const a = by != null ? snap.players[by - 1]?.pos : undefined, t = snap.players[target - 1]?.pos;
         if (by == null || by === target || !a || !t) continue;
         seats[by - 1].damage! += Number(e.data.amount) || 0;
         seats[by - 1].hitDists.push(Math.round(Math.hypot(a.x - t.x, a.z - t.z)));
+        touch(by - 1, e.t); touch(target - 1, e.t);
+        bo[by - 1].hits++;
+        if (a.y - t.y >= HIGH_M) bo[by - 1].highHits++;
+        const w = e.data.weapon as string | undefined;
+        if (w && w !== 'fists' && w !== 'rocket' && w !== 'grenade' && w !== 'charge') bo[target - 1].bulletsTaken++;
       } else if (e.type === 'kill') {
         const v = e.data.victim as number, k = e.data.killer as number | null;
         seats[v - 1].deaths++;
         if (k != null && k !== v) { seats[k - 1].kills++; if (e.t >= SD) lateKills++; }
+        if (k != null && k !== v && fight[k - 1]) { fight[k - 1]!.kill = true; endFight(k - 1, false); }
+        endFight(v - 1, true);
       } else if (e.type === 'sealed') {
         const by = e.data.by as number | null | undefined;
         if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
@@ -194,6 +238,8 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       }
     }
   }
+  for (let i = 0; i < fight.length; i++) endFight(i, false);
+  seats.forEach((s, i) => { s.build = bo[i]; });
   const msPerTick = (performance.now() - w0) / Math.max(1, ticks);
   // Rapier worlds live in WASM memory and are never garbage collected.
   (m as unknown as { physics?: { world?: { free?: () => void } } }).physics?.world?.free?.();
@@ -256,10 +302,28 @@ export type ScenarioSummary = {
   ladder: (Share & { higher: Difficulty; lower: Difficulty }) | null;
   /** FFAs with more than one tier: mean final placement per tier (1 = won), its 95% CI and number of seats. */
   placementByTier: Partial<Record<Difficulty, { mean: number; ci95: number; n: number }>> | null;
+  /** Combat building per skill (absent when the shards predate it). */
+  build?: Record<string, BuildSummary>;
   shipCheck: { pass: boolean | null; checks: Check[] };
   /** Means per game (absent on old shard files): kills at 15:00+, eliminations, credited eliminations, spoils paid. */
   perGame?: { lateKills: number; elims: number; credited: number; spoils: number };
 };
+
+export type BuildSummary = {
+  fights: number; piecesPerFight: number; builtShare: number; winBuilt: number | null; winPlain: number | null;
+  blockedPct: number; highPct: number; kinds: Record<string, number>;
+};
+export function buildSummary(outs: BuildOut[]): BuildSummary {
+  const sum = (f: (b: BuildOut) => number) => outs.reduce((a, b) => a + f(b), 0);
+  const fights = sum((b) => b.fights), built = sum((b) => b.built), taken = sum((b) => b.bulletsTaken), blocked = sum((b) => b.bulletsBlocked);
+  const kinds: Record<string, number> = {};
+  for (const b of outs) for (const [k, n] of Object.entries(b.kinds)) kinds[k] = (kinds[k] ?? 0) + n;
+  return {
+    fights, piecesPerFight: sum((b) => b.pieces) / Math.max(1, fights), builtShare: built / Math.max(1, fights),
+    winBuilt: built ? sum((b) => b.builtWon) / built : null, winPlain: fights - built ? sum((b) => b.plainWon) / (fights - built) : null,
+    blockedPct: (100 * blocked) / Math.max(1, blocked + taken), highPct: (100 * sum((b) => b.highHits)) / Math.max(1, sum((b) => b.hits)), kinds,
+  };
+}
 
 export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary {
   const seats = games.flatMap((g) => g.seats);
@@ -302,6 +366,14 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     perGame: (['lateKills', 'elims', 'credited', 'spoils'] as const).reduce((o, k) => ({ ...o, [k]: games.reduce((a, g) => a + (g[k] ?? 0), 0) / Math.max(1, games.length) }),
       {} as { lateKills: number; elims: number; credited: number; spoils: number }),
   };
+  const withBuild = seats.filter((x) => x.build);
+  if (withBuild.length) {
+    s.build = {};
+    for (const d of ['pro', 'hard', 'medium', 'easy']) {
+      const outs = withBuild.filter((x) => x.difficulty === d).map((x) => x.build!);
+      if (outs.length) s.build[d] = buildSummary(outs);
+    }
+  }
   // Gates from tests/sim/shipChecks.test.ts (8-bot FFA) and tests/sim/botSeries.test.ts (PRO beats hard ≥ 70%; the ladder bar here is 80% per step, the steward hand-off rule).
   // The shipChecks comparisons against the hand-tuned params need a second series and are not run here.
   const checks: Check[] = [];
@@ -343,6 +415,11 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '### Eliminations per game (means)', '',
     '| scenario | kills 15:00+ | eliminations | credited | spoils paid |', '|---|---|---|---|---|',
     ...sums.filter((s) => s.perGame).map((s) => `| ${s.scenario} | ${s.perGame!.lateKills.toFixed(1)} | ${s.perGame!.elims.toFixed(1)} | ${s.perGame!.credited.toFixed(1)} | $${s.perGame!.spoils.toFixed(0)} |`), '',
+    '### Combat building',
+    '| scenario | skill | fights | pieces / fight | fights with building | win % building | win % not | bullets blocked by own cover | hits from high ground | pieces |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+    ...sums.flatMap((s) => Object.entries(s.build ?? {}).map(([d, b]) => `| ${s.scenario} | ${d} | ${b.fights} | ${b.piecesPerFight.toFixed(2)} | ${pct(100 * b.builtShare)} | ${b.winBuilt === null ? '-' : pct(100 * b.winBuilt)} | ${b.winPlain === null ? '-' : pct(100 * b.winPlain)} | ${b.blockedPct.toFixed(1)}% | ${b.highPct.toFixed(1)}% | ${Object.entries(b.kinds).map(([k, n]) => `${k} ${n}`).join(', ') || '-'} |`)),
+    '',
     '### Wins by skill',
     ...sums.map((s) => `- ${s.scenario}: ${Object.entries(s.winsByDifficulty).map(([d, n]) => `${d} ${n}`).join(', ') || 'none'}; no winner ${s.noWinner} · ${s.msPerTick.toFixed(2)} ms/tick · slowest game ${s.maxWallSec.toFixed(0)} s wall`),
   ];

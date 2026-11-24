@@ -104,7 +104,11 @@ const STORM_PREP_SEC = 150;
 const STORM_SPARE_DECKS = 2, STORM_SHOP_GRACE = 45;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Walls a bot throws down for cover, best first (sandbags go up two high). */
-const WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
+const WALLS: PieceKind[] = ['wood', 'metal', 'steel'];
+/** Medium and Easy throw down the toughest wall they hold (main's behaviour; situational choice is a Hard/PRO skill). */
+const PLAIN_WALLS: PieceKind[] = ['metal', 'wood', 'steel'];
+/** Walls for holding a spot (home, a long hold, replacing a cracked wall): toughest first. */
+const STRONG_WALLS: PieceKind[] = ['steel', 'metal', 'wood'];
 /** Generator cash worth grabbing on the way out, and the level at which it is about to be wasted at the cap. */
 const COLLECT_BEFORE_LEAVING = 40, COLLECT_NEAR_CAP = 400;
 /** Grenades: throw range (outside the blast), minimum gap between throws, how stale a sighting may be. */
@@ -221,10 +225,16 @@ export class Bot {
   private cover: {
     threatId: number; threat: Vec3; lastContact: number; startAt: number; placed: number;
     phase: 'hide' | 'peek'; phaseUntil: number; side: number;
+    /** When I first stood behind a wall in this episode; peeks so far; cracked walls I left (or rolled on). */
+    heldSince: number | null; peeks: number; done: number[];
   } | null = null;
   private coverRollAt = -Infinity;
-  /** Top of a ramp I threw down in a fight (high ground), while it lasts. */
-  private perch: { ramp: Vec3; pos: Vec3; until: number } | null = null;
+  /** Top of a ramp I threw down in a fight (high ground), while it lasts; how many ramps chained on so far. */
+  private perch: { ramp: Vec3; pos: Vec3; until: number; dir: Vec3; chain: number } | null = null;
+  /** This fight (fightSince) wants a ramp: rolled once per fight against buildSkill.ramp. */
+  private rampRoll: { fight: number; yes: boolean } | null = null;
+  /** Why my latest piece went down (spectator brain panel). */
+  buildWhy: string | null = null;
   private fightSince: number | null = null;
   private retreatSince: number | null = null;
   private lastPieceAt = -Infinity;
@@ -414,6 +424,7 @@ export class Bot {
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
+    this.buildWhy = null;
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
     // Cut off from home: get a hook here and hook home (fighting comes first: enemies in sight keep the goal's act).
     const rescue = this.strandedAct(ctx);
@@ -579,7 +590,7 @@ export class Bot {
     let select: number | null = null, useMedkit = false;
     const kit = me.hotbar.indexOf('medkit');
     if (kit >= 0 && me.inv.medkits > 0 && me.hp <= MEDKIT_AT[this.difficulty] && me.busyUntil <= now && me.healAt === null &&
-        (!enemy || ctx.enemyDist > 30) && now - this.mem.lastHurtAt > 0.5) {
+        (!enemy || ctx.enemyDist > 30 || (this.skilledHealer() && this.sheltered(ctx))) && now - this.mem.lastHurtAt > 0.5) {
       select = kit; useMedkit = true; fire = false;
     }
     // Stamina (movement.ts): like a human, stop sprinting around when winded and keep the rest for getting away.
@@ -1266,6 +1277,7 @@ export class Bot {
         : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
+      combatKit: this.combatKit(c),
     };
   }
 
@@ -1297,15 +1309,24 @@ export class Bot {
       for (const [i, s] of this.fortSlots().entries())
         if (!slotBuilt(view.pieces, s) && (this.slotBackoff.get(i) ?? -Infinity) <= view.now) add1(s.kind);
     const walls = Math.round(this.P.buildTuning.coverCarry[this.difficulty] * (0.4 + t.builder));
-    const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
-    // Cover walls of the kind I already carry for plugs (one hotbar slot), metal once rich.
-    const wall: PieceKind = me.hotbar.includes('metal') || (skilled && total >= this.P.buildTuning.metalCoverAt) ? 'metal' : 'wood';
+    // Cover walls: wood (fast, cheap) for fights, unless metal already takes a slot for plugs and wood doesn't.
+    const wall: PieceKind = me.hotbar.includes('metal') && !me.hotbar.includes('wood') ? 'metal' : 'wood';
     add1(wall, walls);
+    // Once rich, a couple of metal walls beside them for holding a spot and replacing a cracked wall.
+    if (sk.reinforce > 0 && total >= this.P.buildTuning.metalCoverAt) add1('metal', this.P.buildTuning.metalCarry[this.difficulty]);
     const scaffolds = this.scaffoldsNeeded(c);
     if (sk.bridgeCover && this.wallsOnBridge && scaffolds >= 2 * this.P.buildTuning.scaffoldsPerBridgeWall)
       add1(wall, Math.floor(scaffolds / this.P.buildTuning.scaffoldsPerBridgeWall));
-    if (sk.highGround && total >= this.P.buildTuning.rampAt && t.builder >= 0.3) add1('ramp');
+    if (sk.highGround && sk.ramp > 0 && total >= this.P.buildTuning.rampAt && t.builder >= 0.3) add1('ramp', this.P.buildTuning.rampCarry[this.difficulty]);
     return b;
+  }
+
+  /** Ramps carried from the first shop visit on (skills that ramp in fights; never with a full hotbar). */
+  private combatKit(c: Ctx): Partial<Record<PieceKind, number>> | undefined {
+    const n = this.P.buildTuning.rampFirst[this.difficulty];
+    if (c.view.suddenDeath || n < 1 || !this.P.buildSkill[this.difficulty].highGround) return undefined;
+    if (!c.me.hotbar.includes('ramp') && c.me.hotbar.filter((k) => k === null).length <= this.P.buildTuning.freeSlots) return undefined;
+    return { ramp: Math.round(n) };
   }
 
   /**
@@ -1858,12 +1879,12 @@ export class Bot {
     const shore = Math.sqrt(c.home.radius * c.home.radius - 9);
     const out = mirror ? l.length - shore - f.s : f.s - shore;
     const lastWall = this.lastWallS.get(key) ?? -Infinity;
-    const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
+    const wall = TALL.reduce((n, k) => n + (c.me.inv.pieces[k] ?? 0), 0) > c.openDoors.length ? PLAIN_WALLS.find((k) => (c.me.inv.pieces[k] ?? 0) > 0) : undefined;
     if (wall && this.P.buildSkill[this.difficulty].bridgeCover && this.wallsOnBridge && out > this.P.buildTuning.bridgeWallFrom && Math.abs(f.s - lastWall) >= this.P.buildTuning.bridgeWallEvery) {
       this.lastWallS.set(key, f.s);
       const side = flankSide(c.view.map, l);
       const p = add(at(-1.6), scale(right(yawOf(l.dir)), side * 0.85));
-      const act = this.place(c, wall, v3(p.x, c.me.pos.y, p.z), yawOf(l.dir) + Math.PI / 2, ahead);
+      const act = this.place(c, wall, v3(p.x, c.me.pos.y, p.z), yawOf(l.dir) + Math.PI / 2, ahead, `bridge side wall (${wall})`);
       if (act) return act;
     }
     const rotY = yawOf(l.dir);
@@ -2339,7 +2360,8 @@ export class Bot {
     if (this.perch && (now > this.perch.until || !c.view.pieces.some((p) => p.kind === 'ramp' && dist2D(p.pos, this.perch!.ramp) < 0.3))) this.perch = null;
     if (this.perch) {
       const d = dist2D(me.pos, this.perch.pos);
-      return d > 0.35 ? { dir: norm(flat(sub(this.perch.pos, me.pos))) } : { dir: null };
+      if (d > 0.35) return { dir: norm(flat(sub(this.perch.pos, me.pos))) };
+      return this.chainRamp(c, e) ?? { dir: null };
     }
     const ramp = this.highGround(c, e, to, gun, sameIsland);
     if (ramp) return ramp;
@@ -2369,25 +2391,55 @@ export class Bot {
   // ---------------------------------------------------------------- building
 
   /** Place a piece if the sim would take it and it keeps my own bunker open; null otherwise. */
-  private place(c: Ctx, kind: PieceKind, pos: Vec3, rotY: number, face: Vec3): Act | null {
+  private place(c: Ctx, kind: PieceKind, pos: Vec3, rotY: number, face: Vec3, why?: string): Act | null {
     const r = c.view.canPlace(kind, pos, rotY);
     if (!r.ok) return null;
     if (!c.view.suddenDeath && !ownBunkerSafe(c.home.bunker, c.view.pieces, ghost(kind, r.pos, rotY, c.me.id))) return null;
+    this.buildWhy = why ?? null;
     return { dir: null, face, build: { kind, pos, rotY, free: true } };
   }
 
   /** Busy placing, or still between two pieces of a sequence (better players chain them tighter). */
-  private building(c: Ctx, kind?: PieceKind): boolean {
-    const gap = this.P.buildSkill[this.difficulty].gap;
-    return c.me.busyUntil > c.view.now || c.view.now < this.lastPieceAt + (kind ? PIECES[kind].placeSec : 0) + gap;
+  private building(c: Ctx, kind?: PieceKind, combat = false): boolean {
+    const sk = this.P.buildSkill[this.difficulty];
+    const wait = Math.max((kind ? PIECES[kind].placeSec : 0) + sk.gap, combat ? sk.pieceSec : 0);
+    return c.me.busyUntil > c.view.now || c.view.now < this.lastPieceAt + wait;
   }
 
-  /** Walls I may throw down for cover: tall pieces beyond the seal kit, else sandbags. */
-  private wallKind(c: Ctx): PieceKind | null {
+  /**
+   * Walls I may throw down for cover: tall pieces beyond the seal kit, else sandbags. Mid-fight the fastest, cheapest
+   * wall (wood) does; `strong` (holding a spot, at home, replacing a cracked wall) takes the toughest I carry.
+   */
+  private wallKind(c: Ctx, strong = false): PieceKind | null {
     const inv = c.me.inv;
     const tall = TALL.reduce((n, k) => n + (inv.pieces[k] ?? 0), 0);
-    if (tall > c.openDoors.length) return WALLS.find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
-    return (inv.pieces.sandbags ?? 0) > 0 ? 'sandbags' : null;
+    const pick = () => (strong ? STRONG_WALLS : this.coverSkilled() ? WALLS : PLAIN_WALLS).find((k) => (inv.pieces[k] ?? 0) > 0) ?? null;
+    if (tall > c.openDoors.length) return pick();
+    if ((inv.pieces.sandbags ?? 0) > 0) return 'sandbags';
+    // Masters (reinforce > 0.8) spend a plug on cover when the doors are far off (they'll buy another): staying alive first.
+    const far = !c.rivalIsl || dist2D(c.me.pos, c.rivalIsl.bunker.center) > this.P.buildTuning.kitCoverM;
+    return tall > 0 && false && far ? pick() : null;
+  }
+
+  /** Should the next cover wall be the strongest I carry: at home, rich enough to spend it, or I've held this spot a while. */
+  private strongCover(c: Ctx): boolean {
+    const cv = this.cover;
+    return c.on === c.home.index || c.me.inv.cash + c.me.vault.cash >= this.P.buildTuning.metalCoverAt ||
+      (!!cv && cv.heldSince !== null && c.view.now - cv.heldSince >= this.P.buildTuning.holdSec);
+  }
+
+  /** Patching up behind cover with the shooter still in sight takes nerve: Hard and PRO (buildSkill.reinforce > 0.5). */
+  skilledHealer(): boolean { return this.P.buildSkill[this.difficulty].reinforce > 0.5; }
+
+  /** Situational wall material: Hard and PRO (buildSkill.reinforce > 0.5). */
+  private coverSkilled(): boolean { return this.P.buildSkill[this.difficulty].reinforce > 0.5; }
+
+  /** Behind something solid from whoever is shooting at me (heals are safe here even with them in sight). */
+  sheltered(c: Ctx): boolean {
+    const from = this.cover?.threat ?? c.enemy?.pos;
+    if (!from) return false;
+    const eye = add(from, v3(0, PLAYER.eyeHeight, 0)), chest = add(c.me.pos, v3(0, CHEST, 0));
+    return c.view.pieces.some((p) => dist2D(p.pos, c.me.pos) < 3 && shields(p, eye, chest));
   }
 
   /** Where the shooter with this id is (seen now, their tracer, or last sighting). */
@@ -2415,7 +2467,8 @@ export class Bot {
     }
     const by = this.mem.lastHurtBy;
     if (by === null || by === me.id || now - this.mem.lastHurtAt > 1.0) return;
-    if (view.suddenDeath || c.on < 0 || insideBunker(c.home.bunker, me.pos)) return;
+    if (view.suddenDeath || insideBunker(c.home.bunker, me.pos)) return;
+    if (c.on < 0) return;
     const from = this.threatPos(c, by);
     if (!from) return;
     if (this.cover?.threatId === by) { this.cover.threat = from; this.cover.lastContact = now; return; }
@@ -2434,17 +2487,17 @@ export class Bot {
     if (this.rng() >= sk.coverChance * Math.min(1, 0.55 + this.t.builder)) return;
     this.cover = {
       threatId: by, threat: from, lastContact: now, startAt: now + sk.coverDelay * (0.7 + 0.6 * this.rng()), placed: 0,
-      phase: 'hide', phaseUntil: 0, side: this.rng() < 0.5 ? -1 : 1,
+      phase: 'hide', phaseUntil: 0, side: this.rng() < 0.5 ? -1 : 1, heldSince: null, peeks: 0, done: [],
     };
     this.nextScoreAt = Math.min(this.nextScoreAt, now + sk.coverDelay * 0.5);
   }
 
   /** A piece near me that shields a spot just behind it from the threat, and that spot. */
-  private coverWall(c: Ctx, threat: Vec3): { wall: PieceState; hide: Vec3 } | null {
+  private coverWall(c: Ctx, threat: Vec3, skip: number[] = []): { wall: PieceState; hide: Vec3 } | null {
     const eye = add(threat, v3(0, PLAYER.eyeHeight, 0));
     let best: { wall: PieceState; hide: Vec3 } | null = null, bestD = 4;
     for (const p of c.view.pieces) {
-      if (p.kind === 'scaffold' || p.kind === 'ramp') continue;
+      if (p.kind === 'scaffold' || p.kind === 'ramp' || skip.includes(p.id)) continue;
       const d = dist2D(p.pos, c.me.pos);
       if (d >= bestD || Math.abs(p.pos.y - c.me.pos.y) > 1.2) continue;
       const away = norm(flat(sub(p.pos, threat)));
@@ -2463,23 +2516,27 @@ export class Bot {
     const now = view.now;
     const sk = this.P.buildSkill[this.difficulty];
     const face = add(cv.threat, v3(0, CHEST, 0));
-    const got = this.coverWall(c, cv.threat);
+    const got = this.coverWall(c, cv.threat, cv.done);
     if (!got) {
-      if (now < cv.startAt || this.building(c)) return c.enemy ? this.doFight(c) : { dir: null, face };
-      const kind = this.wallKind(c);
+      if (now < cv.startAt || this.building(c, undefined, true)) return c.enemy ? this.doFight(c) : { dir: null, face };
+      const strong = this.strongCover(c);
+      const kind = this.wallKind(c, strong);
       if (!kind || cv.placed >= this.P.buildTuning.coverMaxPieces) { this.cover = null; this.nextScoreAt = now; return IDLE; }
       const to = norm(flat(sub(cv.threat, me.pos)));
       // A bag already lying between us: stack the next one on it.
       const low = kind === 'sandbags' ? view.pieces.find((p) => p.kind === 'sandbags' && p.owner === me.id && dist2D(p.pos, me.pos) < 2.2 &&
         Math.abs(p.pos.y - me.pos.y) < 0.3 && (p.pos.x - me.pos.x) * to.x + (p.pos.z - me.pos.z) * to.z > 0.5) : undefined;
       if (low) {
-        const act = this.place(c, kind, v3(low.pos.x, me.pos.y + 0.4, low.pos.z), low.rotY, face);
+        const act = this.place(c, kind, v3(low.pos.x, me.pos.y + 0.4, low.pos.z), low.rotY, face, `cover: second bag vs @${cv.threatId}`);
         if (act) { cv.placed++; return act; }
       }
+      // Set off to the side away from where I'll peek, so stepping out to shoot is one short step.
+      const off = scale(right(yawOf(to)), -cv.side * this.P.buildTuning.coverOffset);
+      const why = `cover: ${kind} vs @${cv.threatId} (${strong ? 'strongest: home, rich or holding' : 'fast, cheap'})`;
       for (const d of this.P.buildTuning.coverDist) {
-        let pos = add(me.pos, scale(to, d)), rotY = yawOf(to);
+        let pos = add(add(me.pos, scale(to, d)), off), rotY = yawOf(to);
         if (this.rng() < sk.misplace) ({ pos, rotY } = fumble(pos, rotY, this.rng));
-        const act = this.place(c, kind, pos, rotY, face);
+        const act = this.place(c, kind, pos, rotY, face, why);
         if (act) { cv.placed++; return act; }
       }
       // Nowhere to put it: fight it out.
@@ -2490,30 +2547,76 @@ export class Bot {
     // Peek rhythm: hide behind the wall, step out to the side and shoot, back in.
     const { wall, hide } = got;
     const away = norm(flat(sub(wall.pos, cv.threat)));
-    const peek = add(hide, scale(right(yawOf(away)), cv.side * (PIECES[wall.kind].w / 2 + 0.7)));
+    const along = right(yawOf(away));
+    cv.heldSince ??= now;
+    // The wall is cracking: a fresh one (the strongest I carry) beside it on my peek side, and move behind that.
+    if (wall.hp < PIECES[wall.kind].hp * this.P.buildTuning.crackedAt && !cv.done.includes(-wall.id - 1) && !this.building(c, undefined, true)) {
+      cv.done.push(wall.id);
+      const kind = cv.placed < this.P.buildTuning.coverMaxPieces && this.rng() < sk.reinforce ? this.wallKind(c, true) : null;
+      if (kind) {
+        const pos = add(v3(wall.pos.x, me.pos.y, wall.pos.z), scale(along, cv.side * (PIECES[wall.kind].w / 2 + PIECES[kind].w / 2 + 0.05)));
+        const act = this.place(c, kind, pos, yawOf(away), face, `reinforce: ${wall.kind} wall cracked (${Math.round(wall.hp)} hp), ${kind} beside it`);
+        if (act) { cv.placed++; cv.phase = 'hide'; cv.phaseUntil = 0; return act; }
+      }
+      cv.done.pop(); // nothing went up: keep using the cracked wall (no second roll on it)
+      cv.done.push(-wall.id - 1);
+    }
+    const peek = add(hide, scale(along, cv.side * (PIECES[wall.kind].w / 2 + this.P.buildTuning.peekStep)));
+    // Patching up (medkit) or in the middle of placing: stay in behind the wall till it's done.
+    const busy = me.healAt !== null || me.busyUntil > now;
+    if (busy && cv.phase === 'peek') { cv.phase = 'hide'; cv.phaseUntil = 0; }
     const spot = cv.phase === 'hide' ? hide : peek;
     const there = dist2D(me.pos, spot) < 0.35;
     if (there && cv.phaseUntil === 0) cv.phaseUntil = now + (cv.phase === 'hide' ? sk.peekHide : sk.peekOut) * (0.75 + 0.5 * this.rng());
-    if (cv.phaseUntil > 0 && now >= cv.phaseUntil) {
+    if (cv.phaseUntil > 0 && now >= cv.phaseUntil && !busy) {
       cv.phase = cv.phase === 'hide' ? 'peek' : 'hide';
       cv.phaseUntil = 0;
-      if (cv.phase === 'peek' && this.rng() < 0.3) cv.side = -cv.side;
+      if (cv.phase === 'peek') { cv.peeks++; if (this.rng() < 0.3) cv.side = -cv.side; }
     }
     return there ? { dir: null, face } : { dir: norm(flat(sub(spot, me.pos))), face };
   }
 
-  /** Mid-range fight on the same island for a while: a ramp toward them and fight from its top. */
+  /**
+   * Mid-range fight on the same island for a while (sooner if they stand above me): a ramp toward them and fight
+   * from its top. Whether this fight calls for one is rolled once per fight (buildSkill.ramp).
+   */
   private highGround(c: Ctx, e: PlayerState, to: Vec3, gun: WeaponKind, sameIsland: boolean): Act | null {
     const { me, view } = c;
     const now = view.now;
-    const [lo, hi] = this.P.buildTuning.highGroundRange;
-    if (!this.P.buildSkill[this.difficulty].highGround || (me.inv.pieces.ramp ?? 0) === 0 || !sameIsland || gun === 'fists' ||
-      c.enemyDist < lo || c.enemyDist > hi || this.fightSince === null || now - this.fightSince < this.P.buildTuning.highGroundAfter ||
-      c.on < 0 || me.pos.y - view.map[c.on].groundY > 0.3 || e.pos.y - me.pos.y > 1 || this.building(c)) return null;
+    const sk = this.P.buildSkill[this.difficulty], bt = this.P.buildTuning;
+    const [lo, hi] = bt.highGroundRange;
+    if (!sk.highGround || (me.inv.pieces.ramp ?? 0) === 0 || !sameIsland || gun === 'fists' || this.fightSince === null ||
+      c.enemyDist < lo || c.enemyDist > hi || c.on < 0 || me.pos.y - view.map[c.on].groundY > 0.3) return null;
+    const above = e.pos.y - me.pos.y;
+    // Up to someone standing higher (a ramp reaches 1.5 m, two of them 3 m); a level fight after highGroundAfter.
+    if (above > PIECES.ramp.h * 2.2 || (above < bt.rampUpTo && now - this.fightSince < bt.highGroundAfter)) return null;
+    if (this.rampRoll?.fight !== this.fightSince) this.rampRoll = { fight: this.fightSince, yes: this.rng() < sk.ramp };
+    if (!this.rampRoll.yes || this.building(c, 'ramp', true)) return null;
     const pos = add(me.pos, scale(to, 2.1));
-    const act = this.place(c, 'ramp', pos, yawOf(to) + Math.PI, add(e.pos, v3(0, CHEST, 0)));
+    const why = above >= bt.rampUpTo ? `ramp: up to @${e.id} (${above.toFixed(1)} m above me)` : `ramp: high ground on @${e.id}`;
+    const act = this.place(c, 'ramp', pos, yawOf(to) + Math.PI, add(e.pos, v3(0, CHEST, 0)), why);
     if (!act) return null;
-    this.perch = { ramp: v3(pos.x, me.pos.y, pos.z), pos: add(pos, scale(to, 1.0)), until: now + this.P.buildTuning.perchSec };
+    this.perch = { ramp: v3(pos.x, me.pos.y, pos.z), pos: add(pos, scale(to, 1.0)), until: now + bt.perchSec, dir: to, chain: 0 };
+    return act;
+  }
+
+  /**
+   * On my perch with the rival still out of reach (or above me): chain the next ramp on from this one's top, forward
+   * and up toward them, and move the perch to its top (buildSkill.rampChain ramps per fight at most).
+   */
+  private chainRamp(c: Ctx, e: PlayerState): Act | null {
+    const pr = this.perch!, me = c.me, now = c.view.now;
+    const sk = this.P.buildSkill[this.difficulty], bt = this.P.buildTuning;
+    if (pr.chain >= sk.rampChain || (me.inv.pieces.ramp ?? 0) === 0 || this.building(c, 'ramp', true)) return null;
+    const toE = norm(flat(sub(e.pos, me.pos)));
+    // Still facing them (they didn't go round me), and still worth closing: far, or higher than my perch.
+    if (toE.x * pr.dir.x + toE.z * pr.dir.z < 0.8) return null;
+    if (c.enemyDist < bt.highGroundRange[0] + PIECES.ramp.d && e.pos.y - me.pos.y < bt.rampUpTo) return null;
+    const top = pr.ramp.y + PIECES.ramp.h;
+    const pos = v3(pr.ramp.x + pr.dir.x * PIECES.ramp.d, top, pr.ramp.z + pr.dir.z * PIECES.ramp.d);
+    const act = this.place(c, 'ramp', pos, yawOf(pr.dir) + Math.PI, add(e.pos, v3(0, CHEST, 0)), `ramp: chained forward and up toward @${e.id}`);
+    if (!act) return null;
+    pr.ramp = pos; pr.pos = add(pos, scale(pr.dir, 1.0)); pr.chain++; pr.until = now + bt.perchSec;
     return act;
   }
 
@@ -2640,7 +2743,7 @@ export class Bot {
     const walk = this.goTo(v3(stand.x, home.groundY, stand.z), 0.6);
     if (walk.dir) return walk;
     if (this.building(c, slot.kind)) return { dir: null, face };
-    const act = this.place(c, slot.kind, slot.pos, slot.rotY, face);
+    const act = this.place(c, slot.kind, slot.pos, slot.rotY, face, `fortify: ${slot.tag} ${slot.kind}`);
     if (act) return act;
     this.slotBackoff.set(i, view.now + this.P.buildTuning.slotBackoffSec);
     this.nextScoreAt = view.now;
