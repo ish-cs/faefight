@@ -1,6 +1,7 @@
 import { ELIM, LIFECYCLE, PLAYER, SHIELD_MAX } from './constants';
 import type { MatchStateCore } from './lifecycle';
 import { isAlly } from './teams';
+import { takeVaultCash } from './vault';
 import type { MatchEvent, PlayerState } from './types';
 
 /**
@@ -62,8 +63,7 @@ export function creditFor(
 
 /** Takes the spoils from the victim (vault, share of the drop bag's cash, generator). Integers only. */
 export function takeSpoils(s: MatchStateCore, victim: PlayerState, bagId: number | null): number {
-  const vault = Math.floor(victim.vault.cash);
-  victim.vault.cash -= vault;
+  const vault = takeVaultCash(victim);
   let carried = 0;
   const bag = bagId !== null ? s.loot.get(bagId) : undefined;
   if (bag) {

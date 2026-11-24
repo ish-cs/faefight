@@ -33,13 +33,13 @@ describe('shop', () => {
     expect(p.inv.weapons.pistol).toEqual({ mag: 12, spare: 36 });
     expect(p.inv.cash).toBe(0);
   });
-  test('cannot spend vault cash', () => {
+  test('spends vault cash when carried cash is short (sim/vault.ts)', () => {
     const p = player(0);
     p.vault.cash = 1000;
     const r = buy(p, { buy: 'pistol' });
-    expect(r.ok).toBe(false);
-    expect(p.inv.weapons.pistol).toBeUndefined();
-    expect(p.vault.cash).toBe(1000);
+    expect(r.ok).toBe(true);
+    expect(p.inv.weapons.pistol).toBeDefined();
+    expect(p.vault.cash).toBe(950);
   });
   test('buying a piece adds to the count', () => {
     const p = player(100);
