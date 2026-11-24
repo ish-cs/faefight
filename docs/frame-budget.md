@@ -42,20 +42,22 @@ A single new feature may cost at most **~2 % of frame time (≈ 0.15 ms GPU, 0.1
 | post passes | no new full-screen pass at output res without a measurement; prefer half-res | each full-res pass at 3456×2234 ≈ 0.3–0.6 ms |
 | ragdolls / footprints / shells / wet decals | pooled, capped (shells ≤ 64, footprints ≤ 128 as one instanced mesh, ragdolls ≤ 4 simulated) | |
 
-## Upscaling (ultra)
+## Upscaling (high / ultra): TAAU
 
-Ultra renders the scene at **0.7× output resolution with MSAA ×4** and upscales to native Retina in the final grade
-pass: bilinear + a contrast-adaptive sharpen (`post.ts` `'cas'`). No extra full-resolution pass, no history, so no
-ghosting and **no added latency**. Thin wires and alpha-to-coverage foliage survive (they need MSAA).
+High and ultra render the scene **without MSAA** at a fraction of the output (ultra 0.67× of 2× DPR, high 0.75× of
+1.5× DPR) and reconstruct + anti-alias at output size from jittered history (`taau.ts`, a fork of three's TAAUNode),
+then RCAS-sharpen inside the grade pass (no extra output-resolution pass). Low keeps native MSAA ×4.
 
-Tried and rejected (still selectable for A/B with `?upscale=`):
-- `taau` (three's TAAUNode, 0.6×, jittered, velocity MRT): cheapest GPU, but power-line wires vanished, foliage
-  that relies on MSAA alpha-to-coverage dithered, and characters went soft. Velocity also adds the previous instance
-  matrix to every instanced mesh, which pushed critters over WebGPU's 8 vertex buffers.
-- `fsr` (FSR 1 EASU + RCAS): looks the same as `cas` but adds two output-sized passes (~+40 % GPU timestamp vs `cas`).
+Rules for anything that moves on screen (velocity MRT, `velocity.ts`):
+- Vertex displacement through `positionNode` is handled for every material (its displacement is carried into the
+  previous position). Fast time-driven animation (wing flaps): use `timeDisplaced(m, t => …)`.
+- Camera-following meshes must follow in the shader (a uniform offset), not through `mesh.position`.
+- Instanced materials near WebGPU's 8 vertex buffers: `staticVelocity(m)` (camera-only motion, no previous buffers).
+- Additive FX are reactive automatically (no history lock behind tracers/sparks); a normal-blended FX layer that
+  moves fast calls `reactive(m)`. `?taaudbg=1` shows motion vectors and the reactive mask.
 
-`?upscale=0` renders native (main's ultra), `?upscaleScale=0.8` sets the input scale. Dynamic resolution on ultra
-scales the *input* resolution only; output-sized targets keep their size.
+`?upscale=cas` (0.7× MSAA ×4 + CAS, the previous ultra), `?upscale=fsr`, `?upscale=0` (native MSAA) stay for A/B;
+`?upscaleScale=` sets the input scale.
 
 ## Measuring: what to trust
 

@@ -6,6 +6,7 @@ import type { IslandLayout } from '../../sim/map';
 import type { StormSnap, Vec3 } from '../../sim/types';
 import type { Quality, SkyLighting } from './sky';
 import { stepWetness, WET, wetness, wetOverride } from './wetness';
+import { reactive } from './velocity';
 
 /** WebGPURenderer tone-maps unlit materials too: pre-boost so the bolt and wall read bright. */
 const BOOST = 2.6;
@@ -82,6 +83,7 @@ export class StormFx {
     // A little wind slant: the top of each streak leans downwind.
     rainMat.positionNode = vec3(wx, wy, wz).add(positionLocal).add(vec3(positionLocal.y.mul(0.18), 0, positionLocal.y.mul(0.06)));
     rainMat.opacityNode = float(0.32).mul(this.rainAmt);
+    reactive(rainMat); // thin fast streaks: no TAAU history behind them (velocity.ts)
     this.rain = new THREE.InstancedMesh(rainGeo, rainMat, RAIN_DROPS.ultra);
     this.rain.frustumCulled = false;
     this.rain.visible = false;

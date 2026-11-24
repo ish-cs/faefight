@@ -1,13 +1,14 @@
 import * as THREE from 'three/webgpu';
 import {
-  abs, builtinAOContext, dot, emissive, exp, float, length, luminance, min, mix, mrt, normalView, output, pass, renderOutput, screenSize, screenUV, smoothstep, step,
-  uniform, vec2, vec3, vec4, velocity,
+  abs, builtinAOContext, dot, emissive, exp, float, ivec2, length, luminance, max, min, mix, mrt, normalView, output, pass, renderOutput, screenSize, screenUV,
+  smoothstep, step, textureSize, uniform, vec2, vec3, vec4, velocity,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
-import { taau } from 'three/addons/tsl/display/TAAUNode.js';
 import { fsr1 } from 'three/addons/tsl/display/FSR1Node.js';
 import { perfOff } from './perfFlags';
+import { taau } from './taau';
+import { installVelocityFix } from './velocity';
 
 export type PostOptions = {
   samples: number; bloom: boolean; ao: false | { resolution: number; samples: number }; flare?: boolean;
@@ -15,9 +16,9 @@ export type PostOptions = {
    * Render the scene at `scale` × the output resolution and upscale. Same-frame: no added latency.
    * - 'fsr': keeps MSAA; spatial FSR 1 (EASU edge-adaptive upscale + RCAS sharpen, `sharpen` = RCAS stops, 0 =
    *   sharpest). No history, so no ghosting; thin wires and alpha-to-coverage foliage survive.
-   * - 'taau': temporal (Karis 2014 / FSR2-style): jittered, no MSAA, motion vectors (velocity MRT), history
-   *   reconstruction + a 5-tap contrast-adaptive sharpen (`sharpen` 0–1). Cheaper but softer; loses sub-pixel
-   *   wires and dithers foliage that relies on MSAA alpha-to-coverage.
+   * - 'taau': temporal (Karis 2014 / FSR2-style, taau.ts): jittered, no MSAA, motion vectors (velocity MRT, with
+   *   vertex displacement and a reactive mask for transparent FX: velocity.ts), history reconstruction at output
+   *   size, then RCAS (three's SharpenNode maths, `sharpen` in stops, 0 = sharpest) folded into the grade pass.
    * - 'cas': keeps MSAA; bilinear upscale + the same contrast-adaptive sharpen, folded into the final grade pass
    *   (no extra full-resolution passes: FSR 1's EASU + RCAS are two more output-sized passes, ~40 % of ultra's
    *   output-resolution GPU time at 2× DPR).
@@ -25,19 +26,29 @@ export type PostOptions = {
   upscale?: { mode: 'fsr' | 'taau' | 'cas'; scale: number; sharpen: number };
 };
 
-/**
- * Opt a material out of TAAU motion vectors (writes zero velocity; the history clamp absorbs the error). Needed for
- * instanced meshes that already use most vertex buffers: velocity adds the previous instance matrix (4 more), and
- * WebGPU allows 8 (critters: 9 → pipeline creation fails and the mesh disappears). Free when TAAU is off.
- */
-export function noVelocity(m: THREE.NodeMaterial) {
-  m.mrtNode = mrt({ velocity: vec4(0, 0, 0, 0) });
-}
-
 /** live sharpen strength for 'taau' / 'cas' (debug) */
 const sharpenAmount = uniform(0.25);
 /** scene input scale (× output resolution) under 'cas', kept live by SkyLighting for dynamic resolution */
 export const upscaleInput = uniform(1);
+
+/**
+ * RCAS (AMD FidelityFX FSR 1 robust contrast-adaptive sharpen; the maths of three's SharpenNode) of `t` at the
+ * output pixel, folded into the grade pass instead of SharpenNode's own output-resolution pass. Runs on HDR input
+ * through a reversible tonemap (c / (1 + max c)), so sun highlights above 1 don't break RCAS's 0–1 limiters.
+ */
+function rcasSample(t: THREE.TextureNode, stops: THREE.Node<'float'>): THREE.Node<'vec4'> {
+  const p = ivec2(screenUV.mul(vec2(textureSize(t) as unknown as THREE.Node<'ivec2'>))).toConst();
+  const tm = (c: THREE.Node<'vec4'>) => c.rgb.div(max(c.r, max(c.g, c.b)).add(1));
+  const e = tm(t.load(p)), b = tm(t.load(p.add(ivec2(0, -1)))), d = tm(t.load(p.add(ivec2(-1, 0))));
+  const f = tm(t.load(p.add(ivec2(1, 0)))), h = tm(t.load(p.add(ivec2(0, 1))));
+  const mn4 = min(min(b, d), min(f, h)), mx4 = max(max(b, d), max(f, h));
+  const hitMin = min(mn4, e).div(mx4.mul(4).max(1e-4));
+  const hitMax = vec3(1).sub(max(mx4, e)).div(mn4.mul(4).sub(4).min(-1e-4));
+  const l = max(hitMin.negate(), hitMax);
+  const lobe = max(float(-(0.25 - 1 / 16)), min(max(l.r, max(l.g, l.b)), 0)).mul(stops.negate().exp2());
+  const r = b.add(d).add(f).add(h).mul(lobe).add(e).div(lobe.mul(4).add(1)).clamp(0, 0.999);
+  return vec4(r.div(float(1).sub(max(r.r, max(r.g, r.b)))), 1); // inverse tonemap back to HDR
+}
 
 /**
  * Contrast-adaptive 5-tap sharpen (CAS-lite) of `t` at screen uv, taps `px` apart (uv): restores the crispness an
@@ -84,6 +95,7 @@ export function buildPipeline(
   pipe.outputColorTransform = false; // tone map + sRGB ourselves so the grade runs in display space
 
   const taauOn = o.upscale?.mode === 'taau';
+  if (taauOn) installVelocityFix(); // before any material compiles against the velocity MRT
   // TAAU needs MSAA off (the jittered history is the anti-aliasing)
   const scenePass = pass(scene, camera, { samples: taauOn ? 0 : o.samples });
   if (o.upscale) scenePass.setResolutionScale(o.upscale.scale);
@@ -92,8 +104,14 @@ export function buildPipeline(
   const targets: Record<string, THREE.Node> = { output };
   if (o.bloom) targets.emissive = emissive;
   if (o.ao) targets.normal = normalView;
-  if (taauOn) targets.velocity = velocity;
-  if (Object.keys(targets).length > 1) scenePass.setMRT(mrt(targets));
+  // velocity: xy motion (NDC), z reactive mask (transparent FX coverage, velocity.ts). Material blending on this
+  // target so a transparent surface blends its mask in over the opaque surface's motion instead of replacing it.
+  if (taauOn) targets.velocity = vec4(velocity as unknown as THREE.Node<'vec2'>, 0, 1);
+  if (Object.keys(targets).length > 1) {
+    const m = mrt(targets);
+    if (taauOn) m.setBlendMode('velocity', new THREE.BlendMode(THREE.MaterialBlending));
+    scenePass.setMRT(m);
+  }
   const raw = scenePass.getTextureNode('output');
   // TAAU: everything after this runs at output resolution on the reconstructed image; AO and bloom stay at their
   // (input-relative) resolutions and are sampled by screen uv.
@@ -104,7 +122,7 @@ export function buildPipeline(
   if (o.upscale?.mode === 'cas') col = casSample(raw, vec2(1, 1).div(screenSize.mul(upscaleInput)));
   if (taauOn) {
     const t = taau(raw, scenePass.getTextureNode('depth'), scenePass.getTextureNode('velocity'), camera).getTextureNode();
-    col = casSample(t, vec2(1, 1).div(screenSize)); // TAAU resolves at output size: output-pixel taps
+    col = rcasSample(t, sharpenAmount); // TAAU resolves at output size: output-pixel taps
   }
 
   let aoPass: ReturnType<typeof ao> | null = null;
@@ -175,6 +193,11 @@ export function buildPipeline(
   const vig = float(1).sub(grade.vignette.mul(smoothstep(0.06, 0.5, dot(v, v))));
   c = c.mul(vig);
   if (flare) c = c.add(flare);
+  // debug (`?taaudbg=1`): motion vectors (|x|, |y| × 40 in red / green) and the reactive mask (blue)
+  if (taauOn && typeof location !== 'undefined' && new URLSearchParams(location.search).get('taaudbg') === '1') {
+    const v = scenePass.getTextureNode('velocity').sample(screenUV);
+    c = vec3(abs(v.x).mul(40), abs(v.y).mul(40), v.z);
+  }
   pipe.outputNode = c;
   return { pipe, scenePass, aoPass, bloomPass }; // the scene pass: the warm-up compiles world materials for its exact target/MRT
 }

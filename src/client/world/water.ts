@@ -99,7 +99,9 @@ export function buildWater(def: MapDef): Ocean {
   };
   const vExp = expo(rx, rz);
   const ws = waveSum(TSL, rx, rz, uTime, vExp, uSea, float(1), TRAINS, vFade);
-  mat.positionNode = positionLocal.add(vec3(ws.dx, ws.dy, ws.dz));
+  // The grid follows the camera in whole metres through `origin` in the shader, not through the mesh's matrix: the
+  // surface is a world-space height field, so its motion vectors (TAAU) must not include the grid's 1 m snaps.
+  mat.positionNode = positionLocal.add(vec3(ws.dx.add(origin.x), ws.dy, ws.dz.add(origin.z)));
   const vNormal = varying(vec3(ws.nx, ws.ny, ws.nz), 'vWaveN');
   const vHeight = varying(ws.dy, 'vWaveH');
   const vPinch = varying(ws.pinch, 'vWaveP');
@@ -214,8 +216,8 @@ export function buildWater(def: MapDef): Ocean {
   return {
     mesh,
     update(cam, waterY, dt) {
-      mesh.position.set(Math.round(cam.x), waterY, Math.round(cam.z));
-      origin.value.copy(mesh.position);
+      mesh.position.set(0, waterY, 0);
+      origin.value.set(Math.round(cam.x), waterY, Math.round(cam.z));
       stepWaves(performance.now() / 1000, dt);
       uTime.value = waveTime();
       uSea.value = seaState().current;

@@ -34,22 +34,31 @@ type Preset = {
 const COMPETITIVE_POST: Partial<PostOptions> = { samples: 2, bloom: false, ao: false, flare: false, upscale: undefined };
 
 /**
- * Ultra's upscaler (A/B, debug): `?upscale=0` off (native MSAA), `?upscale=taau` / `?upscale=fsr` picks the mode,
- * `?upscaleScale=0.7` sets the input scale.
+ * High/ultra upscaler (A/B, debug): `?upscale=taau` (default) temporal upscale + RCAS; `?upscale=cas` / `=fsr` the
+ * previous spatial upscalers over a 0.7× MSAA ×4 scene; `?upscale=0` native MSAA ×4 (no upscale).
+ * `?upscaleScale=0.6` sets the input scale (× output resolution).
  */
 const Q = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
-const UP_MODE = Q?.get('upscale') ?? 'cas';
-const UP_SCALE = Math.min(1, Math.max(0.4, Number(Q?.get('upscaleScale')) || (UP_MODE === 'taau' ? 0.6 : 0.7)));
-const UPSCALE_ULTRA: PostOptions['upscale'] = UP_MODE === '0' ? undefined
-  : { mode: UP_MODE === 'taau' || UP_MODE === 'fsr' ? UP_MODE : 'cas', scale: UP_SCALE, sharpen: UP_MODE === 'cas' ? 0.5 : 0.25 };
+const UP_MODE = Q?.get('upscale') ?? 'taau';
+const UP_Q = Number(Q?.get('upscaleScale'));
+const upscale = (taauScale: number): PostOptions['upscale'] => {
+  if (UP_MODE === '0') return undefined;
+  const mode = UP_MODE === 'cas' || UP_MODE === 'fsr' ? UP_MODE : 'taau';
+  const scale = Math.min(1, Math.max(0.4, UP_Q || (mode === 'taau' ? taauScale : 0.7)));
+  // taau: RCAS stops (0 = sharpest); cas: CAS strength 0–1; fsr: RCAS stops
+  return { mode, scale, sharpen: mode === 'cas' ? 0.5 : 0.25 };
+};
 
-// low: 2 small cascades over a short range; high: 3 cascades (crisp near, shorter reach than ultra);
-// ultra: 4 cascades with a long reach. GTAO + bloom on high/ultra (AO at half resolution).
+// low: 2 small cascades over a short range, native MSAA ×4; high: 3 cascades (crisp near, shorter reach than ultra);
+// ultra: 4 cascades with a long reach. GTAO + bloom on high/ultra (AO at half the scene resolution).
+// High/ultra: TAAU (no MSAA): the scene renders at `scale` × the output and is reconstructed + anti-aliased from
+// jittered history at output resolution (post.ts / taau.ts). It replaced MSAA ×4, which cost the most GPU time.
 const PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, shadow: { cascades: 2, mapSize: 1024, far: 90 }, post: { samples: 4, bloom: false, ao: false } },
-  high: { pixelRatio: 1.25, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true } },
-  // ultra: native Retina output, scene rendered at 0.7× (MSAA ×4) and upscaled bilinear + contrast-adaptive sharpen in the grade pass
-  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, upscale: UPSCALE_ULTRA } },
+  // high: 1.5× output from a 0.75× scene (1.125× input, below the old 1.25× native MSAA ×4)
+  high: { pixelRatio: 1.5, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true, upscale: upscale(0.75) } },
+  // ultra: native Retina output from a 0.67× scene
+  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, upscale: upscale(0.67) } },
 };
 
 /** Far-cascade caster mask: layer 0 only (+ unused bit 31, see cascadeLayers). */

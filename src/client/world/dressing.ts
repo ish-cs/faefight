@@ -4,6 +4,7 @@ import { MAP } from '../../sim/constants';
 import type { IslandLayout } from '../../sim/map';
 import { BACKDROP_DECOR, type Clutter, type Ellipse, ISLAND_DECOR } from './decor';
 import { mat, StaticBatch } from './geo';
+import { timeDisplaced } from './velocity';
 import { mats } from './materials';
 import { makeRng } from './textures';
 
@@ -307,8 +308,8 @@ export class Gulls {
     m.name = 'gull';
     const span = abs(positionGeometry.x);
     const amt = attribute('gullFlap', 'float');
-    const flap = sin(time.mul(9).add(float(instanceIndex).mul(1.7))).mul(span).mul(0.55).mul(amt);
-    m.positionNode = positionLocal.add(vec3(0, flap, 0));
+    // wing beat: fast, so last frame's pose goes into the motion vectors as well (velocity.ts)
+    timeDisplaced(m, (t) => positionLocal.add(vec3(0, sin(t.mul(9).add(float(instanceIndex).mul(1.7))).mul(span).mul(0.55).mul(amt), 0)));
     // white body, grey mantle, black wingtips, yellow beak
     let col = mix(vec3(0.92, 0.92, 0.9), vec3(0.55, 0.58, 0.62), smoothstep(0.12, 0.25, span));
     col = mix(col, vec3(0.1, 0.1, 0.11), smoothstep(0.5, 0.68, span));

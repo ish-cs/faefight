@@ -8,7 +8,7 @@ import type { MapDef } from '../../sim/map';
 import type { MatchEvent, Vec3 } from '../../sim/types';
 import { buildHabitats, type Habitats, type PerchIn } from './critterHabitats';
 import { critterGeometry, TINTS } from './critterMeshes';
-import { noVelocity } from './post';
+import { staticVelocity } from './velocity';
 import { type Agent, type CritterQuality, CritterSim, type CritterSound, type V3 } from './critterSim';
 import { SPECIES_DEFS, SWARM_DEFS, type SpeciesDef, type SwarmDef } from './critterSpecies';
 
@@ -160,7 +160,7 @@ export class Critters {
       const mats = new THREE.InstancedInterleavedBuffer(mesh.instanceMatrix.array as Float32Array, 16, 1);
       mats.setUsage(THREE.DynamicDrawUsage);
       const mat = animated(d.name, d.mode === 'water', crit, mats);
-      noVelocity(mat);
+      staticVelocity(mat);
       mesh.material = mat;
       mesh.name = `critter:${d.name}`;
       mesh.count = 0;
@@ -330,7 +330,7 @@ export class Critters {
     const cy = cos(yaw), sy = sin(yaw);
     m.positionNode = vec3(local.x.mul(cy).add(local.z.mul(sy)), local.y, local.z.mul(cy).sub(local.x.mul(sy))).add(pos);
     if (d.water) underwater(m, 0.6);
-    noVelocity(m);
+    staticVelocity(m);
     const mesh = new THREE.InstancedMesh(geo, m, n);
     mesh.name = `swarm:${d.name}`;
     mesh.count = 0;

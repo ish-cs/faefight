@@ -30,7 +30,8 @@ const SPOTS = [
 
 async function run(quality) {
   const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio', '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
-  const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: dpr });
+  const [vw, vh] = arg('size', '1600x900').split('x').map(Number); // --size=1728x1117 + --dpr=2 = a 14" MacBook Pro panel
+  const page = await browser.newPage({ viewport: { width: vw, height: vh }, deviceScaleFactor: dpr });
   page.setDefaultTimeout(240_000);
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
@@ -90,7 +91,7 @@ async function run(quality) {
     const lat = await dbg('latency');
     const gfps = await page.evaluate(() => window.__faefight.gpuFps?.() ?? 0);
     per.push({
-      spot: s.name, avgMs: f.avg, p99: f.p99, cpu: f.cpuAvg, gpu: gpu.avg ?? 0, lat: lat.gpuAvg, gfps,
+      spot: s.name, avgMs: f.avg, p50: f.p50, p95: f.p95, p99: f.p99, cpu: f.cpuAvg, gpu: gpu.avg ?? 0, lat: lat.gpuAvg, gfps,
       draws: infos.reduce((a, x) => a + x.drawCalls, 0) / infos.length,
       tris: infos.reduce((a, x) => a + x.triangles, 0) / infos.length,
     });
@@ -100,7 +101,7 @@ async function run(quality) {
   const mean = (k) => per.reduce((a, x) => a + x[k], 0) / per.length;
   const avgMs = mean('avgMs');
   return {
-    preset: quality, loadMs, pbr, fps: +(1000 / avgMs).toFixed(1), avgMs: +avgMs.toFixed(2), p99: +Math.max(...per.map((x) => x.p99)).toFixed(2),
+    preset: quality, loadMs, pbr, fps: +(1000 / avgMs).toFixed(1), avgMs: +avgMs.toFixed(2), p50: +mean('p50').toFixed(2), p95: +mean('p95').toFixed(2), p99: +Math.max(...per.map((x) => x.p99)).toFixed(2),
     cpuMs: +mean('cpu').toFixed(2), gpuMs: +mean('gpu').toFixed(2), latMs: +mean('lat').toFixed(1), gpuFps: +mean('gfps').toFixed(1), draws: Math.round(mean('draws')), tris: Math.round(mean('tris')),
     perSpot: per.map((x) => `${x.spot}:${(1000 / x.avgMs).toFixed(0)}fps/${x.gfps.toFixed(0)}gfps/${x.gpu.toFixed(1)}gms/${x.lat.toFixed(0)}lat/${x.cpu.toFixed(1)}cms/${Math.round(x.draws)}dc/${Math.round(x.tris / 1000)}kt`).join(' '),
     errors: errors.slice(0, 5),
@@ -110,9 +111,9 @@ async function run(quality) {
 const rows = [];
 for (const q of presets) rows.push(await run(q));
 console.log(`\n== ${label} (stress ×${stress}) ==`);
-console.log('| preset | load s | avg fps | p99 ms | cpu ms | gpu ms | look→GPU done ms | GPU-done fps | draws | tris |');
-console.log('|---|---|---|---|---|---|---|---|---|---|');
-for (const r of rows) console.log(`| ${r.preset} | ${(r.loadMs / 1000).toFixed(1)} | ${r.fps} | ${r.p99} | ${r.cpuMs} | ${r.gpuMs} | ${r.latMs} | ${r.gpuFps} | ${r.draws} | ${(r.tris / 1e6).toFixed(2)}M |`);
+console.log('| preset | load s | avg fps | p50 ms | p95 ms | p99 ms | cpu ms | gpu ms | look→GPU done ms | GPU-done fps | draws | tris |');
+console.log('|---|---|---|---|---|---|---|---|---|---|---|---|');
+for (const r of rows) console.log(`| ${r.preset} | ${(r.loadMs / 1000).toFixed(1)} | ${r.fps} | ${r.p50} | ${r.p95} | ${r.p99} | ${r.cpuMs} | ${r.gpuMs} | ${r.latMs} | ${r.gpuFps} | ${r.draws} | ${(r.tris / 1e6).toFixed(2)}M |`);
 if (rows[0]?.pbr) console.log(`textures: ${JSON.stringify(rows[0].pbr)}`);
 for (const r of rows) console.log(`${r.preset}: ${r.perSpot}${r.errors.length ? `  errors: ${JSON.stringify(r.errors)}` : ''}`);
 console.log(JSON.stringify({ label, stress, rows }));
