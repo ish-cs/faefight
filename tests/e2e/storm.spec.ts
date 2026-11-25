@@ -37,9 +37,12 @@ test('sudden death: STORM warning, ring banner, vignette outside the ring, teleg
   expect(s0.storm).toBeTruthy();
   expect(s0.waterY).toBe(0);
 
-  // Ring through the middle of the islands; step outside it.
-  await dbg(page, 'time', 1000);
+  // Ring through the middle of the islands; step outside it. Out of the bunker first: sudden death sealed it with me
+  // inside, and jumping the clock past the breakout countdown while I'm still in there eliminates me (a tick could
+  // land between the two debug messages).
   await dbg(page, 'teleport', ux * (L + 10), uz * (L + 10));
+  await expect.poll(async () => Math.hypot((await me()).pos.x - ux * (L + 10), (await me()).pos.z - uz * (L + 10)), { timeout: 2000 }).toBeLessThan(1);
+  await dbg(page, 'time', 1000);
   await expect(page.locator('.hud .banner')).toContainText('IN THE STORM', { timeout: 5000 });
   await expect(page.getByTestId('storm-vignette')).toHaveClass(/on/);
   await expect.poll(async () => (await me()).hp, { timeout: 5000 }).toBeLessThan(100);
