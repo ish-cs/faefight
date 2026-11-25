@@ -341,7 +341,10 @@ export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, Bui
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
   offenseCash: D(Infinity, 3 * PIECES.wood.price, 3 * PIECES.metal.price, 3 * PIECES.wood.price),
-  push: D(0, 0.25, 0.25, 0.35),
+  // PRO 0.35 → 0.2 with the 10 s respawn and the final sealed death: every lost push now costs 10 s and the carried
+  // cash, and a PRO re-pushing its Hard neighbour died up to 12 times a game (botBuild seeds 2-7 PRO/Easy 2.30 → 3.19,
+  // decisive 6/6; mixed ×60 PRO 3.29 → 3.17, tiers in order).
+  push: D(0, 0.25, 0.25, 0.2),
   shopForPush: 0.75,
   plinkRange: 30,
   maxRange: D(Infinity, 20, 20, 24),
