@@ -9,17 +9,20 @@ permissions:
 
 jobs:
   diag:
-    name: ${{ matrix.v.name }} s${{ matrix.seed }}
+    name: ${{ matrix.v.name }} ${{ matrix.mode }} s${{ matrix.seed }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        seed: [8, 9, 10, 11, 12, 13, 14, 15]
+        seed: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        mode: [build, hit]
         v:
-          - { name: base, p: '{}' }
-          - { name: fight35, p: '{"heal.fightHp.pro":35}' }
-          - { name: fight30, p: '{"heal.fightHp.pro":30}' }
+          - { name: base45, p: '{"heal.fightHp.pro":45}' }
+          - { name: fight40, p: '{"heal.fightHp.pro":40}' }
+          - { name: fight35, p: '{}' }
+        exclude:
+          - { mode: build, seed: 1 }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -35,4 +38,5 @@ jobs:
           DIAG_SEED: ${{ matrix.seed }}
           DIAG_NAME: ${{ matrix.v.name }}
           DIAG_PARAMS: ${{ matrix.v.p }}
-        run: pnpm exec vitest run tests/sim/_diagBuildVar.test.ts --silent=false 2>&1 | grep RESULT
+          DIAG_MODE: ${{ matrix.mode }}
+        run: pnpm exec vitest run tests/sim/_diagBuildVar.test.ts --silent=false 2>&1 | grep -E 'RESULT'
