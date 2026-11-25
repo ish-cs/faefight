@@ -269,6 +269,8 @@ export type GunSkill = { recoilComp: number; burstShots: number; burstPause: num
  *   until the fight is over; with mid-fight heals Easy out-placed Medium in mixed FFAs, 5.01 vs 5.06).
  * - fightHp: in a fight, hp + shield at or below this wants a heal; a burst of `burst` damage (about a second) wants one
  *   up to fightHp + burstHp.
+ *   PRO 35 (was 45): a 2 s medkit at 45 handed the other side free hits and dragged fights out (botBuild seeds 2-7
+ *   PRO/Easy 1.49 -> 2.24; holdout seeds 8-15 2.03 -> 2.16). PRO still heals mid-fight, just later and smarter.
  * - pressHp: the enemy in front of me at or under this hp + shield (and not above me): press the kill, no heal.
  * - openDist: an enemy in sight this far off or more: heal where I stand.
  * - reloadWeight: chance (per incident) to use an enemy's reload as the heal window (an item that finishes within their
@@ -440,7 +442,7 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
 export const HEAL: HealParams = {
   stock: D(0, 1, 1, 2), stockAt: D(1200, 350, 220, 200), stockPer: 350, stockMax: 3,
   safeHp: D(30, 55, 65, 70), quietSec: 2.5, midFight: D(0, 1, 1, 1),
-  fightHp: D(25, 35, 40, 45), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
+  fightHp: D(25, 35, 40, 35), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
   reloadWeight: D(0, 0.3, 0.5, 1), reloadSlack: 0.3,
   coverFirst: D(0, 0, 0, 0.5), hideSec: 2.5,
   reHealSec: 8, pressLead: 25, punishHp: 40, hideM: 4,
