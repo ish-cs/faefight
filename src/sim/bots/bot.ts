@@ -1,5 +1,5 @@
 import * as dm from '../dmath';
-import { AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, MEDKIT, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
 import { eyePos } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
@@ -7,9 +7,10 @@ import type { DockDef, Doorway, IslandLayout } from '../map';
 import { overDock } from '../docks';
 import { NO_INPUT } from '../types';
 import type {
-  BuildRequest, Difficulty, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
+  BuildRequest, Difficulty, HotbarItem, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
 } from '../types';
 import { funds } from '../economy';
+import { canAdd } from '../hotbar';
 import { vaultLevel, vaultSpec, vaultUpgradePrice } from '../vault';
 import { add, clone, dist2D, forward, norm, right, rotateY, scale, sub, v3, yawOf } from '../vec';
 import { isRng, mulberry32 } from '../rng';
@@ -18,6 +19,7 @@ import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, 
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { DEFAULT_BOT_PARAMS, type BotParams } from './params';
 import { crossTo, escapeFrom, hookReady, yankReason, type HookIntent } from './hook';
+import { dropForHeal, healPlan, healStock, hpHealsHeld, type HealPlan } from './heal';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
@@ -121,8 +123,6 @@ const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, har
 const TORCH_RANGE = [9, 45] as const, TORCH_GAP = 8, TORCH_RICH = 900;
 /** Rebuy money for after a death: pistol + a box of ammo. */
 const INSURANCE = WEAPONS.pistol.price + 25;
-/** HP at or below which a bot uses a medkit it carries. */
-const MEDKIT_AT: Record<Difficulty, number> = { easy: 35, medium: 45, hard: 55, pro: 55 };
 /**
  * Clear of my own bunker (from its center): within SEAL.exitRadius of it while it's sealed starts the 10 s
  * escape countdown, so never hang around closer than this.
@@ -272,6 +272,24 @@ export class Bot {
   private targetBan = new Map<number, number>();
   private lastNadeAt = -Infinity;
   private lastTorchAt = -Infinity;
+  /** Healing (heal.ts): hp + shield last tick, damage in the current burst and when it began, last time hurt. */
+  private lastEff = 0;
+  private burst = 0;
+  private burstAt = -Infinity;
+  private lastDmgAt = -Infinity;
+  /** This fight's rolls (coverFirst, reloadWeight), since when I've been breaking line of sight to heal. */
+  private healRoll = { cover: true, reload: true };
+  private healRng: () => number;
+  private healHideAt: number | null = null;
+  /** How I'd break line of sight to heal right now (cover close by or a wall to throw), or null: none at hand. */
+  private healHideAct: Act | null = null;
+  /** When I last started a heal mid-fight (heal.reHealSec commitment). */
+  private fightHealAt = -Infinity;
+  /** Last heal decision (spectators), heals wanted (stock target), slots dropped to fit a heal (not looted back). */
+  private healNote: { t: number; text: string } | null = null;
+  private healWant = 0;
+  private lastHealDropAt = -Infinity;
+  private healDrops: { pos: Vec3; t: number }[] = [];
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
   /** Low on stamina: walk (save it for escapes) until it's back up. */
@@ -334,6 +352,8 @@ export class Bot {
     const base = isRng(rng) ? rng.state.a : Math.floor(rng() * 4294967296);
     const aimSeed = (base ^ Math.imul(id, 0x9e3779b1) ^ 0x6a09e667) >>> 0;
     this.aim = new Aim({ ...AIM[difficulty], recoilComp: P.gunSkill[difficulty].recoilComp }, mulberry32(aimSeed), P.aim.feel[difficulty]);
+    // Heal habits roll on their own stream too (like the aim hand): healing never shifts the match's other rolls.
+    this.healRng = mulberry32((base ^ Math.imul(id, 0x85ebca6b) ^ 0x3c6ef372) >>> 0);
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
@@ -396,6 +416,8 @@ export class Bot {
       this.fightSince = null;
       this.hookIntent = null;
       this.strandedSince = null;
+      this.healHideAt = null;
+      this.lastEff = 0;
       this.nextScoreAt = -Infinity;
       return { ...NO_INPUT, yaw: me.yaw, pitch: me.pitch };
     }
@@ -438,6 +460,13 @@ export class Bot {
     }
     // Never hang around inside my own bunker (one plug per door and I'm sealed in): step out.
     if (!act.dir && this.goal !== 'defend' && !this.trapped(ctx) && insideBunker(ctx.home.bunker, me.pos)) act = { ...act, ...this.escape(ctx) };
+    // Healing (heal.ts), mid-fight included: low with them in my face, break line of sight first (cover, a wall, back off).
+    const heal = this.healDecide(ctx);
+    if (ctx.enemy && this.healHideAct && this.healHideAt !== null && this.goal !== 'storm' && (heal?.act === 'hide' || heal?.act === 'wait')) act = this.healHideAct;
+    // Passing the potion seller short of heals or shields: step over and buy.
+    const detour = !ctx.enemy && !heal && !act.shop && !act.build ? this.sellerDetour(ctx) : null;
+    if (detour) act = detour;
+    const dropSlot = !ctx.enemy && heal?.act !== 'use' && !act.build && !act.shop ? this.healDrop(ctx) : null;
 
     // Aim: enemies first, then whatever the goal wants to look or shoot at, else along the walk.
     const eye = eyePos(me);
@@ -588,13 +617,15 @@ export class Bot {
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
 
-    // Patch up with a medkit when hurt and nobody is in my face (2 s with my hands busy).
-    let select: number | null = null, useMedkit = false;
-    const kit = me.hotbar.indexOf('medkit');
-    // (Not mid-reload: the medkit takes the gun out of my hands and cancels the reload; it can wait a moment.)
-    if (kit >= 0 && me.inv.medkits > 0 && me.hp <= MEDKIT_AT[this.difficulty] && me.busyUntil <= now && me.healAt === null && me.reloadUntil === 0 &&
-        (!enemy || ctx.enemyDist > 30 || (this.skilledHealer() && this.sheltered(ctx))) && now - this.mem.lastHurtAt > 0.5) {
-      select = kit; useMedkit = true; fire = false;
+    // Heals (heal.ts): between fights, and mid-fight out of their sight, while they reload, or when there's no cover.
+    // Using one puts the gun away (a reload in progress is lost): wait for the reload unless I'm low.
+    let select: number | null = null, useMedkit = false, drink = false;
+    const lowNow = me.hp + me.shield <= this.P.heal.fightHp[this.difficulty];
+    if (heal?.act === 'use' && heal.slot >= 0 && !grapple && !act.placeCharge && (me.reloadUntil === 0 || lowNow)) {
+      select = heal.slot; fire = false; throwGrenade = false;
+      if (heal.item === 'medkit') useMedkit = true; else drink = true;
+      this.healNote = { t: now, text: heal.why };
+      if (enemy || now - this.mem.lastHurtAt < this.P.heal.quietSec) this.fightHealAt = now;
     }
     // Stamina (movement.ts): like a human, stop sprinting around when winded and keep the rest for getting away.
     if (me.stamina < 30) this.winded = true; else if (me.stamina > 70) this.winded = false;
@@ -616,20 +647,22 @@ export class Bot {
     this.probe?.acted(act, look, fire);
     const out = {
       ...NO_INPUT, ...move, yaw: look.yaw, pitch: look.pitch, jump,
-      sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
-      fire, reload, interact, slot: useMedkit ? null : slot, select, useMedkit, build: act.build ?? null, shop: act.shop ? { buy: act.shop } : null,
+      sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach || this.healHideAt !== null) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
+      fire, reload: reload && !useMedkit && !drink, interact, slot: useMedkit || drink ? null : slot, select, useMedkit, drink,
+      build: useMedkit || drink ? null : act.build ?? null, shop: act.shop && !useMedkit && !drink ? { buy: act.shop } : null,
       vault: this.withLoadout(me, act.vault), placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
       ...(grapple ? { grapple: true, build: null, shop: null } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
-    // Shields: stock up at a potion seller, drink out of combat (see potionAction).
-    if (!act.shop && !act.build && !fire && !useMedkit && !throwGrenade && !act.placeCharge && !grapple) {
+    // Potions: stock up at a potion seller (heal potions toward the heal stock, then shields), drink out of combat.
+    if (!act.shop && !act.build && !fire && !useMedkit && !drink && !throwGrenade && !act.placeCharge && !grapple) {
       const atSeller = (view.potionShops ?? []).some((s) => dist2D(me.pos, s) <= USE_RANGE);
-      const pot = potionAction(me, now, !!enemy, atSeller);
+      const pot = potionAction(me, now, !!enemy, atSeller, this.healWant);
       if (pot && 'buy' in pot) out.shop = { buy: pot.buy };
       // (Not mid-reload: drinking takes the gun out of my hands and the reload with it; it can wait a moment.)
       else if (pot && me.reloadUntil === 0) Object.assign(out, { select: pot.drink, slot: null, drink: true });
+      else if (dropSlot !== null && select === null) Object.assign(out, { select: dropSlot, slot: null, drop: 'stack' as const });
     }
     return out;
   }
@@ -694,6 +727,9 @@ export class Bot {
       if (why && this.rng() < H.yankRate * HOOK_CHECK_SEC) it = { why: 'yank', target: e.id, note: why };
     }
     if (it?.why === 'escape' && !this.canReturn(c, it.node)) it = null;
+    // Never escape out into the storm.
+    const st = c.view.storm;
+    if (it?.why === 'escape' && st && Math.hypot(it.to.x - st.x, it.to.z - st.z) > this.stormSafeR(st)) it = null;
     // Crossing: not with someone close (a rope ride is a free target), but someone far off across the water doesn't
     // stop a push.
     if (!it && (!e || c.enemyDist > H.escapeNear) && want !== null && this.nav.nodes[want] && this.canReturn(c, want)) it = crossTo(c.view, H, this.nav.nodes[want]);
@@ -1272,7 +1308,9 @@ export class Bot {
       // A hard plug in my own doorway: only a charge gets through.
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
-      medkits: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
+      // Heals to carry; with the storm coming in, no new ones (the decks and getting inside the ring come first).
+      medkits: (this.healWant = this.stormPrep(c.view) ? Math.min(hpHealsHeld(c.me), healStock(total, this.difficulty, this.P.heal))
+        : healStock(total, this.difficulty, this.P.heal)),
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
       // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
@@ -1451,6 +1489,10 @@ export class Bot {
     for (const p of c.view.loot) {
       const d = dist2D(p, c.me.pos);
       if (d >= bestD || p.y < c.view.waterY + 0.2) continue;
+      if (this.healDrops.some((h) => dist2D(h.pos, p) < 3)) continue; // dropped to make room for a heal
+      // Out past the storm's safe line: stormFence never lets me walk there (a bag I'd stand and stare at).
+      const st = c.view.storm;
+      if (st && this.difficulty !== 'easy' && Math.hypot(p.x - st.x, p.z - st.z) > this.stormSafeR(st) - 0.5) continue;
       const i = islandAt(c.view.map, p);
       if (i !== c.on && !this.nav.routeTo(p)) continue;
       best = p; bestD = d;
@@ -1546,7 +1588,7 @@ export class Bot {
       }
       case 'heal': {
         // Health comes back slowly out of combat: low and away from home, go back and recover.
-        if (view.suddenDeath || c.enemy || c.on === home.index || !c.homeReach || me.inv.medkits > 0) return 0;
+        if (view.suddenDeath || c.enemy || c.on === home.index || !c.homeReach || hpHealsHeld(me) > 0) return 0;
         const low = 0.35 + 0.25 * t.caution - 0.15 * t.aggression;
         return hp < low ? 0.75 + (low - hp) : 0;
       }
@@ -1609,9 +1651,12 @@ export class Bot {
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
         if (dist2D(me.pos, home.shop) < 4 && plan.spent <= this.spendCash(me)) return 0.9;
+        // Topping up heals is no reason for a trip home once I hold one (they're bought on the next visit anyway).
+        const items = hpHealsHeld(me) > 0 ? plan.items.filter((i) => i !== 'medkit') : plan.items;
+        if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
         // An empty gun is as good as none: restocking it is as urgent as buying one.
-        const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv));
-        return (urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0) - away;
+        const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv));
+        return (urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0) - away;
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
@@ -2405,6 +2450,12 @@ export class Bot {
       this.strafeFlipAt = now + 0.6 + this.rng() * 0.8;
     }
     const to = norm(flat(sub(e.pos, me.pos)));
+    // They're healing (hands busy for a second or two) and I'm fit to fight: rush them before it lands.
+    if ((e.healAt !== null || e.drinking) && me.hp + me.shield >= this.P.heal.punishHp && this.difficulty !== 'easy') {
+      this.healNote = { t: now, text: `@${e.id} is healing: rushing them` };
+      const wp = this.sameGround(me.pos, e.pos) ? null : this.nav.routeTo(e.pos);
+      if (this.sameGround(me.pos, e.pos) || wp) return { dir: norm(flat(sub(wp ?? e.pos, me.pos))), sprint: true, approach: true };
+    }
     const gun = bestGun(me.inv, c.enemyDist);
     const pref = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
     // Skilled players close in rather than trade shots from afar.
@@ -2546,6 +2597,97 @@ export class Bot {
       phase: 'hide', phaseUntil: 0, side: this.rng() < 0.5 ? -1 : 1, heldSince: null, peeks: 0, done: [],
     };
     this.nextScoreAt = Math.min(this.nextScoreAt, now + sk.coverDelay * 0.5);
+  }
+
+  /** What healing wants this tick (heal.ts); tracks damage bursts and rolls this fight's habits on its first hit. */
+  private healDecide(c: Ctx): HealPlan | null {
+    const me = c.me, now = c.view.now, H = this.P.heal;
+    const eff = me.hp + me.shield;
+    if (eff < this.lastEff) {
+      if (now - this.lastDmgAt > H.quietSec) {
+        this.healRoll = { cover: this.healRng() < H.coverFirst[this.difficulty], reload: this.healRng() < H.reloadWeight[this.difficulty] };
+      }
+      if (now - this.burstAt > 1) { this.burst = 0; this.burstAt = now; }
+      this.burst += this.lastEff - eff;
+      this.lastDmgAt = now;
+    }
+    this.lastEff = eff;
+    const e = c.enemy;
+    // Hiding only works with cover at hand (or a wall to throw): backing off across the map just drags the fight out.
+    this.healHideAct = e && eff <= H.fightHp[this.difficulty] + H.burstHp ? this.healHide(c, e) : null;
+    const plan = healPlan({
+      me, now, diff: this.difficulty,
+      foe: e ? { dist: c.enemyDist, eff: e.hp + e.shield, reloadLeft: e.reloadUntil > now ? e.reloadUntil - now : 0 } : null,
+      hurtAgo: now - this.mem.lastHurtAt, burst: now - this.burstAt <= 1.5 ? this.burst : 0,
+      hidingFor: this.healHideAt === null ? null : now - this.healHideAt,
+      // Racing the storm or near its edge: no hiding (backing off walks me out into it), heal where I am.
+      coverFirst: this.healRoll.cover && !!this.healHideAct && this.goal !== 'storm' && !this.nearStormEdge(c), useReload: this.healRoll.reload, sheltered: false,
+      sinceFightHeal: now - this.fightHealAt,
+    }, H);
+    if (plan?.act === 'hide') { this.healHideAt ??= now; this.healNote = { t: now, text: plan.why }; }
+    // Stay hidden only while the heal itself is going (a "wait" to trade or press means fight on, not keep hiding).
+    else if (!(plan?.act === 'wait' && plan.why === 'healing') || !e) this.healHideAt = null;
+    if (plan?.act === 'wait' && plan.why !== 'healing') this.healNote = { t: now, text: plan.why };
+    return plan;
+  }
+
+  /** Within a few metres of (or past) the line the storm is about to close to. */
+  private nearStormEdge(c: Ctx): boolean {
+    const st = c.view.storm;
+    return !!st && Math.hypot(c.me.pos.x - st.x, c.me.pos.z - st.z) > this.stormSafeR(st) - 4;
+  }
+
+  /** Low with an enemy in sight: get out of their line of sight to heal (cover within heal.hideM, or a wall thrown down); null: none at hand. */
+  private healHide(c: Ctx, e: PlayerState): Act | null {
+    const me = c.me, face = add(e.pos, v3(0, CHEST, 0));
+    const got = this.coverWall(c, e.pos);
+    if (got) return dist2D(me.pos, got.hide) > 0.35 ? { dir: norm(flat(sub(got.hide, me.pos))), face, sprint: true } : { dir: null, face };
+    const spot = this.coverFrom(c, e);
+    if (spot && dist2D(spot, me.pos) < this.P.heal.hideM) return { ...this.goTo(spot, 0.4), face, sprint: true };
+    const kind = c.enemyDist >= 5 ? this.wallKind(c) : null;
+    if (kind && !this.building(c, kind)) {
+      const to = norm(flat(sub(e.pos, me.pos)));
+      for (const d of this.P.buildTuning.coverDist) {
+        const a = this.place(c, kind, add(me.pos, scale(to, d)), yawOf(to), face);
+        if (a) return a;
+      }
+    }
+    return null;
+  }
+
+  /** A potion seller close by on this island while I'm short of heals it would sell me: walk over. */
+  private sellerDetour(c: Ctx): Act | null {
+    const me = c.me, H = this.P.heal;
+    if (H.detourM <= 0 || c.view.suddenDeath || ['storm', 'disengage', 'defend', 'cover'].includes(this.goal)) return null;
+    const node = this.nav.nodeAt(me.pos);
+    if (node < 0) return null;
+    const s = (c.view.potionShops ?? []).find((p) => dist2D(p, me.pos) <= H.detourM && this.nav.nodeAt(p) === node);
+    if (!s || dist2D(me.pos, s) <= USE_RANGE - 0.3) return null;
+    // Only for heals (shields are bought when at the counter anyway, not worth a detour).
+    const buy = potionAction(me, c.view.now, false, true, this.healWant);
+    if (!buy || !('buy' in buy) || buy.buy !== 'healPotion') return null;
+    return this.goTo(s, USE_RANGE - 0.3);
+  }
+
+  /**
+   * A full hotbar keeping a heal out (none held, the stock wants one, cash for a medkit, at home): the least-wanted
+   * slot (HealParams keep weights) to drop, or null. At most one drop per 5 s.
+   */
+  private healDrop(c: Ctx): number | null {
+    const me = c.me, now = c.view.now;
+    this.healDrops = this.healDrops.filter((h) => now - h.t < 90);
+    if (now - this.lastHealDropAt < 5 || c.on !== c.home.index || me.hotbar.includes(null) || hpHealsHeld(me) > 0) return null;
+    const n = this.needs(c);
+    if ((n.medkits ?? 0) <= 0 || this.spendCash(me) < MEDKIT.price) return null;
+    const needed = new Set<HotbarItem>(Object.keys(n.build ?? {}) as PieceKind[]);
+    if (n.grapple === 'cross' || this.strandedSince !== null) needed.add('grapple');
+    if ((n.traps ?? 0) > 0) needed.add('trap');
+    const slot = dropForHeal(me, this.P.heal, needed);
+    if (slot === null) return null;
+    this.lastHealDropAt = now;
+    this.healDrops.push({ pos: clone(me.pos), t: now });
+    this.healNote = { t: now, text: `dropping ${me.hotbar[slot]} to make room for a heal` };
+    return slot;
   }
 
   /** A piece near me that shields a spot just behind it from the threat, and that spot. */
@@ -2812,6 +2954,9 @@ export class Bot {
     const me = c.me;
     const from = c.enemy?.pos ?? (this.mem.lastHurtBy !== null ? this.mem.recent(this.mem.lastHurtBy, c.view.now, 5)?.pos : undefined);
     if (!from) { this.nextScoreAt = c.view.now; return IDLE; }
+    // Out of heals: the shop first (buy, heal, re-peek), not minutes of backing off on low hp.
+    const restock = this.restockHeal(c);
+    if (restock) return restock;
     const away = norm(flat(sub(me.pos, from)));
     if (c.homeReach) {
       // Behind my bunker, not inside it (inside, one plug per door seals me in).
@@ -2823,6 +2968,22 @@ export class Bot {
     const cover = c.enemy ? this.coverFrom(c, c.enemy) : null;
     if (cover && dist2D(cover, me.pos) > 0.8) return { ...this.goTo(cover, 0.6), sprint: true };
     return { dir: away, sprint: true };
+  }
+
+  /**
+   * Low and out of heals, with the cash for one and my shop in reach (heal.restock): run to it and buy a medkit; heal.ts
+   * uses it once they're far or out of sight, and the retreat ends. Round-11 heals CI: PRO sat in 'disengage' ~4× as
+   * long as before, always holding no heal with the cash for several (seed 5: 100 s at hp 20-35, $1400, foes 90-110 m off).
+   */
+  private restockHeal(c: Ctx): Act | null {
+    const me = c.me, now = c.view.now;
+    if (this.P.heal.restock[this.difficulty] < 0.5 || !c.homeReach || c.view.suddenDeath || hpHealsHeld(me) > 0 ||
+        this.spendCash(me) < MEDKIT.price || !canAdd(me.hotbar, 'medkit') || this.buyBlocked('medkit')) return null;
+    const walk = { ...this.goTo(c.home.shop, 2.0), sprint: true };
+    this.healNote = { t: now, text: 'out of heals: running to my shop for a medkit' };
+    if (dist2D(me.pos, c.home.shop) > USE_RANGE || now < this.nextBuyAt) return walk;
+    this.nextBuyAt = now + BUY_GAP[this.difficulty];
+    return { ...walk, shop: 'medkit' };
   }
 
   /** Radius I want to be inside: the ring as it will be a few seconds from now, minus a margin. */

@@ -261,6 +261,45 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
 export type GunSkill = { recoilComp: number; burstShots: number; burstPause: number; sprayRange: number };
 
 /**
+ * Healing (heal.ts): what a strong player keeps stocked and when they use it, mid-fight included.
+ * - stock / stockAt / stockPer / stockMax: carry `stock` heals (medkits + heal potions) once `stockAt` cash (carried +
+ *   banked) is in hand, one more per `stockPer` above that, at most `stockMax`.
+ * - safeHp: out of a fight (no enemy in sight, unhurt for quietSec s), patch hp up at or below this.
+ * - midFight: >= 0.5 heals mid-fight too; below that only between fights (Easy: a weak player forgets the medkit
+ *   until the fight is over; with mid-fight heals Easy out-placed Medium in mixed FFAs, 5.01 vs 5.06).
+ * - fightHp: in a fight, hp + shield at or below this wants a heal; a burst of `burst` damage (about a second) wants one
+ *   up to fightHp + burstHp.
+ *   PRO 35 (was 45): a 2 s medkit at 45 handed the other side free hits and dragged fights out (botBuild seeds 2-7
+ *   PRO/Easy 1.49 -> 2.24; holdout seeds 8-15 2.03 -> 2.16). PRO still heals mid-fight, just later and smarter.
+ * - pressHp: the enemy in front of me at or under this hp + shield (and not above me): press the kill, no heal.
+ * - openDist: an enemy in sight this far off or more: heal where I stand.
+ * - reloadWeight: chance (per incident) to use an enemy's reload as the heal window (an item that finishes within their
+ *   reload + reloadSlack s).
+ * - coverFirst: chance (per incident) to break line of sight before healing; hideSec: give up hiding after this long
+ *   and heal in the open. Below PRO 0: measured, hiding to heal dragged hard-vs-hard duels out (decisive 29/40 vs 37/40
+ *   on main, ×40) while healing where I stand kept them decisive (39/40). PRO too on the post-seal-fix main (pro-vs-hard decisive).
+ * - hideM: cover this close (or a wall I can throw) is worth breaking line of sight for; farther, heal where I stand.
+ * - reHealSec: after a mid-fight heal, no other one for this long unless a burst lands (one heal per exchange: fights end).
+ * - pressLead: mid-fight, my hp + shield this far above the enemy in front of me: push the kill instead of healing.
+ * - punishHp: an enemy in sight healing (medkit or drink) while my hp + shield is at least this: rush them.
+ * - detourM: a potion seller this close on my island, short of heals and no enemy in sight: go buy heal potions.
+ * - restock: >= 0.5: retreating on low hp with no heal held, the cash for a medkit and my shop in reach: run to the shop,
+ *   buy one and heal instead of backing off for minutes (PRO; a strong player's reflex).
+ * - slotValue / keep: a full hotbar drops its least-wanted item (keep weight under slotValue) to make room for a heal.
+ */
+export type HealParams = {
+  stock: Record<Difficulty, number>; stockAt: Record<Difficulty, number>; stockPer: number; stockMax: number;
+  safeHp: Record<Difficulty, number>; quietSec: number; midFight: Record<Difficulty, number>;
+  fightHp: Record<Difficulty, number>; burst: number; burstHp: number; pressHp: number; openDist: number;
+  reloadWeight: Record<Difficulty, number>; reloadSlack: number;
+  coverFirst: Record<Difficulty, number>; hideSec: number;
+  reHealSec: number; pressLead: number; punishHp: number; hideM: number;
+  detourM: number; restock: Record<Difficulty, number>;
+  slotValue: number;
+  keep: { pistol: number; trap: number; ramp: number; speedPotion: number; grapple: number; sandbags: number; grenade: number };
+};
+
+/**
  * Weapon in hand (like a strong human: commit to a weapon, finish a reload, never thrash; a switch cancels a reload).
  * - holdSec: after a switch, keep the new weapon at least this long (unless it's out of ammo, or empty in a close fight);
  *   rocketHoldSec for the rocket launcher (drawn for a shot, it gets fired) unless an enemy is a threat.
@@ -287,7 +326,7 @@ export type VaultParams = {
   healSlot: number;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; vault: VaultParams };
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -400,6 +439,18 @@ export const GUN_SKILL: Record<Difficulty, GunSkill> = {
   pro: { recoilComp: 0.95, burstShots: 4, burstPause: 0.22, sprayRange: 15 },
 };
 
+export const HEAL: HealParams = {
+  stock: D(0, 1, 1, 2), stockAt: D(1200, 350, 220, 200), stockPer: 350, stockMax: 3,
+  safeHp: D(30, 55, 65, 70), quietSec: 2.5, midFight: D(0, 1, 1, 1),
+  fightHp: D(25, 35, 40, 35), burst: 35, burstHp: 20, pressHp: 35, openDist: 35,
+  reloadWeight: D(0, 0.3, 0.5, 1), reloadSlack: 0.3,
+  coverFirst: D(0, 0, 0, 0.5), hideSec: 2.5,
+  reHealSec: 8, pressLead: 25, punishHp: 40, hideM: 4,
+  detourM: 18, restock: D(0, 0, 0, 1),
+  slotValue: 0.5,
+  keep: { pistol: 0.25, trap: 0.3, ramp: 0.35, speedPotion: 0.15, grapple: 0.8, sandbags: 0.4, grenade: 0.6 },
+};
+
 export const WEAPON: WeaponParams = { holdSec: 0.6, rocketHoldSec: 2.5, threatM: 12, hurtSec: 1, shotgunHyst: 2 };
 
 export const VAULT: VaultParams = {
@@ -407,7 +458,7 @@ export const VAULT: VaultParams = {
   upgradeAt: D(Infinity, 500, 200, 100), upgradeScore: 0.75, healSlot: 1,
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, vault: VAULT });
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -480,6 +531,11 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
   ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
+  ['heal.stock.*', [0, 3]], ['heal.stockAt.*', [100, 1200]], ['heal.stockPer', [150, 1000]], ['heal.stockMax', [1, 4]],
+  ['heal.safeHp.*', [30, 95]], ['heal.quietSec', [0.5, 6]], ['heal.midFight.*', [0, 1]], ['heal.fightHp.*', [15, 90]], ['heal.burst', [15, 80]],
+  ['heal.burstHp', [0, 50]], ['heal.pressHp', [0, 80]], ['heal.openDist', [15, 70]], ['heal.reloadWeight.*', [0, 1]],
+  ['heal.reloadSlack', [-0.5, 1]], ['heal.coverFirst.*', [0, 1]], ['heal.hideSec', [0.5, 6]], ['heal.reHealSec', [0, 20]], ['heal.pressLead', [0, 80]], ['heal.punishHp', [0, 100]], ['heal.hideM', [1, 10]], ['heal.detourM', [0, 40]], ['heal.restock.*', [0, 1]],
+  ['heal.slotValue', [0, 1]], ['heal.keep.*', [0, 1]],
   ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
   ['vault.medkits.*', [0, 4]], ['vault.scaffolds.*', [0, 15]], ['vault.keep.*', [0, 150]], ['vault.buy.*', [0, 1]],
   ['vault.carry.*', [0, 400]], ['vault.bankMin', [30, 300]], ['vault.upgradeAt.*', [100, 2000]], ['vault.upgradeScore', [0.1, 1]], ['vault.healSlot', [0, 1]],
