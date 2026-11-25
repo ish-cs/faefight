@@ -15,11 +15,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        seed: [8, 9, 10, 11, 12,         v:
+        seed: [8, 9, 10, 11, 12, 13, 14, 15]
+        v:
           - { name: base, p: '{}' }
           - { name: fight35, p: '{"heal.fightHp.pro":35}' }
           - { name: fight30, p: '{"heal.fightHp.pro":30}' }
-ro":0.5}' }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
