@@ -546,9 +546,10 @@ export class Nav {
       const l = this.lane(i, j);
       const s = laneS(l, p);
       if (s < 0 || s > l.length) continue;
-      // Opposite islands' lane runs right over the center island's own (same line): heading for the center, it's the
-      // center's (taking the far island's turned a bot on the center bridge round, back to where it came from).
-      const off = laneOff(l, p) - (prefer >= 0 && (l.from === prefer || l.to === prefer) ? 0.05 : 0);
+      // Opposite islands' lane runs right over the center island's own (same line): the shorter one is the one I'm on
+      // (ties broken by length), unless I'm heading for a node one of them ends at: then that one (taking the far
+      // island's turned a bot on the center bridge round, back to where it came from).
+      const off = laneOff(l, p) + 2e-4 * l.length - (prefer >= 0 && (l.from === prefer || l.to === prefer) ? 0.05 : 0);
       if (off < bestOff) { bestOff = off; best = l; }
     }
     return best;
