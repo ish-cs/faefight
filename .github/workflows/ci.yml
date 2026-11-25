@@ -17,12 +17,14 @@ jobs:
       matrix:
         seed: [2, 3, 4, 5, 6, 7]
         v:
-          - { name: base, p: '{}' }
-          - { name: stockLikeHard, p: '{"heal.stock.pro":1,"heal.stockAt.pro":350}' }
-          - { name: noDrop, p: '{"heal.slotValue":0}' }
-          - { name: noCoverFirst, p: '{"heal.coverFirst.pro":0}' }
-          - { name: noStock, p: '{"heal.stock.pro":0,"heal.stockAt.pro":1200}' }
-          - { name: noMidFight, p: '{"heal.midFight.pro":0}' }
+          - { name: restockOff, p: '{"heal.restock.pro":0}' }
+          - { name: fight35, p: '{"heal.fightHp.pro":35}' }
+          - { name: fight30, p: '{"heal.fightHp.pro":30}' }
+          - { name: hardStockFight35, p: '{"heal.stock.pro":1,"heal.stockAt.pro":350,"heal.fightHp.pro":35}' }
+          - { name: safe55, p: '{"heal.safeHp.pro":55}' }
+          - { name: stockAt350, p: '{"heal.stockAt.pro":350}' }
+          - { name: stock1, p: '{"heal.stock.pro":1}' }
+          - { name: reload05, p: '{"heal.reloadWeight.pro":0.5}' }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
