@@ -13,7 +13,7 @@ test.describe('first launch', () => {
     const card = page.getByTestId('how-to-play');
     await expect(card).toBeVisible();
     await expect(page.getByTestId('loading')).toHaveCount(0); // it opens once the loading screen is gone
-    await expect(card.locator('li')).toHaveCount(7);
+    await expect(card.locator('li')).toHaveCount(8);
     await expect(card).toContainText('Seal every enemy bunker');
     await expect(card).toContainText('10 seconds');
     await expect(card.locator('select')).toHaveCount(0);

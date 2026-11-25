@@ -253,8 +253,10 @@ export class LobbyUi {
       } else if (s.kind === 'bot') {
         name.append(Object.assign(el('span', 'nick', s.name ?? 'Bot'), { title: s.name ?? 'Bot' }));
         if (teamMode && teams[i] !== null) name.append(el('span', 'tagpill team', `team ${teams[i]! + 1}`));
-        // The host's slider already shows the difficulty.
-        name.append(el('span', 'tagpill', a ? 'bot' : `bot · ${diffTag(s.difficulty)}`));
+        // The host's slider already shows the difficulty; with a team pill too, the slider alone marks the bot
+        // (only bot and open seats have one), so the name keeps its room.
+        if (!a) name.append(el('span', 'tagpill', `bot · ${diffTag(s.difficulty)}`));
+        else if (!(teamMode && teams[i] !== null)) name.append(el('span', 'tagpill', 'bot'));
       }
       else { name.textContent = teamMode && teams[i] !== null ? `Open · team ${teams[i]! + 1}` : 'Open'; name.classList.add('open'); }
       row.append(dot, name);

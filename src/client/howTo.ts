@@ -26,7 +26,7 @@ function steps(): { icon: keyof typeof ICON; title: string; text: string }[] {
     { icon: 'rocket', title: 'Rocket jump', text: `Fire a rocket at your feet to launch high: ${ROCKET.selfDmgMax} damage at most, soft landing.` },
     { icon: 'seal', title: 'Seal their bunker', text: 'Plug all 3 doorways of their bunker while they are dead or outside it.' },
     { icon: 'skull', title: 'Respawn', text: `Respawn takes ${LIFECYCLE.respawnSec} s; die with your bunker sealed and you are out for good.` },
-    { icon: 'timer', title: 'Sealed in yourself?', text: `Sealed while dead? Respawn trapped and break out within ${LIFECYCLE.breakoutSec} s.` },
+    { icon: 'timer', title: 'Sealed in yourself?', text: `Sealed while dead? Respawn trapped and break out within ${LIFECYCLE.breakoutSec} seconds.` },
     { icon: 'storm', title: 'Sudden death', text: 'Barriers drop over every bunker doorway, no one respawns, and the storm closes in.' },
   ];
 }
