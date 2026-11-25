@@ -38,7 +38,7 @@ describe('bot healing decisions (heal.ts)', () => {
 
   test('mid-fight, low, enemy close and in sight: break line of sight first, then heal in the open if hiding drags on', () => {
     const p = give(give(player(), 'medkit'), 'healPotion');
-    p.hp = 40;
+    p.hp = HEAL.fightHp.pro - 5;
     const s = sit(p, { foe: foe(12), hurtAgo: 0.2 });
     expect(healPlan(s, HEAL)).toMatchObject({ act: 'hide' });
     // Out of their sight (or behind cover) a moment later: heal right away, quickest first.
@@ -49,7 +49,7 @@ describe('bot healing decisions (heal.ts)', () => {
 
   test('mid-fight: heal while the enemy reloads, with an item that finishes before they do', () => {
     const p = give(player(), 'medkit');
-    p.hp = 40;
+    p.hp = HEAL.fightHp.pro - 5;
     // Medkit takes 2 s: a 1 s reload is too short, a 2.5 s one is a window.
     expect(healPlan(sit(p, { foe: foe(12, 100, 1), hurtAgo: 0.2, coverFirst: true }), HEAL)).toMatchObject({ act: 'hide' });
     expect(healPlan(sit(p, { foe: foe(12, 100, 2.5), hurtAgo: 0.2 }), HEAL)).toMatchObject({ act: 'use', item: 'medkit', why: expect.stringMatching(/reload/) });
@@ -57,7 +57,7 @@ describe('bot healing decisions (heal.ts)', () => {
 
   test('mid-fight: press a nearly dead enemy instead of healing; healthy enough does nothing', () => {
     const p = give(player(), 'medkit');
-    p.hp = 45;
+    p.hp = HEAL.fightHp.pro;
     expect(healPlan(sit(p, { foe: foe(10, 20), hurtAgo: 0.2 }), HEAL)).toMatchObject({ act: 'wait', why: expect.stringMatching(/press/) });
     p.hp = 90;
     expect(healPlan(sit(p, { foe: foe(10), hurtAgo: 0.2 }), HEAL)).toBeNull();
@@ -77,13 +77,13 @@ describe('bot healing decisions (heal.ts)', () => {
 
   test('commitment: one heal per exchange (unless a burst lands), and no heal while clearly ahead', () => {
     const p = give(give(player(), 'medkit'), 'healPotion');
-    p.hp = 40;
+    p.hp = HEAL.fightHp.pro - 5;
     const s = sit(p, { foe: null, hurtAgo: 0.5, sinceFightHeal: HEAL.reHealSec - 1 });
     expect(healPlan(s, HEAL)).toMatchObject({ act: 'wait', why: expect.stringMatching(/healed a moment ago/) });
     expect(healPlan({ ...s, burst: HEAL.burst + 1 }, HEAL)).toMatchObject({ act: 'use' });
     expect(healPlan({ ...s, sinceFightHeal: HEAL.reHealSec + 1 }, HEAL)).toMatchObject({ act: 'use' });
     // They're far lower: push, don't heal.
-    expect(healPlan(sit(p, { foe: foe(12, 40 - HEAL.pressLead), hurtAgo: 0.2 }), HEAL)).toMatchObject({ act: 'wait', why: expect.stringMatching(/press/) });
+    expect(healPlan(sit(p, { foe: foe(12, HEAL.fightHp.pro - 5 - HEAL.pressLead), hurtAgo: 0.2 }), HEAL)).toMatchObject({ act: 'wait', why: expect.stringMatching(/press/) });
   });
 
   test('a burst of damage triggers a heal a little above fightHp', () => {
