@@ -178,16 +178,21 @@ describe('restock loadout (C)', () => {
     expect(snap.players[0].loadout).toEqual({ items: { wood: 10, medkit: 2 }, keep: 60, buy: false });
     m.debugKill(1);
     let restock: Snapshot['events'][number] | undefined;
-    for (let i = 0; i < 30 * (LIFECYCLE.respawnSec + 1); i++) {
+    // The 10 s respawn spans an interest payout (every VAULT_INTEREST_SEC): compare with the vault just before the
+    // restock tick.
+    let vaultBefore = snap.players[0].vault.cash;
+    for (let i = 0; i < 30 * (LIFECYCLE.respawnSec + 1) && !restock; i++) {
+      vaultBefore = snap.players[0].vault.cash;
       snap = m.tick(new Map());
-      restock ??= snap.events.find((e) => e.type === 'restock');
+      restock = snap.events.find((e) => e.type === 'restock');
     }
     const me = snap.players[0];
     expect(me.alive).toBe(true);
     expect(me.inv.pieces.wood).toBe(10);
     expect(me.inv.medkits).toBe(2);
     expect(me.inv.cash).toBe(60);
-    expect(me.vault.cash).toBe(500 - 60); // the start $50 stayed carried and dropped
+    expect(vaultBefore).toBeGreaterThanOrEqual(500); // the start $50 stayed carried and dropped (interest only adds)
+    expect(me.vault.cash).toBe(vaultBefore - 60);
     expect(restock?.data).toMatchObject({ player: 1, moved: 12, cash: 60 });
   });
 });

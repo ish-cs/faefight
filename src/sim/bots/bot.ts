@@ -1972,8 +1972,12 @@ export class Bot {
     return c.danger || this.intruder(c) || leaving ? Math.min(carry, this.P.vault.carry.hard) : carry;
   }
 
-  /** The next vault level is affordable with VaultParams.upgradeAt to spare (carried + banked). */
+  /**
+   * The next vault level is affordable with VaultParams.upgradeAt to spare (carried + banked). The first heal my stock
+   * wants is bought before it (a PRO put $600 of $1082 into a level, then the hook and decks took the rest: no medkit).
+   */
   wantsVaultUpgrade(me: PlayerState): boolean {
+    if (this.healWant > 0 && hpHealsHeld(me) === 0) return false;
     const price = vaultUpgradePrice(vaultLevel(me));
     return price !== null && funds(me) >= price + this.P.vault.upgradeAt[this.difficulty];
   }
