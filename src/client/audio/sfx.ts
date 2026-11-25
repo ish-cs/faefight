@@ -504,6 +504,13 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       tone(k, out, t, { f0: 80 * p, f1: 40, dur: 0.2, peak: 0.8, attack: 0.003 });
       return Math.max(0.25, land(k, out, t, cue));
     case 'dockCreak': return creak(k, out, t, 0.25);
+    case 'barrierSlam': { // a ton of precast concrete landing: sub thump, the crunch of grit under it, a ground rumble
+      tone(k, out, t, { f0: 62 * p, f1: 28, dur: 0.45, peak: 1.0, attack: 0.002 });
+      noise(k, out, t, { type: 'lowpass', freq: 420 * p, freqEnd: 120, dur: 0.35, peak: 0.9, attack: 0.002 });
+      noise(k, out, t + 0.005, { type: 'bandpass', freq: 1900 * p, q: 1.4, dur: 0.09, peak: 0.45 });
+      for (let i = 0; i < 4; i++) noise(k, out, t + 0.03 + k.rnd() * 0.12, { type: 'bandpass', freq: (2600 + k.rnd() * 1800) * p, q: 3, dur: 0.02, peak: 0.12 + k.rnd() * 0.1 });
+      return Math.max(0.45, 0.05 + noise(k, out, t + 0.05, { type: 'lowpass', freq: 160 * p, dur: 0.9, peak: 0.35, attack: 0.04 }));
+    }
     case 'dockBreak': { // planks give way: crack, splinters, timber groaning, the splash
       noise(k, out, t, { type: 'bandpass', freq: 1200 * p, q: 1.2, dur: 0.08, peak: 1.0 });
       let len = creak(k, out, t + 0.05, 0.3) + 0.05;

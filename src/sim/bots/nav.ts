@@ -1,6 +1,7 @@
 import * as dm from '../dmath';
 import { MAP, PIECES, PLAYER } from '../constants';
 import { MOVE } from '../movement';
+import { BARRIER } from '../barriers';
 import type { Box, Bunker, CenterIsland, Doorway, IslandLayout, StaticBox } from '../map';
 import { doorBlocked } from './plans';
 import type { Vec3 } from '../types';
@@ -111,8 +112,7 @@ function segHitsRect(a: Vec3, b: Vec3, hx: number, hz: number): boolean {
  * that way (it hugs the wall).
  * `at`: the corner I'm standing on; I count as being there, so the next waypoint is the one after it.
  */
-function route(a: Vec3, c: Vec3, corners: Vec3[], at: Vec3 | undefined): Vec3 | null {
-  const H = BUNKER_HALF + 0.05;
+function route(a: Vec3, c: Vec3, corners: Vec3[], at: Vec3 | undefined, H = BUNKER_HALF + 0.05): Vec3 | null {
   const pts = [at ?? a, ...corners, c], n = pts.length, goal = n - 1;
   const d = new Array<number>(n).fill(Infinity), first = new Array<number>(n).fill(-1), done = new Array<boolean>(n).fill(false);
   d[0] = 0;
@@ -132,18 +132,23 @@ function route(a: Vec3, c: Vec3, corners: Vec3[], at: Vec3 | undefined): Vec3 | 
 
 /** Next waypoint toward dest on one island: through doorways when entering/leaving the bunker, around it otherwise. */
 /** `open`: doorways a player can still walk through (a plugged one is skipped unless all are). */
-export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open: (d: Doorway) => boolean = () => true): Vec3 {
+/**
+ * `barriers`: sudden death's concrete slabs stand in every doorway (barriers.ts): no way in or out at all (inside: stay
+ * put; outside: wait in front of the nearest slab), and the bunker's footprint is wider by the slabs' lip.
+ */
+export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open: (d: Doorway) => boolean = () => true, barriers = false): Vec3 {
   const b = isl.bunker;
   const inMe = insideBunker(b, me), inDest = insideBunker(b, dest);
+  const H = BUNKER_HALF + (barriers ? BARRIER.proud : 0);
   if (inMe === inDest) {
     if (inMe) return dest;
     const a = toLocal(b, me), c = toLocal(b, dest);
-    const nearWall = Math.abs(a.x) < BUNKER_HALF + 0.4 && Math.abs(a.z) < BUNKER_HALF + 0.4;
-    if (!segHitsSquare(a, c, nearWall ? BUNKER_HALF + 0.05 : BUNKER_HALF + 0.4)) return dest;
-    const k = BUNKER_HALF + 1.3;
+    const nearWall = Math.abs(a.x) < H + 0.4 && Math.abs(a.z) < H + 0.4;
+    if (!segHitsSquare(a, c, nearWall ? H + 0.05 : H + 0.4)) return dest;
+    const k = H + 1.3;
     // Standing in a doorway (inside the wall square, not the room): no corner is reachable from here and a
     // straight line cuts back through the room, so step straight out first (else bots dither on the threshold).
-    if (Math.abs(a.x) < BUNKER_HALF + 0.05 && Math.abs(a.z) < BUNKER_HALF + 0.05) {
+    if (Math.abs(a.x) < H + 0.05 && Math.abs(a.z) < H + 0.05) {
       const out = Math.abs(a.x) > Math.abs(a.z) ? v3(Math.sign(a.x) * k, 0, a.z) : v3(a.x, 0, Math.sign(a.z) * k);
       return toWorld(b, out);
     }
@@ -152,26 +157,28 @@ export function withinIsland(isl: { bunker: Bunker }, me: Vec3, dest: Vec3, open
     // (a destination close to the wall always clips the wider margin, and re-picking the corner I stand on makes
     // bots dither on it, their view flipping with each step).
     const at = corners.find((q) => dist2D(a, q) < CORNER_REACHED);
-    if (at && !segHitsSquare(a, c, BUNKER_HALF + 0.05)) return dest;
+    if (at && !segHitsSquare(a, c, H + 0.05)) return dest;
     // Shortest walk round the square: me → corners (along the sides) → dest, every leg clear of the wall. Pricing a
     // corner as me→corner→dest without checking the corner→dest leg made a corner whose way on cuts back through
     // the bunker look cheapest; standing on the corner it was skipped for the next one, a step later it was
     // cheapest again: bots paced between two corners, their view flipping each step (botAim seed 1, seal walk).
-    const next = route(a, c, corners, at);
+    const next = route(a, c, corners, at, H + 0.05);
     if (next === c) return dest;
     if (next) return toWorld(b, next);
     let best: Vec3 | null = null, bestCost = Infinity;
     for (const corner of corners) {
-      if (corner === at || segHitsSquare(a, corner, BUNKER_HALF + 0.05)) continue;
+      if (corner === at || segHitsSquare(a, corner, H + 0.05)) continue;
       const cost = dist2D(a, corner) + dist2D(corner, c);
       if (cost < bestCost) { bestCost = cost; best = corner; }
     }
     return best ? toWorld(b, best) : dest;
   }
+  if (barriers && inMe) return me;
   const usable = b.doorways.filter(open);
   const doors = usable.length ? usable : b.doorways;
   const door = doors.reduce((p, d) => (dist2D(d.center, inMe ? dest : me) < dist2D(p.center, inMe ? dest : me) ? d : p));
   const out = forward(door.yaw);
+  if (barriers) return add(door.center, scale(out, 1.5));
   const rel = sub(me, door.center);
   const lateral = Math.abs(rel.x * right(door.yaw).x + rel.z * right(door.yaw).z);
   const depth = rel.x * out.x + rel.z * out.z;
@@ -573,7 +580,7 @@ export class Nav {
   private withinGrid(i: number, me: Vec3, dest: Vec3): Vec3 {
     const node = this.nodeList[i];
     const pieces = this.view.pieces;
-    let wp = node.bunker ? withinIsland({ bunker: node.bunker }, me, dest, (d) => !doorBlocked(pieces, d)) : dest;
+    let wp = node.bunker ? withinIsland({ bunker: node.bunker }, me, dest, (d) => !doorBlocked(pieces, d), this.view.suddenDeath) : dest;
     const g = this.grids.get(i);
     if (g) g.props = (this.view.props?.() ?? []).filter((p) => p.top - node.groundY > PROP_STEP && dist2D(p.pos, node.center) < node.radius + 1);
     // A waypoint on a prop (a lane carrot, a spot by the rim) moves to just beside it: round it, not shoving it ahead.

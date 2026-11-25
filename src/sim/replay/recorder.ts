@@ -22,7 +22,7 @@ export type RecorderOpts = {
 };
 
 /** Sim events kept in the replay's event log (the per-shot/per-piece-hit chatter is left out). */
-const LOGGED = new Set(['kill', 'hit', 'sealed', 'unsealed', 'eliminated', 'win', 'suddenDeath', 'trapped', 'escaped', 'placed', 'destroyed', 'explosion', 'elimination']);
+const LOGGED = new Set(['kill', 'hit', 'sealed', 'unsealed', 'eliminated', 'win', 'suddenDeath', 'trapped', 'escaped', 'placed', 'destroyed', 'explosion', 'elimination', 'allSealed']);
 const r1 = (v: number) => Math.round(v * 10) / 10;
 const r2 = (v: number) => Math.round(v * 100) / 100;
 

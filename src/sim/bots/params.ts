@@ -101,6 +101,18 @@ export type DriveParams = {
    * seconds after I'd get there walking (a route round by other islands counts in full). By skill.
    */
   stormLead: Record<Difficulty, number>;
+  /**
+   * Sudden death drops unbreakable concrete slabs over every bunker doorway (barriers.ts): whoever is inside then stays
+   * inside until the storm gets them. From this many seconds before sudden death, get out of any bunker and don't step
+   * into one. By skill (0 = unaware).
+   */
+  barrierLead: Record<Difficulty, number>;
+  /**
+   * Sudden death: an enemy shut in a bunker behind the slabs can't be reached and the storm will finish them. Past
+   * this many metres I leave them be (no walking up to wait at a slab) and play the ring; closer, I still answer them
+   * (they can shoot out through the slits). By skill (0 = unaware: chase them like anyone else).
+   */
+  shutInRange: Record<Difficulty, number>;
 };
 
 /**
@@ -390,6 +402,8 @@ export const DRIVE: DriveParams = {
   dockMinRange: 6,
   dockRollSec: 1,
   stormLead: D(0, 8, 12, 15),
+  barrierLead: D(0, 12, 20, 25),
+  shutInRange: D(0, 14, 10, 8),
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
@@ -529,7 +543,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]], ['drive.crossFire.*', [15, 60]],
   ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome.*', [0, 1.2]], ['drive.sealedCaution.*', [0, 0.5]], ['drive.sealedFocus', [1, 3]],
   ['drive.spoilsTarget.*', [0, 1.5]], ['drive.finishTrapped', [0, 2]],
-  ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]], ['drive.stormLead.*', [0, 40]],
+  ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]], ['drive.stormLead.*', [0, 40]], ['drive.barrierLead.*', [0, 60]], ['drive.shutInRange.*', [0, 40]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
   ['buildSkill.*.peekOut', [0.3, 3]], ['buildSkill.*.pieceSec', [0.25, 2]], ['buildSkill.*.ramp', [0, 1]],

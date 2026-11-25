@@ -30,7 +30,9 @@ export type SoundId =
   | 'shellCasing' | 'ragdollThud'
   | 'dockCreak' | 'dockBreak'
   /** An island beacon shutting down (its owner is out of the game). */
-  | 'beaconDown';
+  | 'beaconDown'
+  /** Sudden death: a concrete doorway barrier slamming down (world/barriers.ts plays it as each bunker's slabs land). */
+  | 'barrierSlam';
 
 export type Cue = {
   sound: SoundId;

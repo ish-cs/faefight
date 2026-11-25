@@ -4,6 +4,7 @@ import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosiv
 import { BUILD, DT, ECONOMY, TICK_HZ, VAULT_INTEREST_SEC, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { payInterest, sanitizeLoadout, upgradeVault, vaultMove, vaultSpec } from './vault';
+import { dropBarriers } from './barriers';
 import { envKiller, islandSealed, killPlayer, sealPieces, newMatchState, tickLifecycle, type MatchStateCore } from './lifecycle';
 import { buildMapDef, grappleRange, spawnYaw, type IslandLayout, type MapDef } from './map';
 import { collectGold, collectSupply, inShieldWell, newCenterState, refillShield, tickCenter, type CenterState } from './center';
@@ -70,6 +71,8 @@ export class Match implements MatchApi {
   /** Elimination credit bookkeeping (elimination.ts): plain data, so fork() and checkpoints carry it. */
   private elim: ElimLedger;
   private sealDirty = true;
+  /** Sim time the sudden-death doorway barriers dropped (barriers.ts); null before. */
+  private barrierAt: number | null = null;
   private doors: DoorwayTracker;
   private supportDirty = false;
   /** Player whose damage broke a piece this tick: whatever collapses with it is theirs too (kill credit). */
@@ -367,6 +370,7 @@ export class Match implements MatchApi {
     for (const p of this.s.players.values()) if (p.alive && inShieldWell(this.def.center, p.pos)) refillShield(p, DT);
     this.events.push(...this.cosmetics.onEvents(this.events, now));
     this.events.push(...tickLifecycle(this.s, this.physics, this.map, now, DT, this.settings.suddenDeathSec));
+    if (this.s.forcedSeal && this.barrierAt === null) this.dropBarriers(now);
     this.practice?.after(now);
     // Items used up, picked up or lost this tick: keep every hotbar (and the hand) in step with inv.
     for (const p of this.s.players.values()) { tickHealing(p, now); tickPotions(p, now, DT); this.syncHand(p); }
@@ -849,6 +853,12 @@ export class Match implements MatchApi {
     this.events.push({ t: now, type: 'placed', data: { piece: id, kind: req.kind, by: p.id } });
   }
 
+  /** Sudden death sealed every bunker: concrete slabs drop over every doorway (one 'allSealed' event for all of them). */
+  private dropBarriers(now: number) {
+    this.barrierAt = now;
+    this.events.push(...dropBarriers(this.physics, this.map, this.s.players.values(), this.s.pieces, (id) => this.ctx.onPieceDestroyed(id), now));
+  }
+
   private updateSeals(now: number) {
     if (!this.sealDirty && !this.s.forcedSeal) return;
     this.sealDirty = false;
@@ -869,7 +879,8 @@ export class Match implements MatchApi {
         // forced seal keeps whatever physical seal was there.
         if (!sealed) this.elim.seal[i] = null;
         else if (by !== null) { placers.delete(by); this.elim.seal[i] = { by, placers: [...placers].sort((a, b) => a - b) }; }
-        this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i, owner, by } });
+        // Sudden death seals every bunker at once: that is the single 'allSealed' event (dropBarriers), not one per bunker.
+        if (!this.s.forcedSeal) this.events.push({ t: now, type: sealed ? 'sealed' : 'unsealed', data: { island: i, owner, by } });
       }
       this.sealed[i] = sealed;
     });
@@ -1015,6 +1026,7 @@ export class Match implements MatchApi {
       sealed: this.sealed,
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,
+      ...(this.barrierAt !== null ? { barrierAt: this.barrierAt } : {}),
       storm: this.s.storm ? stormSnap(this.s.storm, this.s.time) : null,
       winner: this.s.winner,
       potionShops: this.potionShops,

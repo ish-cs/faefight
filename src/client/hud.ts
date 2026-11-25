@@ -9,9 +9,7 @@ import { PIECE_ORDER } from './input';
 import { STAMINA } from '../sim/movement';
 import { islandColor, islandName } from './colors';
 import { endState } from './endState';
-
-/** Why someone is out (the sim's `eliminated` event reason), for the kill feed. */
-const ELIM_WHY: Record<string, string> = { sealed: ': bunker sealed', trapped: ': trapped in sealed bunker', suddenDeath: ': sudden death' };
+import { insideBunker } from '../sim/bots/nav';
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
 import { dragOutcome } from './hotbarDrag';
@@ -19,6 +17,9 @@ import { VaultPanel } from './vaultPanel';
 import { bankAboveLoadout, funds, vaultSpec } from '../sim/vault';
 import { SEALED_OUTSIDE_TEXT } from './qol/alerts';
 import { FEED_FADE_MS, FEED_LIFE_MS, FeedList, feedEntries, feedText, type FeedEntry, type FeedMarker } from './qol/killFeed';
+
+/** Why someone is out (the sim's `eliminated` event reason), for the kill feed. */
+const ELIM_WHY: Record<string, string> = { sealed: ': bunker sealed', trapped: ': trapped in sealed bunker', suddenDeath: ': sudden death' };
 
 const MARK_GLYPH: Record<FeedMarker, string> = { headshot: '◎', explosion: '✸', fall: '↓', water: '≈', storm: '≋', lightning: 'ϟ' };
 
@@ -216,6 +217,8 @@ export class Hud {
   /** Shop item under the pointer (sent to spectators of you). */
   private hoverItem: ShopItem | null = null;
   private stormWarnUntil = 0;
+  /** Sudden death's one seal announcement, a hazard plate under the STORM warning (event 'allSealed'). */
+  private allSealed = el('div', 'storm-warn-seal');
   private killfeed = el('div', 'killfeed');
   private center = el('div', 'center-msg');
   private crosshair = el('div', 'crosshair');
@@ -284,6 +287,11 @@ export class Hud {
     this.scope.dataset.testid = 'scope';
     this.stormWarn.dataset.testid = 'storm-warn';
     this.stormWarn.append(el('div', 'storm-warn-sub', 'Sudden death · get inside the ring'));
+    this.allSealed.dataset.testid = 'all-sealed';
+    this.allSealed.innerHTML = LOCK_ICON;
+    this.allSealed.append(el('span', 'sws-text', 'ALL BUNKERS SEALED'));
+    this.allSealed.style.display = 'none';
+    this.stormWarn.append(this.allSealed);
     this.stormVignette.dataset.testid = 'storm-vignette';
     this.elimBanner.dataset.testid = 'elim-banner';
     this.lowHp.dataset.testid = 'lowhp-vignette';
@@ -683,10 +691,12 @@ export class Hud {
 
   /** Sealed bunker / break-out countdown banner for `me` (the viewed player). */
   private updateSealed(snap: Snapshot, me: PlayerState) {
-    const sealed = !!snap.sealed[me.island];
+    // Sudden death seals every bunker for good (announced once, 'allSealed'): no per-bunker "clear a doorway" nag.
+    const sealed = !!snap.sealed[me.island] && !snap.suddenDeath;
     const trapped = me.alive && me.breakoutUntil != null;
+    const left = trapped ? Math.max(0, me.breakoutUntil! - snap.time).toFixed(1) : '';
     setText(this.sealedBanner, trapped
-      ? `BREAK OUT! ${Math.max(0, me.breakoutUntil! - snap.time).toFixed(1)}s`
+      ? !snap.suddenDeath ? `BREAK OUT! ${left}s` : this.map[me.island] && insideBunker(this.map[me.island].bunker, me.pos) ? `SEALED IN! ${left}s` : `GET CLEAR! ${left}s`
       : me.alive ? SEALED_OUTSIDE_TEXT : 'YOUR BUNKER IS SEALED');
     this.sealedBanner.classList.toggle('outside', me.alive && !trapped);
     this.sealedBanner.style.display = (sealed || trapped) && !me.eliminated && snap.winner === null ? 'block' : 'none';
@@ -801,7 +811,7 @@ export class Hud {
       } else if (e.type === 'elimination' && typeof e.data.by === 'number') {
         this.showElimination(e, name);
       } else if (e.type === 'suddenDeath') {
-        this.addFeed('Sudden death: generators stopped, the storm is closing in', true);
+        this.addFeed('Sudden death: all bunkers sealed, generators stopped, the storm is closing in', true);
         this.stormWarnUntil = performance.now() + 4000;
         this.stormWarn.style.display = 'flex';
       } else if (e.type === 'vaultUpgrade' && e.data.player === this.humanId) {
@@ -810,6 +820,11 @@ export class Hud {
         const d = e.data as { moved: number; bought: number; spent: number; cash: number };
         const parts = [d.moved ? `${d.moved} from the vault` : '', d.bought ? `${d.bought} bought ($${d.spent})` : '', d.cash ? `$${d.cash} cash` : ''].filter(Boolean);
         this.addFeed(`Restocked: ${parts.join(' · ')}`);
+      } else if (e.type === 'allSealed') {
+        // One announcement for every bunker (no per-bunker seal lines in sudden death): on the STORM banner.
+        this.allSealed.style.display = 'flex';
+        this.stormWarnUntil = Math.max(this.stormWarnUntil, performance.now() + 5000);
+        this.stormWarn.style.display = 'flex';
       } else if (e.type === 'kill') {
         const v = this.viewId || this.humanId;
         if (e.data.killer === v && e.data.victim !== v) this.hitmarker(false, true);

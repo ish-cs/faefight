@@ -28,6 +28,8 @@ export type PhysicsSave = {
   /** Piece base heights, crane anchors and no-build zones (clone() copies them too; a restore without them builds differently). */
   pieceBaseY?: [number, number][];
   anchors?: number[];
+  /** Sudden-death doorway barriers' collider handles. */
+  barriers?: number[];
   zones?: [string, NoBuildZone[]][];
   dirty: boolean;
   /** gameplay props' query colliders (props.ts), push recording */
@@ -83,6 +85,8 @@ export class Physics {
   private pushes: PropPush[] = [];
   /** Standing pier sections (MapDef.docks) by dock id; a broken one is removed. */
   private docks = new Map<number, RAPIER.Collider>();
+  /** Sudden-death doorway barriers (barriers.ts): `world` colliders, but never copied into PropSim's world. */
+  private readonly barriers = new Set<number>();
   private dirty = true;
   /** No-build zones by group ('islands', 'potion'), see building.ts. */
   private zones = new Map<string, NoBuildZone[]>();
@@ -114,6 +118,7 @@ export class Physics {
     for (const h of this.slits) ph.slits.add(h);
     for (const [id, y] of this.pieceBaseY) ph.pieceBaseY.set(id, y);
     for (const h of this.anchors) ph.anchors.add(h);
+    for (const h of this.barriers) ph.barriers.add(h);
     for (const [g, z] of this.zones) ph.zones.set(g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } })));
     for (const [id, x] of this.props) ph.props.set(id, { c: same(x.c), spawn: x.spawn });
     ph.recordPushes = this.recordPushes;
@@ -134,6 +139,7 @@ export class Physics {
       docks: [...this.docks].map(([id, c]) => [id, c.handle]),
       pieceBaseY: [...this.pieceBaseY],
       anchors: [...this.anchors],
+      barriers: [...this.barriers],
       zones: [...this.zones].map(([g, z]) => [g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } }))]),
       dirty: this.dirty,
       props: [...this.props].map(([id, x]) => [id, x.c.handle, x.spawn]),
@@ -164,6 +170,7 @@ export class Physics {
     for (const [id, h] of s.docks ?? []) ph.docks.set(id, col(h));
     for (const [id, y] of s.pieceBaseY ?? []) ph.pieceBaseY.set(id, y);
     for (const h of s.anchors ?? []) ph.anchors.add(h);
+    for (const h of s.barriers ?? []) ph.barriers.add(h);
     for (const [g, z] of s.zones ?? []) ph.zones.set(g, z.map((x) => ({ ...x, center: { ...x.center }, half: { ...x.half } })));
     ph.dirty = s.dirty;
     return ph;
@@ -264,7 +271,9 @@ export class Physics {
   /** Every static world collider (islands, bunkers, slit plugs, cover, stations): PropSim copies them. */
   forEachStaticCollider(f: (shape: RAPIER.Shape, pos: Vec3, rot: RAPIER.Rotation) => void): void {
     this.world.forEachCollider((c) => {
-      if (this.entities.get(c.handle)?.type !== 'world') return;
+      // Barriers drop mid-match: PropSim's world never has them (its rebuilds must match the original's); props
+      // never get near them anyway (anything in a bunker area is ejected).
+      if (this.entities.get(c.handle)?.type !== 'world' || this.barriers.has(c.handle)) return;
       const t = c.translation();
       f(c.shape, v3(t.x, t.y, t.z), c.rotation());
     });
@@ -306,6 +315,15 @@ export class Physics {
       .setRotation(quatY(rotY));
     return this.track(this.world.createCollider(desc), { type: 'world' });
   }
+
+  /** Sudden-death barriers in (barriers.ts). Idempotent: false (nothing added) when they are already up. */
+  addBarriers(boxes: { center: Vec3; half: Vec3; rotY: number }[]): boolean {
+    if (this.barriers.size) return false;
+    for (const b of boxes) this.barriers.add(this.addStaticBox(b.center, b.half, b.rotY).handle);
+    return true;
+  }
+
+  get barrierCount(): number { return this.barriers.size; }
 
   /** A pier section broke: open water there from now on. Unknown / already gone ids are ignored (idempotent). */
   removeDock(id: number): void {

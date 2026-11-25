@@ -99,6 +99,11 @@ export class SurfaceMap {
     for (const d of def.docks ?? []) this.boxes.push({ center: d.center, half: d.half, rotY: d.rotY, surface: 'wood', owner: ownDock(d.id), dock: d.id });
   }
 
+  /** Solid world boxes that appear mid-match (sudden-death doorway barriers): marks land on them from now on. */
+  addSolid(boxes: readonly Box[], surface: WorldSurface): void {
+    for (const b of boxes) this.boxes.push({ ...b, surface, owner: OWNER_WORLD });
+  }
+
   /** Pier sections that are broken (snapshot `docks`): no longer solid for marks. */
   brokenDocks: ReadonlySet<number> = new Set();
 

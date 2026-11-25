@@ -243,7 +243,9 @@ export type MatchEventType =
    * Elimination credit (elimination.ts): data { victim, by (eliminator, null = nobody), assists: number[],
    * how: 'killed' | 'sealed' | 'trapped' | 'other', spoils (total $), shares: [id, $][] }.
    */
-  | 'elimination';
+  | 'elimination'
+  /** Sudden death sealed every bunker at once and dropped the doorway barriers (barriers.ts): data { barriers }. */
+  | 'allSealed';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
@@ -279,6 +281,8 @@ export type Snapshot = {
   sealed: boolean[];
   waterY: number;
   suddenDeath: boolean;
+  /** Sim time the sudden-death doorway barriers dropped (barriers.ts); absent before. */
+  barrierAt?: number;
   /** Sudden-death storm (null/absent before it starts). Optional so hand-built snapshots can omit it. */
   storm?: StormSnap | null;
   winner: number | null;

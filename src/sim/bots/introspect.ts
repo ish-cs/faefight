@@ -119,7 +119,7 @@ type Internals = {
   needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null;
-  stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
+  stormPrep(view: BotView): boolean; sealingSoon(view: BotView): boolean; leaveBeforeBarriers(c: Ctx): boolean; rivalShutIn(c: Ctx): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
   defender: boolean; allyInTrouble(c: Ctx): AllyStatus | null; regroupWith(c: Ctx): AllyStatus | null; offensive(c: Ctx): boolean;
   waitFor(c: Ctx): AllyStatus | null; ownFight(c: Ctx): boolean; teamFocus(view: BotView, id: number): number;
@@ -169,7 +169,8 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
   switch (g) {
     case 'storm': {
       const st = view.storm;
-      if (!st) return zero('no storm yet');
+      if (!st && I.leaveBeforeBarriers(c)) return { f: [['barriers drop soon', 2]], why: 'Sudden death is seconds away: concrete slabs will shut every bunker doorway for good, so I\'m getting out of mine now' };
+      if (!st) return zero(I.sealingSoon(view) ? 'no storm yet; staying out of bunkers (barriers drop soon)' : 'no storm yet');
       const d = Math.hypot(me.pos.x - st.x, me.pos.z - st.z);
       if (d > st.r) return { f: [['outside ring', easy ? 0.9 : 1.7]], why: `Caught outside the storm ring (${m(d)} from its centre, ring ${m(st.r)}): getting in` };
       const safe = I.stormSafeR(st);
@@ -365,6 +366,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       return { f, why: `The centre holds $${Math.round(cv.gold)} gold${sup ? ' and free pieces' : ''}: going to take it` };
     }
     case 'attack': {
+      if (!c.enemy && I.rivalShutIn(c)) return zero(`${rivalName(c)} is shut in a bunker behind the slabs: the storm will finish them`);
       const recent = c.rival ? I.mem.recent(c.rival.id, now, 20) : null;
       if (!(c.reach || c.hookFrom) || !c.rival || (view.suddenDeath && !c.enemy && !recent)) {
         if (c.reach && view.suddenDeath) return { f: [['sudden death', 0.3]], why: `Sudden death: hunting ${rivalName(c)} down` };
@@ -633,7 +635,9 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
     case 'contest': return two('Walk to the centre stations', 'Grab gold / pieces');
     case 'assist': return two('Run to the teammate under fire', 'Shoot whoever is on them');
     case 'regroup': return two('Catch up with the push leader', 'Push in together');
-    case 'storm': return { steps: ['Get inside the ring / onto the centre island', 'Hold position'], at: moving ? 0 : 1 };
+    case 'storm':
+      if (!view.storm) return { steps: ['Out of my bunker before the doorway slabs drop', 'Clear of the doorway'], at: moving ? 0 : 1 };
+      return { steps: ['Get inside the ring / onto the centre island', 'Hold position'], at: moving ? 0 : 1 };
     case 'cover': return { steps: ['Get to the cover spot', 'Place a wall', 'Fight from behind it'], at: a?.build ? 1 : moving ? 0 : 2 };
     case 'fortify': return { steps: ['Walk to the next fort slot', 'Build it', 'Next slot'], at: a?.build ? 1 : moving ? 0 : 1 };
     case 'trap': return { steps: ['Walk to a doorway', 'Set a spike trap', 'Next spot'], at: a?.trap ? 1 : moving ? 0 : 1 };

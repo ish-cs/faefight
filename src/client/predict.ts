@@ -4,6 +4,7 @@ import { DT } from '../sim/constants';
 import type { MapDef } from '../sim/map';
 import { newMoveState, stepMove, type MoveCmd, type MoveState, type Mover } from '../sim/movement';
 import { Physics } from '../sim/physics';
+import { barrierBoxes } from '../sim/barriers';
 import type { PieceState, PlayerState, Snapshot, Vec3 } from '../sim/types';
 
 /** Prediction errors bigger than this (teleport, respawn, a wall that wasn't there) snap instead of blending. */
@@ -38,10 +39,10 @@ export class Predictor {
   /** Stats for debugging/tests. */
   readonly stats = { reconciles: 0, snaps: 0, lastError: 0, maxReplay: 0 };
 
-  private constructor(private physics: Physics, readonly humanId: number) {}
+  private constructor(private physics: Physics, readonly humanId: number, private readonly map: MapDef) {}
 
   static async create(map: MapDef, humanId: number): Promise<Predictor> {
-    return new Predictor(await Physics.create(map), humanId);
+    return new Predictor(await Physics.create(map), humanId, map);
   }
 
   /** True when the local player is alive and has a predicted state to render. */
@@ -147,6 +148,8 @@ export class Predictor {
     this.physics.setPropPoses(snap.props);
     // Broken pier sections: open water (removeDock ignores ones already gone).
     if (snap.docks && snap.docks.length !== this.docksGone) { for (const id of snap.docks) this.physics.removeDock(id); this.docksGone = snap.docks.length; }
+    // Sudden-death doorway barriers: walls from then on (addBarriers is a no-op once they're in).
+    if (snap.barrierAt != null && !this.physics.barrierCount) this.physics.addBarriers(barrierBoxes(this.map.islands));
 
     const live = new Set<number>();
     for (const p of snap.players) {

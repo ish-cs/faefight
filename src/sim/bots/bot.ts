@@ -115,6 +115,8 @@ const BOLT_REACT: Record<Difficulty, number> = { easy: 0.6, medium: 0.35, hard: 
 const EASY_DODGE = 0.4;
 /** Medium+ bots bridge to the centre island (where the storm ends) from this long before sudden death. */
 const STORM_PREP_SEC = 150;
+/** Storm goal score for leaving my bunker before sudden death's slabs drop (above every other goal), and how far past the doorway to go. */
+const BARRIER_LEAVE = 2, BUNKER_EXIT = 3;
 /** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
 const STORM_SPARE_DECKS = 2, STORM_SHOP_GRACE = 45;
 /**
@@ -620,6 +622,15 @@ export class Bot {
     if (!dodge) dir = this.hazardAvoid(ctx, dir);
     if (dir && !dodge) dir = this.stormFence(me, view, dir);
     if (dir) dir = this.nav.safeDir(dir);
+    // Sudden death: concrete barriers fill every doorway (barriers.ts). Inside a bunker no step leads out: whatever
+    // the goal wants, don't push into a slab (the stuck recovery would only thrash about the room).
+    if (dir && view.suddenDeath)
+      for (const isl of view.map)
+        if (insideBunker(isl.bunker, me.pos) && !insideBunker(isl.bunker, add(me.pos, scale(dir, 0.6)))) { dir = null; break; }
+    // The slabs drop any moment (drive.barrierLead): no step into a bunker, whatever the goal (inside = out of the game).
+    if (dir && this.sealingSoon(view))
+      for (const isl of view.map)
+        if (!insideBunker(isl.bunker, me.pos) && insideBunker(isl.bunker, add(me.pos, scale(dir, 0.6)))) { dir = null; break; }
     // Never walk into (or stand in) fire: slide around burning pieces and ground fires (a lightning dodge wins).
     const zones = this.avoidZones(view, me);
     if (zones.length && !dodge) {
@@ -1267,6 +1278,7 @@ export class Bot {
       let eff = !view.suddenDeath && view.sealed[e.island] ? d / this.P.drive.sealedFocus : d;
       // Teams: focus fire on whoever is hurting a teammate.
       if (view.allies?.some((a) => a.hurtBy === e.id && view.now - a.hurtAt <= this.P.team.assistSec)) eff /= this.P.team.focusFire;
+      if (this.shutInIgnored(view, e, d)) continue;
       if (e.alive && eff < pickD) { enemy = e; enemyDist = d; pickD = eff; }
     }
     // Off any island (a bridge, a pier): from wherever that walk starts (a dock off a dead rival's island is not home;
@@ -1577,7 +1589,8 @@ export class Bot {
     switch (g) {
       case 'storm': {
         const st = view.storm;
-        if (!st) return 0;
+        // The doorway slabs drop soon and I'm inside my bunker: out now, before it shuts me in for good.
+        if (!st) return this.leaveBeforeBarriers(c) ? BARRIER_LEAVE : 0;
         const d = Math.hypot(me.pos.x - st.x, me.pos.z - st.z);
         if (d > st.r) return this.difficulty === 'easy' ? 0.9 : 1.7;
         if (d > this.stormSafeR(st)) return this.difficulty === 'easy' ? 0.4 : 1.3;
@@ -1730,6 +1743,8 @@ export class Bot {
         return 0.1 + 0.25 * t.greed + 0.1 * t.opportunism + Math.min(cv.gold, 1000) / 2000 + supplies - far - rich - (c.danger ? 0.2 : 0);
       }
       case 'attack': {
+        // Seen shut in a bunker since the slabs dropped: nothing to walk to (the storm finishes them).
+        if (!c.enemy && this.rivalShutIn(c)) return 0;
         if (!(c.reach || c.hookFrom) || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
@@ -1818,6 +1833,9 @@ export class Bot {
 
   /** Inside my own sealed bunker (respawned into it, or sealed in alive): getting out is all that matters. */
   private trapped(c: Ctx): boolean {
+    // Sudden death: concrete barriers fill every doorway (barriers.ts), so from inside there is no getting out at all;
+    // fight from where I stand (through the slits) instead of pushing into a slab until the countdown ends.
+    if (c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos)) return false;
     return c.me.breakoutUntil !== null || (c.view.sealed[c.home.index] && !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos) && underRoof(c.home, c.me.pos));
   }
 
@@ -1942,6 +1960,8 @@ export class Bot {
     if (dist2D(self.pos, dest) <= arrive) return IDLE;
     const home = this.view.map[self.island];
     if (insideBunker(home.bunker, self.pos) && !insideBunker(home.bunker, dest)) {
+      // Sudden death: concrete barriers fill every doorway (barriers.ts). No way out: don't push into a slab.
+      if (this.view.suddenDeath) return IDLE;
       // Out of my bunker first, around whatever stands in it or in its doorways.
       const path = this.homeGrid({ home, view: this.view } as Ctx).search(self.pos).path;
       if (path) return { dir: norm(flat(sub(path[Math.min(path.length - 1, 3)], self.pos))) };
@@ -3141,7 +3161,13 @@ export class Bot {
   private doStorm(c: Ctx): Act {
     const { view, me } = c;
     const st = view.storm;
-    if (!st) return IDLE;
+    if (!st) {
+      if (!this.leaveBeforeBarriers(c)) return IDLE;
+      // Out through the nearest doorway (goTo routes round whatever stands in the room) and clear of the slab.
+      const door = c.home.bunker.doorways.reduce((p, d) => (dist2D(d.center, me.pos) < dist2D(p.center, me.pos) ? d : p));
+      const out = add(door.center, scale(forward(door.yaw), BUNKER_EXIT));
+      return { ...this.goTo(v3(out.x, c.home.groundY, out.z), 0.8), sprint: true };
+    }
     if (this.finalHunt(c)) {
       const walk = this.goTo(v3(st.x, me.pos.y, st.z), FINAL_HUNT_NEAR - 1);
       if (walk.dir) return walk;
@@ -3229,6 +3255,30 @@ export class Bot {
   /** Bridging to the center island ahead of the storm (medium+, from STORM_PREP_SEC before sudden death). */
   private stormPrep(view: BotView): boolean {
     return this.difficulty !== 'easy' && (view.suddenDeath || view.now >= (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) - STORM_PREP_SEC);
+  }
+
+  /** Sudden death's doorway slabs drop within drive.barrierLead s (0 for easy: unaware of them). */
+  private sealingSoon(view: BotView): boolean {
+    const lead = this.P.drive.barrierLead[this.difficulty];
+    return lead > 0 && !view.suddenDeath && view.now >= (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) - lead;
+  }
+
+  /** Sudden death: shut in a bunker behind the slabs and further than drive.shutInRange: the storm's, not mine to chase. */
+  private shutInIgnored(view: BotView, e: PlayerState, d: number): boolean {
+    const r = this.P.drive.shutInRange[this.difficulty];
+    return r > 0 && view.suddenDeath && d > r && view.map.some((isl) => insideBunker(isl.bunker, e.pos));
+  }
+
+  /** My rival was seen inside a bunker after sudden death's slabs dropped (so is still in it), and I know what that means. */
+  private rivalShutIn(c: Ctx): boolean {
+    if (!c.rival || !c.view.suddenDeath || this.P.drive.shutInRange[this.difficulty] <= 0) return false;
+    const s = this.mem.seen.get(c.rival.id);
+    return !!s && s.t >= (c.view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) && c.view.map.some((isl) => insideBunker(isl.bunker, s.pos));
+  }
+
+  /** Inside my bunker with the slabs about to drop: getting out beats anything else. */
+  private leaveBeforeBarriers(c: Ctx): boolean {
+    return this.sealingSoon(c.view) && insideBunker(c.home.bunker, c.me.pos);
   }
 
   /** Whatever I'm doing, don't walk back out toward the storm once at the edge of where I want to be (not easy). */
