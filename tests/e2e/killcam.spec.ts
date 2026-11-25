@@ -45,7 +45,7 @@ test('dying shows the killcam cinematic, it ends before the respawn; any key / c
   const mine = page.locator('[data-testid="feed-entry"].mine');
   await expect(mine).toBeVisible();
   await expect(mine).toContainText('You');
-  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === bot)!.alive, { timeout: 10_000 }).toBe(true);
+  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === bot)!.alive, { timeout: RESPAWN_MS + 5_000 }).toBe(true);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/qol2-killfeed.png` });
 
   // Killed by the bot: the killcam plays, then ends by itself before the respawn.
@@ -76,7 +76,7 @@ test('dying shows the killcam cinematic, it ends before the respawn; any key / c
   expect(done.reason).toBe('ended');
   expect(done.stats.slowFrames).toBeGreaterThan(5); // the slow beat played
   expect(done.stats.maxStep).toBeLessThan(25); // no camera snaps (m/s)
-  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);
+  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: RESPAWN_MS + 5_000 }).toBe(true);
   expect(Date.now() - diedAt).toBeLessThan(RESPAWN_MS + 3000); // respawn not held up
 
   // Again, skipped with a key (any key, once past the short grace for the press you died on).
@@ -97,7 +97,7 @@ test('dying shows the killcam cinematic, it ends before the respawn; any key / c
   await page.mouse.click(640, 360);
   await expect(kc).toBeHidden({ timeout: 1_000 });
   expect((await dbg<KcInfo>(page, 'killcam')).reason).toBe('skipped');
-  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);
+  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: RESPAWN_MS + 5_000 }).toBe(true);
 
   expect(errors).toEqual([]);
 });

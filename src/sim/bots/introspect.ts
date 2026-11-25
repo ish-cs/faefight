@@ -116,7 +116,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormPrep(view: BotView): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
   spendable(me: PlayerState): number; rivalFacts(view: BotView): RivalFacts[];
@@ -174,12 +174,14 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const safe = I.stormSafeR(st);
       if (d > safe) return { f: [['ring closing', easy ? 0.4 : 1.3]], why: `The ring closes past me soon (safe line ${m(safe)}, I'm at ${m(d)}): moving in ahead of it` };
       if (I.needCenterBridge(c)) return { f: [['no center bridge', 1.2]], why: 'The storm ends on the centre island and I have no way onto it: bridging there' };
+      if (I.finalHunt(c)) return { f: [['final circle, nobody in sight', 0.6]], why: 'Final circle and nobody in sight: closing in on its centre to find the last rivals' };
       return zero('safe inside the ring');
     }
     case 'fight': {
       const e = c.enemy;
       if (!e) return zero('no enemy in sight');
       const n = I.nav.nodeAt(me.pos), same = n >= 0 && n === I.nav.nodeAt(e.pos);
+      if (!same && c.enemyDist > 25 && view.suddenDeath && !gun) return { f: [['sudden death, no ammo: go punch', 1]], why: `Sudden death and no ammo: closing in on @${e.id} (${m(c.enemyDist)}) to punch` };
       if (!same && c.enemyDist > 25) return { f: [['far enemy', 0.2]], why: `@${e.id} in sight across the water (${m(c.enemyDist)}), too far to chase` };
       const armed = gun || c.enemyDist < 8;
       return {
@@ -189,7 +191,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     }
     case 'disengage': {
       if (!c.enemy && now - I.mem.lastHurtAt > 1.5) return zero('not under fire');
-      const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
+      const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + I.sealedCaution(c);
       if (hp < low) {
         return { f: [['low hp', 1.15], ['below bail line', low - hp]], why: `Down to ${Math.round(me.hp)} hp, under my bail-out line of ${Math.round(low * 100)}: backing off` };
       }
@@ -209,7 +211,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const how = me.inv.charges > 0 ? 'a charge' : gun ? 'my gun' : 'my fists';
       if (view.sealed[home.index]) {
         return {
-          f: [[can ? 'can clear' : 'cannot clear', can ? 0.85 : 0.1], ['caution', 0.1 * t.caution]],
+          f: [[can ? 'can clear' : 'cannot clear', can ? 0.85 : 0.1], ...(can && I.sealedHomeCalm(c) ? [['sealed home: death = out', I.P.drive.sealedHome[I.difficulty]] as [string, number]] : []), ['caution', 0.1 * t.caution]],
           why: can ? `My bunker is sealed (${kinds}): clearing it with ${how}` : `My bunker is sealed (${kinds}) and nothing I carry gets through`,
         };
       }
@@ -374,7 +376,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
           why: `${rivalName(c)} is dead, back in ${secs(back)}${wait ? ': waiting at their door for the unarmed respawn' : ''}`,
         };
       }
-      if (!gun) return { f: [['unarmed', 0.1]], why: `Going for ${rivalName(c)} without a gun` };
+      if (!gun) return view.suddenDeath
+        ? { f: [['sudden death, no ammo: fists', 0.95]], why: `Sudden death and no ammo: going for ${rivalName(c)} with my fists` }
+        : { f: [['unarmed', 0.1]], why: `Going for ${rivalName(c)} without a gun` };
       const up = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
       const k = 0.5 + 0.5 * Math.max(hp, 1 - t.caution);
       const f: [string, number][] = [['base', 0.3 * k], ['aggression', 0.25 * t.aggression * k]];
@@ -421,6 +425,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     case 'loot': {
       const bag = I.nearestLoot(c), crate = I.nearestCrate(c);
       if (!bag && !crate) return zero('no loot in reach');
+      if (bag && !gun && view.suddenDeath) return { f: [['sudden death, no ammo: bag first', 1.05]], why: `Sudden death and no ammo: a loot bag ${m(dist2D(bag, me.pos))} away beats punching` };
       const crateS = crate ? 0.2 + 0.3 * t.greed - dist2D(crate.pos, me.pos) / 30 : 0;
       const bagS = bag ? 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70 : 0;
       if (crate && (!bag || crateS > bagS)) {

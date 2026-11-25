@@ -9,6 +9,9 @@ import { PIECE_ORDER } from './input';
 import { STAMINA } from '../sim/movement';
 import { islandColor, islandName } from './colors';
 import { endState } from './endState';
+
+/** Why someone is out (the sim's `eliminated` event reason), for the kill feed. */
+const ELIM_WHY: Record<string, string> = { sealed: ': bunker sealed', trapped: ': trapped in sealed bunker', suddenDeath: ': sudden death' };
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
 import { dragOutcome } from './hotbarDrag';
@@ -794,7 +797,7 @@ export class Hud {
         // Credited ones get the big line from their 'elimination' event (same tick).
         const id = e.data.player ?? e.data.id;
         if (!events.some((x) => x.type === 'elimination' && x.data.victim === id && x.data.by !== null))
-          this.addFeed(`${name(id) ?? 'Someone'} eliminated`, true);
+          this.addFeed(`${name(id) ?? 'Someone'} eliminated${ELIM_WHY[e.data.reason as string] ?? ''}`, true);
       } else if (e.type === 'elimination' && typeof e.data.by === 'number') {
         this.showElimination(e, name);
       } else if (e.type === 'suddenDeath') {

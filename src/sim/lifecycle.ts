@@ -95,6 +95,11 @@ export function killPlayer(
   cause?: string,
   /** What set it off when it wasn't the killer's own weapon (e.g. 'barrel'): the feed says "X via barrel". */
   via?: string,
+  /**
+   * The island layout. When given, a victim whose own bunker is sealed at the moment of death is eliminated on the
+   * spot (no respawn). Only unit tests that don't care about seals leave it out.
+   */
+  map?: IslandLayout[],
 ): MatchEvent[] {
   const p = s.players.get(victimId);
   if (!p) throw new Error(`killPlayer: no player ${victimId}`);
@@ -126,14 +131,18 @@ export function killPlayer(
   p.deaths++;
   const k = killer !== null && killer !== victimId ? s.players.get(killer) : undefined;
   if (k) k.kills++;
-  if (p.breakoutUntil !== null) {
-    // Died while trapped in a sealed bunker: no more respawns.
+  // Out for good: died while trapped in a sealed bunker, or died while your bunker is sealed (2026-11-22, the
+  // user's rule). Sudden death seals every bunker, so a death then is final on the spot too (waiting out the 10 s
+  // respawn only to eliminate would hold the result back; CI ffa8-hard seed 11 hit the time cap that way).
+  const reason = p.breakoutUntil !== null ? 'trapped'
+    : map && !s.practice && islandSealed(s, map, p.island) ? (s.forcedSeal ? 'suddenDeath' : 'sealed') : null;
+  if (reason) {
     p.breakoutUntil = null;
     p.respawnAt = null;
     p.eliminated = true;
     physics.setPlayerPos(victimId, PARKED);
     const kill = { victim: victimId, killer, inWater, ...(cause ? { cause } : {}), ...(via ? { via } : {}), ...(bag !== undefined ? { bag } : {}) };
-    return [ev(now, 'kill', kill), ev(now, 'eliminated', { player: victimId })];
+    return [ev(now, 'kill', kill), ev(now, 'eliminated', { player: victimId, reason })];
   }
   p.respawnAt = now + LIFECYCLE.respawnSec;
   physics.setPlayerPos(victimId, PARKED);
@@ -211,7 +220,7 @@ export function tickLifecycle(
     const y = p.yankedBy;
     const yank = y && now - y.at <= GRAPPLE.yankCreditSec && y.by !== p.id ? y.by : null;
     const by = yank ?? envKiller(s, p, now);
-    out.push(...killPlayer(s, physics, p.id, now, true, by, undefined, yank !== null ? 'grapple' : by !== null ? 'water' : undefined));
+    out.push(...killPlayer(s, physics, p.id, now, true, by, undefined, yank !== null ? 'grapple' : by !== null ? 'water' : undefined, map));
   }
 
   for (const p of s.players.values())
@@ -233,7 +242,7 @@ export function tickLifecycle(
     // Sudden death seals every bunker for good (nothing to break): no respawn at all.
     if (s.forcedSeal) {
       p.eliminated = true;
-      out.push(ev(now, 'eliminated', { player: p.id }));
+      out.push(ev(now, 'eliminated', { player: p.id, reason: 'suddenDeath' }));
       continue;
     }
     // Physically sealed: respawn inside anyway, with a short window to break out.
@@ -272,7 +281,10 @@ export function tickLifecycle(
       p.spawnProtected = false;
     }
     // Inside your own bunker while it's sealed (however you got there): the escape clock starts.
-    if (!s.practice && p.breakoutUntil === null && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
+    // Inside means under the roof: standing on top of your own sealed bunker is not being sealed in (replay 7d6d6fa:
+    // a bot that hopped onto its roof got the countdown and was eliminated up there).
+    const underRoof = p.pos.y < map[p.island].groundY + MAP.bunker.height - 0.5;
+    if (!s.practice && p.breakoutUntil === null && underRoof && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
       p.breakoutUntil = now + LIFECYCLE.breakoutSec;
       out.push(ev(now, 'trapped', { player: p.id, until: p.breakoutUntil }));
       continue;
@@ -282,7 +294,7 @@ export function tickLifecycle(
       p.breakoutUntil = null;
       out.push(ev(now, 'escaped', { player: p.id }));
     } else if (now >= p.breakoutUntil) {
-      out.push(...killPlayer(s, physics, p.id, now, false));
+      out.push(...killPlayer(s, physics, p.id, now, false, null, undefined, undefined, map));
     }
   }
 

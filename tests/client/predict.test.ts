@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { Predictor, SNAP_DIST } from '../../src/client/predict';
 import { MoveQueue } from '../../src/client/moveQueue';
 import { Match } from '../../src/sim/match';
+import { LIFECYCLE } from '../../src/sim/constants';
 import type { MoveCmd } from '../../src/sim/movement';
 import { NO_INPUT, type PlayerState, type Snapshot, type Vec3 } from '../../src/sim/types';
 import { applyPlayerDamage, type CombatCtx } from '../../src/sim/combat';
@@ -109,7 +110,7 @@ describe('Predictor', () => {
     pr.onSnapshot(m.tick(new Map()));
     expect(pr.active).toBe(false);
     let s = m.tick(new Map());
-    for (let i = 0; i < 200 && !me(s).alive; i++) s = m.tick(new Map());
+    for (let i = 0; i < 30 * (LIFECYCLE.respawnSec + 2) && !me(s).alive; i++) s = m.tick(new Map());
     pr.onSnapshot(s);
     expect(pr.active).toBe(true);
     expect(d3(pr.current!.pos, me(s).pos)).toBeLessThan(1e-6);

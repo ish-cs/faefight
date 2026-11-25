@@ -104,11 +104,26 @@ describe('lifecycle', () => {
     expect(b.invulnUntil).toBeGreaterThan(R + 2.5);
   });
 
-  test('sealed at respawn → respawns trapped; still inside after 10 s → eliminated', async () => {
+  test('sealed at the moment of death → eliminated on the spot, no respawn', async () => {
     const { s, physics, b, run } = await setup();
     sealIsland(s, 1);
+    const evs = killPlayer(s, physics, 2, 0, false, 1, undefined, undefined, map);
+    expect(evs.map((e) => e.type)).toEqual(['kill', 'eliminated']);
+    expect(evs[1].data).toEqual({ player: 2, reason: 'sealed' });
+    expect(b.eliminated).toBe(true);
+    expect(b.respawnAt).toBeNull();
+    const later = run(0, LIFECYCLE.respawnSec + 1);
+    expect(b.alive).toBe(false);
+    expect(later.some((e) => e.type === 'spawn')).toBe(false);
+    expect(s.winner).toBe(1);
+  });
+
+  test('sealed after death (during the respawn wait) → respawns trapped; still inside after 10 s → eliminated', async () => {
+    const { s, physics, b, run } = await setup();
     const R = LIFECYCLE.respawnSec, B = LIFECYCLE.breakoutSec;
-    killPlayer(s, physics, 2, 0, false);
+    killPlayer(s, physics, 2, 0, false, 1, undefined, undefined, map);
+    expect(b.eliminated).toBe(false);
+    sealIsland(s, 1);
     let evs = run(0, R + 0.2);
     expect(b.alive).toBe(true);
     expect(b.eliminated).toBe(false);
@@ -126,9 +141,9 @@ describe('lifecycle', () => {
 
   test('breaking out of the bunker within 10 s keeps you in the game', async () => {
     const { s, physics, b, run } = await setup();
-    sealIsland(s, 1);
     const R = LIFECYCLE.respawnSec;
-    killPlayer(s, physics, 2, 0, false);
+    killPlayer(s, physics, 2, 0, false, null, undefined, undefined, map);
+    sealIsland(s, 1);
     run(0, R + 0.2);
     b.pos = spot(1, 8); // walked out through a doorway they cleared
     run(R + 0.2, R + 11);
@@ -139,13 +154,33 @@ describe('lifecycle', () => {
 
   test('dying while trapped is final', async () => {
     const { s, physics, b, run } = await setup();
-    sealIsland(s, 1);
     const R = LIFECYCLE.respawnSec;
-    killPlayer(s, physics, 2, 0, false);
+    killPlayer(s, physics, 2, 0, false, null, undefined, undefined, map);
+    sealIsland(s, 1);
     run(0, R + 2);
-    killPlayer(s, physics, 2, R + 2, false);
+    expect(b.breakoutUntil).not.toBeNull();
+    const evs = killPlayer(s, physics, 2, R + 2, false, 1, undefined, undefined, map);
+    expect(evs.find((e) => e.type === 'eliminated')?.data).toEqual({ player: 2, reason: 'trapped' });
     run(R + 2, R + 6);
     expect(b.eliminated).toBe(true);
+  });
+
+  test('sudden death: killed after the forced seal → eliminated on the spot', async () => {
+    const { s, physics, b } = await setup();
+    s.forcedSeal = true;
+    const evs = killPlayer(s, physics, 2, 0, false, 1, undefined, undefined, map);
+    expect(evs.map((e) => e.type)).toEqual(['kill', 'eliminated']);
+    expect(evs[1].data).toEqual({ player: 2, reason: 'suddenDeath' });
+    expect(b.eliminated).toBe(true);
+  });
+
+  test('sudden death: already dead when it starts → eliminated when the respawn comes due', async () => {
+    const { s, physics, b, run } = await setup();
+    killPlayer(s, physics, 2, 0, false, 1, undefined, undefined, map);
+    s.forcedSeal = true;
+    const later = run(0, LIFECYCLE.respawnSec + 0.2);
+    expect(b.eliminated).toBe(true);
+    expect(later.find((e) => e.type === 'eliminated')?.data).toEqual({ player: 2, reason: 'suddenDeath' });
   });
 
   test('unsealing before respawn restores respawn', async () => {
@@ -225,6 +260,14 @@ describe('trapped inside a sealed bunker at any time', () => {
     evs = run(9.8, 10.4);
     expect(b.eliminated).toBe(true);
     expect(s.winner).toBe(1);
+  });
+  test('standing on the roof of your own sealed bunker is not being sealed in (replay 7d6d6fa p7)', async () => {
+    const { s, b, run } = await setup();
+    b.pos = { ...map[1].spawn, y: map[1].groundY + MAP.bunker.height };
+    sealIsland(s, 1);
+    const evs = run(0, 1);
+    expect(b.breakoutUntil).toBeNull();
+    expect(evs.some((e) => e.type === 'trapped')).toBe(false);
   });
   test('escaping before the countdown ends keeps you in', async () => {
     const { s, b, run } = await setup();

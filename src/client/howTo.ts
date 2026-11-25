@@ -22,9 +22,9 @@ function steps(): { icon: keyof typeof ICON; title: string; text: string }[] {
     { icon: 'cash', title: 'Earn cash', text: `Your generator fills with cash over time. Stand next to it and press ${e} to collect.` },
     { icon: 'shop', title: 'Shop', text: `Press ${e} at the shop for guns, ammo, building pieces, grenades and medkits.` },
     { icon: 'bridge', title: 'Build a bridge', text: 'Pick a piece on the hotbar and click to place it. Bridge the water to an enemy island.' },
-    { icon: 'seal', title: 'Seal their bunker', text: 'While an enemy is dead, plug all 3 doorways of their bunker.' },
-    { icon: 'skull', title: 'Eliminate', text: 'A player whose bunker is sealed when they die is out for good.' },
-    { icon: 'timer', title: 'Sealed in yourself?', text: 'You respawn trapped inside: break out within 10 seconds.' },
+    { icon: 'seal', title: 'Seal their bunker', text: 'Plug all 3 doorways of their bunker: while they are dead, or while they are out.' },
+    { icon: 'skull', title: 'Eliminate', text: 'A player whose bunker is sealed when they die is out for good, no respawn.' },
+    { icon: 'timer', title: 'Sealed in yourself?', text: 'Sealed while you were dead? You respawn trapped inside: break out within 10 seconds.' },
   ];
 }
 

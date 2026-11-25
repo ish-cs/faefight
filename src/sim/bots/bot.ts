@@ -60,6 +60,16 @@ const STUCK_SEC = 2, STUCK_DIST = 0.5, UNSTICK_SEC = 0.6;
 const TURN_RATE = 8;
 /** Beyond this, an enemy on another island isn't worth abandoning the current goal for. */
 const ENGAGE_RANGE = 25;
+/** escape(): a grid path out that moves me less than this in ESCAPE_STALL_SEC is a dead end. */
+const ESCAPE_STALL_M = 0.3, ESCAPE_STALL_SEC = 1;
+/** Attack score in sudden death with no ammo: above collect/shop (≤ 0.9), below storm and survival goals. */
+const SD_FISTS_ATTACK = 0.95;
+/** Final circle with nobody in sight: storm goal score for closing in on its centre, and how near counts as there. */
+const FINAL_HUNT = 0.6, FINAL_HUNT_NEAR = 4;
+/** Feet below the bunker roof (minus a margin): actually inside, not standing on top of it. */
+const underRoof = (home: IslandLayout, p: Vec3) => p.y < home.groundY + MAP.bunker.height - 0.5;
+/** My bunker sealed: clear it first unless an enemy is closer than this (then fight; turning my back loses). */
+const SEALED_HOME_CLEAR = 12;
 const CHEST = 1.2;
 /**
  * Where the next deck of a bridge goes, tried in order: [s past the tip, metres to the side]. Straight on first; when
@@ -106,6 +116,12 @@ const EASY_DODGE = 0.4;
 const STORM_PREP_SEC = 150;
 /** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
 const STORM_SPARE_DECKS = 2, STORM_SHOP_GRACE = 45;
+/**
+ * The first STORM_SHOP_GRACE s of sudden death: the ring has barely moved, a shop trip is still safe. Counted from the
+ * match's own sudden-death time (the lobby sets 8-25 min), not the default.
+ */
+export const inStormShopGrace = (view: Pick<BotView, 'now' | 'suddenDeathAt'>): boolean =>
+  view.now - (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) < STORM_SHOP_GRACE;
 const COVER_KINDS = new Set(['wood', 'metal', 'steel', 'container']);
 /** Walls a bot throws down for cover, best first (sandbags go up two high). */
 const WALLS: PieceKind[] = ['wood', 'metal', 'steel'];
@@ -292,6 +308,9 @@ export class Bot {
   private healDrops: { pos: Vec3; t: number }[] = [];
   private grid: { key: string; grid: BunkerGrid } | null = null;
   private hideFrom: { pos: Vec3; until: number } | null = null;
+  /** escape(): where I was when my grid path out last made headway; a path that doesn't move me is not a way out. */
+  private escapeRef: { pos: Vec3; t: number } | null = null;
+  private escapeNoPathUntil = 0;
   /** Low on stamina: walk (save it for escapes) until it's back up. */
   private winded = false;
   private lastScores: { goal: string; score: number }[] = [];
@@ -496,7 +515,11 @@ export class Bot {
     let grapple = false;
     const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
     const barrel = enemy && !dock ? this.barrelShot(ctx) : null;
-    if (hook && hook.why !== 'yank') {
+    if (act.shootAt && act.shootFirst && me.breakoutUntil !== null) {
+      // Countdown running: the plug in my way beats everything else (no hook, barrel or pier tricks first).
+      look = hand(lookAt(eye, act.shootAt), TURN_RATE);
+      fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
+    } else if (hook && hook.why !== 'yank') {
       const want = lookAt(eye, hook.to);
       look = hand(want, TURN_RATE * 1.5);
       grapple = angleBetween(look, want) < 0.02;
@@ -1385,7 +1408,8 @@ export class Bot {
    * getting there first. Real builders fortify anyway.
    */
   private fortWorthIt(c: Ctx): boolean {
-    if (this.t.builder >= this.P.buildTuning.fortEarlyBuilder) return true;
+    const B = this.P.buildTuning;
+    if (this.t.builder >= Math.min(B.fortEarlyBuilder, B.fortSealedRule[this.difficulty])) return true;
     const rivals = c.view.others.filter((o) => !o.eliminated).length;
     return rivals >= this.P.buildTuning.fortMinRivals && !c.reach && sealKit(c.me.inv) >= c.openDoors.length;
   }
@@ -1493,8 +1517,9 @@ export class Bot {
       // Out past the storm's safe line: stormFence never lets me walk there (a bag I'd stand and stare at).
       const st = c.view.storm;
       if (st && this.difficulty !== 'easy' && Math.hypot(p.x - st.x, p.z - st.z) > this.stormSafeR(st) - 0.5) continue;
-      const i = islandAt(c.view.map, p);
-      if (i !== c.on && !this.nav.routeTo(p)) continue;
+      // No route, even on my own island (e.g. past a wall): goTo would idle on it forever (measured: two medium bots
+      // stood 160 s in the final ring, out of ammo, each "looting" a bag it couldn't reach; the watchdog is off then).
+      if (!this.nav.routeTo(p)) continue;
       best = p; bestD = d;
     }
     return best;
@@ -1547,14 +1572,19 @@ export class Bot {
         if (d > st.r) return this.difficulty === 'easy' ? 0.9 : 1.7;
         if (d > this.stormSafeR(st)) return this.difficulty === 'easy' ? 0.4 : 1.3;
         // No way onto the center island yet: the ring will end there, so the bridge comes first.
-        return this.needCenterBridge(c) ? 1.2 : 0;
+        if (this.needCenterBridge(c)) return 1.2;
+        // Final circle, nobody in sight: the last rivals are in here too, so close in on its centre and find them
+        // (CI storm medium seed 2: two armed bots stood 15 m apart behind cover on the center island until the cap).
+        return this.finalHunt(c) ? FINAL_HUNT : 0;
       }
       case 'fight': {
         if (!c.enemy) return 0;
         // Someone across the water gets shot at anyway (aim/fire layer on every goal); only drop
         // everything to fight when they're close or on the same island.
         const sameIsland = this.sameGround(me.pos, c.enemy.pos);
-        if (!sameIsland && c.enemyDist > ENGAGE_RANGE) return 0.2;
+        // Sudden death with no ammo: the one I can see is the one to go and punch, however far (else both walk to
+        // each other's islands and pass in the ring until the cap).
+        if (!sameIsland && c.enemyDist > ENGAGE_RANGE) return view.suddenDeath && !gun ? SD_FISTS_ATTACK + 0.05 : 0.2;
         // Sudden death with no ammo left anywhere to buy it: fists are all there is.
         const sealedFoe = !view.suddenDeath && view.sealed[c.enemy.island] ? this.P.drive.sealedHunt : 0;
         return (gun || c.enemyDist < 8 || view.suddenDeath ? 0.85 : 0.35) + 0.25 * t.aggression + (gun ? sealedFoe : 0);
@@ -1566,7 +1596,7 @@ export class Bot {
         // Final circle: nowhere left to run (backing off only buys regen, and the fight never ends); fists vs fists
         // in sudden death likewise.
         if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
-        const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression;
+        const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + this.sealedCaution(c);
         if (hp < low) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
@@ -1580,7 +1610,8 @@ export class Bot {
         if (!blockers.length) return 0;
         // Nothing that can clear what's there (steel needs a charge): better to go buy one than stand at the door.
         const can = blockers.some((p) => this.canClear(c, p));
-        if (view.sealed[home.index]) return (can ? 0.85 : 0.1) + 0.1 * t.caution;
+        // Dying while sealed is an instant elimination: unseal before anything else unless someone is on top of me.
+        if (view.sealed[home.index]) return (can ? 0.85 + (this.sealedHomeCalm(c) ? this.P.drive.sealedHome[this.difficulty] : 0) : 0.1) + 0.1 * t.caution;
         // One plugged doorway is most of a seal: clear it before going out. Out of ammo with the money for a box
         // (vault too): fetch it first, punching sandbags out one by one takes a minute (ffa8-mixed seed 18: 61 s).
         const restock = !ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) && me.inv.cash + me.vault.cash >= AMMO_BOX.price;
@@ -1690,7 +1721,9 @@ export class Bot {
         // Respawn window with no kit to seal: wait at their door for the unarmed respawn.
         const push = this.inWindow(c) ? this.P.drive.windowPush * 0.5 : 0;
         if (rivalDown) return (gun && sealKit(me.inv) === 0 ? 0.35 + 0.3 * t.opportunism : 0.3) + push;
-        if (!gun) return 0.1;
+        // Sudden death, out of ammo: generators are off and home is in the storm, so fists are the only way to win
+        // (CI ffa8-hard seed 11: the last two, both empty, walked between shop, generator and ring until the cap).
+        if (!gun) return view.suddenDeath ? SD_FISTS_ATTACK : 0.1;
         const upgraded = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
         // Their bunker is sealed: every death of theirs is an elimination, so hunting them is worth the most.
         const sealedHunt = c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive ? this.P.drive.sealedHunt : 0;
@@ -1721,6 +1754,9 @@ export class Bot {
       case 'loot': {
         const bag = this.nearestLoot(c);
         const crate = this.nearestCrate(c);
+        // Sudden death with no ammo: a bag (guns, rounds) beats punching (CI storm seed 7: two fist-only bots traded
+        // punches with regen for 3 min beside full bags).
+        if (bag && !gun && view.suddenDeath) return SD_FISTS_ATTACK + 0.1;
         const bagScore = bag ? 0.35 + 0.45 * t.greed + (gun ? 0 : 0.2) - dist2D(bag, me.pos) / 70 : 0;
         // A crate is a small, uncertain prize: worth a short detour, never a trip.
         const crateScore = crate ? 0.2 + 0.3 * t.greed - dist2D(crate.pos, me.pos) / 30 : 0;
@@ -1753,9 +1789,19 @@ export class Bot {
     }
   }
 
+  /** Extra bail-out hp line while my own bunker is sealed (a death now is final), by tier (drive.sealedCaution). */
+  sealedCaution(c: Ctx): number {
+    return c.view.sealed[c.home.index] && !c.view.suddenDeath ? this.P.drive.sealedCaution[this.difficulty] : 0;
+  }
+
+  /** My bunker is sealed and no enemy is close enough to punish me for turning to clear it. */
+  private sealedHomeCalm(c: Ctx): boolean {
+    return !c.enemy || c.enemyDist > SEALED_HOME_CLEAR;
+  }
+
   /** Inside my own sealed bunker (respawned into it, or sealed in alive): getting out is all that matters. */
   private trapped(c: Ctx): boolean {
-    return c.me.breakoutUntil !== null || (c.view.sealed[c.home.index] && !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos));
+    return c.me.breakoutUntil !== null || (c.view.sealed[c.home.index] && !c.view.suddenDeath && insideBunker(c.home.bunker, c.me.pos) && underRoof(c.home, c.me.pos));
   }
 
   private pick(c: Ctx): Goal {
@@ -1812,7 +1858,7 @@ export class Bot {
         return long && !stillHit && me.hp / 100 > this.P.drive.reengageHp ? 0 : s;
       }
       case 'fight': {
-        if (!c.enemy) return s;
+        if (!c.enemy || (view.suddenDeath && !ownsGun(me.inv))) return s; // no ammo in sudden death: go and punch
         const sameIsland = this.sameGround(me.pos, c.enemy.pos);
         return !sameIsland && c.enemyDist > this.P.drive.plinkRange ? 0 : s;
       }
@@ -1833,7 +1879,7 @@ export class Bot {
       }
       // The center island is where the fights are: worth going for when it pays.
       case 'contest': return s > 0 ? s + this.P.drive.push[this.difficulty] * 0.5 : s;
-      case 'fortify': return this.t.builder >= this.P.buildTuning.fortEarlyBuilder ? s * 0.5 : 0;
+      case 'fortify': return this.t.builder >= Math.min(this.P.buildTuning.fortEarlyBuilder, this.P.buildTuning.fortSealedRule[this.difficulty]) ? s * 0.5 : 0;
       case 'trap': return s * 0.6;
       case 'cut': return this.crossing(c) ? s : s * 0.4;
       // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
@@ -2171,7 +2217,14 @@ export class Bot {
       return far && dist2D(far, me.pos) > 0.2 ? { dir: norm(flat(sub(far, me.pos))) } : IDLE;
     }
     this.hideFrom = null;
-    if (here.path) {
+    // The grid says there's a way out but walking it gets me nowhere (a plug the grid misreads, physics disagrees):
+    // stop trusting it for a while and break something instead (replay 7d6d6fa: trapped bots pressed against a wall
+    // for the whole countdown, never firing).
+    if (here.path && now >= this.escapeNoPathUntil) {
+      if (!this.escapeRef || dist2D(this.escapeRef.pos, me.pos) > ESCAPE_STALL_M || now - this.escapeRef.t > ESCAPE_STALL_SEC * 3) this.escapeRef = { pos: clone(me.pos), t: now };
+      else if (now - this.escapeRef.t > ESCAPE_STALL_SEC) { this.escapeNoPathUntil = now + 3; this.escapeRef = null; }
+    }
+    if (here.path && now >= this.escapeNoPathUntil) {
       const wp = here.path[Math.min(here.path.length - 1, 3)];
       const dir = norm(flat(sub(wp, me.pos)));
       // The way out goes over a piece too low to block (a lone sandbag in a doorway): hop it, don't walk into it.
@@ -2190,8 +2243,11 @@ export class Bot {
     const cost = (p: PieceState) => Math.min(breakCost(p, weapon, dps), blastable(p) ? CHARGE.fuseSec + 2 : Infinity);
     const nearDoor = (p: PieceState) => c.home.bunker.doorways.some((d) => dist2D(d.center, p.pos) < 1.8);
     // Nothing I carry gets through anything: still have a go at the weakest doorway plug (a human would).
+    // Last resort (no single piece opens a path, e.g. two layers in every doorway): the weakest doorway plug, then
+    // the nearest blocker. Trapped, standing still is never the answer.
     const target = pieceToBreak(grid, me.pos, cost, nearDoor) ??
-      (pieceToBreak(grid, me.pos, (p) => p.hp, nearDoor));
+      pieceToBreak(grid, me.pos, (p) => p.hp, nearDoor) ??
+      [...grid.blockers].sort((a, b) => (nearDoor(b) ? 1 : 0) - (nearDoor(a) ? 1 : 0) || a.hp - b.hp || dist2D(a.pos, me.pos) - dist2D(b.pos, me.pos))[0] ?? null;
     if (!target) return IDLE;
     const center = v3(target.pos.x, target.pos.y + Math.min(PIECES[target.kind].h / 2, 1.2), target.pos.z);
     const useCharge = blastable(target) && breakCost(target, weapon, dps) > CHARGE.fuseSec + 2;
@@ -2967,7 +3023,20 @@ export class Bot {
     }
     const cover = c.enemy ? this.coverFrom(c, c.enemy) : null;
     if (cover && dist2D(cover, me.pos) > 0.8) return { ...this.goTo(cover, 0.6), sprint: true };
-    return { dir: away, sprint: true };
+    // Straight away from them, or the nearest heading that keeps me on land (measured: botDrown medium seed 3, a bot
+    // landed from a hook escape on an island rim and ran on into the sea).
+    const dir = this.landward(me.pos, away);
+    return dir ? { dir, sprint: true } : IDLE;
+  }
+
+  /** `want`, or the heading closest to it whose ground 2.5 m ahead is dry land or a deck; null if none is. */
+  private landward(from: Vec3, want: Vec3): Vec3 | null {
+    for (const a of [0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4]) {
+      const d = a === 0 ? want : rotateY(want, a);
+      const g = this.view.groundAt(from.x + d.x * 2.5, from.z + d.z * 2.5);
+      if (g !== null && g > this.view.waterY + 0.5) return d;
+    }
+    return null;
   }
 
   /**
@@ -2992,6 +3061,12 @@ export class Bot {
     return Math.max(Math.min(st.rf - 2, st.r), ahead);
   }
 
+  /** Sudden death, the ring at its final size, no enemy in sight, and I'm not yet near its centre. */
+  private finalHunt(c: Ctx): boolean {
+    const st = c.view.storm;
+    return !!st && c.view.suddenDeath && !c.enemy && st.r <= st.rf + 0.5 && Math.hypot(c.me.pos.x - st.x, c.me.pos.z - st.z) > FINAL_HUNT_NEAR;
+  }
+
   /**
    * Sudden-death storm: get inside the ring ahead of it. Straight toward the centre when that stays on land
    * I can walk to; otherwise to the walkable spot closest to the centre (the near shore of my island or of one
@@ -3001,6 +3076,10 @@ export class Bot {
     const { view, me } = c;
     const st = view.storm;
     if (!st) return IDLE;
+    if (this.finalHunt(c)) {
+      const walk = this.goTo(v3(st.x, me.pos.y, st.z), FINAL_HUNT_NEAR - 1);
+      if (walk.dir) return walk;
+    }
     const ctr = v3(st.x, me.pos.y, st.z);
     const want = this.stormSafeR(st) - 1;
     const d = dist2D(me.pos, ctr);
@@ -3026,7 +3105,7 @@ export class Bot {
       // Stock up in one shop visit (not one deck per trip) while still on my island.
       // Only while the shop (and the vault, if I need cash from it) is still inside the ring: a trip out into the
       // storm to shop kills just as surely.
-      const shopSafe = dist2D(c.home.shop, ctr) < st.r - 2 || view.now - LIFECYCLE.suddenDeathAt < STORM_SHOP_GRACE;
+      const shopSafe = dist2D(c.home.shop, ctr) < st.r - 2 || inStormShopGrace(view);
       const buy = have < need && c.homeReach && shopSafe && (have === 0 || dist2D(me.pos, c.home.shop) < 6) ? this.buyDecks(c) : null;
       if (buy) return buy;
       if (have > 0) {
