@@ -1269,14 +1269,16 @@ export class Bot {
       if (view.allies?.some((a) => a.hurtBy === e.id && view.now - a.hurtAt <= this.P.team.assistSec)) eff /= this.P.team.focusFire;
       if (e.alive && eff < pickD) { enemy = e; enemyDist = d; pickD = eff; }
     }
-    const reach = !!rivalIsl && (on === rivalIsl.index || this.nav.hop(src, rivalIsl.index) !== null);
-    // Off any island (a bridge, a pier): from wherever that walk starts (a dock off a dead rival's island is not home).
+    // Off any island (a bridge, a pier): from wherever that walk starts (a dock off a dead rival's island is not home;
+    // out on an unfinished bridge, only the island it hangs off: home's bridges don't help me there).
     const stand = node >= 0 ? [node] : this.nav.standNodes(me.pos);
+    const from = stand.length ? stand : [src];
+    const reach = !!rivalIsl && (on === rivalIsl.index || from.some((n) => n === rivalIsl.index || this.nav.hop(n, rivalIsl.index) !== null));
     const homeReach = stand.length === 0 || stand.some((n) => n === home.index || this.nav.hop(n, home.index) !== null);
     const openDoors = rivalIsl ? rivalIsl.bunker.doorways.filter((d) => !doorBlocked(view.pieces, d)) : [];
     const danger = view.now - this.mem.lastHurtAt < 3 || (!!enemy && enemyDist < 40);
     const C = this.nav.centerNode;
-    const centerReach = C >= 0 && (node === C || this.nav.hop(src, C) !== null);
+    const centerReach = C >= 0 && (node === C || from.some((n) => n === C || this.nav.hop(n, C) !== null));
     let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
     const hookFrom = rivalIsl && !reach ? this.hookLaunch(view, me, node, home.index, rivalIsl.index) : null;
     // Teams: bridge to the teammate whose island is on the way (they lay the rest); already linked to them, wait
