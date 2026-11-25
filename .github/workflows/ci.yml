@@ -15,14 +15,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        seed: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        seed: [1, 2, 3, 4, 5, 6, 7]
         mode: [build, hit]
         v:
-          - { name: base45, p: '{"heal.fightHp.pro":45}' }
-          - { name: fight40, p: '{"heal.fightHp.pro":40}' }
-          - { name: fight35, p: '{}' }
+          - { name: f32, p: '{"heal.fightHp.pro":32}' }
+          - { name: f33, p: '{"heal.fightHp.pro":33}' }
+          - { name: f34, p: '{"heal.fightHp.pro":34}' }
+          - { name: f36, p: '{"heal.fightHp.pro":36}' }
+          - { name: f37, p: '{"heal.fightHp.pro":37}' }
+          - { name: f38, p: '{"heal.fightHp.pro":38}' }
+          - { name: f35rel08, p: '{"heal.reloadWeight.pro":0.8}' }
+          - { name: f35cov06, p: '{"heal.coverFirst.pro":0.6}' }
         exclude:
           - { mode: build, seed: 1 }
+          - { mode: hit, seed: 2 }
+          - { mode: hit, seed: 3 }
+          - { mode: hit, seed: 4 }
+          - { mode: hit, seed: 5 }
+          - { mode: hit, seed: 6 }
+          - { mode: hit, seed: 7 }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
