@@ -26,12 +26,19 @@ async function hitRates(seed: number, minutes: number) {
       if (e.type === 'hit' && e.data.target !== e.data.by) add(hits, by);
     }
   }
-  return (d: Difficulty) => ({ shots: shots.get(d) ?? 0, rate: (hits.get(d) ?? 0) / Math.max(1, shots.get(d) ?? 0) });
+  return { shots, hits };
 }
 
 describe('bot hit rate under recoil', () => {
-  test('PRO lands a human-pro share, beats Hard, and is no aimbot; easy misses most', async () => {
-    const r = await hitRates(1, 6);
+  test('pooled over seeds 1-4: PRO lands a human-pro share, beats Hard, and is no aimbot; easy misses most', async () => {
+    // Coordinator's definition (one for every branch, like botBuild): pooled over seeds 1-4. A single 6-minute match
+    // flipped on one hit (0.701 vs 0.70) while 15 seeds pooled sat at 0.53.
+    const shots = new Map<Difficulty, number>(), hits = new Map<Difficulty, number>();
+    for (const seed of [1, 2, 3, 4]) {
+      const g = await hitRates(seed, 6);
+      for (const d of D) { shots.set(d, (shots.get(d) ?? 0) + (g.shots.get(d) ?? 0)); hits.set(d, (hits.get(d) ?? 0) + (g.hits.get(d) ?? 0)); }
+    }
+    const r = (d: Difficulty) => ({ shots: shots.get(d) ?? 0, rate: (hits.get(d) ?? 0) / Math.max(1, shots.get(d) ?? 0) });
     const pro = r('pro'), hard = r('hard'), easy = r('easy');
     console.log(`hit rate: pro ${pro.rate.toFixed(2)} (${pro.shots}) hard ${hard.rate.toFixed(2)} (${hard.shots}) easy ${easy.rate.toFixed(2)} (${easy.shots})`);
     expect(pro.shots).toBeGreaterThan(50);
@@ -39,5 +46,5 @@ describe('bot hit rate under recoil', () => {
     expect(pro.rate).toBeLessThan(0.7);
     expect(pro.rate).toBeGreaterThan(hard.rate);
     expect(easy.rate).toBeLessThan(pro.rate);
-  }, 600_000);
+  }, 1_800_000);
 });
