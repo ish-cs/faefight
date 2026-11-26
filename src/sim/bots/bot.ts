@@ -114,7 +114,6 @@ const STORM_MARGIN: Record<Difficulty, number> = { easy: 0, medium: 3, hard: 4, 
 const BOLT_REACT: Record<Difficulty, number> = { easy: 0.6, medium: 0.35, hard: 0.2, pro: 0.15 };
 const EASY_DODGE = 0.4;
 /** Medium+ bots bridge to the centre island (where the storm ends) from this long before sudden death. */
-const STORM_PREP_SEC = 150;
 /** Storm goal score for leaving my bunker before sudden death's slabs drop (above every other goal), and how far past the doorway to go. */
 const BARRIER_LEAVE = 2, BUNKER_EXIT = 3;
 /** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
@@ -3265,9 +3264,9 @@ export class Bot {
     return !!c.view.storm && this.nav.centerNode >= 0 && !c.centerReach && this.stormPrep(c.view);
   }
 
-  /** Bridging to the center island ahead of the storm (medium+, from STORM_PREP_SEC before sudden death). */
+  /** Bridging to the center island ahead of the storm (medium+, from drive.stormPrepSec before sudden death). */
   private stormPrep(view: BotView): boolean {
-    return this.difficulty !== 'easy' && (view.suddenDeath || view.now >= (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) - STORM_PREP_SEC);
+    return this.difficulty !== 'easy' && (view.suddenDeath || view.now >= (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) - this.P.drive.stormPrepSec);
   }
 
   /** Storm prep's own goals (decks to the center, buying them): never dropped by the watchdog. */

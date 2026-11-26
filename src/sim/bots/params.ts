@@ -91,6 +91,7 @@ export type DriveParams = {
   sealedFocus: number;
   kitlessAttack: Record<Difficulty, number>;
   kitSpare: Record<Difficulty, number>;
+  stormPrepSec: number;
   /**
    * Spoils of war: rival-choice bonus per $1000 of bounty on a sealed / trapped rival (skilled players only: an easy or
    * medium bot picking a PRO for the money was what flipped the botBuild seed-2 game); finishTrapped: one trapped in reach.
@@ -405,6 +406,8 @@ export const DRIVE: DriveParams = {
   // Plugs carried beyond a full seal kit: after a respawn-window seal the trapped owner shoots a plug out; the spare
   // re-seals that doorway (mixed ×60 on main: 3.6 of 5.7 such seals a game ended in a breakout, sieger at the door).
   kitSpare: D(0, 1, 1, 1),
+  // Medium+ get set for the storm (decks to the center, buying them) this long before sudden death.
+  stormPrepSec: 150,
   spoilsTarget: D(0, 0, 0.5, 0.5),
   finishTrapped: 0.8,
   dockShot: D(0.15, 0.45, 0.65, 0.85),
@@ -551,7 +554,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sealRaceM', [10, 120]], ['drive.windowSlackSec', [0, 6]], ['drive.windowPush', [0, 1.5]],
   ['drive.respawnCautionSec', [0, 30]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]], ['drive.crossFire.*', [15, 60]],
-  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome.*', [0, 1.2]], ['drive.sealedCaution.*', [0, 0.5]], ['drive.sealedFocus', [1, 3]], ['drive.kitlessAttack.*', [0, 0.8]], ['drive.kitSpare.*', [0, 3]],
+  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome.*', [0, 1.2]], ['drive.sealedCaution.*', [0, 0.5]], ['drive.sealedFocus', [1, 3]], ['drive.kitlessAttack.*', [0, 0.8]], ['drive.kitSpare.*', [0, 3]], ['drive.stormPrepSec', [30, 240]],
   ['drive.spoilsTarget.*', [0, 1.5]], ['drive.finishTrapped', [0, 2]],
   ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]], ['drive.stormLead.*', [0, 40]], ['drive.barrierLead.*', [0, 60]], ['drive.shutInRange.*', [0, 40]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
