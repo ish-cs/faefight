@@ -40,8 +40,7 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  *   bunker is sealed (each death of theirs eliminates them); sealedFocus: among visible enemies, one with a sealed
  *   bunker counts as this many times closer when choosing whom to shoot.
  * - kitlessAttack: taken off the attack goal while short of a seal kit (that I can afford) for an unsealed rival:
- *   shop for it first, so a kill at their bunker turns into a seal (by tier). kitSpare: plugs bought beyond the kit
- *   (re-seal the doorway a trapped owner breaks out through).
+ *   shop for it first, so a kill at their bunker turns into a seal (by tier).
  * - sealedCaution: added to the disengage hp line while my own bunker is sealed (by tier).
  * - sealedHome: added to defend (clear my plugged doorway) while my own bunker is sealed and no enemy is within
  *   SEALED_HOME_CLEAR m: dying sealed is an instant elimination, so unseal before picking fights.
@@ -90,8 +89,6 @@ export type DriveParams = {
   sealedCaution: Record<Difficulty, number>;
   sealedFocus: number;
   kitlessAttack: Record<Difficulty, number>;
-  kitSpare: Record<Difficulty, number>;
-  stormPrepSec: number;
   /**
    * Spoils of war: rival-choice bonus per $1000 of bounty on a sealed / trapped rival (skilled players only: an easy or
    * medium bot picking a PRO for the money was what flipped the botBuild seed-2 game); finishTrapped: one trapped in reach.
@@ -377,8 +374,10 @@ export const DRIVE: DriveParams = {
   guardFreshSec: 4,
   collectCarried: 200,
   steelRich: 550,
-  sealAway: 0.25,
-  sealAwayTarget: 0.6,
+  // 0.25 → 0.6 and 0.6 → 1.0: a bunker sealed while its owner is out ends in an elimination ~75% of the time (a
+  // respawn-window seal ~35%: the trapped owner shoots a plug out), so the empty bunker is the one to go for.
+  sealAway: 0.6,
+  sealAwayTarget: 1.0,
   emptyHomeSec: 8,
   sealRaceM: 60,
   windowSlackSec: 2,
@@ -403,11 +402,6 @@ export const DRIVE: DriveParams = {
   sealedFocus: 1.6,
   // Off attack while short of a seal kit I can afford (shop first): kills at their door should become seals.
   kitlessAttack: D(0, 0.3, 0.3, 0.3),
-  // Plugs carried beyond a full seal kit: after a respawn-window seal the trapped owner shoots a plug out; the spare
-  // re-seals that doorway (mixed ×60 on main: 3.6 of 5.7 such seals a game ended in a breakout, sieger at the door).
-  kitSpare: D(0, 1, 1, 1),
-  // Medium+ get set for the storm (decks to the center, buying them) this long before sudden death.
-  stormPrepSec: 150,
   spoilsTarget: D(0, 0, 0.5, 0.5),
   finishTrapped: 0.8,
   dockShot: D(0.15, 0.45, 0.65, 0.85),
@@ -554,7 +548,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sealRaceM', [10, 120]], ['drive.windowSlackSec', [0, 6]], ['drive.windowPush', [0, 1.5]],
   ['drive.respawnCautionSec', [0, 30]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]], ['drive.crossFire.*', [15, 60]],
-  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome.*', [0, 1.2]], ['drive.sealedCaution.*', [0, 0.5]], ['drive.sealedFocus', [1, 3]], ['drive.kitlessAttack.*', [0, 0.8]], ['drive.kitSpare.*', [0, 3]], ['drive.stormPrepSec', [30, 240]],
+  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome.*', [0, 1.2]], ['drive.sealedCaution.*', [0, 0.5]], ['drive.sealedFocus', [1, 3]], ['drive.kitlessAttack.*', [0, 0.8]],
   ['drive.spoilsTarget.*', [0, 1.5]], ['drive.finishTrapped', [0, 2]],
   ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]], ['drive.stormLead.*', [0, 40]], ['drive.barrierLead.*', [0, 60]], ['drive.shutInRange.*', [0, 40]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
