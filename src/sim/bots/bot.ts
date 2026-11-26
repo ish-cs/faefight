@@ -1759,7 +1759,7 @@ export class Bot {
         const upgraded = !!(me.inv.weapons.smg || me.inv.weapons.rifle || me.inv.weapons.shotgun);
         // Their bunker is sealed: every death of theirs is an elimination, so hunting them is worth the most.
         const sealedHunt = c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive ? this.P.drive.sealedHunt : 0;
-        return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution)) + sealedHunt;
+        return (0.3 + 0.25 * t.aggression - (upgraded ? 0 : 0.12 * t.patience)) * (0.5 + 0.5 * Math.max(hp, 1 - t.caution)) + sealedHunt - this.kitlessAttack(c);
       }
       case 'seal': {
         const kit = sealKit(me.inv);
@@ -1821,6 +1821,18 @@ export class Bot {
     }
   }
 
+  /**
+   * Going after an unsealed rival without a seal kit I could afford: a kill at their bunker can't become a seal (they're
+   * back in 10 s), so shop for the kit first (drive.kitlessAttack). Mixed ×60 on main: 65% of kills within 30 m of the
+   * victim's bunker were by a bot holding no plug at all; 3 of 19 such kills a game turned into a seal.
+   */
+  kitlessAttack(c: Ctx): number {
+    const pen = this.P.drive.kitlessAttack[this.difficulty];
+    if (pen <= 0 || !c.rivalIsl || c.view.sealed[c.rivalIsl.index] || c.view.suddenDeath) return 0;
+    const short = Math.max(c.openDoors.length, 1) - sealKit(c.me.inv);
+    return short > 0 && c.me.inv.cash + c.me.vault.cash >= short * PIECES.wood.price ? pen : 0;
+  }
+
   /** Extra bail-out hp line while my own bunker is sealed (a death now is final), by tier (drive.sealedCaution). */
   sealedCaution(c: Ctx): number {
     return c.view.sealed[c.home.index] && !c.view.suddenDeath ? this.P.drive.sealedCaution[this.difficulty] : 0;
@@ -1849,7 +1861,7 @@ export class Bot {
     let best: Goal = c.view.storm ? 'storm' : (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
     for (const g of GOALS) {
-      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrep(c.view)) continue; // banned for a while (goal watchdog)
+      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrepGoal(g)) continue; // banned for a while (goal watchdog)
       const raw = this.score(g, c);
       const base = this.teamDrive(g, c, this.drive(g, c, raw));
       if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
@@ -3257,6 +3269,11 @@ export class Bot {
     return this.difficulty !== 'easy' && (view.suddenDeath || view.now >= (view.suddenDeathAt ?? LIFECYCLE.suddenDeathAt) - STORM_PREP_SEC);
   }
 
+  /** Storm prep's own goals (decks to the center, buying them): never dropped by the watchdog. */
+  private stormPrepGoal(g: Goal): boolean {
+    return (g === 'bridge' || g === 'shop') && this.stormPrep(this.view);
+  }
+
   /** Sudden death's doorway slabs drop within drive.barrierLead s (0 for easy: unaware of them). */
   private sealingSoon(view: BotView): boolean {
     const lead = this.P.drive.barrierLead[this.difficulty];
@@ -3328,8 +3345,9 @@ export class Bot {
    */
   private watchdog(now: number, me: PlayerState) {
     const limit = !STALLABLE.has(this.goal) ? undefined : this.P.drive.stallSec * (this.goal === 'attack' ? 1.5 : 1);
-    // Getting set for the storm (decks to the center, buying them) is never given up.
-    if (limit === undefined || this.stormPrep(this.view)) { this.prog = null; return; }
+    // Getting set for the storm (decks to the center, buying them) is never given up; any other goal still is
+    // (mixed ×60 seed 9: a PRO stood 70 s at home on a 'seal' with no walkable route, 13:50-15:00).
+    if (limit === undefined || this.stormPrepGoal(this.goal)) { this.prog = null; return; }
     const p = this.prog;
     if (!p || p.goal !== this.goal || this.lastDidAt > p.at) {
       this.prog = { goal: this.goal, at: now, pos: clone(me.pos), far: 0 };

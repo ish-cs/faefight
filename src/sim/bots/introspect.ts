@@ -116,7 +116,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; kitlessAttack(c: Ctx): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null;
   stormPrep(view: BotView): boolean; sealingSoon(view: BotView): boolean; leaveBeforeBarriers(c: Ctx): boolean; rivalShutIn(c: Ctx): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
@@ -392,6 +392,8 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const f: [string, number][] = [['base', 0.3 * k], ['aggression', 0.25 * t.aggression * k]];
       if (!up) f.push(['patience (no upgrade)', -0.12 * t.patience * k]);
       if (c.rivalIsl && view.sealed[c.rivalIsl.index] && c.rival.alive) f.push(['sealed hunt', I.P.drive.sealedHunt]);
+      const kitless = I.kitlessAttack(c);
+      if (kitless) f.push(['no seal kit (shop first)', -kitless]);
       const where = recent ? `seen ${secs(now - recent.t)} ago${recent.island >= 0 && recent.island !== c.rival.island ? ' away from home' : ''}` : 'whereabouts unknown';
       return { f, why: `Going after ${rivalName(c)} (${where}) with my ${gunName(best(me.inv))}${!c.reach ? ', hooking over' : ''}` };
     }
