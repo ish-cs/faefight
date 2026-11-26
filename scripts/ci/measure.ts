@@ -90,6 +90,7 @@ export type GameOut = {
   seats: SeatOut[];
   /** Player kills at or after sudden death (15:00+), eliminations in all, credited ones (refs with elimination rewards) and their spoils. */
   lateKills?: number; elims?: number; credited?: number; spoils?: number;
+  diag?: unknown;
 };
 
 /** What src/sim/bots/params.ts exports, depending on the ref (the trainer branch adds sanitize/toBotParams). */
@@ -162,6 +163,10 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const lastCash = new Map<number, [number, number]>();
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const homeStreak = new Map<number, number>();
+  // DIAG (presd): kill funnel and seal outcomes.
+  const dg = { killD: [0, 0, 0, 0], killDLate: [0, 0, 0, 0], killHomeDef: 0, killHomeDefLate: 0, deadSeals: 0, aliveSeals: 0, aliveSealElim: 0, aliveSealUnseal: 0, aliveSealDur: 0,
+    deadSealElim: 0, deadSealUnseal: 0, lateGoal: {} as Record<string, number>, sealedAtSd: 0, leftAtSd: 0 };
+  const sealEp = new Map<number, { t: number; alive: boolean }>();
   let preSdElims = 0, preSdSeals = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
   const bo: BuildOut[] = diffs.map(() => ({ fights: 0, built: 0, builtWon: 0, plainWon: 0, pieces: 0, kinds: {}, bulletsTaken: 0, bulletsBlocked: 0, hits: 0, highHits: 0 }));
   const fight: ({ last: number; pieces: number; kill: boolean } | null)[] = diffs.map(() => null);
@@ -193,6 +198,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       }
       lastCash.set(p.id, [p.inv.cash, p.vault.cash]);
     }
+    if (dg.leftAtSd === 0 && snap.time >= SD - 1) {
+      for (const p of snap.players) if (!p.eliminated) { dg.leftAtSd++; if (snap.sealed[p.island]) dg.sealedAtSd++; }
+    }
     if (ticks % SAMPLE_TICKS === 0) {
       const dt = SAMPLE_TICKS / TICK_HZ;
       for (const p of snap.players) {
@@ -201,6 +209,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         s.aliveSec += dt;
         const goal = brains[p.id - 1]?.currentGoal;
         if (goal && ATTACK_GOALS.has(goal)) s.attackSec += dt;
+        if (goal && snap.time >= 600 && snap.time < SD) dg.lateGoal[goal] = (dg.lateGoal[goal] ?? 0) + dt;
         const b = bunkers[p.island];
         const nearBunker = snap.players.some((o) => o.id !== p.id && o.alive && Math.hypot(o.pos.x - b.x, o.pos.z - b.z) < THREAT_M);
         const armed = Object.keys(p.inv.weapons).length > 0 && p.inv.cash + p.vault.cash > 0;
@@ -262,6 +271,13 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (ls !== null && e.t - ls >= 3) seats[v - 1].lowHpDeaths!++;
         healSeen[v - 1].lowSince = null;
         if (k != null && k !== v) { seats[k - 1].kills++; if (e.t >= SD) lateKills++; }
+        if (k != null && k !== v && e.t < SD && !snap.sealed[snap.players[v - 1].island]) {
+          const kp = snap.players[k - 1].pos, vb = bunkers[snap.players[v - 1].island], kb = bunkers[snap.players[k - 1].island];
+          const d = Math.hypot(kp.x - vb.x, kp.z - vb.z), bin = d < 30 ? 0 : d < 60 ? 1 : d < 120 ? 2 : 3;
+          const homeDef = Math.hypot(kp.x - kb.x, kp.z - kb.z) < 30;
+          dg.killD[bin]++; if (homeDef) dg.killHomeDef++;
+          if (e.t >= 600) { dg.killDLate[bin]++; if (homeDef) dg.killHomeDefLate++; }
+        }
         if (k != null && k !== v && fight[k - 1]) { fight[k - 1]!.kill = true; endFight(k - 1, false); }
         endFight(v - 1, true);
       } else if (e.type === 'sealed') {
@@ -269,6 +285,15 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (by != null && by !== e.data.owner && seats[by - 1]) seats[by - 1].seals!++;
         if (firstSeal === null && by != null && by !== e.data.owner && e.t < SD) firstSeal = e.t;
         if (by != null && by !== e.data.owner && e.t < SD) preSdSeals++;
+        if (by != null && by !== e.data.owner && e.t < SD) {
+          const o = snap.players[(e.data.owner as number) - 1];
+          const alive = !!o?.alive && o.breakoutUntil === null;
+          sealEp.set(e.data.island as number, { t: e.t, alive });
+          if (alive) dg.aliveSeals++; else dg.deadSeals++;
+        }
+      } else if (e.type === 'unsealed') {
+        const ep = sealEp.get(e.data.island as number);
+        if (ep && e.t < SD) { sealEp.delete(e.data.island as number); if (ep.alive) { dg.aliveSealUnseal++; dg.aliveSealDur += e.t - ep.t; } else dg.deadSealUnseal++; }
       } else if ((e.type as string) === 'elimination') {
         if (e.data.by != null) { credited++; spoils += Number(e.data.spoils) || 0; }
       } else if ((e.type as string) === 'restock') {
@@ -279,6 +304,8 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (seats[id - 1].eliminatedAt === null) {
           seats[id - 1].eliminatedAt = e.t;
           if (e.t < SD) preSdElims++;
+          const ep = sealEp.get(snap.players[id - 1].island);
+          if (ep && e.t < SD) { sealEp.delete(snap.players[id - 1].island); if (ep.alive) { dg.aliveSealElim++; dg.aliveSealDur += e.t - ep.t; } else dg.deadSealElim++; }
           elims++;
         }
       }
@@ -292,7 +319,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const winner = snap.winner !== null && snap.winner > 0 ? snap.winner : null;
   return {
     scenario, seed, winner, winnerDifficulty: winner ? diffs[winner - 1] : null, time: snap.time,
-    decisive: winner !== null && snap.time < SD, preSdElims, preSdSeals, lateKills, elims, credited, spoils, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
+    diag: dg, decisive: winner !== null && snap.time < SD, preSdElims, preSdSeals, lateKills, elims, credited, spoils, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
   };
 }
 
