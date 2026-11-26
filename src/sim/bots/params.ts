@@ -401,7 +401,7 @@ export const DRIVE: DriveParams = {
   sealedCaution: D(0, 0.1, 0.2, 0.25),
   sealedFocus: 1.6,
   // Off attack while short of a seal kit I can afford (shop first): kills at their door should become seals.
-  kitlessAttack: D(0, 0.3, 0.3, 0.3),
+  kitlessAttack: D(0, 0.25, 0.25, 0.25),
   spoilsTarget: D(0, 0, 0.5, 0.5),
   finishTrapped: 0.8,
   dockShot: D(0.15, 0.45, 0.65, 0.85),

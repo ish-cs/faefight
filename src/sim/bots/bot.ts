@@ -115,6 +115,8 @@ const BOLT_REACT: Record<Difficulty, number> = { easy: 0.6, medium: 0.35, hard: 
 const EASY_DODGE = 0.4;
 /** Medium+ bots bridge to the centre island (where the storm ends) from this long before sudden death. */
 const STORM_PREP_SEC = 150;
+/** Pieces that plug a doorway (sealKit counts tall pieces and sandbag pairs). */
+const KIT_PIECES: PieceKind[] = ['steel', 'metal', 'wood', 'sandbags'];
 /** Storm goal score for leaving my bunker before sudden death's slabs drop (above every other goal), and how far past the doorway to go. */
 const BARRIER_LEAVE = 2, BUNKER_EXIT = 3;
 /** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
@@ -1830,7 +1832,10 @@ export class Bot {
     const pen = this.P.drive.kitlessAttack[this.difficulty];
     if (pen <= 0 || !c.rivalIsl || c.view.sealed[c.rivalIsl.index] || c.view.suddenDeath) return 0;
     const short = Math.max(c.openDoors.length, 1) - sealKit(c.me.inv);
-    return short > 0 && c.me.inv.cash + c.me.vault.cash >= short * PIECES.wood.price ? pen : 0;
+    if (short <= 0 || c.me.inv.cash + c.me.vault.cash < short * PIECES.wood.price) return 0;
+    // Only when the shop would sell me a plug now (a full hotbar can't take a new piece kind: botWeaponCommit seed 1,
+    // half the marked-down ticks had no plug in the plan and the bot hung about home instead).
+    return this.plan(c).items.some((i) => (KIT_PIECES as string[]).includes(i)) ? pen : 0;
   }
 
   /** Extra bail-out hp line while my own bunker is sealed (a death now is final), by tier (drive.sealedCaution). */

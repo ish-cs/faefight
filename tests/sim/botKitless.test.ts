@@ -12,7 +12,12 @@ const ctx = (o: { pieces?: Record<string, number>; cash?: number; sealed?: boole
 }) as never;
 
 describe('drive.kitlessAttack: no attack on an unsealed rival without a seal kit I could buy', () => {
-  const bot = (d: 'easy' | 'medium' | 'hard' | 'pro') => new Bot(1, d, mulberry32(1));
+  // The shop plan stubbed: by default it would sell a plug next.
+  const bot = (d: 'easy' | 'medium' | 'hard' | 'pro', items: string[] = ['wood']) => {
+    const b = new Bot(1, d, mulberry32(1));
+    (b as unknown as { plan: () => unknown }).plan = () => ({ items, covered: false, spent: 0 });
+    return b;
+  };
   test('short of a kit with the cash for it: attack is marked down by the tier knob', () => {
     expect(bot('pro').kitlessAttack(ctx({}))).toBe(DRIVE.kitlessAttack.pro);
     expect(bot('medium').kitlessAttack(ctx({ pieces: { wood: 2 } }))).toBe(DRIVE.kitlessAttack.medium);
@@ -24,5 +29,10 @@ describe('drive.kitlessAttack: no attack on an unsealed rival without a seal kit
     expect(bot('pro').kitlessAttack(ctx({ sd: true }))).toBe(0);
     expect(bot('pro').kitlessAttack(ctx({ cash: 20 }))).toBe(0);
     expect(bot('easy').kitlessAttack(ctx({}))).toBe(0);
+  });
+  test('no penalty when the shop would not sell a plug now (full hotbar: nothing to go and buy)', () => {
+    expect(bot('pro', []).kitlessAttack(ctx({}))).toBe(0);
+    expect(bot('pro', ['scaffold', 'smg']).kitlessAttack(ctx({}))).toBe(0);
+    expect(bot('pro', ['scaffold', 'metal']).kitlessAttack(ctx({}))).toBe(DRIVE.kitlessAttack.pro);
   });
 });
