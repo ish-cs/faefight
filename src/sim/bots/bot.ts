@@ -1835,7 +1835,7 @@ export class Bot {
     if (short <= 0 || c.me.inv.cash + c.me.vault.cash < short * PIECES.wood.price) return 0;
     // Only when the shop would sell me a plug now (a full hotbar can't take a new piece kind: botWeaponCommit seed 1,
     // half the marked-down ticks had no plug in the plan and the bot hung about home instead).
-    return this.plan(c).items.some((i) => (KIT_PIECES as string[]).includes(i)) ? pen : 0;
+    return pen; // NOGATE-TRIAL
   }
 
   /** Extra bail-out hp line while my own bunker is sealed (a death now is final), by tier (drive.sealedCaution). */
