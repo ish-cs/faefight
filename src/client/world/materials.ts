@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { color, cos, float, mix, normalMap, positionLocal, positionWorld, sin, smoothstep, step, texture, time, uv, vec2, vec3, vertexColor } from 'three/tsl';
+import { color, cos, float, luminance, mix, normalMap, normalWorldGeometry, positionLocal, positionWorld, sin, smoothstep, step, texture, time, uv, vec2, vec3, vertexColor } from 'three/tsl';
 import { MAP } from '../../sim/constants';
 import { lightU } from './lightUniforms';
 import { applyPbr, pbrMaterial, pbrSample, pbrTex, worldNoise } from './pbr';
@@ -72,6 +72,38 @@ function containerMaterial() {
   return weather(m, { grime: 0.25, streaks: 0.3, vary: 0.12 });
 }
 
+/** Atlas UV units per metre of the baked structures (build_structures.py logs UV_PER_M) → detail tiles per UV unit. */
+const STRUCTURE_UV_PER_M = 0.06371, STRUCTURE_DETAIL_M = 2;
+
+/**
+ * Baked cast concrete (structureModel.ts: bunkers + quay rim): unique-UV atlas from Blender — formwork panels, tie
+ * holes, chipped arrises, spalled door jambs with rebar, pockmarks, stains, tide zone in the albedo/normal; AO into the
+ * ambient term only (aoNode). The atlas holds ~7.7 mm texels, so a tiled CC0 concrete scan (luminance + normal) adds
+ * the sub-centimetre grain up close. Wet + glossy right above the waterline like the old quay wall; moss at the foot.
+ */
+function structureMaterial() {
+  const m = new THREE.MeshStandardNodeMaterial();
+  m.name = 'structure';
+  const t = pbrTex('structure');
+  const u = uv();
+  const arm = texture(t.arm, u).rgb;
+  const du = u.mul(1 / (STRUCTURE_UV_PER_M * STRUCTURE_DETAIL_M));
+  const det = pbrTex('concrete_wall');
+  const dl = luminance(texture(det.map, du).rgb).div(0.237).clamp(0.4, 1.8);
+  const y = positionWorld.y;
+  const wet = float(1).sub(smoothstep(0.1, 0.9, y.sub(MAP.waterY))); // splash zone above the waterline (quay)
+  m.colorNode = texture(t.map, u).rgb.mul(mix(float(1), dl, 0.6)).mul(mix(float(1), float(0.62), wet));
+  const n = texture(t.normal, u).rgb.mul(2).sub(1);
+  const d = texture(det.normal, du).rgb.mul(2).sub(1);
+  m.normalNode = normalMap(vec3(n.xy.add(d.xy.mul(0.8)), n.z).normalize().mul(0.5).add(0.5));
+  m.roughnessNode = mix(arm.g, float(0.32), wet.mul(0.85));
+  m.metalnessNode = float(0);
+  m.aoNode = arm.r;
+  mossyBase(m, true);
+  applyWet(m, { porosity: 0.85 });
+  return weather(m, { grime: 0.15, streaks: 0.2, vary: 0.06 });
+}
+
 let M: ReturnType<typeof make> | null = null;
 function make() {
   return {
@@ -98,6 +130,8 @@ function make() {
     matte: weather(pbrMaterial('matte', 'linen', { lum: 0.4, lumPow: 0.35, uvScale: 3, normalScale: 0.45, roughAdd: 0.15, metalness: 0, untile: false }), { grime: 0.45, streaks: 0.3, edge: 0.25, chip: 'light' }),
     /** baked shipping containers (one shared atlas, livery = vertex colour) */
     container: containerMaterial(),
+    /** baked bunkers + quay rim (one shared atlas) */
+    structure: structureMaterial(),
     corr: weather(pbrMaterial('corr', 'corrugated', { lum: 0.44, uvScale: [2, 1], normalScale: 1.2, metalness: 0.35, roughMul: 0.95, macro: 0.12, untile: 'shift' }), { rust: 0.35, edge: 0.4, streaks: 0.75, grime: 0.45 }),
     awning: std('awning', { map: awningTex(), roughness: 0.8, side: THREE.DoubleSide }),
     leaf: std('leaf', { map: leafBlobTex(), roughness: 0.95 }),
@@ -141,10 +175,12 @@ function make() {
 }
 
 /** Moss + damp grime creeping up the first ~30 cm of cast concrete from the quay deck (bunkers, kerbs). */
-function mossyBase(m: THREE.MeshStandardNodeMaterial) {
+function mossyBase(m: THREE.MeshStandardNodeMaterial, wallsOnly = false) {
   const h = positionWorld.y.sub(MAP.groundY);
+  // wallsOnly: not on floors / roofs, nor on faces hanging below the deck (quay beam)
+  const onWall = wallsOnly ? float(1).sub(step(0.5, normalWorldGeometry.y.abs())).mul(step(0.01, h)) : float(1);
   const n = worldNoise(0.9, 'g');
-  const moss = float(1).sub(smoothstep(0.02, n.mul(0.35).add(0.08), h)).mul(step(-0.05, h)).mul(smoothstep(0.25, 0.6, worldNoise(0.35)).mul(0.6).add(0.4));
+  const moss = float(1).sub(smoothstep(0.02, n.mul(0.35).add(0.08), h)).mul(step(-0.05, h)).mul(smoothstep(0.25, 0.6, worldNoise(0.35)).mul(0.6).add(0.4)).mul(onWall);
   m.colorNode = mix(m.colorNode as THREE.Node<'vec3'>, vec3(0.07, 0.1, 0.035).mul(n.mul(0.6).add(0.7)), moss.mul(0.85));
   m.roughnessNode = mix(m.roughnessNode as THREE.Node<'float'>, float(0.95), moss);
   return m;
