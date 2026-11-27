@@ -33,7 +33,8 @@ def opt(k, d):
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 BAKE = opt('bake', 2048)
-TEX = opt('tex', 1024)
+TEX = opt('tex', 2048)      # albedo + ARM (stencils + livery mask need the texels)
+NTEX = opt('ntex', 1024)    # normal (corrugation / dents are low-frequency; a tiled detail normal adds grain)
 SAMPLES = opt('samples', 128)
 SEED = opt('seed', 20)
 WORK = opt('work', '/tmp/faefight-blender/container')
@@ -365,7 +366,7 @@ ISL = []
 for fs in islands_of(bm):
     us = [l[uvl].uv.x for f in fs for l in f.loops]; vs = [l[uvl].uv.y for f in fs for l in f.loops]
     ISL.append((fs, min(us), min(vs), max(us) - min(us), max(vs) - min(vs)))
-MARGIN = 6 / TEX
+MARGIN = 6 / 1024  # 6 px at 1K = 12 px at 2K: room for mip bleed
 log('island area m2:', round(sum(i[3] * i[4] for i in ISL), 2), 'n', len(ISL), 'top:', sorted([(round(i[3],2), round(i[4],2)) for i in ISL], key=lambda t: -t[0]*t[1])[:12])
 def skyline(scale, place=False):
     """Skyline bottom-left packer: each island (tallest first) goes where the skyline is lowest."""
@@ -598,7 +599,7 @@ DIRT = np.array([0.62, 0.55, 0.45])               # multiplied: road dirt darken
 g = grime_low * 0.55
 rgb *= (1 - g[..., None]) + DIRT * g[..., None]; rough += g * 0.2
 rgb *= (1 - 0.28 * wstreak)[..., None]; rough += 0.1 * wstreak
-rgb *= (0.78 + 0.22 * ao)[..., None]               # cavity dirt (AO itself goes to the ambient term via arm.r)
+rgb *= (0.62 + 0.38 * ao)[..., None]               # cavity dirt (AO itself goes to the ambient term via arm.r)
 code = 0.5 + 0.5 * np.clip(mask, 0, 1)                            # 1 tinted paint … 0.5 untinted dielectric
 for k, (a, r_, cd) in {'galv': (0.42, 0.36, 0.0), 'rubber': (0.03, 0.85, 0.5), 'plate': (0.55, 0.32, 0.0)}.items():
     s = is_[k]
@@ -608,21 +609,22 @@ gr = is_['galv'] * ss(0.62, 0.75, n_fine)  # a little rust on the bars
 rgb = rgb * (1 - gr[..., None]) + rust_col * gr[..., None]; code = np.where(gr > 0.5, 0.5, code); rough = rough * (1 - gr) + 0.85 * gr
 rgb[~cov] = 0.5; rough[~cov] = 0.6; code[~cov] = 1.0
 
-def down(a):  # 2×2 box downsample to TEX
-    f = BAKE // TEX
-    return a.reshape(TEX, f, TEX, f, *a.shape[2:]).mean((1, 3))
+def down(a, n=None):  # box downsample to n (default TEX)
+    n = n or TEX; f = BAKE // n
+    return a if f == 1 else a.reshape(n, f, n, f, *a.shape[2:]).mean((1, 3))
 def srgb(x):
     x = np.clip(x, 0, 1); return np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1 / 2.4) - 0.055)
-nrm = down(np.stack([nx, ny, NRM[..., 2] * 2 - 1], -1)); nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True) + 1e-8
+nrm = down(np.stack([nx, ny, NRM[..., 2] * 2 - 1], -1), NTEX); nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True) + 1e-8
 OUT = {
     'albedo': (srgb(down(rgb)), 'sRGB'),
     'normal': (nrm * 0.5 + 0.5, 'Non-Color'),
     'arm': (np.stack([down(ao), np.clip(down(rough), 0.04, 1), down(code)], -1), 'Non-Color'),
 }
 for name, (a, cs) in OUT.items():
-    img = bpy.data.images.new(f'out_{name}', TEX, TEX, alpha=False)
+    n = a.shape[0]
+    img = bpy.data.images.new(f'out_{name}', n, n, alpha=False)
     img.colorspace_settings.name = cs
-    px4 = np.concatenate([np.clip(a, 0, 1), np.ones((TEX, TEX, 1), np.float32)], -1).astype(np.float32)
+    px4 = np.concatenate([np.clip(a, 0, 1), np.ones((n, n, 1), np.float32)], -1).astype(np.float32)
     img.pixels.foreach_set(px4.ravel())
     path = os.path.join(OUT_TEX, f'{name}.jpg')
     img.filepath_raw = path; img.file_format = 'JPEG'

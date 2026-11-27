@@ -64,7 +64,7 @@ function containerMaterial() {
   m.colorNode = texture(t.map, u).rgb.mul(mix(vec3(1, 1, 1), vc, code.mul(2).sub(1).clamp(0, 1)));
   const n = texture(t.normal, u).rgb.mul(2).sub(1);
   const d = texture(pbrTex('painted_metal').normal, u.mul(1 / (CONTAINER_UV_PER_M * DETAIL_TILE_M))).rgb.mul(2).sub(1);
-  m.normalNode = normalMap(vec3(n.xy.mul(1.3).add(d.xy.mul(0.3)), n.z).normalize().mul(0.5).add(0.5));
+  m.normalNode = normalMap(vec3(n.xy.mul(3).add(d.xy.mul(0.3)), n.z).normalize().mul(0.5).add(0.5));
   m.roughnessNode = arm.g;
   m.metalnessNode = float(1).sub(code.mul(2)).clamp(0, 1).mul(0.85);
   m.aoNode = arm.r;
