@@ -95,10 +95,15 @@ type SeatOut = {
   /**
    * Frozen bot: longest stretch (s) alive with a rival still in the game without moving > FROZEN_M (2D), before sudden
    * death and from it on; frozenAt: when the longest pre-sudden-death one started. Not counted: a breakout countdown,
-   * holding inside my own bunker under fire (hurt in the last 3 s or an enemy within 30 m), and in sudden death any
+   * holding inside my own bunker under fire (hurt in the last 3 s or an enemy within 30 m), earning at my own generator
+   * (it pays me there: carried cash up in the last EARN_SEC s within EARN_M m; earnMax), and in sudden death any
    * bunker (the doorway slabs shut it). Optional: older shards.
    */
   frozenMax?: number; frozenAt?: number; frozenMaxSd?: number;
+  /** The longest pre-sudden-death freeze ≥ FROZEN_GATE_SEC, as the brain saw it when it hit that: goal/move layer: why @ x,z. */
+  frozenNote?: string;
+  /** Longest stretch (s) earning at its own generator (EARN_M / EARN_SEC): excluded from frozenMax, shown on its own. */
+  earnMax?: number;
   /** Movement jitter (src/sim/bots/moveStats.ts; refs without it leave this out). */
   jitter?: SeatJitter;
 };
@@ -123,6 +128,8 @@ export type BuildOut = {
 };
 const FIGHT_GAP = 8, BLOCK_M = 4, HIGH_M = 1.2;
 const FROZEN_M = 1, FROZEN_GATE_SEC = 45;
+/** Earning at my own generator (not frozen): within EARN_M m of it, carried cash up in the last EARN_SEC s. */
+const EARN_M = 3, EARN_SEC = 2;
 /** Dead air: no hit, kill or build anywhere while ≥ 2 players are still in the game. */
 const ACTION_EVENTS = new Set(['hit', 'kill', 'placed']);
 export type GameOut = {
@@ -211,7 +218,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
     archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0, healsGot: 0, healsUsed: 0, healsUsedFight: 0, lowHpDeaths: 0,
     deposits: 0, banked: 0, vaultPaid: 0, restocks: 0, interest: 0, vaultLv: 1, frozenMax: 0, frozenAt: 0, frozenMaxSd: 0,
   }));
-  const still = new Map<number, { x: number; z: number; t: number }>();
+  const still = new Map<number, { x: number; z: number; t: number; note?: string }>();
   let lastAction = 0, deadAir = 0, deadAirAt = 0;
   type HealSeen = { alive: boolean; n: number; healAt: unknown; drinking: { kind: string } | null; lowSince: number | null; hurtAt: number };
   const healSeen: HealSeen[] = diffs.map(() => ({ alive: false, n: 0, healAt: null, drinking: null, lowSince: null, hurtAt: -99 }));
@@ -219,6 +226,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const healN = (p: HealP) => p.inv.medkits + (p.inv.potions?.healPotion ?? 0) + (p.inv.potions?.shieldSmall ?? 0) + (p.inv.potions?.shieldBig ?? 0);
   const lastCash = new Map<number, [number, number]>();
   const bunkers = m.map.map((isl) => isl.bunker.center);
+  const gens = m.map.map((isl) => isl.generator);
+  /** Last time each player's carried cash rose while at its own generator (it pays them there), and since when it has. */
+  const earnAt = new Map<number, number>(), earnSince = new Map<number, number>();
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, preSdSeals = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
   const bo: BuildOut[] = diffs.map(() => ({ fights: 0, built: 0, builtWon: 0, plainWon: 0, pieces: 0, kinds: {}, bulletsTaken: 0, bulletsBlocked: 0, hits: 0, highHits: 0 }));
@@ -246,6 +256,8 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       const b = lastCash.get(p.id), s = seats[p.id - 1];
       if (b && s) {
         const dv = p.vault.cash - b[1], di = p.inv.cash - b[0];
+        const g = gens[p.island];
+        if (di > 0 && p.alive && Math.hypot(p.pos.x - g.x, p.pos.z - g.z) <= EARN_M) earnAt.set(p.id, snap.time);
         if (dv > 0 && di < 0) { s.deposits!++; s.banked! += dv; }
         else if (dv > 0 && di === 0) s.interest! += dv; // vault interest (refs with it)
         else if (dv < 0 && di <= 0) s.vaultPaid!++;
@@ -270,15 +282,30 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         const underFire = snap.time - (healSeen[p.id - 1]?.hurtAt ?? -99) < 3 ||
           snap.players.some((o) => o.id !== p.id && o.alive && Math.hypot(o.pos.x - p.pos.x, o.pos.z - p.pos.z) < THREAT_M);
         const shutIn = sd && bunkers.some((c) => Math.hypot(p.pos.x - c.x, p.pos.z - c.z) <= HOME_SIT_M);
+        // Earning: at my own generator while it pays me (carried cash rose in the last EARN_SEC): waiting for the price
+        // of the next buy, not frozen. Reported on its own (earnMax).
+        const earning = p.alive && snap.time - (earnAt.get(p.id) ?? -99) < EARN_SEC;
+        if (earning) { const e0 = earnSince.get(p.id) ?? snap.time; earnSince.set(p.id, e0); seats[p.id - 1].earnMax = Math.max(seats[p.id - 1].earnMax ?? 0, snap.time - e0); }
+        else earnSince.delete(p.id);
         const a = still.get(p.id);
-        if (!p.alive || p.eliminated || !rivals || p.breakoutUntil !== null || (inOwn && underFire) || shutIn || !a ||
+        if (!p.alive || p.eliminated || !rivals || p.breakoutUntil !== null || (inOwn && underFire) || shutIn || earning || !a ||
             Math.hypot(p.pos.x - a.x, p.pos.z - a.z) > FROZEN_M || (a.t < SD && sd)) {
           still.set(p.id, { x: p.pos.x, z: p.pos.z, t: snap.time });
           continue;
         }
         const s = seats[p.id - 1], held = snap.time - a.t;
+        // The brain probe records only while watched: switch it on 5 s before the gate, read it at the gate, then off.
+        const wb = brains[p.id - 1] as (Brain & { watch?: (on: boolean) => void; debugBrain?: () => { goal?: string; why?: string } }) | undefined;
+        if (!sd && held >= FROZEN_GATE_SEC - 5 && a.note === undefined) {
+          if (held < FROZEN_GATE_SEC) wb?.watch?.(true);
+          else {
+            const d = wb?.debugBrain?.();
+            wb?.watch?.(false);
+            a.note = `${d?.goal ?? '?'}/${wb?.moveSrc ?? '?'}: ${d?.why ?? '?'} @ ${p.pos.x.toFixed(0)},${p.pos.z.toFixed(0)}`;
+          }
+        }
         if (sd) s.frozenMaxSd = Math.max(s.frozenMaxSd ?? 0, held);
-        else if (held > (s.frozenMax ?? 0)) { s.frozenMax = held; s.frozenAt = a.t; }
+        else if (held > (s.frozenMax ?? 0)) { s.frozenMax = held; s.frozenAt = a.t; s.frozenNote = a.note; }
       }
       const dt = SAMPLE_TICKS / TICK_HZ;
       for (const p of snap.players) {
@@ -459,7 +486,7 @@ export type ScenarioSummary = {
    * Stalls (absent on old shard files): the longest frozen bot (s) before sudden death, where (seed, seat, start), and
    * from sudden death on; games with a bot frozen ≥ FROZEN_GATE_SEC; longest and median per-game dead air (s).
    */
-  stalls?: { frozenMax: number; worst: string; frozenMaxSd: number; gamesFrozen: number; deadAirMax: number; deadAirWorst: string; deadAirMedian: number | null };
+  stalls?: { frozenMax: number; worst: string; frozenMaxSd: number; gamesFrozen: number; deadAirMax: number; deadAirWorst: string; deadAirMedian: number | null; freezes?: string[]; earnMax?: number; earnWorst?: string };
   /** Means per game (absent on old shard files): kills at 15:00+, eliminations, credited eliminations, spoils paid. */
   perGame?: { lateKills: number; elims: number; credited: number; spoils: number };
   /** Movement jitter per tier (per minute alive), the layers behind the flips, and the worst episodes. */
@@ -572,15 +599,19 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
   };
   if (seats.every((x) => x.frozenMax !== undefined) && games.every((g) => g.deadAir !== undefined)) {
     let worst = '-', frozenMax = 0, frozenMaxSd = 0, gamesFrozen = 0, deadAirMax = 0, deadAirWorst = '-';
+    const freezes: [number, string][] = [];
+    let earn = 0, earnWorst = '-';
     for (const g of games) {
       g.seats.forEach((x, i) => {
+        if ((x.earnMax ?? 0) > earn) { earn = x.earnMax!; earnWorst = `seed ${g.seed} p${i + 1} ${x.difficulty}`; }
+        if (x.frozenMax! >= FROZEN_GATE_SEC) freezes.push([x.frozenMax!, `${x.frozenMax!.toFixed(0)} s seed ${g.seed} p${i + 1} ${x.difficulty} from ${secs(x.frozenAt ?? 0)}: ${x.frozenNote ?? '-'}`]);
         if (x.frozenMax! > frozenMax) { frozenMax = x.frozenMax!; worst = `seed ${g.seed} p${i + 1} ${x.difficulty} from ${secs(x.frozenAt ?? 0)}`; }
         frozenMaxSd = Math.max(frozenMaxSd, x.frozenMaxSd ?? 0);
       });
       if (g.seats.some((x) => Math.max(x.frozenMax!, x.frozenMaxSd ?? 0) >= FROZEN_GATE_SEC)) gamesFrozen++;
       if (g.deadAir! > deadAirMax) { deadAirMax = g.deadAir!; deadAirWorst = `seed ${g.seed} from ${secs(g.deadAirAt ?? 0)}`; }
     }
-    s.stalls = { frozenMax, worst, frozenMaxSd, gamesFrozen, deadAirMax, deadAirWorst, deadAirMedian: median(games.map((g) => g.deadAir!)) };
+    s.stalls = { frozenMax, worst, frozenMaxSd, gamesFrozen, deadAirMax, deadAirWorst, deadAirMedian: median(games.map((g) => g.deadAir!)), freezes: freezes.sort((a, b) => b[0] - a[0]).map(([, t]) => t), earnMax: earn, earnWorst };
   }
   const withBuild = seats.filter((x) => x.build);
   if (withBuild.length) {
@@ -641,6 +672,8 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     `### Stalls (frozen: alive, a rival in the game, moved ≤ ${FROZEN_M} m; dead air: no hit, kill or build anywhere)`, '',
     '| scenario | frozen max before 15:00 | worst | frozen max 15:00+ | games with a ≥ 45 s freeze | dead air max | worst | dead air median |', '|---|---|---|---|---|---|---|---|',
     ...sums.filter((s) => s.stalls).map((s) => { const x = s.stalls!; return `| ${s.scenario} | ${x.frozenMax.toFixed(0)} s | ${x.worst} | ${x.frozenMaxSd.toFixed(0)} s | ${x.gamesFrozen}/${s.games} | ${x.deadAirMax.toFixed(0)} s | ${x.deadAirWorst} | ${x.deadAirMedian === null ? '-' : x.deadAirMedian.toFixed(0)} s |`; }), '',
+    ...sums.filter((s) => s.stalls?.earnMax !== undefined).map((s) => `${s.scenario}: longest wait earning at its own generator (not counted as frozen): ${s.stalls!.earnMax!.toFixed(0)} s (${s.stalls!.earnWorst})`), '',
+    ...sums.filter((s) => s.stalls?.freezes?.length).flatMap((s) => [`${s.scenario} freezes ≥ ${FROZEN_GATE_SEC} s (goal/move layer: why, when it hit ${FROZEN_GATE_SEC} s):`, ...s.stalls!.freezes!.slice(0, 25).map((t) => `- ${t}`), '']),
     '### Eliminations per game (means)', '',
     '| scenario | kills 15:00+ | eliminations | credited | spoils paid |', '|---|---|---|---|---|',
     ...sums.filter((s) => s.perGame).map((s) => `| ${s.scenario} | ${s.perGame!.lateKills.toFixed(1)} | ${s.perGame!.elims.toFixed(1)} | ${s.perGame!.credited.toFixed(1)} | $${s.perGame!.spoils.toFixed(0)} |`), '',
