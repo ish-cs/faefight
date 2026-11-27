@@ -58,6 +58,20 @@ try {
     const p = { x: st.center.x + (ox / ol) * 4.5, z: st.center.z + (oz / ol) * 4.5 };
     await look(p, Math.atan2(-(st.center.x - p.x), -(st.center.z - p.z)), -0.05, 'container');
   } else console.log('no container cover on this map');
+  // close-up bunker: the front door's jambs (spalls, rebar, pockmarks) from ~4 m, a little off-axis
+  const bk = home.bunker, by = bk.facingYaw;
+  const bWorld = (x, z) => ({ x: bk.center.x + x * Math.cos(by) + z * Math.sin(by), z: bk.center.z - x * Math.sin(by) + z * Math.cos(by) });
+  { const p = bWorld(-1.6, -4.6), t = bWorld(0.8, -2.3); await look(p, Math.atan2(-(t.x - p.x), -(t.z - p.z)), 0.02, 'bunker'); }
+  // close-up quay: from the far end of the home pier back at the rim wall beside it (beam, fenders, tide zone)
+  const docks = (def?.docks ?? []).filter((d) => d.island === home.index);
+  if (docks.length) {
+    const dd = (d) => Math.hypot(d.center.x - home.center.x, d.center.z - home.center.z);
+    const far = docks.reduce((a, b) => (dd(b) > dd(a) ? b : a)), near = docks.reduce((a, b) => (dd(b) < dd(a) ? b : a));
+    const phi = Math.atan2(far.center.z - home.center.z, far.center.x - home.center.x) + 0.24;
+    const t = { x: home.center.x + home.radius * Math.cos(phi), z: home.center.z + home.radius * Math.sin(phi) };
+    const at = { x: (far.center.x + near.center.x) / 2, z: (far.center.z + near.center.z) / 2 };
+    await look(at, Math.atan2(-(t.x - at.x), -(t.z - at.z)), -0.3, 'quay');
+  } else console.log('no pier on the home island');
   // mid-fight: on the centre island looking across at the other islands and the bots
   const L = Math.hypot(home.center.x, home.center.z), ux = home.center.x / L, uz = home.center.z / L;
   await dbg('time', 150);
@@ -70,7 +84,7 @@ try {
   const sx = Math.sin(az), sz = Math.cos(az);
   await look({ x: home.center.x + sx * 10, z: home.center.z + sz * 10 }, az + Math.PI, 0.04, 'sunset');
   if (errors.length) console.log('errors:', JSON.stringify(errors.slice(0, 5)));
-  console.log(`shots: ${out}-{spawn,container,midfight,sunset}.png`);
+  console.log(`shots: ${out}-{spawn,container,bunker,quay,midfight,sunset}.png`);
 } finally {
   await browser.close();
 }

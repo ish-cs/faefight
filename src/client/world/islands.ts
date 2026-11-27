@@ -21,6 +21,7 @@ import { pbrAlbedo, pbrSample, worldNoise } from './pbr';
 import { applyWet } from './wetness';
 import { type Footprint, islandSurface, makeRng, yardTopTex } from './textures';
 import { raycastProxies } from './raycastProxy';
+import { bendQuayModule, structureGeo } from './structureModel';
 
 const UNLIT_BOOST = 2.6;
 const QUAY_DEPTH = 14; // how far the quay walls go below y=0 (never visible past the water)
@@ -130,7 +131,15 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
   // harbor: main's PBR slab with sand/grass/puddle decor; yard: painted asphalt (lanes + container bays) on asphalt PBR
   const topMat = yard ? paintedTopMaterial('islandTop', yardTopTex(R, coverBays(map[0], def.statics)), 'asphalt') : islandTopMaterial(R);
   const wallMat = M.seawall;
-  const wallGeo = new THREE.CylinderGeometry(R, R, groundY + QUAY_DEPTH, 128, 1, true);
+  // baked structures (structureModel.ts): bunker visual mesh + the rim's capping beam / wall face as 16 bent modules
+  // per island down to 0.6 m below the waterline; the old cylinder only continues below them. null = old visuals.
+  const bunkerGeo = structureGeo('bunker');
+  const quayFlat = structureGeo('quay');
+  const quayMod = quayFlat ? bendQuayModule(quayFlat, R, groundY) : null;
+  quayMod?.computeBoundingBox();
+  const wallTop = quayMod ? quayMod.boundingBox!.min.y : groundY;
+  const QUAY_MODS = 16; // 8 of the rim's 128 segments each
+  const wallGeo = new THREE.CylinderGeometry(R, R, wallTop + QUAY_DEPTH, 128, 1, true);
   {
     const uvA = wallGeo.getAttribute('uv');
     const rep = Math.round((2 * Math.PI * R) / 6);
@@ -148,7 +157,12 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
     // --- playable disc: exactly the sim's flat cylinder (radius R, top at groundY)
     // every island's slab and quay wall merge into one mesh each (built after the loop): 2 draws instead of 2 × n
     tops.push(topGeo.clone().applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, groundY, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1))));
-    walls.push(wallGeo.clone().translate(isl.center.x, (groundY - QUAY_DEPTH) / 2, isl.center.z));
+    walls.push(wallGeo.clone().translate(isl.center.x, (wallTop - QUAY_DEPTH) / 2, isl.center.z));
+    if (quayMod) {
+      // module k spans rim angles [k, k + 1] · 2π / 16, the same vertices as the slab's 128-gon edge (CircleGeometry)
+      const Q = new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, 0, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
+      for (let k = 0; k < QUAY_MODS; k++) solid.add(M.structure, quayMod, Q.clone().multiply(mat(0, 0, 0, 0, ((k + 0.5) * 2 * Math.PI) / QUAY_MODS, 0)), 0xffffff, true);
+    }
 
     // fenders hang on the outside of the wall (outside the disc): rubber blocks (harbor) or tyres (yard).
     // The mooring bollards on the coping are breakable cosmetics now (cosmetics.ts).
@@ -164,7 +178,9 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
 
     // --- bunker: concrete boxes identical to bunkerWallBoxes
     const b = isl.bunker;
-    for (const bx of bunkerWallBoxes(b)) {
+    const BL = new THREE.Matrix4().compose(new THREE.Vector3(b.center.x, groundY, b.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
+    if (bunkerGeo) solid.add(M.structure, bunkerGeo, BL); // baked: the exact union of the same boxes + interior floor
+    else for (const bx of bunkerWallBoxes(b)) {
       const m = mat(bx.center.x, bx.center.y, bx.center.z, 0, bx.rotY, 0);
       solid.add(M.concrete, boxUV(bx.half.x * 2, bx.half.y * 2, bx.half.z * 2, 3), m, 0xd8d2c4);
     }
@@ -184,9 +200,8 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
         for (const sx of [-1, 1]) add(new THREE.BoxGeometry(f, h, lip), sx * (w / 2 + f / 2), 0, z);
       }
     }
-    const BL = new THREE.Matrix4().compose(new THREE.Vector3(b.center.x, groundY, b.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
     dress.add(M.slab, boxUV(9, 0.04, 9, 3), BL.clone().multiply(mat(0, 0.02, 0)), 0xe6e0d2, false);
-    dress.add(M.matte, new THREE.PlaneGeometry(4, 4).rotateX(-Math.PI / 2), BL.clone().multiply(mat(0, 0.045, 0)), 0x8f8a7f, false);
+    if (!bunkerGeo) dress.add(M.matte, new THREE.PlaneGeometry(4, 4).rotateX(-Math.PI / 2), BL.clone().multiply(mat(0, 0.045, 0)), 0x8f8a7f, false);
     // team stripe painted on the walls
     const team = teamColors[isl.index % teamColors.length];
     for (const d of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {

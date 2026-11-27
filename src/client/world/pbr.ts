@@ -7,7 +7,7 @@ import { abs, float, luminance, max, mix, normalMap, positionWorld, smoothstep, 
  * metal). Helpers sample them with anti-tiling ("texture bombing": a second, rotated + offset sample blended in by
  * low-frequency noise) and world-space macro variation, so large surfaces don't show a repeating grid.
  */
-export type PbrName = 'container' | 'concrete' | 'concrete_wall' | 'sand' | 'grass' | 'rock' | 'corrugated' | 'painted_metal' | 'planks' | 'linen' | 'asphalt' | 'steel_plate' | 'gravel';
+export type PbrName = 'container' | 'structure' | 'concrete' | 'concrete_wall' | 'sand' | 'grass' | 'rock' | 'corrugated' | 'painted_metal' | 'planks' | 'linen' | 'asphalt' | 'steel_plate' | 'gravel';
 
 type V3 = THREE.Node<'vec3'>;
 type V2 = THREE.Node<'vec2'>;
@@ -16,7 +16,7 @@ type F = THREE.Node<'float'>;
 const BASE = `${import.meta.env.BASE_URL}assets/textures/`;
 const loader = new THREE.TextureLoader();
 const texCache = new Map<string, THREE.Texture>();
-const PBR_SETS: PbrName[] = ['container', 'concrete', 'concrete_wall', 'sand', 'grass', 'rock', 'corrugated', 'painted_metal', 'planks', 'linen', 'asphalt', 'steel_plate', 'gravel'];
+const PBR_SETS: PbrName[] = ['container', 'structure', 'concrete', 'concrete_wall', 'sand', 'grass', 'rock', 'corrugated', 'painted_metal', 'planks', 'linen', 'asphalt', 'steel_plate', 'gravel'];
 const PBR_MAPS = ['albedo', 'normal', 'arm'] as const;
 
 /** Anisotropic filtering per preset (set at load; a preset change applies on the next page load). */
@@ -62,7 +62,7 @@ export async function preloadPbr(gpu: THREE.WebGPURenderer, quality: 'low' | 'hi
  * createImageBitmap (flipped at decode, so no flipY copy) before the world builds; a plain <img> texture is decoded
  * synchronously on the main thread at its first GPU upload. On failure the lazy TextureLoader path in load() runs.
  */
-const JPEG_SETS: PbrName[] = ['container'];
+const JPEG_SETS: PbrName[] = ['container', 'structure'];
 let bitmaps: THREE.ImageBitmapLoader | null = null; // made on first use (the constructor warns where createImageBitmap is missing, e.g. node tests)
 
 async function preloadJpeg(name: string, srgb: boolean) {
