@@ -2708,9 +2708,10 @@ export class Bot {
         // Just got out: don't walk straight back in (the fight pulls me toward them, the barrel pushes me out, and I
         // shuffle on the line between): slide along the edge instead.
         const k = dir ? dir.x * away.x + dir.z * away.z : 0;
-        // Heading straight in (nothing left to slide along): go round it, the same side each time (stopping here held
-        // bots 1-2.5 min at a barrel's edge, their route running through it: ffa4-pro seed 6).
-        if (dir && k < 0) { const t = v3(dir.x - away.x * k, 0, dir.z - away.z * k); dir = Math.hypot(t.x, t.z) < 0.2 ? scale(right(yawOf(away)), this.id % 2 ? 1 : -1) : norm(t); }
+        // Heading straight in (nothing left to slide along) with nobody within ENGAGE_RANGE: go round it, the same side
+        // each time (stopping here held bots 1-2.5 min at a barrel's edge, their route running through it: ffa4-pro
+        // seed 6). Closer, the fight moves me.
+        if (dir && k < 0) { const t = v3(dir.x - away.x * k, 0, dir.z - away.z * k); dir = Math.hypot(t.x, t.z) >= 0.2 ? norm(t) : c.enemyDist > ENGAGE_RANGE ? scale(right(yawOf(away)), this.id % 2 ? 1 : -1) : null; }
         continue;
       }
       push = add(push ?? v3(), scale(away, (h.fusing ? 3 : 2) * (1 - d / R) + 0.4));
