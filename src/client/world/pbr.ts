@@ -7,7 +7,7 @@ import { abs, float, luminance, max, mix, normalMap, positionWorld, smoothstep, 
  * metal). Helpers sample them with anti-tiling ("texture bombing": a second, rotated + offset sample blended in by
  * low-frequency noise) and world-space macro variation, so large surfaces don't show a repeating grid.
  */
-export type PbrName = 'concrete' | 'concrete_wall' | 'sand' | 'grass' | 'rock' | 'corrugated' | 'painted_metal' | 'planks' | 'linen' | 'asphalt' | 'steel_plate' | 'gravel';
+export type PbrName = 'container' | 'concrete' | 'concrete_wall' | 'sand' | 'grass' | 'rock' | 'corrugated' | 'painted_metal' | 'planks' | 'linen' | 'asphalt' | 'steel_plate' | 'gravel';
 
 type V3 = THREE.Node<'vec3'>;
 type V2 = THREE.Node<'vec2'>;
@@ -16,7 +16,7 @@ type F = THREE.Node<'float'>;
 const BASE = `${import.meta.env.BASE_URL}assets/textures/`;
 const loader = new THREE.TextureLoader();
 const texCache = new Map<string, THREE.Texture>();
-const PBR_SETS: PbrName[] = ['concrete', 'concrete_wall', 'sand', 'grass', 'rock', 'corrugated', 'painted_metal', 'planks', 'linen', 'asphalt', 'steel_plate', 'gravel'];
+const PBR_SETS: PbrName[] = ['container', 'concrete', 'concrete_wall', 'sand', 'grass', 'rock', 'corrugated', 'painted_metal', 'planks', 'linen', 'asphalt', 'steel_plate', 'gravel'];
 const PBR_MAPS = ['albedo', 'normal', 'arm'] as const;
 
 /** Anisotropic filtering per preset (set at load; a preset change applies on the next page load). */
@@ -54,6 +54,31 @@ export const pbrStats = { format: 'jpg' as 'jpg' | 'ktx2', ms: 0, gpuBytes: 0, f
  */
 export async function preloadPbr(gpu: THREE.WebGPURenderer, quality: 'low' | 'high' | 'ultra') {
   anisotropy = ANISOTROPY[quality];
+  await Promise.all([preloadKtx2(gpu), ...JPEG_SETS.flatMap((set) => PBR_MAPS.map((m) => preloadJpeg(`${set}/${m}`, m === 'albedo')))]);
+}
+
+/**
+ * Sets shipped as JPEG only (encodeKtx2.mjs JPEG_ONLY: KTX2 looked blocky on them). Decoded off the main thread with
+ * createImageBitmap (flipped at decode, so no flipY copy) before the world builds; a plain <img> texture is decoded
+ * synchronously on the main thread at its first GPU upload. On failure the lazy TextureLoader path in load() runs.
+ */
+const JPEG_SETS: PbrName[] = ['container'];
+let bitmaps: THREE.ImageBitmapLoader | null = null; // made on first use (the constructor warns where createImageBitmap is missing, e.g. node tests)
+
+async function preloadJpeg(name: string, srgb: boolean) {
+  const url = `${BASE}${name}.jpg`;
+  try {
+    bitmaps ??= new THREE.ImageBitmapLoader().setOptions({ imageOrientation: 'flipY', premultiplyAlpha: 'none' });
+    const t = new THREE.Texture(await bitmaps.loadAsync(url) as ImageBitmap);
+    t.flipY = false; // already flipped by createImageBitmap
+    t.needsUpdate = true;
+    texCache.set(name, setup(t, srgb));
+  } catch (err) {
+    console.warn(`[world/pbr] off-thread decode of ${url} failed: main-thread <img> fallback`, err);
+  }
+}
+
+async function preloadKtx2(gpu: THREE.WebGPURenderer) {
   const t0 = performance.now();
   const off = typeof location !== 'undefined' && new URLSearchParams(location.search).get('ktx2') === '0';
   if (off) { pbrStats.ms = 0; return; }

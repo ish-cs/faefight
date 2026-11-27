@@ -10,6 +10,7 @@ import { NpcSystem } from './characters/npcs';
 import { GunFx } from './gunFx';
 import { PlayerTrack, RenderClock } from './interp';
 import { pieceGeometry, World } from './world';
+import { preloadContainerModel } from './world/containerModel';
 import { preloadPbr } from './world/pbr';
 import { PotionSellers, stall } from './world/potionSeller';
 import { loadQuality } from './world/sky';
@@ -146,7 +147,8 @@ export class Renderer {
   static async create(canvas: HTMLCanvasElement): Promise<Renderer> {
     const r = new Renderer(canvas);
     await r.gpu.init();
-    await preloadPbr(r.gpu, loadQuality()); // compressed PBR maps in place before any material samples them
+    // compressed PBR maps in place before any material samples them; the baked container model before the world builds
+    await Promise.all([preloadPbr(r.gpu, loadQuality()), preloadContainerModel()]);
     r.characters.camera = r.camera;
     r.world = new World(r.gpu, r.scene, r.camera, r.collidables); // tone mapping, pixel ratio, shadows, sky
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
