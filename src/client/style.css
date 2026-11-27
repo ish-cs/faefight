@@ -287,7 +287,6 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 /* Item details live in a bar at the bottom of the shop panel (a floating tooltip got clipped at the panel edge). */
 .shop-info { margin-top: 10px; min-height: 30px; padding: 6px 10px; border-radius: 8px; background: rgba(8, 11, 16, 0.55); border: 1px solid var(--line); font-size: 13px; font-weight: 600; color: var(--muted); text-align: center; white-space: normal; }
 .shop-info.on { color: var(--text); }
-.vault-cash { display: flex; gap: 6px; align-items: center; margin: 8px 0 12px; flex-wrap: wrap; }
 .cash-input { font: inherit; width: 110px; padding: 6px 10px; color: var(--text); background: rgba(255, 255, 255, 0.08); border: 1px solid var(--line); border-radius: 8px; }
 .vault-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .vault-col { background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }

@@ -50,6 +50,7 @@ export class AlertHud {
     this.home.dataset.testid = 'home-panel';
     this.genToast.dataset.testid = 'gen-toast';
     this.homeThreat.title = 'Enemy on your island';
+    this.homeVault.title = 'Banked cash: safe when you die';
     this.doors.append(this.doorsArrow, this.doorsLabel);
     const bar = el('span', 'qh-bar');
     bar.append(this.homeFill);
@@ -117,7 +118,8 @@ export class AlertHud {
     setText(this.homeGen, `$${stored}`);
     this.homeFill.style.width = `${pct}%`;
     this.home.classList.toggle('full', stored >= cap);
-    setText(this.homeVault, `Vault $${Math.floor(me.vault.cash)} · Lv${me.vaultLevel ?? 1}`);
+    // Vault level only once it's been upgraded (Lv1 next to "Gen Lv1" read as noise).
+    setText(this.homeVault, `Vault $${Math.floor(me.vault.cash)}${(me.vaultLevel ?? 1) > 1 ? ` · Lv${me.vaultLevel}` : ''}`);
     setText(this.homeLv, `Gen Lv${lv}`);
     this.home.title = `Generator ${pct}% full`;
     const enemies = enemiesOnIsland(s, me, isl);

@@ -619,7 +619,7 @@ export class Hud {
     this.lastCash = inv.cash;
     // Carried cash drops on death; the vault never does (and shops take it). Warn once a fair sum is carried.
     const risky = !this.practice && inv.cash >= CARRY_WARN;
-    setText(this.bankNote, risky ? `$${Math.floor(inv.cash)} carried drops if you die · bank it` : '');
+    setText(this.bankNote, risky ? `$${Math.floor(inv.cash)} drops if you die · bank it${(me.vaultLevel ?? 1) > 1 ? ' (H)' : ''}` : '');
     this.bankNote.classList.toggle('risk', risky);
     this.updateStamina(watching ? me.stamina : ctx.stamina ?? me.stamina, me.alive);
     setText(this.watchTag, watching ? `${me.isBot ? 'BOT · ' : ''}${me.name}` : '');
