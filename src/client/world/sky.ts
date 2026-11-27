@@ -6,7 +6,7 @@ import type { IslandLayout } from '../../sim/map';
 import { activeKeymap, bindingLabel, isAction } from '../keymap';
 import { settings } from '../settings/store';
 import { Lighting, type ShadowPreset, SUN_DIR as LIGHT_SUN_DIR } from './lighting';
-import { SHADOW_ONLY_FIRST_LAYER, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
+import { SHADOW_ONLY_FIRST_LAYER, SHADOW_ONLY_LAYER, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
 import { cascadeToRefresh, type CascadeCacheState, nearCascadeDue, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen, upscaleInput } from './post';
 import { lightU } from './lightUniforms';
@@ -323,7 +323,9 @@ export class SkyLighting {
     // + shadow-only stand-ins of map-wide static meshes (geo.ts): every cascade, small-part ones the first only
     // + shadow-only casters for the first cascade (gameProps.ts)
     const so1 = 1 << SHADOW_ONLY_FIRST_LAYER;
-    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = i === 0 ? this.camera.layers.mask | so1 : i < near ? noTiny | (1 << 31) : FAR_CASCADE_MASK;
+    // + shadow twins of the bundled static meshes (islands.ts): every cascade
+    const so = 1 << SHADOW_ONLY_LAYER;
+    for (let i = 0; i < lights.length; i++) lights[i].shadow!.camera.layers.mask = (i === 0 ? this.camera.layers.mask | so1 : i < near ? noTiny | (1 << 31) : FAR_CASCADE_MASK) | so;
     this.cacheFarCascades(lights, near);
   }
 

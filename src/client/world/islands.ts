@@ -5,7 +5,7 @@ import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec
 import { bunkerSlitBoxes, bunkerWallBoxes, harborBackdropFrame, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { registerDistanceCull } from './lod';
+import { registerDistanceCull, SHADOW_ONLY_FIRST_LAYER, SHADOW_ONLY_LAYER, TINY_CASTER_LAYER } from './lod';
 import { buildCenter, paintedTopMaterial } from './center';
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrierProp, containerCover, containerLite, reefer, rtg } from './mapProps';
@@ -324,6 +324,23 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
     for (const m of dressed) if (m.userData.lod) root.add(m);
     // + the other static island meshes (tops, walls, bunkers, structures, backdrop): the visible, never-toggled ones
     for (const o of [...root.children]) if ((o as THREE.Mesh).isMesh && o.visible && !o.userData.lod) bundle.add(o);
+    // a bundle draws every object it holds in every pass (no culling): the camera can afford that for these map-wide
+    // meshes, the shadow cascades can't. So bundled meshes don't cast; a plain twin (same geometry + material) on a
+    // shadow-only layer casts instead, culled per cascade as before.
+    for (const o of [...bundle.children]) {
+      const m = o as THREE.Mesh;
+      const L = m.layers.mask;
+      const layer = L === 1 ? SHADOW_ONLY_LAYER : L === 1 << TINY_CASTER_LAYER ? SHADOW_ONLY_FIRST_LAYER : -1;
+      if (layer < 0) { root.add(m); continue; } // other layer setups (near-cascade-only casters): not bundled
+      if (!m.castShadow) continue;
+      const twin = new THREE.Mesh(m.geometry, m.material);
+      twin.name = `${m.name}#shadow`;
+      twin.castShadow = true; twin.receiveShadow = false;
+      twin.layers.set(layer);
+      twin.position.copy(m.position); twin.quaternion.copy(m.quaternion); twin.scale.copy(m.scale);
+      root.add(twin);
+      m.castShadow = false;
+    }
     root.add(bundle);
   }
   return { collidables, root };
