@@ -1360,6 +1360,7 @@ export class Bot {
         : healStock(total, this.difficulty, this.P.heal)),
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
+      hardKit: this.P.drive.hardKit[this.difficulty],
       // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
       grapple: c.bridgeTo !== null && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c) && total >= this.P.hook.crossBuyAt[this.difficulty] ? 'cross'
         : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
