@@ -56,6 +56,8 @@ const BUY_RETRIES = 2;
 const BUY_BACKOFF_SEC = 20;
 const ARRIVE = 0.6;
 const USE_RANGE = ECONOMY.interactRadius - 0.2;
+/** Vault this close (m), e.g. from the shop next to it: the level is bought on the same trip (VaultParams.upgradeNear). */
+const UPGRADE_NEAR_M = 12;
 const COLLECT_AT = 40;
 const STUCK_SEC = 2, STUCK_DIST = 0.5, UNSTICK_SEC = 0.6;
 const TURN_RATE = 8;
@@ -1687,7 +1689,10 @@ export class Bot {
         const close = c.enemy && c.enemyDist < 8;
         if (close) return 0;
         // Rich enough for the next vault level (more interest, remote deposits): a trip to the vault to buy it.
-        if (this.wantsVaultUpgrade(me)) return this.P.vault.upgradeScore - dist2D(me.pos, home.vault) / 80;
+        if (this.wantsVaultUpgrade(me)) {
+          const d = dist2D(me.pos, home.vault);
+          return this.P.vault.upgradeScore + (d < UPGRADE_NEAR_M ? this.P.vault.upgradeNear : 0) - d / 80;
+        }
         if (excess < this.P.vault.bankMin) return 0;
         const leaving = c.reach || (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c);
         const want = 0.2 + Math.min(excess, 600) / 600 * (0.3 + 0.3 * t.caution + 0.2 * t.greed);
@@ -1937,7 +1942,8 @@ export class Bot {
       case 'trap': return s * 0.6;
       case 'cut': return this.crossing(c) ? s : s * 0.4;
       // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
-      case 'bank': return this.insuranceDue(me) > 0 || c.danger ? s : s * 0.5;
+      // Buying the vault level isn't idle banking (halved, it never beat the shop next door before a seal run).
+      case 'bank': return this.insuranceDue(me) > 0 || c.danger || this.wantsVaultUpgrade(me) ? s : s * 0.5;
       case 'loot': return s * 0.6;
     }
     return s;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Bot } from '../../src/sim/bots/bot';
-import { DRIVE, PARAM_RANGES } from '../../src/sim/bots/params';
+import { DRIVE, PARAM_RANGES, VAULT } from '../../src/sim/bots/params';
 import { nextPurchase, PLAIN_STYLE } from '../../src/sim/bots/plans';
 import { PIECES } from '../../src/sim/constants';
 import { newPlayer } from '../../src/sim/player';
@@ -65,5 +65,12 @@ describe('drive.reinforceHp: a sieger adds a second wall outside the softest plu
     expect(bot('pro').reinforce(ctx({ sandbags: 4 }), door, PIECES.wood.hp)).toBeNull();
     expect(bot('easy').reinforce(ctx({ wood: 1 }), door, PIECES.wood.hp)).toBeNull();
     expect(PARAM_RANGES['drive.reinforceHp.pro']).toEqual([0, 1000]);
+  });
+});
+
+describe('vault.upgradeNear: a rich bot at the shop buys its vault level on the same trip', () => {
+  test('the knob is on and tunable (behaviour: tests/sim/botVault.test.ts)', () => {
+    expect(VAULT.upgradeNear).toBeGreaterThan(0);
+    expect(PARAM_RANGES['vault.upgradeNear']).toEqual([0, 1]);
   });
 });
