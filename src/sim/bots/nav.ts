@@ -20,6 +20,8 @@ const DETOUR_KEEP_SEC = 1.5;
 const DETOURS = [0.4, -0.4, 0.8, -0.8, 1.2, -1.2, 1.6, -1.6];
 /** Highest step the character controller climbs without jumping (autostep 0.3 m). */
 const STEP_UP = 0.35;
+/** A bridge's end this much above its island (a sandbag across it, ffa4-pro seed 5) is hopped onto (bot think(): hop). */
+export const HOP_UP = 1.1;
 /** Don't walk off anything higher than this when there's another way (falls over ~3.3 m hurt). */
 const MAX_DROP = 3;
 /**
@@ -541,7 +543,7 @@ export class Nav {
     const nodes = this.nodeList;
     const p = laneAt(l, i === l.from ? landEdge(nodes[i]) + 0.5 : l.length - landEdge(nodes[i]) - 0.5);
     const y = this.view.groundAt(p.x, p.z);
-    return y !== null && y - nodes[i].groundY <= STEP_UP;
+    return y !== null && y - nodes[i].groundY <= HOP_UP;
   }
 
   /** The lane p stands on; `prefer`: of lanes along the same line, one that ends at that node. */

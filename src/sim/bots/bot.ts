@@ -70,6 +70,8 @@ const FOE_HOLD_SEC = 0.5, FOE_SWITCH = 0.7;
 const COVER_LEAVE_M = 1.5;
 /** Out of a barrel's danger zone (hazardAvoid), this much further is where I stop walking straight back toward it. */
 const HAZARD_FENCE_M = 1;
+/** Lower than this above my feet a piece is stepped over, not hopped. */
+const STEP_HOP = 0.4;
 const TURN_RATE = 8;
 /** Beyond this, an enemy on another island isn't worth abandoning the current goal for. */
 const ENGAGE_RANGE = 25;
@@ -685,6 +687,12 @@ export class Bot {
     turned(was, dir, 'stormFence'); was = dir;
     if (dir) dir = this.nav.safeDir(dir);
     turned(was, dir, 'safeDir'); was = dir;
+    // A low piece right in my way, nobody near (a sandbag across my bridge's start, ffa4-pro seed 5: 76 s pressed
+    // into it): hop it, the way escape() hops one in a doorway. Nav counts a bridge end up to HOP_UP as walkable.
+    // (On a deck too, which safeJump never hops from: the arc itself must come down on something solid.)
+    const hop = !!dir && !jump && !ctx.danger && Math.abs(me.vel.y) <= 0.05 && this.lowPieceAhead(view, me, dir) &&
+      this.nav.landsOnGround(dir, !!act.sprint, PLAYER.jumpVelocity, true);
+    if (hop) jump = true;
     // Sudden death: concrete barriers fill every doorway (barriers.ts). Inside a bunker no step leads out: whatever
     // the goal wants, don't push into a slab (the stuck recovery would only thrash about the room).
     if (dir && view.suddenDeath)
@@ -717,7 +725,7 @@ export class Bot {
     // Stuck means pushing and not moving; held back at an edge by safeDir isn't stuck (a hop there goes in the water).
     this.trackStuck(now, me, dir);
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
-    if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
+    if (jump && !hop && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     if (rope || grapple) jump = false; // a jump lets go of the rope
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
@@ -927,14 +935,14 @@ export class Bot {
     if (!this.cutOff(c)) return null;
     const me = c.me, node = this.nav.nodes[this.nav.nodeAt(me.pos)];
     if (!node) return null;
-    // A hook only helps when some shore of this node is in hook reach of home (harbor's center isn't: 69 m).
-    const hookHome = this.hookLaunch(c.view, me, node.index, c.home.index, c.home.index, true) !== null;
-    if (!hookHome) return null;
+    // A hook only helps from where home is in hook reach: my shore facing it, or the tip of a bridge toward it
+    // (harbor's center shore isn't: 69 m). Walk there, not just to the shore (ffa8-pro seed 5: a PRO stood 59 s on
+    // the center's shore while the hold was in reach from the bridge tip).
+    const launch = this.hookLaunch(c.view, me, node.index, c.home.index, c.home.index, true);
+    if (!launch) return null;
     if ((me.inv.grapples ?? 0) > 0) {
       if (me.hook || me.mv?.pull) return null;
-      const d = flat(sub(c.home.center, node.center)), l = Math.hypot(d.x, d.z) || 1;
-      const rim = add(node.center, scale(d, (node.radius - 0.7) / l));
-      return this.goTo(v3(rim.x, node.groundY, rim.z), 0.8);
+      return this.goTo(launch, 0.8);
     }
     if (funds(me) < GRAPPLE.price) return null;
     const seller = (c.view.potionShops ?? []).find((s) => this.nav.nodeAt(s) === node.index);
@@ -953,10 +961,9 @@ export class Bot {
     const S = this.P.drive.strandedSec;
     if (!(held >= S) || me.hook || me.mv?.pull) return null;
     const node = this.nav.nodeAt(me.pos);
-    // A hook that could reach home from some shore here: give it twice as long to find its hold. One that can't (out of
-    // reach from every shore) is no reason to wait: ffa8-pro seed 5, a PRO with two hooks stood 178 s on the center.
+    // A hook that can reach home from here has had drive.strandedSec to walk to its launch spot and fire (it used to
+    // get twice as long, and one that can't reach at all held a PRO with two hooks 178 s on the center, ffa8-pro seed 5).
     const hookHome = this.hookLaunch(c.view, me, node, c.home.index, c.home.index, true) !== null;
-    if (hookHome && (me.inv.grapples ?? 0) > 0 && held < 2 * S) return null;
     const seller = hookHome && (c.view.potionShops ?? []).some((s) => this.nav.nodeAt(s) === node);
     if (seller && funds(me) >= GRAPPLE.price) return null;
     return norm(flat(sub(c.home.center, me.pos)));
@@ -2666,6 +2673,17 @@ export class Bot {
     if (weapon === 'rocket' && view.clearShot && !view.clearShot(pick.at) && pick.why !== 'cover') return null;
     this.dockPlan = { id: pick.d.id, enemy: e.id, at: pick.at, weapon, why: pick.why, until: view.now + 2.5 };
     return this.dockPlan;
+  }
+
+  /** A piece too low to stop a hop (sandbags) within a stride ahead along dir. */
+  private lowPieceAhead(view: BotView, me: PlayerState, dir: Vec3): boolean {
+    return view.pieces.some((p) => {
+      if (p.kind === 'ramp' || p.kind === 'scaffold') return false;
+      const top = p.pos.y + PIECES[p.kind].h - me.pos.y;
+      if (top <= STEP_HOP || top >= SEAL.blockHeight) return false;
+      const to = flat(sub(p.pos, me.pos)), ahead = to.x * dir.x + to.z * dir.z;
+      return ahead > 0 && ahead < 1.4 && Math.abs(to.x * dir.z - to.z * dir.x) < PIECES[p.kind].w / 2 + 0.3;
+    });
   }
 
   /** Run from a fusing barrel; in a fight (outside the storm), also step out of blast range of live ones (they could be shot). */
