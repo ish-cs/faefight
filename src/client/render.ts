@@ -1,6 +1,5 @@
 import { CASING_CAP } from './world/casings';
 import * as THREE from 'three/webgpu';
-import { installCoalescedUniformWrites } from './world/uniformWrites';
 import { GENERATOR_MAX_LEVEL, LIFECYCLE, PLAYER, WEAPONS } from '../sim/constants';
 import { PROP_HALF } from '../sim/physics';
 import type { IslandLayout, MapDef } from '../sim/map';
@@ -152,7 +151,6 @@ export class Renderer {
   static async create(canvas: HTMLCanvasElement): Promise<Renderer> {
     const r = new Renderer(canvas);
     await r.gpu.init();
-    installCoalescedUniformWrites(r.gpu);
     // compressed PBR maps in place before any material samples them; the baked container + structures before the world builds
     await Promise.all([preloadPbr(r.gpu, loadQuality()), preloadContainerModel(), preloadStructureModel()]);
     r.characters.camera = r.camera;
