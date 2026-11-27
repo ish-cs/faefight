@@ -314,14 +314,16 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
     for (const p of raycastProxies(m, 24)) { if (p !== m) root.add(p); collidables.push(p); }
   }
   yield;
-  // static dressing (~50 materials, map-wide merged meshes) as one WebGPU render bundle: recorded once per pass,
+  // static dressing (~50 materials, map-wide merged meshes) + island meshes as one WebGPU render bundle: recorded once per pass,
   // replayed after that (no per-object projection, sort, pipeline lookup or draw encoding). Distance-culled chunks
   // toggle .visible, which a bundle can't follow, so they stay outside it. ?nobundle = A/B.
   const bundle = typeof location !== 'undefined' && location.search.includes('nobundle') ? null : new THREE.BundleGroup();
   const dressed = dress.build(bundle ?? root, 'dressing', { chunked: true });
   if (bundle) {
-    bundle.name = 'dressingBundle';
+    bundle.name = 'staticBundle';
     for (const m of dressed) if (m.userData.lod) root.add(m);
+    // + the other static island meshes (tops, walls, bunkers, structures, backdrop): the visible, never-toggled ones
+    for (const o of [...root.children]) if ((o as THREE.Mesh).isMesh && o.visible && !o.userData.lod) bundle.add(o);
     root.add(bundle);
   }
   return { collidables, root };
