@@ -123,6 +123,10 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
   const collidables: THREE.Object3D[] = [];
   const dress = new StaticBatch({ stress: true }); // non-colliding decoration
   const solid = new StaticBatch(); // bunker walls + barriers: match sim colliders exactly
+  // baked bunkers + quay rim (draw only) and, when baked, the bunker boxes again as invisible camera/aim ray targets:
+  // the baked meshes are ~3× the triangles, and rays never need the bevels or the rim beam
+  const baked = new StaticBatch(), rayOnly = new StaticBatch();
+  const rimRays: THREE.BufferGeometry[] = [];
   const M = mats();
   const n = map.length;
   const R = map[0].radius;
@@ -161,7 +165,9 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
     if (quayMod) {
       // module k spans rim angles [k, k + 1] · 2π / 16, the same vertices as the slab's 128-gon edge (CircleGeometry)
       const Q = new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, 0, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
-      for (let k = 0; k < QUAY_MODS; k++) solid.add(M.structure, quayMod, Q.clone().multiply(mat(0, 0, 0, 0, ((k + 0.5) * 2 * Math.PI) / QUAY_MODS, 0)), 0xffffff, true);
+      // no shadow casting (like the old wall): it faces the open water
+      for (let k = 0; k < QUAY_MODS; k++) baked.add(M.structure, quayMod, Q.clone().multiply(mat(0, 0, 0, 0, ((k + 0.5) * 2 * Math.PI) / QUAY_MODS, 0)), 0xffffff, false);
+      rimRays.push(new THREE.CylinderGeometry(R, R, groundY + QUAY_DEPTH, 128, 1, true).translate(isl.center.x, (groundY - QUAY_DEPTH) / 2, isl.center.z));
     }
 
     // fenders hang on the outside of the wall (outside the disc): rubber blocks (harbor) or tyres (yard).
@@ -179,10 +185,10 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
     // --- bunker: concrete boxes identical to bunkerWallBoxes
     const b = isl.bunker;
     const BL = new THREE.Matrix4().compose(new THREE.Vector3(b.center.x, groundY, b.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
-    if (bunkerGeo) solid.add(M.structure, bunkerGeo, BL); // baked: the exact union of the same boxes + interior floor
-    else for (const bx of bunkerWallBoxes(b)) {
+    if (bunkerGeo) baked.add(M.structure, bunkerGeo, BL); // baked: the exact union of the same boxes + interior floor
+    for (const bx of bunkerWallBoxes(b)) {
       const m = mat(bx.center.x, bx.center.y, bx.center.z, 0, bx.rotY, 0);
-      solid.add(M.concrete, boxUV(bx.half.x * 2, bx.half.y * 2, bx.half.z * 2, 3), m, 0xd8d2c4);
+      (bunkerGeo ? rayOnly : solid).add(M.concrete, boxUV(bx.half.x * 2, bx.half.y * 2, bx.half.z * 2, 3), m, 0xd8d2c4);
     }
     // firing slits: dark steel reveal liners + a thin protruding frame on both faces (decor only, opening untouched)
     for (const sl of bunkerSlitBoxes(b)) {
@@ -297,9 +303,13 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
   }
   yield;
   const bunkers = solid.build(root, 'bunkers', { chunked: true });
+  baked.build(root, 'structures', { chunked: true });
+  const rays = rayOnly.build(root, 'bunkerRays');
+  if (rimRays.length) rays.push(new THREE.Mesh(mergeGeometries(rimRays, false)!, wallMat));
+  for (const m of rays) { m.visible = false; m.castShadow = false; if (!m.parent) root.add(m); }
   // camera/aim rays test raycast-only per-cell splits, not the map-wide merged draws (raycastProxy.ts): the merged
   // island tops/walls (8 × 384 tris) and bunker walls (3.5k) were tested whole by 2–3 rays every frame
-  for (const m of [...slabs, ...bunkers]) {
+  for (const m of [...slabs, ...bunkers, ...rays]) {
     for (const p of raycastProxies(m, 24)) { if (p !== m) root.add(p); collidables.push(p); }
   }
   yield;
