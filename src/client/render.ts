@@ -34,6 +34,7 @@ export { blurInfo } from './world/post';
 
 export { pieceGeometry };
 import { islandColor, setIslandPalette } from './colors';
+import { probe, S } from './perfHud';
 export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 
 /** WebGPURenderer tone-maps everything on output (per-material toneMapped is ignored), so unlit
@@ -597,6 +598,7 @@ export class Renderer {
       // Labels within reach of the player (predicted feet when playing, else the camera).
       this.lootView.frame(dt, now / 1000, this.local?.pos ?? this.camera.position, this.camera);
     }
+    probe.lap(S.chars);
 
     for (let i = this.fx.length - 1; i >= 0; i--) {
       const f = this.fx[i];
@@ -625,7 +627,9 @@ export class Renderer {
     const feet = this.feet.slice(0, nf);
     this.npcs.frame(dt, this.camera, feet);
     this.applyBlur(); // camera final (debug view, shake) by now
+    probe.lap(S.fx);
     this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw
+    probe.lap(S.submit);
     if (GPU_TIMING) this.resolveGpuTime();
   }
 
