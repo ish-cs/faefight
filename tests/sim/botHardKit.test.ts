@@ -24,9 +24,11 @@ describe('drive.hardKit: the seal kit is metal, not wood (a respawn pistol shoot
   test('Hard/PRO swap a wood kit for metal as soon as one metal plug is affordable', () => {
     for (const d of ['hard', 'pro'] as const) expect(nextPurchase(woodKit(PIECES.metal.price), needs(d), d, PLAIN_STYLE)).toBe('metal');
   });
-  test('Medium only with twice the price; Easy never (tier order holds)', () => {
-    expect(nextPurchase(woodKit(PIECES.metal.price), needs('medium'), 'medium', PLAIN_STYLE)).not.toBe('metal');
-    expect(nextPurchase(woodKit(2 * PIECES.metal.price), needs('medium'), 'medium', PLAIN_STYLE)).toBe('metal');
+  test('Medium/Easy keep their wood kit (knob 0: tier order holds); a Medium knob of 2 waits for twice the price', () => {
+    expect(nextPurchase(woodKit(5000), needs('medium'), 'medium', PLAIN_STYLE)).not.toBe('metal');
+    const m2 = { ...needs('medium'), hardKit: 2 };
+    expect(nextPurchase(woodKit(PIECES.metal.price), m2, 'medium', PLAIN_STYLE)).not.toBe('metal');
+    expect(nextPurchase(woodKit(2 * PIECES.metal.price), m2, 'medium', PLAIN_STYLE)).toBe('metal');
     expect(nextPurchase(woodKit(5000), needs('easy'), 'easy', PLAIN_STYLE)).not.toBe('metal');
   });
   test('stops once the metal/steel plugs cover the doors', () => {

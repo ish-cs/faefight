@@ -409,8 +409,9 @@ export const DRIVE: DriveParams = {
   // Off attack while short of a seal kit I can afford (shop first): kills at their door should become seals.
   kitlessAttack: D(0, 0.25, 0.25, 0.25),
   // Mixed ×60 on main: respawn-window seals with a wood/sandbag plug ended in a breakout 75% of the time (owner's
-  // pistol, ~7 s), all-metal/steel ones 3%. Hard/PRO buy metal plugs at once, Medium when it has 2× the price.
-  hardKit: D(0, 2, 1, 1),
+  // pistol, ~7 s), all-metal/steel ones 3%. Hard/PRO buy metal plugs at once. Medium
+  // off: at 2× the price it ranked below Easy in mixed ×120 (5.29 vs 5.19); its siege second layer is enough.
+  hardKit: D(0, 0, 1, 1),
   // Same data: breakouts went through a lone wood plug (338/449) or a sandbag pair (99) with the sieger within 10 m
   // (90%) but the escapee spawn-protected: a second layer is what stops it (wood + wood ~14 s > the 10 s window).
   reinforceHp: D(0, 400, 400, 400),
