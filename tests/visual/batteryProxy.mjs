@@ -123,7 +123,7 @@ async function run(rate) {
   const pull = async () => {
     const { t, dt } = await dbg('frameLog');
     const sh = t.length - dt.length; // align from the newest frame (resetFrames may clear only dt)
-    for (let i = Math.max(0, sh); i < t.length; i++) if (t[i] > lastT && t[i] > t0 && dt[i - sh] !== undefined) { frames.push([t[i], dt[i - sh]]); lastT = t[i]; }
+    for (let i = Math.max(0, sh); i < t.length; i++) if (t[i] > lastT && dt[i - sh] !== undefined && t[i] - dt[i - sh] >= t0) { frames.push([t[i], dt[i - sh]]); lastT = t[i]; }
   };
   const tEnd = Date.now() + secs * 1000;
   let spot = 0, nextSpot = Date.now() + 8000;
