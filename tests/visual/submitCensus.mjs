@@ -10,6 +10,8 @@ const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k
 const preset = arg('preset', 'high');
 const frames = Number(arg('frames', '120'));
 const params = arg('params', '');
+const throttle = Number(arg('throttle', '1'));
+const hooks = arg('hooks', '1') === '1';
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
 const SPOTS = [
   { name: 'harbor', at: [6, 13], look: [14, 60], pitch: 0.02 },
@@ -28,10 +30,12 @@ await page.goto(`${url}/?debug=1&bots=7&perf${params ? `&${params}` : ''}`);
 await page.getByTestId('play-easy').click();
 await page.waitForFunction(() => window.__faefight?.snapshot?.() && !window.__faefightLoading?.visible(), null, { timeout: 180_000 });
 await page.waitForTimeout(3000);
+if (throttle > 1) { const cdp = await page.context().newCDPSession(page); await cdp.send('Emulation.setCPUThrottlingRate', { rate: throttle }); }
 
-await page.evaluate(() => {
+await page.evaluate((hooks) => {
   const R = window.__faefight.renderer, gpu = R.gpu, scene = R.scene;
   const C = (window.__census = { frames: 0, pass: {}, wb: 0, wbKB: 0, wt: 0, wtKB: 0, umw: 0, objs: 0, draws: 0, by: {} });
+  if (!hooks) { const tick = () => { C.frames++; requestAnimationFrame(tick); }; requestAnimationFrame(tick); C.sub = {}; C.bind = {}; C.uni = {}; return; }
   const stack = [];
   const kind = (cam, rt) => {
     if (cam.isOrthographicCamera && rt?.depthTexture) return `shadow:${rt.width}`;
@@ -134,7 +138,7 @@ await page.evaluate(() => {
     else if (x.isMesh) meshes++;
   });
   C.scene = { objects: o, matrixAutoUpdate: auto, matrixWorldAutoUpdate: autoW, batched: bm, batchedInstances: bmInst, instanced: im, skinned: sk, meshes };
-});
+}, hooks);
 
 const out = [];
 const dbg = (f, ...a) => page.evaluate(([f, a]) => window.__faefight[f](...a), [f, a]);
@@ -170,7 +174,7 @@ for (const s of SPOTS) {
 }
 await browser.close();
 for (const r of out) {
-  console.log(`== ${preset} ${r.spot}: fps ${r.fps} draws/frame ${r.draws} writeBuffer ${r.wb} (${r.wbKB} KB) writeTexture ${r.wt} (${r.wtKB} KB) updateMatrixWorld ${r.umwMs} ms submit ${r.probe?.submit} total ${r.probe?.total}`);
+  console.log(`== ${preset} ${throttle}x ${r.spot}: fps ${r.fps} draws/frame ${r.draws} writeBuffer ${r.wb} (${r.wbKB} KB) writeTexture ${r.wt} (${r.wtKB} KB) updateMatrixWorld ${r.umwMs} ms submit ${r.probe?.submit} total ${r.probe?.total}`);
   console.log('   scene', JSON.stringify(r.scene));
   for (const [k, p] of Object.entries(r.pass).sort((a, b) => b[1].ms - a[1].ms)) console.log(`   ${k.padEnd(28)} ×${p.perFrame} ${p.ms} ms objs ${p.objs}`);
   for (const b of r.bind ?? []) console.log(`   bind ${b[0].padEnd(24)} ×${b[1]}/frame uniforms ${b[2]} ranges/write ${b[3]} bytes ${b[4]}`);
