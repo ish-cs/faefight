@@ -916,9 +916,9 @@ export class Bot {
    */
   private cutOff(c: Ctx): boolean {
     const me = c.me, node = this.nav.nodeAt(me.pos), home = c.home.index;
-    // Over the rim on the way into the water (the ditch): still cut off. Resetting here held a stranded bot at the
-    // edge, its clock starting over each time it got there.
-    if (node < 0 && this.strandedSince !== null && !c.homeReach) return true;
+    // Over the rim on the way into the water (the ditch under way): still cut off. Resetting here held a stranded bot
+    // at the edge, its clock starting over each time it got there. (Out on a bridge before that: not cut off.)
+    if (node < 0 && this.strandedSince !== null && !c.homeReach && c.view.now - this.strandedSince >= this.P.drive.strandedSec) return true;
     const cut = node >= 0 && node !== home && !c.homeReach && (me.inv.pieces.scaffold ?? 0) < this.scaffoldsTo(node, home) &&
       !c.view.map.some((isl) => isl.index === node || this.nav.hop(node, isl.index) !== null);
     if (!cut) this.strandedSince = null;
@@ -961,6 +961,9 @@ export class Bot {
     const S = this.P.drive.strandedSec;
     if (!(held >= S) || me.hook || me.mv?.pull) return null;
     const node = this.nav.nodeAt(me.pos);
+    // Marooned on the center: hold it and farm its gold (doContest) rather than drown (botDrown: a swim home is a water
+    // death nobody caused); whoever bridges over brings a fight and a way off.
+    if (node === this.nav.centerNode) return null;
     // A hook that can reach home from here has had drive.strandedSec to walk to its launch spot and fire (it used to
     // get twice as long, and one that can't reach at all held a PRO with two hooks 178 s on the center, ffa8-pro seed 5).
     const hookHome = this.hookLaunch(c.view, me, node, c.home.index, c.home.index, true) !== null;
