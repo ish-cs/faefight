@@ -211,6 +211,21 @@ describe('bots and the storm', () => {
     const now = snap.players.find((p) => p.id === 1)!;
     expect(dist2D(now.pos, me.pos)).toBeGreaterThan(STORM.boltRadius * 0.6);
   }, 60_000);
+
+  // CI teams 4v4 seed 21 (breakout-clock branch): three armed bots of two teams stood on the final circle's centre,
+  // 1.7 m apart on either side of one wood wall, for 13 min with no shot fired: none saw the other, and the
+  // final hunt stopped within 4 m of the centre.
+  test('final circle: two bots on either side of a wall at its centre find each other', async () => {
+    const m = await Match.create({ players: [{ name: 'a', isBot: true, difficulty: 'hard' }, { name: 'b', isBot: true, difficulty: 'pro' }], seed: 5 });
+    run(m, 1);
+    m.debugSetTime(SD + 400); // the ring has closed to its final circle
+    const g = m.debugGroundAt(center.x, center.z)!;
+    m.debugPlacePiece('wood', v3(center.x, g, center.z), 0, 1);
+    m.debugTeleport(1, v3(center.x, g, center.z + 0.9));
+    m.debugTeleport(2, v3(center.x + 0.3, g, center.z - 0.9));
+    const { evs } = run(m, 40);
+    expect(evs.some((e) => e.type === 'hit' && e.data.by !== e.data.target)).toBe(true);
+  }, 120_000);
 });
 
 describe('8 bots and the storm', () => {

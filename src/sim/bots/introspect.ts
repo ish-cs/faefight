@@ -178,7 +178,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const go = I.stormLeave(c);
       if (go) return { f: [['long way in', 1.5]], why: `The walk to the centre island takes ${Math.round(go.sec)} s and the ring is ${Math.round(go.sec + go.slack)} s from me: leaving now` };
       if (I.needCenterBridge(c)) return { f: [['no center bridge', 1.2]], why: 'The storm ends on the centre island and I have no way onto it: bridging there' };
-      if (I.finalHunt(c)) return { f: [['final circle, nobody in sight', 0.6]], why: 'Final circle and nobody in sight: closing in on its centre to find the last rivals' };
+      if (I.finalHunt(c)) return { f: [['final circle, nobody in sight', 0.6]], why: 'Final circle and nobody in sight: closing in on its centre and circling it to find the last rivals' };
       return zero('safe inside the ring');
     }
     case 'fight': {
