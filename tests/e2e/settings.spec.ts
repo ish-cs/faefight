@@ -49,6 +49,9 @@ test('loading screens, settings (sensitivity + rebind jump) apply in a vs-bot ma
   // Other tabs render and apply.
   await page.getByTestId('settings-tab-video').click();
   await page.getByTestId('set-fov3').fill('80');
+  // Power mode: Auto by default; Performance = always the battery saver.
+  await expect(page.getByTestId('set-power').getByRole('button', { name: 'Auto', exact: true })).toHaveClass(/on/);
+  await page.getByTestId('set-power').getByRole('button', { name: 'Performance', exact: true }).click();
   await page.getByTestId('settings-tab-gameplay').click();
   await page.getByTestId('set-crosshair').getByRole('button', { name: 'Dot', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-crosshair', 'dot');
@@ -63,6 +66,7 @@ test('loading screens, settings (sensitivity + rebind jump) apply in a vs-bot ma
   expect(s.controls.keys.jump).toEqual(['KeyJ']);
   expect(s.controls.keys.camera).toEqual(['KeyV']);
   expect(s.video.fovThird).toBe(80);
+  expect(s.video.power).toBe('performance');
   expect(s.gameplay.screenShake).toBeCloseTo(0.4);
   expect(s.gameplay.cameraBob).toBe(false);
   // The menu's key help follows the rebinding.
