@@ -71,6 +71,8 @@ const FOE_HOLD_SEC = 0.5, FOE_SWITCH = 0.7;
 const COVER_LEAVE_M = 1.5;
 /** Out of a barrel's danger zone (hazardAvoid), this much further is where I stop walking straight back toward it. */
 const HAZARD_FENCE_M = 1;
+/** Standing this much higher than my vault, it's out of reach (Match: within 2 m of its height). */
+const VAULT_REACH_Y = 1.8;
 /** Lower than this above my feet a piece is stepped over, not hopped. */
 const STEP_HOP = 0.4;
 const TURN_RATE = 8;
@@ -2254,6 +2256,9 @@ export class Bot {
     const remote = vaultSpec(me).remote && !upgrade && c.on === c.home.index;
     const walk = remote ? IDLE : this.goTo(c.home.vault, 1.8);
     if ((!remote && dist2D(me.pos, c.home.vault) > USE_RANGE) || me.busyUntil > c.view.now) return walk;
+    // Up on something (my own stacked sandbags) the vault is out of reach (the sim wants me within 2 m of its height),
+    // though it's right below: step off first (mixed seed 14: a PRO stood 116 s up there, depositing nothing).
+    if (!remote && me.pos.y - c.home.vault.y >= VAULT_REACH_Y) return { dir: norm(flat(sub(me.pos, c.home.vault))) };
     const cash = Math.max(Math.floor(me.inv.cash - this.bankKeep(c)), this.insuranceDue(me));
     if (cash <= 0 && !upgrade) { this.nextScoreAt = c.view.now; return walk; }
     this.nextScoreAt = c.view.now + 1.2;
