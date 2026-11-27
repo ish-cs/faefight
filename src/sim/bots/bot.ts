@@ -2238,10 +2238,13 @@ export class Bot {
     if (!target) { this.nextScoreAt = c.view.now; return IDLE; }
     const door = b.doorways.find((d) => doorPieces(c.view.pieces, d).includes(target));
     if (!door) throw new Error(`Bot ${this.id}: blocker ${target.id} matches no doorway`);
-    if (isHard(target.kind) && me.inv.charges > 0) return this.blast(c, door, target, inside);
     const fists = !ownsGun(me.inv);
     // Punching from outside means standing within the countdown radius: only while it isn't sealed.
-    if (fists && !inside && c.view.sealed[home.index]) { this.nextScoreAt = c.view.now; return IDLE; }
+    const noPunch = fists && !inside && c.view.sealed[home.index];
+    // A charge for hard plugs, and for a soft one I can't shoot or punch (canClear counted on it: ffa8-mixed seed 10,
+    // a gunless Hard with a charge stood 9.5 min "clearing" a wood plug).
+    if (me.inv.charges > 0 && (isHard(target.kind) || noPunch)) return this.blast(c, door, target, inside);
+    if (noPunch) { this.nextScoreAt = c.view.now; return IDLE; }
     return this.breakPlug(door, target, inside, fists);
   }
 
