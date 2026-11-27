@@ -35,6 +35,8 @@ export interface Storyline {
   kind: ShotKind;
   /** Where a wide shot is centred (else the featured player). */
   at?: V3;
+  /** Sim time of the event behind a one-off moment (kill, elimination, completed seal). */
+  since?: number;
 }
 
 /** How long each kind of moment stays interesting (s of sim time). */
@@ -108,16 +110,16 @@ export class InterestTracker {
       // The credited eliminator (sim/elimination.ts: the sealer of a sealed-in player too), else the killer.
       const who = e.by != null && isAlive(e.by) ? e.by : k?.killer != null && isAlive(k.killer) ? k.killer : null;
       if (who === null) continue;
-      out.push({ reason: 'elimination', playerId: who, otherId: e.player, score: SCORE.elimination - (t - e.t) * 0.3, kind: 'shoulder' });
+      out.push({ reason: 'elimination', playerId: who, otherId: e.player, score: SCORE.elimination - (t - e.t) * 0.3, kind: 'shoulder', since: e.t });
     }
     for (const k of this.kills) {
       if (this.elims.some((e) => e.player === k.victim) || k.killer === null || !isAlive(k.killer)) continue;
-      out.push({ reason: 'elimination', playerId: k.killer, otherId: k.victim, score: SCORE.kill - (t - k.t) * 0.4, kind: 'shoulder' });
+      out.push({ reason: 'elimination', playerId: k.killer, otherId: k.victim, score: SCORE.kill - (t - k.t) * 0.4, kind: 'shoulder', since: k.t });
     }
     // A bunker just sealed: the sealer, over the shoulder.
     for (const sl of this.seals) {
       const who = sl.by !== null && isAlive(sl.by) ? sl.by : sl.owner !== null && isAlive(sl.owner) ? sl.owner : null;
-      if (who !== null) out.push({ reason: 'seal', playerId: who, otherId: sl.owner ?? undefined, score: SCORE.sealDone - (t - sl.t) * 0.3, kind: 'shoulder' });
+      if (who !== null) out.push({ reason: 'seal', playerId: who, otherId: sl.owner ?? undefined, score: SCORE.sealDone - (t - sl.t) * 0.3, kind: 'shoulder', since: sl.t });
     }
     // A rocket in flight: the player it is heading for (closest to its path ahead).
     for (const pr of s.projectiles ?? []) {

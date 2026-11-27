@@ -154,6 +154,37 @@ describe('cinematic director hysteresis', () => {
     expect(shots.every((s) => s.kind !== 'orbit')).toBe(true);
   });
 
+  it('a new kill interrupts a quiet shot early, but a kill shot then holds: no ping-pong between kills', () => {
+    // e2e (8 PRO bots): two kills a moment apart, then a third; the director used to cut kill -> older kill -> kill
+    // about every 4 s (the older kill preempting once the current shot's own story faded).
+    const d = new Director();
+    const shots: ShotEvent[] = [];
+    d.on('shot', (e) => shots.push(e));
+    d.setActive(true);
+    const dead = new Set<number>();
+    const ps = () => [1, 2, 3, 4, 5, 6, 7, 8].map((id) => pl(id, { alive: !dead.has(id) }));
+    const kill = (t: number, killer: number, victim: number) => { dead.add(victim); return [{ t, type: 'kill', data: { victim, killer } }]; };
+    const at = (t: number, k: number) => Math.abs(t - k) < 1e-4;
+    let t = 0;
+    for (; t <= 20 + 1e-9; t += 1 / 30) d.update(snap(t, ps())); // quiet: past the opening
+    const n0 = shots.length;
+    for (; shots.length === n0; t += 1 / 30) d.update(snap(t, ps())); // a fresh quiet shot starts
+    const quiet = d.shot!;
+    const killer1 = [1, 2, 3, 4].find((id) => id !== quiet.playerId)!;
+    const killer2 = [1, 2, 3, 4].find((id) => id !== quiet.playerId && id !== killer1)!;
+    const killer3 = [1, 2, 3, 4].find((id) => id !== quiet.playerId && id !== killer1 && id !== killer2)!;
+    const tK1 = t + CUT.preemptAfter + 0.5;
+    for (; t <= tK1 + 20; t += 1 / 30) {
+      const ev = at(t, tK1) ? kill(t, killer1, 5) : at(t, tK1 + 0.7) ? kill(t, killer2, 6) : at(t, tK1 + 5) ? kill(t, killer3, 7) : [];
+      d.update(snap(t, ps(), { events: ev }));
+    }
+    const after = shots.filter((s) => s.t > tK1);
+    expect(after[0]).toMatchObject({ playerId: killer1, reason: 'elimination' }); // the new kill interrupts the quiet shot
+    expect(after[0].t - quiet.startedAt).toBeLessThan(CUT.minShot);
+    for (let i = 1; i < after.length; i++) expect(after[i].t - after[i - 1].t, `cut ${i} after a kill shot`).toBeGreaterThanOrEqual(CUT.minShot);
+    expect(after.slice(1).some((s) => s.playerId === killer2 && s.t < after[0].t + CUT.minShot)).toBe(false);
+  });
+
   it('summary lists the featured player and top storylines; active events fire', () => {
     const d = new Director();
     const act: boolean[] = [];

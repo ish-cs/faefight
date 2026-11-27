@@ -128,6 +128,48 @@ export function clampToAnchor(anchor: V3, cam: V3, raycast: Raycast, skin = SHOT
   return len - want;
 }
 
+/** A moving camera's collision (sweepCamera). */
+export const SWEEP = {
+  /** A frame never ends closer than this to a surface (m; the camera's near plane is 0.05). */
+  skin: 0.06,
+  /** A prop at most this thick along the move (a lamp post, a pole, a railing) is passed in one frame: the frame
+   *  lands just beyond it, never inside. Anything thicker stops the camera. Thin enough that the pass stays a
+   *  glide (≤ 0.37 m in a frame), not a jump. */
+  hop: 0.25,
+} as const;
+
+const _bk: V3 = { x: 0, y: 0, z: 0 }, _far: V3 = { x: 0, y: 0, z: 0 };
+/**
+ * Moves a camera from `from` (where the last frame was drawn) toward `to` (updated in place) like a solid
+ * object, so no frame is ever drawn from inside a prop: a thin prop on the way (≤ SWEEP.hop) is passed, landing
+ * just beyond it; anything thicker stops it SWEEP.skin short of the surface. Returns true when stopped.
+ */
+export function sweepCamera(from: V3, to: V3, raycast: Raycast): boolean {
+  const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+  const len = Math.hypot(dx, dy, dz);
+  if (len < 1e-4) return false;
+  _d.x = dx / len; _d.y = dy / len; _d.z = dz / len;
+  const h = raycast(from, _d, len + SWEEP.skin);
+  if (h === null) return false;
+  {
+    // Crossing (or about to touch) a surface: where does that prop end? Seen back from just past the thickest prop we'd pass.
+    const reach = len + SWEEP.hop + SWEEP.skin;
+    _far.x = from.x + _d.x * reach; _far.y = from.y + _d.y * reach; _far.z = from.z + _d.z * reach;
+    _bk.x = -_d.x; _bk.y = -_d.y; _bk.z = -_d.z;
+    const e = raycast(_far, _bk, reach - h);
+    const exit = e === null ? -Infinity : reach - e;
+    if (e !== null && e > 0 && exit - h <= SWEEP.hop) {
+      // Thin: the frame lands beyond it (or where it was heading, if that is already past it).
+      const land = Math.max(len, exit + SWEEP.skin);
+      to.x = from.x + _d.x * land; to.y = from.y + _d.y * land; to.z = from.z + _d.z * land;
+      return false;
+    }
+  }
+  const want = Math.max(0, Math.min(len, h - SWEEP.skin));
+  to.x = from.x + _d.x * want; to.y = from.y + _d.y * want; to.z = from.z + _d.z * want;
+  return true;
+}
+
 /** How far along subject→target the wide shot centres (0.5 = midpoint; less on long shots). */
 const wideFrac = (span: number) => (span > 2 * SHOT.wideReach ? SHOT.wideReach / span : 0.5);
 

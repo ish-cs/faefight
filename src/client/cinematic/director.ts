@@ -147,8 +147,12 @@ export class Director {
       return this.cut(this.lines.find((l) => l.playerId !== cur.playerId) ?? best, t);
     }
     if (this.pending) return cur; // a cut is already on its way
-    // A big moment interrupts early (not one that is just this shot's own story).
-    if (age >= CUT.preemptAfter && BIG.has(best.reason) && best.playerId !== cur.playerId && best.score >= curNow + CUT.preemptMargin) return this.plan(best, t);
+    // A big moment interrupts early (not one that is just this shot's own story). Only a moment that happened
+    // during this shot: an older one was already passed over (it used to win once this shot's own story faded,
+    // cutting back to a stale kill ~4 s in). And a shot that is itself a big moment holds its minimum length:
+    // with kills seconds apart the camera otherwise hopped killer to killer every few seconds.
+    if (age >= CUT.preemptAfter && BIG.has(best.reason) && !BIG.has(cur.reason) && (best.since ?? t) > cur.startedAt
+      && best.playerId !== cur.playerId && best.score >= curNow + CUT.preemptMargin) return this.plan(best, t);
     if (cur.seq === 1 && age >= CUT.opening) return this.plan(best, t); // end of the establishing shot
     if (age < CUT.minShot) return cur;
     // A fight is followed until it resolves: only a big moment (above) takes the camera away.

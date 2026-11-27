@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { emptyInventory } from '../../src/sim/economy';
 import type { MatchEvent, MatchEventType, PlayerState, Snapshot, Vec3 } from '../../src/sim/types';
-import { sees, SHOT, smoothDamp, smoothDampV3, solveTwoShot, type Raycast, type TwoShotOut } from '../../src/client/camPath';
+import { sees, SHOT, smoothDamp, smoothDampV3, solveTwoShot, sweepCamera, SWEEP, type Raycast, type TwoShotOut } from '../../src/client/camPath';
 import {
   findKillShot, KILLCAM_SEC, MIN_LEAD_IN, planKillcam, realSpan, RESPAWN_MARGIN, sampleSmooth, SLOW_LEAD_MAX, SLOW_LEAD_MIN, slowAmount, slowLead, SLOWMO, timeScale,
 } from '../../src/client/qol/killcamBuffer';
@@ -117,6 +117,50 @@ describe('camera path solver (camPath.solveTwoShot)', () => {
       maxStep = Math.max(maxStep, Math.hypot(b.pos.x - a.pos.x, b.pos.y - a.pos.y, b.pos.z - a.pos.z));
     }
     expect(maxStep).toBeLessThan(0.5);
+  });
+});
+
+describe('solid camera (camPath.sweepCamera)', () => {
+  const dt = 1 / 60;
+  /** Glides a camera from x = -3 toward x = 3 at `speed` m/s (z = -3, chest height) through `boxes`; every frame drawn. */
+  function glide(boxes: Box[], speed: number) {
+    const rc = boxRaycast(boxes);
+    const cam = { x: -3, y: 1.5, z: -3 };
+    let maxStep = 0, stops = 0;
+    for (let i = 1; i <= Math.ceil(6 / (speed * dt)); i++) {
+      const to = { x: Math.min(3, cam.x + speed * dt), y: 1.5, z: -3 };
+      if (sweepCamera(cam, to, rc)) stops++;
+      maxStep = Math.max(maxStep, Math.hypot(to.x - cam.x, to.y - cam.y, to.z - cam.z) / dt);
+      expect(inside(to, boxes), `frame ${i} at x=${to.x.toFixed(2)}`).toBe(false);
+      cam.x = to.x; cam.y = to.y; cam.z = to.z;
+    }
+    return { cam, maxStep, stops };
+  }
+
+  it('glides past a thin pole between two frames: never drawn inside it, never faster than it was moving', () => {
+    for (const speed of [2, 6, 12]) {
+      const r = glide([box(-0.12, 0, -3.12, 0.12, 5, -2.88)], speed);
+      expect(r.cam.x).toBeCloseTo(3, 5); // got past
+      expect(r.stops).toBe(0);
+      // At most the pole's thickness plus a skin either side in one frame: a glide, not a jump.
+      expect(r.maxStep).toBeLessThanOrEqual(speed + (0.24 + 2 * SWEEP.skin) / dt + 1e-6);
+      expect(r.maxStep).toBeLessThan(25);
+    }
+  });
+
+  it('stops short of a thick prop (a wall): no frame inside, no jump', () => {
+    const wall = [box(-0.5, 0, -6, 0.5, 5, 0)];
+    const r = glide(wall, 6);
+    expect(r.stops).toBeGreaterThan(0);
+    expect(r.cam.x).toBeLessThan(-0.5);
+    expect(r.cam.x).toBeGreaterThan(-0.5 - SWEEP.skin - 0.11);
+    expect(r.maxStep).toBeLessThanOrEqual(6 + 1e-6);
+  });
+
+  it('open space: the move is untouched', () => {
+    const to = { x: 1, y: 2, z: 3 };
+    expect(sweepCamera({ x: 0, y: 2, z: 3 }, to, boxRaycast([]))).toBe(false);
+    expect(to).toEqual({ x: 1, y: 2, z: 3 });
   });
 });
 
@@ -335,6 +379,27 @@ describe('Killcam playback', () => {
     while (kc.frame(now)) now += 1000 / 120;
     // Players move ≤ 6 m/s here; the camera never jumps faster than a quick glide.
     expect(kc.info().stats.maxStep).toBeLessThan(25);
+  });
+
+  it('killer running past thin poles: the camera never snaps and never ends up inside one', () => {
+    const kc = started();
+    // Poles around the killer's circle (r = 6 about the victim), crossing the camera's line now and then.
+    const poles: Box[] = [];
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 5) for (const r of [4, 7.5, 9]) {
+      const x = r * Math.cos(a + r), z = r * Math.sin(a + r);
+      poles.push(box(x - 0.12, -1, z - 0.12, x + 0.12, 6, z + 0.12));
+    }
+    const rc = boxRaycast(poles);
+    let now = 0, occluded = 0;
+    for (let f = kc.frame(now, rc), i = 0; f; f = kc.frame(now, rc), i++) {
+      expect(inside(f.cam, poles), `frame ${i}`).toBe(false);
+      const k = f.snap.players.find((p) => p.id === A)!;
+      if (!sees(f.cam, chest(k.pos, SHOT.subjectChest), rc)) occluded++;
+      now += 1000 / 60;
+    }
+    expect(occluded).toBeGreaterThan(0); // poles did pass between the camera and the killer (it used to pop in front of them)
+    const st = kc.info().stats;
+    expect(st.maxStep).toBeLessThan(25);
   });
 
   it('skip: ignored in the grace period (the press you died on), then any input skips at once', () => {

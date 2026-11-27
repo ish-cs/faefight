@@ -2,7 +2,7 @@ import type { MatchEvent, Snapshot, Vec3 } from '../../sim/types';
 import type { Motion } from '../characters/avatar';
 import { islandColor } from '../colors';
 import { ICONS, type IconKind } from '../icons';
-import { clamp01, clampToAnchor, smoothDampV3, solveTwoShot, subjectAnchor, type Raycast, type TwoShotOut } from '../camPath';
+import { clamp01, smoothDampV3, solveTwoShot, sweepCamera, type Raycast, type TwoShotOut } from '../camPath';
 import {
   eventsBetween, findKillShot, planKillcam, sampleSmooth, slowAmount, slowLead, SLOW_OUT, SnapshotHistory, timeScale,
   type KillcamPlan, type KillShot, type PlayerSample,
@@ -57,6 +57,10 @@ export const SKIP_GRACE = 0.3;
 export const FADE_IN = 0.22, FADE_OUT = 0.4;
 /** Camera spring times (real s): position and look point. */
 const CAM_SMOOTH = 0.28, LOOK_SMOOTH = 0.16;
+/** Held short of a thick prop this long (real s), the camera cuts to its target instead of staring at the prop. */
+const HELD_CUT = 0.3;
+/** The camera's top speed (m/s), and how long (s) its side of the pair must stay blocked before it swaps sides. */
+const CAM_MAX_SPEED = 16, SIDE_HOLD = 0.35;
 /** Push-in at the slowest point (FOV × (1 - ZOOM_IN)). */
 const ZOOM_IN = 0.14;
 
@@ -125,7 +129,12 @@ export class Killcam {
   /** Debug/e2e: how the last killcam went. */
   last: { started: boolean; reason: string; plan: KillcamPlan | null } = { started: false, reason: 'none', plan: null };
   /** Debug/e2e: the camera's minimum clearance this replay (both players seen from it every frame?). */
-  stats = { frames: 0, blocked: 0, maxStep: 0, slowFrames: 0, clampMax: 0, sideSwitches: 0, slowReal: 0 };
+  /** clampMax: the furthest the camera was held short of where it was heading (m); cuts: HELD_CUT cuts. */
+  stats = { frames: 0, blocked: 0, maxStep: 0, slowFrames: 0, clampMax: 0, sideSwitches: 0, slowReal: 0, cuts: 0 };
+  /** How long (real s) the camera has been held short of a thick prop. */
+  private held = 0;
+  /** How long (s) the camera's side of the pair has been blocked. */
+  private sideBlocked = 0;
 
   constructor(private hudRoot: HTMLElement) {
     this.root.dataset.testid = 'killcam';
@@ -166,7 +175,9 @@ export class Killcam {
     }
     this.play = { plan, killer, victim, shot, t: plan.from, real: 0, startMs: nowMs, lastNow: nowMs, lastT: plan.from, first: true };
     this.last = { started: true, reason: 'playing', plan };
-    this.stats = { frames: 0, blocked: 0, maxStep: 0, slowFrames: 0, clampMax: 0, sideSwitches: 0, slowReal: 0 };
+    this.stats = { frames: 0, blocked: 0, maxStep: 0, slowFrames: 0, clampMax: 0, sideSwitches: 0, slowReal: 0, cuts: 0 };
+    this.held = 0;
+    this.sideBlocked = 0;
     this.side = 1;
     this.buildCard(info, shot.headshot || info.headshot);
     this.fill.style.transform = 'scaleX(0)';
@@ -289,8 +300,12 @@ export class Killcam {
       this.victimAt.x = kx - Math.sin(k.yaw) * 12; this.victimAt.y = ky; this.victimAt.z = kz - Math.cos(k.yaw) * 12;
     }
     const kFeet = this.anchor; kFeet.x = kx; kFeet.y = ky; kFeet.z = kz;
-    const sol = solveTwoShot({ subject: kFeet, target: this.victimAt, blend: shotBlend(p.t, p.plan), side: this.side, switchCost: p.first ? 0 : 30, raycast }, this.sol);
+    // Sides swap only once this side has been blocked a while: a pole passing between for an instant used to flip
+    // the camera across the pair and back (a 10 m swoop each way).
+    const switchCost = p.first ? 0 : this.sideBlocked >= SIDE_HOLD ? 30 : 1e6;
+    const sol = solveTwoShot({ subject: kFeet, target: this.victimAt, blend: shotBlend(p.t, p.plan), side: this.side, switchCost, raycast }, this.sol);
     if (sol.side !== this.side && !p.first) this.stats.sideSwitches++;
+    this.sideBlocked = sol.side !== this.side || sol.clear ? 0 : this.sideBlocked + dt;
     this.side = sol.side;
     const o = this.out;
     if (p.first) {
@@ -299,13 +314,38 @@ export class Killcam {
       this.camVel.x = this.camVel.y = this.camVel.z = 0;
       this.lookVel.x = this.lookVel.y = this.lookVel.z = 0;
     } else {
+      const cx = this.camPos.x, cy = this.camPos.y, cz = this.camPos.z;
       smoothDampV3(this.camPos, sol.pos, this.camVel, CAM_SMOOTH, dt);
+      // Never faster than a quick glide, however far the target moved.
+      const mv = Math.hypot(this.camPos.x - cx, this.camPos.y - cy, this.camPos.z - cz), cap = CAM_MAX_SPEED * dt;
+      if (mv > cap) {
+        const k = cap / mv;
+        this.camPos.x = cx + (this.camPos.x - cx) * k; this.camPos.y = cy + (this.camPos.y - cy) * k; this.camPos.z = cz + (this.camPos.z - cz) * k;
+        const sp = Math.hypot(this.camVel.x, this.camVel.y, this.camVel.z);
+        if (sp > CAM_MAX_SPEED) { const kv = CAM_MAX_SPEED / sp; this.camVel.x *= kv; this.camVel.y *= kv; this.camVel.z *= kv; }
+      }
       smoothDampV3(this.lookPos, sol.look, this.lookVel, LOOK_SMOOTH, dt);
     }
-    // Never inside geometry: the smoothed camera is pulled in front of anything between it and the killer.
+    // A solid camera: it glides past thin props (poles, posts) between two frames and stops short of thicker ones,
+    // so no frame is drawn from inside a prop and it never jumps. (It used to be pulled in front of anything between
+    // it and the killer after the smoothing, without feeding that back: a pole crossing the view for a frame popped
+    // the camera in front of it and back out.) The solver's target already keeps clear of what blocks the view.
     const prevX = o.cam.x, prevY = o.cam.y, prevZ = o.cam.z;
+    if (!p.first) {
+      const wx = this.camPos.x, wy = this.camPos.y, wz = this.camPos.z;
+      if (sweepCamera(o.cam, this.camPos, raycast)) {
+        this.stats.clampMax = Math.max(this.stats.clampMax, Math.hypot(wx - this.camPos.x, wy - this.camPos.y, wz - this.camPos.z));
+        this.camVel.x = this.camVel.y = this.camVel.z = 0; // resumes from where it stopped: no catch-up jump later
+        this.held += dt;
+        if (this.held > HELD_CUT) {
+          // Pinned behind something thick for a while (its target is on the far side): a clean cut over to it.
+          this.camPos.x = sol.pos.x; this.camPos.y = sol.pos.y; this.camPos.z = sol.pos.z;
+          this.held = 0;
+          this.stats.cuts++;
+        }
+      } else this.held = 0;
+    } else this.held = 0;
     o.cam.x = this.camPos.x; o.cam.y = this.camPos.y; o.cam.z = this.camPos.z;
-    this.stats.clampMax = Math.max(this.stats.clampMax, clampToAnchor(subjectAnchor(kFeet, this.anchor), o.cam, raycast));
     if (!p.first) this.stats.maxStep = Math.max(this.stats.maxStep, Math.hypot(o.cam.x - prevX, o.cam.y - prevY, o.cam.z - prevZ) / Math.max(dt, 1e-3));
     this.stats.frames++;
     if (!sol.clear) this.stats.blocked++;
