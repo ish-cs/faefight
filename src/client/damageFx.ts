@@ -54,6 +54,9 @@ export class DamageFx {
   /** "Burning" badge + warm screen edge while fire is hurting me. */
   private burning = document.createElement('div');
   private burnUntil = 0;
+  /** root size, cached: reading clientWidth every frame forced a style/layout flush after the HUD's DOM writes */
+  private w = 0;
+  private h = 0;
 
   constructor(parent: HTMLElement) {
     this.root.className = 'damage-fx';
@@ -62,6 +65,9 @@ export class DamageFx {
     this.burning.dataset.on = '0';
     this.root.append(this.burning);
     parent.append(this.root);
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver((es) => { const r = es[es.length - 1].contentRect; this.w = r.width; this.h = r.height; }).observe(this.root);
+    }
   }
 
   onSnapshot(snap: Snapshot, me: number) {
@@ -101,27 +107,34 @@ export class DamageFx {
     const now = performance.now() / 1000;
     const on = me && now < this.burnUntil ? '1' : '0';
     if (this.burning.dataset.on !== on) { this.burning.dataset.on = on; this.root.dataset.burning = on; }
-    const w = this.root.clientWidth, h = this.root.clientHeight;
-    this.floaters = this.floaters.filter((f) => {
+    if (!this.floaters.length && !this.arrows.length) return;
+    if (!this.w) { this.w = this.root.clientWidth; this.h = this.root.clientHeight; } // before the first resize callback
+    const w = this.w, h = this.h;
+    // compacted in place (no per-frame arrays)
+    let k = 0;
+    for (const f of this.floaters) {
       const age = now - f.born;
       const p = posOf(f.target);
-      if (age > NUMBER_SEC || !p) { f.el.remove(); return false; }
+      if (age > NUMBER_SEC || !p) { f.el.remove(); continue; }
+      this.floaters[k++] = f;
       this.v.set(p.x, p.y + HEAD_Y, p.z).project(camera);
-      if (this.v.z > 1) { f.el.style.opacity = '0'; return true; }
+      if (this.v.z > 1) { f.el.style.opacity = '0'; continue; }
       const x = (this.v.x * 0.5 + 0.5) * w + f.jitter, y = (-this.v.y * 0.5 + 0.5) * h - age * 60;
       f.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%) scale(${1 + Math.max(0, 0.15 - age) * 3})`;
       f.el.style.opacity = String(1 - Math.max(0, age - NUMBER_SEC * 0.5) / (NUMBER_SEC * 0.5));
-      return true;
-    });
-    this.arrows = this.arrows.filter((a) => {
+    }
+    this.floaters.length = k;
+    k = 0;
+    for (const a of this.arrows) {
       const age = now - a.born;
       const p = a.at ?? posOf(a.attacker);
-      if (age > ARROW_SEC || !p || !me) { a.el.remove(); return false; }
+      if (age > ARROW_SEC || !p || !me) { a.el.remove(); continue; }
+      this.arrows[k++] = a;
       const deg = (hitDirection(me, p, camYaw) * 180) / Math.PI;
       a.el.style.transform = `translate(-50%, -50%) rotate(${deg}deg)`;
       a.el.style.opacity = String(1 - age / ARROW_SEC);
-      return true;
-    });
+    }
+    this.arrows.length = k;
   }
 }
 

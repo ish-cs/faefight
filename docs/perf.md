@@ -129,7 +129,28 @@ first, then scale. It climbs back last-in, first-out. Shift+` shows the rung and
 Settings → Video "Competitive mode" applies on top of any preset: 1× render scale, no GTAO, bloom or flare, and
 MSAA ×2. Measured GPU time at 2× DPR on high: 22.5 ms → 2.4 ms.
 
-## What the profiles say (8 players, prod build)
+## Power mode (src/client/power.ts)
+
+Settings → Video "Power": **Auto** (default), Performance, Quality. Auto turns the saver on while
+`navigator.getBattery()` reports discharging (Chromium; elsewhere unknown = off) or after 5 s of frames slower than the
+display's budget × 1.3. Hysteresis: it holds ≥ 30 s, leaves after 15 s with main-thread work under 60 % of the display
+budget, and a re-entry within 30 s doubles the hold (up to 240 s). Performance = always the saver, Quality = never.
+The saver: a stable 60 fps cap (or the user's lower cap), dynamic resolution on, GTAO cheap, grass ×0.75, LOD
+distance ×0.85, render scale ≤ 0.85, all live governor knobs (no recompile, so it switches mid-match). Pause menu or
+an unfocused window: 30 fps. `window.__faefight.power()` shows the state; Shift+F3 detail prefixes `saver ·`.
+
+## Battery proxy and spike attribution
+
+- `?perf`: per-system main-thread ms (EMA and worst per 250 ms) with a budget bar each, draws, heap, GC count
+  (src/client/perfHud.ts; `window.__faefight.perfProbe()`).
+- `tests/visual/batteryProxy.mjs` (heavy.sh; needs `GAME_URL`, best an unminified prod build): an 8-bot match on a
+  scripted camera path at CDP CPU throttle 1×/4×/6× (≈ plugged / battery / Low Power Mode), vsync 60. Reports
+  p50/p95/p99, longest frame, spikes > 33 / 50 ms per minute, and with `--trace=1` a top-10 spike-cause table (GC, JS
+  function, style/layout, message decode, pipeline compile, texture upload, idle main thread). `--heap=1` lists
+  the top allocating functions (KB/s); `--params=bpstacks` lists `writeTexture` sources per texture.
+  `--battery=charging|discharging` stubs the Battery Status API, `--power=` forces the mode.
+
+
 
 - High is **GPU-bound on Retina**: 32 ms GPU at 2× DPR on main. Render scale and GTAO dominate, then MSAA ×4
   with MRT. High now renders at 1.25× with 8 GTAO samples, giving 22.5 ms.

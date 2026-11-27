@@ -76,6 +76,8 @@ import { EmoteWheel } from './emoteWheel';
 import { isWheelId, quipLines, type WheelId } from '../sim/emotes';
 // UI theme last: its tokens and skin win over style.css / qol.css / settings.css (docs/ui-style.md).
 import { setLeaveGuard } from './leaveGuard';
+import { probe, S } from './perfHud';
+import { PowerState, watchBattery } from './power';
 import './ui/theme.css';
 import './ui/skin.css';
 
@@ -1097,9 +1099,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const sky = renderer.world.sky;
   const govSkip = () => governor.setSkip((s) => s === 'ao' && !sky.presetHasAo);
   govSkip();
-  governor.enabled = settings.get().video.dynamicResolution;
+  /** Power mode (power.ts): on battery / sustained slow frames → stable 60 cap, dynamic resolution, trimmed effects. */
+  const power = new PowerState();
+  power.mode = settings.get().video.power;
+  governor.enabled = settings.get().video.dynamicResolution || power.saver;
   const applyGovernor = () => {
-    const k = governor.knobs;
+    const k = power.trim(governor.knobs);
     sky.setGovernor(k);
     renderer.world.grass.densityScale = k.grass;
     lods.bias = k.lodBias;
@@ -1132,12 +1137,25 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // the quality key sets the sky's preset before saving it, so compare with what was last compiled, not the sky
     const key = `${st.video.quality}/${st.video.competitive}`;
     if (key !== chainKey) { chainKey = key; if (revealed) recompileAfterChange(); }
-    governor.enabled = st.video.dynamicResolution;
+    power.mode = st.video.power;
+    governor.enabled = st.video.dynamicResolution || power.saver;
     perfDetail = st.video.perfDetail || DEBUG;
     if (sky.quality !== govQuality) { govQuality = sky.quality; governor.reset(); govSkip(); }
     applyGovernor();
   };
   const offSettings = settings.subscribe(applySettings);
+  /** saver on/off: live knobs only (no recompile), so it may switch mid-match */
+  const applyPower = () => {
+    governor.enabled = settings.get().video.dynamicResolution || power.saver;
+    applyGovernor();
+    console.info(`[power] ${power.saver ? 'saver' : 'full'} (${power.reason})`);
+  };
+  const offBattery = watchBattery((discharging) => { const was = power.saver; power.onBattery = discharging; if (power.saver !== was) applyPower(); });
+  // menus / unfocused window: a low frame cap (hidden tabs get no rAF at all)
+  let focused = true;
+  const onBlur = () => { focused = false; }, onFocus = () => { focused = true; };
+  window.addEventListener('blur', onBlur);
+  window.addEventListener('focus', onFocus);
   /** Shift + the FPS key (F3 / `): perf detail under the FPS counter (Settings → Video → Performance stats). */
   let perfDetail = settings.get().video.perfDetail || DEBUG, detailShown = false;
 
@@ -1947,7 +1965,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       /** Local player's rendered (predicted) feet this frame, and prediction stats. */
       predicted: () => ({ active: !!predictor?.active, pos: lastRendered, seq: moveSeq, stats: predictor?.stats ?? null, pending: predictor?.pending ?? 0 }),
       frames: () => frameStats(),
-      resetFrames: () => { frameMs.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; gpuDoneT.length = 0; },
+      /** Raw drawn-frame log (the last ≤600): timestamps and intervals, ms. */
+      frameLog: () => ({ t: frameT.slice(), dt: frameMs.slice() }),
+      /** ?perf: per-system main-thread ms (EMA), heap, GC count (perfHud.ts). */
+      perfProbe: () => probe.stats(),
+      /** Power mode state (power.ts): mode, battery, saver on/off and why. */
+      power: () => power.info(),
+      resetFrames: () => { frameMs.length = 0; frameT.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; gpuDoneT.length = 0; },
       /** frames the GPU actually finished per second (true throughput; rAF fps overstates it when frames queue) */
       gpuFps: () => (gpuDoneT.length > 1 ? ((gpuDoneT.length - 1) * 1000) / (gpuDoneT[gpuDoneT.length - 1] - gpuDoneT[0]) : 0),
       gpuMs: () => renderer.gpuStats(),
@@ -2030,6 +2054,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const eyeY = new VerticalSmoother();
   const viewFeet = new THREE.Vector3();
   const frameMs: number[] = [];
+  /** drawn-frame timestamps (performance.now), parallel to frameMs (debug: tests/visual/batteryProxy.mjs) */
+  const frameT: number[] = [];
   const frameStats = () => {
     const xs = [...frameMs].sort((a, b) => a - b);
     const q = (k: number) => xs[Math.min(xs.length - 1, Math.floor(xs.length * k))] ?? 0;
@@ -2069,18 +2095,22 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const frame = () => {
     const now = performance.now();
     // Settings → Video frame cap (rAF itself is vsync-locked; this only skips frames below it).
-    const cap = settings.get().video.frameCap;
+    const cap = power.cap(settings.get().video.frameCap, !!paused || !focused);
     if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
     // GPU queue too deep: wait (look→GPU-done latency stays ≈ 40 ms however GPU-bound; refresh.ts FrameQueue)
     if (gpuQueue.busy(now)) { requestAnimationFrame(frame); return; }
     lastDrawn = now;
+    probe.begin();
     const dt = Math.min(0.1, (now - last) / 1000);
     if (revealed) {
       // main-thread work of the previous frame tells the governor whether frames are GPU- or CPU-bound
       // budget: the frame cap, else the display's refresh (120 Hz ProMotion → 8.3 ms, not 60 fps)
       if (governor.frame(now - last, frameBudgetMs(cap, displayRefresh.hz), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
+      if (power.frame(now - last, workMs[workMs.length - 1] ?? now - last)) applyPower();
     }
     frameMs.push(now - last);
+    frameT.push(now);
+    if (frameT.length > 600) frameT.shift();
     displayRefresh.frame(now - last);
     errors?.frame(now - last);
     if (frameMs.length > 600) frameMs.shift();
@@ -2095,7 +2125,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         hud.setFpsDetail([
           `${((now - fpsSince) / fpsFrames).toFixed(1)} ms${g !== null ? ` · gpu ${g.toFixed(1)} ms` : ''}`,
           `${ri.drawCalls} draws · ${(ri.triangles / 1e6).toFixed(2)}M tris`,
-          `gov ${governor.level}${governor.gpuBound ? ' gpu' : ' cpu'} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
+          `${power.saver ? 'saver · ' : ''}gov ${governor.level}${governor.gpuBound ? ' gpu' : ' cpu'} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
         ]);
       }
       fpsFrames = 0; fpsSince = now;
@@ -2104,6 +2134,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (snap) reconcileBuilds(snap.pieces); // refusals time out between snapshots too
     renderer.setPieceFades(builds.fades(now));
     renderer.beginFrame();
+    probe.lap(S.snapshots);
 
     // Movement: the raw (camera-frame) move axes become numbered fixed-step commands. The sim and
     // our predictor apply exactly the same commands; between steps the predictor extrapolates
@@ -2127,6 +2158,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     if (unsent.length > MAX_CMDS_PER_MSG) unsent = unsent.slice(-MAX_CMDS_PER_MSG);
     const predicting = !!predictor && predictor.renderState(liveCmd(moveSeq + 1), moveAcc / DT, dt, predicted);
     renderer.setLocal(predicting ? predicted : null);
+    probe.lap(S.input);
     hint.style.display = snap && !input.locked && !hud.panelOpen && !paused && !hud.ended && !chat.open && !dead && !practice?.open && !killcam.active ? '' : 'none';
 
     const me = snap?.players.find((p) => p.id === humanId);
@@ -2228,12 +2260,14 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     adsWas = adsWant;
     fpv.setAds(adsWant, dt);
     input.lookScale = me && me.equipped !== 'fists' ? 1 / (1 + (WEAPONS[me.equipped].adsZoom - 1) * fpv.adsK) : 1;
+    probe.lap(S.camera);
     if (me && !spectating && renderer.playerPos(humanId, feet)) {
       lastRendered = { x: feet.x, y: feet.y, z: feet.z };
       // Cameras follow a vertically smoothed feet position (steps/ramps/corrections don't jolt the
       // view); look angles are applied raw.
       const view = viewFeet.set(feet.x, eyeY.update(feet.y, predicting ? predicted.vel.y : null, dt), feet.z);
       if (!fpv.updateCamera(view, input.yaw, input.pitch, me, humanId)) camera.update(view, input.yaw, input.pitch, dt);
+      probe.lap(S.camera);
 
       // Build ghost (holding a piece): where the crosshair points (or a nearby snap spot), validated
       // locally every frame against the predictor's world with the sim's own rules.
@@ -2282,6 +2316,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         trapAimOk = null;
       }
     }
+    probe.lap(S.build);
 
     // What I see beyond the snapshot (ghost, open panel), for anyone spectating me: on change, at most 4 Hz.
     if (backend.sendView && now >= nextViewAt) {
@@ -2294,6 +2329,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const sig = JSON.stringify(v);
       if (sig !== lastViewSig) { lastViewSig = sig; nextViewAt = now + 250; backend.sendView(v); }
     }
+    probe.lap(S.net);
     // Spectating: the sim ignores a dead player anyway; an alive winner flying around must not act either.
     if (spectating) sample = { ...NO_INPUT, yaw: me?.yaw ?? input.yaw, pitch: me?.pitch ?? input.pitch, select: input.selected };
     else if (me?.alive && !fpv.isActive) { // first person: the eye ray already is the crosshair ray
@@ -2309,6 +2345,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       Object.assign(sample, moveForAim(sample.moveX, sample.moveZ, camYaw, sample.yaw));
     }
     if (sample.fire && me?.alive && !spectating) predictShot(sample.yaw, sample.pitch);
+    probe.lap(S.build);
     // Lag compensation: tell the host which moment of everyone else we were looking at when we fired.
     const viewT = renderer.renderTime;
     if ((sample.fire || sample.grapple) && viewT !== null) sample.viewT = viewT;
@@ -2348,10 +2385,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       bobSpeed = Math.abs(vMotion.vel.y) < 0.8 ? Math.hypot(vMotion.vel.x, vMotion.vel.z) : 0;
     }
     fpv.applyShake(dt, bobSpeed); // visual only: the aim ray above was taken without it
+    probe.lap(S.hudFx);
     if (!warmLoop.paused) {
       warmLoop.before?.();
+      probe.skip();
       renderer.render(input.yaw);
       fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
+      probe.lap(S.viewmodel);
       renderer.captureInfo();
       const queued = gpuQueue.submitted(performance.now());
       const gpuDone = () => { queued(); gpuDoneT.push(performance.now()); if (gpuDoneT.length > 600) gpuDoneT.shift(); };
@@ -2362,11 +2402,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     audio.frame(renderer.camera);
     audio.rockets(renderer.gunFx.liveRockets());
     audio.fires(renderer.world.fire.burning());
+    probe.lap(S.audio);
     if (warmed && !revealed) {
       framesAfterWarm++;
       loading.progress('frames', framesAfterWarm / WARM_FRAMES);
       if (framesAfterWarm >= WARM_FRAMES) reveal();
     }
+    if (probe.on) probe.end(renderer.info());
     workMs.push(performance.now() - now);
     if (workMs.length > 600) workMs.shift();
     if (running) requestAnimationFrame(frame);
@@ -2378,7 +2420,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     destroy() {
       if (!running) return;
       running = false;
-      offSettings();
+      offSettings(); offBattery(); window.removeEventListener('blur', onBlur); window.removeEventListener('focus', onFocus);
       clearTimeout(revealTimer);
       if (!revealed) { revealed = true; void loading.hide(); }
       input.enabled = false;

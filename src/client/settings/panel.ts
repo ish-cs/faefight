@@ -9,10 +9,16 @@ import {
   CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, GEN_ALERT_PCTS, LIMITS, QUALITIES, type Settings, settings,
 } from './store';
 import type { Quality } from '../world/sky';
+import { POWER_MODES, type PowerMode } from '../power';
 import { availableVoices, testVoice } from '../cinematic/commentary/tts';
 import { NEURAL_VOICES, neuralEngine, voiceTester } from '../cinematic/commentary/neural';
 
 const PERF_STATS = ['off', 'fps', 'detailed'] as const;
+const POWER_NOTE: Record<PowerMode, string> = {
+  auto: 'On battery or when frames run slow: a steady 60 fps, dynamic resolution and lighter effects',
+  performance: 'Always a steady 60 fps, dynamic resolution and lighter effects (longest battery life)',
+  quality: 'Never trims: full effects at the frame cap you choose',
+};
 const PERF_STATS_LABEL: Record<(typeof PERF_STATS)[number], string> = { off: 'Off', fps: 'FPS', detailed: 'Detailed' };
 
 /**
@@ -240,6 +246,8 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
       () => v().resolutionScale, (x) => set((d) => { d.video.resolutionScale = x; }), (x) => `${Math.round(x * 100)}%`);
     segmented('Frame cap', 'Browsers always sync to the display (vsync); a cap limits below it to save power',
       'set-framecap', FRAME_CAPS, (f) => (f === 0 ? 'Vsync' : `${f}`), () => v().frameCap, (f) => set((d) => { d.video.frameCap = f; }));
+    segmented('Power', POWER_NOTE[v().power], 'set-power', POWER_MODES, (m) => m[0].toUpperCase() + m.slice(1),
+      () => v().power, (m) => set((d) => { d.video.power = m; }), render);
     toggle('Competitive mode', 'Maximum frame rate, still readable: 1× render scale, no ambient occlusion, bloom or lens flare', 'set-competitive', () => v().competitive, (x) => set((d) => { d.video.competitive = x; }));
     toggle('Dynamic resolution', 'Lower the render resolution briefly when the frame rate drops below target', 'set-dynres',
       () => v().dynamicResolution, (x) => set((d) => { d.video.dynamicResolution = x; }));
