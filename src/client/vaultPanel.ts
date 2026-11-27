@@ -20,7 +20,7 @@ const DRAG_PX = 5;
 type Side = 'carried' | 'stored';
 type Drag = { kind: HotbarItem; from: Side; cell: HTMLElement; x0: number; y0: number; shift: boolean; one: boolean; moved: boolean; ghost: HTMLElement | null };
 
-export const VAULT_HINT = 'Click: move a stack · Shift-click: move 1 · or drag · hold E here: bank all';
+export const VAULT_HINT = 'Click to move · Shift-click: move 1';
 export const DEATH_HINT = 'What you carry drops when you die';
 
 /**
@@ -162,7 +162,7 @@ export class VaultPanel {
     exact.append(el('span', 'vault-k', 'Move'), this.amount);
     const keep = el('label', 'vault-field');
     keep.append(el('span', 'vault-k', 'Keep'), this.keep);
-    this.more.replaceChildren(exact, keep,
+    this.more.replaceChildren(el('div', 'vault-tips', 'Drag works too: Shift-drag half, Ctrl/Alt-drag one · scroll a stack for an exact amount · hold E at the vault: bank all extras'), exact, keep,
       btn('Keep $', 'Keep this much carried cash on you; the rest goes in the vault', 'vault-keep', () => {
         const m = this.me; const v = Number(this.keep.value);
         if (!m || this.keep.value === '' || !Number.isFinite(v)) return;
@@ -280,9 +280,9 @@ export class VaultPanel {
     const icon = el('span', 'sicon');
     icon.innerHTML = ICONS[kind];
     c.append(icon, el('span', 'vcount', cellCount(kind, inv)));
-    const name = LABELS[kind] ?? kind;
+    const name = ITEM_NAMES[kind] ?? kind;
     c.setAttribute('aria-label', `${name} ${cellCount(kind, inv)} (${side === 'carried' ? 'carried' : 'in vault'})`);
-    this.tip(c, `${name} ${cellCount(kind, inv)} · click: ${side === 'carried' ? 'bank it' : 'take it'} · Shift-click: 1 · drag: Shift half, Ctrl one · scroll: exact amount`);
+    this.tip(c, `${name} ${cellCount(kind, inv)} · click to ${side === 'carried' ? 'bank' : 'take'} · Shift-click: 1`);
     c.onpointerdown = (e) => this.down(e, c, kind, side);
     c.onpointermove = (e) => this.move(e);
     c.onpointerup = (e) => this.up(e);
@@ -408,7 +408,7 @@ export class VaultPanel {
     setText(this.loadoutTitle, `${used}/${maxKinds} kinds`);
     this.loadoutOn.checked = refillOn(this.draft);
     const sum = Object.entries(this.draft.items).filter(([, n]) => (n ?? 0) > 0)
-      .map(([k, n]) => `${n} ${(LABELS[k] ?? k).toLowerCase()}`);
+      .map(([k, n]) => `${n} ${ITEM_NAMES[k as HotbarItem] ?? k}`);
     if (this.draft.keep > 0) sum.push(`$${this.draft.keep}`);
     setText(this.loadoutSum, sum.join(', '));
     this.loadoutSum.title = sum.join(', ');
@@ -432,8 +432,8 @@ export class VaultPanel {
       };
       const num = el('span', 'vl-n', String(n));
       num.dataset.testid = `loadout-n-${kind}`;
-      r.append(icon, el('span', 'vl-name', LABELS[kind] ?? kind), step('−', -1, 'minus'), num, step('+', 1, 'plus'));
-      this.tip(r, `${LABELS[kind] ?? kind}: refill to ${n} on respawn from the vault (${countOf(me.vault, kind)} stored) · Shift-click ±5`);
+      r.append(icon, el('span', 'vl-name', ITEM_NAMES[kind] ?? kind), step('−', -1, 'minus'), num, step('+', 1, 'plus'));
+      this.tip(r, `${ITEM_NAMES[kind] ?? kind}: refill to ${n} on respawn from the vault (${countOf(me.vault, kind)} stored) · Shift-click ±5`);
       rows.push(r);
     }
     if (!rows.length) rows.push(el('div', 'vault-empty', 'Buy or store gear to add it here'));
@@ -447,12 +447,12 @@ export class VaultPanel {
   }
 }
 
-const LABELS: Record<string, string> = {
-  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
-  sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
-  ramp: 'Ramp', container: 'Container', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit', trap: 'Spike trap',
-  shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
-  grapple: 'Grappling hook',
+/** Short item names, the same on the hotbar, the vault and its tips. */
+export const ITEM_NAMES: Record<HotbarItem, string> = {
+  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket',
+  sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
+  grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit', trap: 'Trap',
+  shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', grapple: 'Hook',
 };
 
 /** The refill does something on respawn: items to top up or cash to hand back. */

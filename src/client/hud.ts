@@ -13,7 +13,7 @@ import { insideBunker } from '../sim/bots/nav';
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
 import { dragOutcome } from './hotbarDrag';
-import { VaultPanel } from './vaultPanel';
+import { ITEM_NAMES as SHORT, VaultPanel } from './vaultPanel';
 import { bankAboveLoadout, funds, vaultSpec } from '../sim/vault';
 import { SEALED_OUTSIDE_TEXT } from './qol/alerts';
 import { FEED_FADE_MS, FEED_LIFE_MS, FeedList, feedEntries, feedText, type FeedEntry, type FeedMarker } from './qol/killFeed';
@@ -117,13 +117,6 @@ const fmtClock = (s: number) => {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 };
 
-/** Short hotbar labels (slots are narrow). */
-const SHORT: Record<HotbarItem, string> = {
-  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket',
-  sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
-  grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit', trap: 'Trap',
-  shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', grapple: 'Hook',
-};
 
 export type HudContext = {
   /** Locally selected hotbar slot (sent to the sim every input). */
