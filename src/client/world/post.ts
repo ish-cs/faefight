@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  abs, builtinAOContext, dot, emissive, exp, float, Fn, If, interleavedGradientNoise, length, luminance, min, mix, mrt, normalView, output, pass, renderOutput, screenCoordinate, screenSize, screenUV, smoothstep, step,
+  abs, builtinAOContext, perspectiveDepthToViewZ, dot, emissive, exp, float, Fn, If, interleavedGradientNoise, length, luminance, min, mix, mrt, normalView, output, pass, renderOutput, screenCoordinate, screenSize, screenUV, smoothstep, step,
   uniform, vec2, vec3, vec4, velocity,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
@@ -23,47 +23,72 @@ export type PostOptions = {
    *   output-resolution GPU time at 2× DPR).
    */
   upscale?: { mode: 'fsr' | 'taau' | 'cas'; scale: number; sharpen: number };
-  /** Killcam slow-motion blur, compiled in up front and off (a uniform branch) until `killcamBlur` turns it on. */
+  /** Camera motion blur (killcam, and live play / spectating per Settings), compiled in up front and off (a uniform branch) until `cameraBlur` turns it on. */
   motionBlur?: boolean;
 };
 
-/** Killcam motion blur (see motionBlurNode): on/off, previous-frame reprojection (prevVP × currVP⁻¹), shutter and radial. */
-const mb = { on: uniform(0), reproj: uniform(new THREE.Matrix4()), shutter: uniform(0), radial: uniform(0) };
+/**
+ * Camera motion blur (see motionBlurNode): on/off, previous-frame reprojection (prevVP × currVP⁻¹), shutter, radial,
+ * the live-play hold (less blur at the crosshair and on whatever is near the camera) and the camera's near / far.
+ */
+const mb = {
+  on: uniform(0), reproj: uniform(new THREE.Matrix4()), shutter: uniform(0), radial: uniform(0), hold: uniform(0),
+  near: uniform(0.05), far: uniform(3000), aspect: uniform(16 / 9),
+};
 const MB_TAPS = 8;
-/** Longest blur streak (uv) and the radial smear at the screen edge at full strength (uv per uv from the centre). */
-const MB_MAX = 0.03, MB_RADIAL = 0.045;
-/** Exposure the camera motion is smeared over at full strength (s): a long, filmic shutter for the slow beat. */
-const MB_SHUTTER_SEC = 1 / 24;
+/** Longest blur streak (uv). Exposure / radial strengths: motionBlur.ts. */
+const MB_MAX = 0.03;
+/**
+ * A frame whose camera jumps further than this (m) or turns more (rad) is a cut (respawn, spectator target switch,
+ * director cut): it starts a new history instead of smearing the whole screen once.
+ */
+const MB_CUT_M = 4, MB_CUT_RAD = 0.6;
 const _vp = new THREE.Matrix4(), _prevVP = new THREE.Matrix4(), _inv = new THREE.Matrix4();
+const _pos = new THREE.Vector3(), _prevPos = new THREE.Vector3(), _fwd = new THREE.Vector3(), _prevFwd = new THREE.Vector3();
 let mbWas = false, mbLastMs = 0;
 
 /**
- * Per frame, after the camera is placed: killcam blur strength `k` (0 off, 1 full). Off and staying off
- * it returns at once (no uniform writes), so normal play pays nothing; the first frame on has no history (no blur
- * from the cut into the replay). No-op on a pipeline built without `motionBlur`.
+ * Per frame, after the camera is placed: camera motion blur over `exposure` seconds of camera motion (0 = off), plus a
+ * `radial` smear from the screen centre (killcam), with `hold` (0–1) of it taken back at the crosshair and near the
+ * camera. A fixed exposure time, not a fraction of the frame: the streak is the same length at 60 and 200 fps.
+ * Off and staying off it returns at once (no uniform writes), so normal play pays nothing; the first frame on, a
+ * `cut`, or a camera jump has no history (no blur across a cut). No-op on a pipeline built without `motionBlur`.
  */
-export function killcamBlur(camera: THREE.Camera, k: number) {
-  if (k <= 0 && !mbWas) return;
+export function cameraBlur(camera: THREE.PerspectiveCamera, exposure: number, radial = 0, hold = 0, cut = false) {
+  const on = exposure > 0 || radial > 0;
+  if (!on && !mbWas) return;
   // the real time since the last frame (not the loop's clamped dt): a stalled frame's longer camera move is not a faster one
   const now = performance.now(), dt = (now - mbLastMs) / 1000;
   mbLastMs = now;
   camera.updateMatrixWorld();
   _vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-  if (!mbWas) _prevVP.copy(_vp);
+  camera.getWorldPosition(_pos);
+  camera.getWorldDirection(_fwd);
+  if (!mbWas || cut || _pos.distanceTo(_prevPos) > MB_CUT_M || _fwd.angleTo(_prevFwd) > MB_CUT_RAD) _prevVP.copy(_vp);
   mb.reproj.value.multiplyMatrices(_prevVP, _inv.copy(_vp).invert());
   _prevVP.copy(_vp);
-  mbWas = k > 0;
-  mb.on.value = mbWas ? 1 : 0;
-  mb.shutter.value = k * MB_SHUTTER_SEC / Math.min(0.5, Math.max(dt, 1 / 240));
-  mb.radial.value = k * MB_RADIAL;
+  _prevPos.copy(_pos);
+  _prevFwd.copy(_fwd);
+  mbWas = on;
+  mb.on.value = on ? 1 : 0;
+  mb.shutter.value = exposure / Math.min(0.5, Math.max(dt, 1 / 240));
+  mb.radial.value = radial;
+  mb.hold.value = hold;
+  mb.near.value = camera.near;
+  mb.far.value = camera.far;
+  mb.aspect.value = camera.aspect;
 }
 
+/** Live motion blur state (debug / e2e). */
+export function blurInfo() { return { on: mb.on.value, shutter: mb.shutter.value, radial: mb.radial.value, hold: mb.hold.value }; }
+
 /**
- * Killcam motion blur over `col` (the scene colour, sampled from `raw`), 8 taps along a per-pixel streak: the camera's
- * own motion (depth reprojected through the previous view-projection: glide, push-in) over a long shutter, plus a
- * radial smear growing from the screen centre (the two-shot's subject) to the edges. No per-object velocity: in slow
- * motion the players barely move between frames, and the camera carries the motion. Behind a uniform branch, so with
- * it off the pass runs the same work as without it.
+ * Camera motion blur over `col` (the scene colour, sampled from `raw`), 8 taps along a per-pixel streak: the camera's
+ * own motion (depth reprojected through the previous view-projection: turns, glides, push-ins) over the exposure, plus
+ * an optional radial smear growing from the screen centre to the edges (the killcam two-shot). No per-object velocity
+ * (that needs a velocity MRT target on every preset): what moves with the camera (your own character, a followed
+ * player) sits near the camera and the centre, where `hold` keeps it sharp, and the first-person weapon and HUD draw
+ * after this pass. Behind a uniform branch, so with it off the pass runs the same work as without it.
  */
 function motionBlurNode(raw: THREE.TextureNode, depth: THREE.TextureNode, col: THREE.Node<'vec4'>): THREE.Node<'vec4'> {
   return Fn(() => {
@@ -73,7 +98,11 @@ function motionBlurNode(raw: THREE.TextureNode, depth: THREE.TextureNode, col: T
       const d = depth.sample(uv).r;
       const prev = mb.reproj.mul(vec4(uv.x.mul(2).sub(1), float(1).sub(uv.y.mul(2)), d, 1));
       const prevUV = vec2(prev.x.div(prev.w).mul(0.5).add(0.5), float(0.5).sub(prev.y.div(prev.w).mul(0.5)));
-      const v = uv.sub(prevUV).mul(mb.shutter).add(uv.sub(0.5).mul(mb.radial)).toVar();
+      // live play: keep the crosshair area and anything within a few metres (own / followed character) readable
+      const dist = perspectiveDepthToViewZ(d, mb.near, mb.far).negate();
+      const r = length(uv.sub(0.5).mul(vec2(mb.aspect, 1)));
+      const keep = float(1).sub(smoothstep(0.06, 0.22, r)).max(float(1).sub(smoothstep(4, 10, dist)));
+      const v = uv.sub(prevUV).mul(mb.shutter).mul(float(1).sub(mb.hold.mul(keep))).add(uv.sub(0.5).mul(mb.radial)).toVar();
       const len = length(v);
       v.assign(v.mul(min(len, MB_MAX).div(len.max(1e-5))));
       const acc = vec3(0, 0, 0).toVar();

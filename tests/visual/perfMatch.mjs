@@ -15,6 +15,8 @@ const sampleMs = Number(arg('sample', '3000'));
 /** device pixel ratio of the page (2 = a Retina MacBook: the presets' render scale then applies) */
 const dpr = Number(arg('dpr', '1'));
 const competitive = arg('competitive', '0') === '1';
+/** motion blur while playing (Settings → Video): off | low | high (ignored by builds without the setting) */
+const mblur = arg('mblur', 'off');
 const views = arg('views', 'base');
 /** extra URL params for both A and B (e.g. --params=upscale=0) */
 const params = arg('params', '');
@@ -37,10 +39,10 @@ async function run(quality) {
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript((q) => {
     try {
-      localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q.q, dynamicResolution: false, competitive: q.c } }));
+      localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q.q, dynamicResolution: false, competitive: q.c, motionBlur: q.mb } }));
       if (q.m) localStorage.setItem('faefight.map', q.m); // --map=yard: the container-heavy template
     } catch { /* fresh profile */ }
-  }, { q: quality, c: competitive, m: arg('map', '') });
+  }, { q: quality, c: competitive, m: arg('map', ''), mb: mblur });
   await page.goto(`${url}/?debug=1&bots=7&gputime=1${stress > 1 ? `&stress=${stress}` : ''}${arg('query', '') ? `&${arg('query', '')}` : ''}${params ? `&${params}` : ''}`);
   const t0 = Date.now();
   await page.getByTestId('play-easy').click();

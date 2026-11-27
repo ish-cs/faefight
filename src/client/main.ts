@@ -1066,7 +1066,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const mods = await loadGameModules((done, total) => loading.progress('code', done / total, 'Loading game code'));
   const THREE = mods.three;
   // lods/pbrStats come through the lazy render module: a static import would pull three.js onto the phone card.
-  const { Renderer, lods, pbrStats } = mods.render, { ThirdPersonCamera } = mods.camera, { FirstPersonView } = mods.viewmodel;
+  const { Renderer, lods, pbrStats, blurInfo } = mods.render, { ThirdPersonCamera } = mods.camera, { FirstPersonView } = mods.viewmodel;
   const { DamageFx } = mods.damageFx, { Hud } = mods.hud, { Spectator } = mods.spectator;
   const offCharProgress = mods.characters.onCharacterProgress((f) => loading.progress('characters', f, 'Downloading characters'));
 
@@ -1124,7 +1124,15 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         if (recompileAgain) { recompileAgain = false; applySettings(settings.get()); }
       });
   };
+  /** Motion blur levels: uniforms only (the pass is compiled with the preset), so toggling mid-match never hitches. */
+  const applyBlur = (st: ReturnType<typeof settings.get>) => {
+    renderer.blur.play = st.video.motionBlur;
+    renderer.blur.spectate = st.video.motionBlurSpectate;
+    // TODO(perf stage A, power.ts): renderer.blur.saver = power.saver (the power saver forces motion blur off)
+  };
+  applyBlur(settings.get());
   const applySettings = (st: ReturnType<typeof settings.get>) => {
+    applyBlur(st);
     if (recompiling) { recompileAgain = true; return; }
     sky.setQuality(st.video.quality);
     sky.setResolutionScale(st.video.resolutionScale);
@@ -1941,6 +1949,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       commentaryVoice: () => ({ state: commentary.neuralState, neural: commentary.tts.neuralActive, synthMs: commentary.tts.neural?.synthMs ?? [] }),
       commentaryOn: (on: boolean) => settings.update((d) => { d.audio.commentaryOn = on; }),
       killcam: () => killcam.info(),
+      /** live motion blur: the shader uniforms (on, shutter, radial, hold) + the frame's context and the levels */
+      motionBlur: () => ({ ...blurInfo(), ctx: renderer.blur.ctx, play: renderer.blur.play, spectate: renderer.blur.spectate }),
       audioPlay: (cue: Parameters<AudioSystem['debugPlay']>[0]) => audio.debugPlay(cue),
       settings: () => settings.get(),
       updateSettings: (mutate: Parameters<typeof settings.update>[0]) => settings.update(mutate),
@@ -2350,6 +2360,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     fpv.applyShake(dt, bobSpeed); // visual only: the aim ray above was taken without it
     if (!warmLoop.paused) {
       warmLoop.before?.();
+      renderer.blur.ctx = kc ? 'killcam' : spectating ? 'spectate' : 'play'; // motion blur per context (Settings → Video)
       renderer.render(input.yaw);
       fpv.render(spectating ? undefined : me, input.yaw, input.pitch, dt, predicting ? predicted.vel : undefined, simNow());
       renderer.captureInfo();
