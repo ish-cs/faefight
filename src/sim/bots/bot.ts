@@ -208,6 +208,11 @@ type Ctx = {
    * bridge toward them once it's within hook range), else null. Counts as a route for attack and seal.
    */
   hookFrom: Vec3 | null;
+  /**
+   * Node my rival stands on when it's worth going there instead of to their bunker: their bunker is sealed (no respawn
+   * to wait for), they were seen there within drive.huntSeenSec, and I can't walk there. Bridge or hook over to it.
+   */
+  hunt: number | null;
   homeReach: boolean;
   openDoors: Doorway[];
   /** Node (island, or the center island) the next bridge goes to, and whether I can already walk to the center. */
@@ -825,7 +830,8 @@ export class Bot {
   /** Walk to where I hook over to my rival's island from (hookPlan fires once it's in reach and nobody is in sight). */
   private toHookLaunch(c: Ctx): Act {
     const walk = this.goTo(c.hookFrom!, 0.8);
-    return walk.dir ? { ...walk, sprint: true } : { dir: null, face: c.rivalIsl!.center };
+    const to = c.hunt !== null ? this.nav.nodes[c.hunt].center : c.rivalIsl!.center;
+    return walk.dir ? { ...walk, sprint: true } : { dir: null, face: to };
   }
 
   /**
@@ -884,6 +890,7 @@ export class Bot {
     const g = this.goal, C = this.nav.centerNode;
     if (this.strandedSince !== null) return c.home.index; // cut off: the hook's job is getting me home
     if (g === 'bridge') return c.bridgeTo;
+    if (g === 'attack' && c.hunt !== null) return c.hunt;
     if ((g === 'attack' || g === 'seal') && c.rivalIsl && !c.reach) return c.rivalIsl.index;
     if ((g === 'contest' || g === 'storm') && C >= 0 && !c.centerReach) return C;
     if (HOME_GOALS.has(g) && !c.homeReach) return c.home.index;
@@ -1293,8 +1300,14 @@ export class Bot {
     const danger = view.now - this.mem.lastHurtAt < 3 || (!!enemy && enemyDist < 40);
     const C = this.nav.centerNode;
     const centerReach = C >= 0 && (node === C || from.some((n) => n === C || this.nav.hop(n, C) !== null));
+    // A rival sealed out of their home, last seen somewhere I can't walk to: hunt them there, don't hold their plugged
+    // door for a respawn that never comes (replay a.faereplay: two PROs, each on the other's island, stood 10.7 min).
+    const seenAt = rival && rival.alive && !view.suddenDeath && view.sealed[rival.island] ? this.mem.recent(rival.id, view.now, this.P.drive.huntSeenSec) : null;
+    const seenNode = seenAt ? this.nav.nodeAt(seenAt.pos) : -1;
+    const hunt = seenNode >= 0 && seenNode !== node && !from.some((n) => n === seenNode || this.nav.hop(n, seenNode) !== null) ? seenNode : null;
     let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
-    const hookFrom = rivalIsl && !reach ? this.hookLaunch(view, me, node, home.index, rivalIsl.index) : null;
+    const hookFrom = hunt !== null ? this.hookLaunch(view, me, node, home.index, hunt)
+      : rivalIsl && !reach ? this.hookLaunch(view, me, node, home.index, rivalIsl.index) : null;
     // Teams: bridge to the teammate whose island is on the way (they lay the rest); already linked to them, wait
     // for their bridge instead of laying a second, longer one of my own.
     const stage = bridgeTo !== null && rival ? this.stageIsland(view, rival) : null;
@@ -1306,9 +1319,10 @@ export class Bot {
     if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath && stage === null && !((this.laneBan.get(C) ?? -Infinity) > view.now) &&
         (bridgeTo === null ? this.centerMinded : this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
     // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
+    if (hunt !== null) bridgeTo = hunt;
     if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
     const bridgeFrom = !homeReach && stand.length && stand[0] !== bridgeTo ? stand[0] : home.index;
-    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, hookFrom, homeReach, openDoors, bridgeTo, bridgeFrom, centerReach, danger };
+    return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, hookFrom, hunt, homeReach, openDoors, bridgeTo, bridgeFrom, centerReach, danger };
   }
 
   private scaffoldsNeeded(c: Ctx): number {
@@ -1638,6 +1652,9 @@ export class Bot {
         // Nothing that can clear what's there (steel needs a charge): better to go buy one than stand at the door.
         const can = blockers.some((p) => this.canClear(c, p));
         // Dying while sealed is an instant elimination: unseal before anything else unless someone is on top of me.
+        // No walk home: nothing to do at the plug from here (replay a.faereplay: it stood 10.7 min "shooting" its
+        // own plug from the far island); getting home (bridge, hook) or hunting comes first.
+        if (view.sealed[home.index] && !c.homeReach) return 0;
         if (view.sealed[home.index]) return (can ? 0.85 + (this.sealedHomeCalm(c) ? this.P.drive.sealedHome[this.difficulty] : 0) : 0.1) + 0.1 * t.caution;
         // One plugged doorway is most of a seal: clear it before going out. Out of ammo with the money for a box
         // (vault too): fetch it first, punching sandbags out one by one takes a minute (ffa8-mixed seed 18: 61 s).
@@ -1747,6 +1764,8 @@ export class Bot {
       case 'attack': {
         // Seen shut in a bunker since the slabs dropped: nothing to walk to (the storm finishes them).
         if (!c.enemy && this.rivalShutIn(c)) return 0;
+        // Hunting them somewhere I can't walk to and can't hook to yet: the bridge (and the shop for its decks) gets me there.
+        if (c.hunt !== null && !c.hookFrom) return 0;
         if (!(c.reach || c.hookFrom) || !c.rival || view.suddenDeath && !c.enemy && !this.mem.recent(c.rival.id, view.now, WHEREABOUTS_SEC)) {
           return c.reach && view.suddenDeath ? 0.3 : 0;
         }
@@ -2130,6 +2149,11 @@ export class Bot {
 
   private doAttack(c: Ctx): Act {
     if (!c.rivalIsl || !c.rival) return IDLE;
+    if (c.hunt !== null) {
+      if (c.hookFrom) return this.toHookLaunch(c);
+      this.nextScoreAt = c.view.now;
+      return IDLE;
+    }
     if (!c.reach && c.hookFrom) return this.toHookLaunch(c);
     const now = c.view.now;
     // Hunt them where they were last seen, if that's somewhere I can walk to; else go to their bunker.
