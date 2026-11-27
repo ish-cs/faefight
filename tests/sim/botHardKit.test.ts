@@ -53,14 +53,14 @@ describe('drive.reinforceHp: a sieger adds a second wall outside the softest plu
     b.goTo = () => ({ dir: null });
     return b;
   };
-  test('Hard/PRO stack a wall (strongest carried) on a lone wood plug', () => {
+  test('Medium+ stack a wall (strongest carried) on a lone wood plug', () => {
     expect(bot('pro').reinforce(ctx({ wood: 1, metal: 1 }), door, PIECES.wood.hp)?.build?.kind).toBe('metal');
     expect(bot('hard').reinforce(ctx({ wood: 1 }), door, PIECES.sandbags.hp * 2)?.build?.kind).toBe('wood');
+    expect(bot('medium').reinforce(ctx({ wood: 1 }), door, PIECES.wood.hp)?.build?.kind).toBe('wood');
   });
-  test('not once the doorway holds enough hp, without a wall, or for Easy/Medium', () => {
+  test('not once the doorway holds enough hp, without a wall, or for Easy', () => {
     expect(bot('pro').reinforce(ctx({ wood: 1 }), door, DRIVE.reinforceHp.pro)).toBeNull();
     expect(bot('pro').reinforce(ctx({ sandbags: 4 }), door, PIECES.wood.hp)).toBeNull();
-    expect(bot('medium').reinforce(ctx({ wood: 1 }), door, PIECES.wood.hp)).toBeNull();
     expect(bot('easy').reinforce(ctx({ wood: 1 }), door, PIECES.wood.hp)).toBeNull();
     expect(PARAM_RANGES['drive.reinforceHp.pro']).toEqual([0, 1000]);
   });
