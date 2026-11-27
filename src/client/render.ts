@@ -14,7 +14,8 @@ import { preloadContainerModel } from './world/containerModel';
 import { preloadPbr } from './world/pbr';
 import { PotionSellers, stall } from './world/potionSeller';
 import { loadQuality } from './world/sky';
-import { killcamBlur } from './world/post';
+import { cameraBlur } from './world/post';
+import { type BlurContext, type BlurLevel, blurParams, type SpectateBlurLevel } from './world/motionBlur';
 import { DayNight } from './world/dayNight';
 import { StormFx } from './world/storm';
 import { IslandBeacons } from './world/beacons';
@@ -29,6 +30,7 @@ import { LootView, lootWarmObjects } from './lootView';
 import { Ropes } from './ropes';
 export { lods } from './world/lod';
 export { pbrStats } from './world/pbr';
+export { blurInfo } from './world/post';
 
 export { pieceGeometry };
 import { islandColor, setIslandPalette } from './colors';
@@ -37,7 +39,7 @@ export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 /** WebGPURenderer tone-maps everything on output (per-material toneMapped is ignored), so unlit
  *  overlay-ish things (labels, ghost, tracers) get their colour pre-boosted to read at full brightness. */
 const UNLIT_BOOST = 2.6;
-/** prefers-reduced-motion (killcam: slow motion without the blur); looked up on first use. */
+/** prefers-reduced-motion (no motion blur: the killcam keeps its slow motion); looked up on first use. */
 let reducedMotion: MediaQueryList | null | undefined;
 const boosted = (hex: number) => new THREE.Color(hex).multiplyScalar(UNLIT_BOOST);
 
@@ -307,8 +309,24 @@ export class Renderer {
    */
   killcamSlow(slow: number, rate: number) {
     this.gunFx.timeScale = rate;
+    this.blur.killcamSlow = slow;
+  }
+
+  /**
+   * Motion blur inputs (motionBlur.ts): main.ts sets the context each frame and the levels from Settings → Video;
+   * `saver` = the power saver's veto. Applied in render() once the camera is final; changing any of them is a few
+   * uniform writes, never a pipeline rebuild.
+   */
+  readonly blur: { ctx: BlurContext; play: BlurLevel; spectate: SpectateBlurLevel; saver: boolean; killcamSlow: number } =
+    { ctx: 'play', play: 'off', spectate: 'auto', saver: false, killcamSlow: 0 };
+  private blurCtxWas: BlurContext = 'play';
+  private applyBlur() {
     reducedMotion ??= typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
-    killcamBlur(this.camera, reducedMotion?.matches ? 0 : slow);
+    const b = this.blur, sky = this.world.sky;
+    const p = blurParams({ ...b, quality: sky.quality, competitive: sky.isCompetitive, reducedMotion: !!reducedMotion?.matches });
+    // a context switch (into / out of a killcam or spectating) is a camera cut: no streak across it
+    cameraBlur(this.camera, p.exposure, p.radial, p.hold, b.ctx !== this.blurCtxWas);
+    this.blurCtxWas = b.ctx;
   }
 
   /** Effects of past events during a replay (tracers, muzzle flashes, hit sparks, explosions). */
@@ -606,6 +624,7 @@ export class Renderer {
     this.barriers?.frame(simT, this.world.pieceFx.particles);
     const feet = this.feet.slice(0, nf);
     this.npcs.frame(dt, this.camera, feet);
+    this.applyBlur(); // camera final (debug view, shake) by now
     this.world.render(this.waterY, this.camera.position, feet); // tide, grass, post chain, draw
     if (GPU_TIMING) this.resolveGpuTime();
   }

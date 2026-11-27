@@ -9,10 +9,12 @@ import {
   CROSSHAIR_COLORS, CROSSHAIRS, type Crosshair, FRAME_CAPS, GEN_ALERT_PCTS, LIMITS, QUALITIES, type Settings, settings,
 } from './store';
 import type { Quality } from '../world/sky';
+import { BLUR_LEVELS, blurAvailable, SPECTATE_BLUR_LEVELS } from '../world/motionBlur';
 import { availableVoices, testVoice } from '../cinematic/commentary/tts';
 import { NEURAL_VOICES, neuralEngine, voiceTester } from '../cinematic/commentary/neural';
 
 const PERF_STATS = ['off', 'fps', 'detailed'] as const;
+const blurLabel = (x: string) => x[0].toUpperCase() + x.slice(1);
 const PERF_STATS_LABEL: Record<(typeof PERF_STATS)[number], string> = { off: 'Off', fps: 'FPS', detailed: 'Detailed' };
 
 /**
@@ -243,6 +245,14 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     toggle('Competitive mode', 'Maximum frame rate, still readable: 1× render scale, no ambient occlusion, bloom or lens flare', 'set-competitive', () => v().competitive, (x) => set((d) => { d.video.competitive = x; }));
     toggle('Dynamic resolution', 'Lower the render resolution briefly when the frame rate drops below target', 'set-dynres',
       () => v().dynamicResolution, (x) => set((d) => { d.video.dynamicResolution = x; }));
+    {
+      // a uniform switch, never a recompile; the pass only exists on High / Ultra outside Competitive mode
+      const na = blurAvailable(v().quality, v().competitive) ? '' : ' (High or Ultra, not in Competitive mode)';
+      segmented('Motion blur (playing)', `Camera motion blur while you play; the crosshair area stays sharp${na}`, 'set-mblur', BLUR_LEVELS, blurLabel,
+        () => v().motionBlur, (x) => set((d) => { d.video.motionBlur = x; }));
+      segmented('Motion blur (spectating)', `Free camera, follow camera and cinematic mode. Auto: Low on High, High on Ultra${na}`, 'set-mblur-spec',
+        SPECTATE_BLUR_LEVELS, blurLabel, () => v().motionBlurSpectate, (x) => set((d) => { d.video.motionBlurSpectate = x; }));
+    }
     {
       const keys = settings.get().controls.keys.fps.map(keyLabel).filter(Boolean).join(' / ') || '—';
       segmented('Performance stats', `Also ${keys} in game (Shift: detail): frame time, draw calls, triangles`, 'set-fps', PERF_STATS, (x) => PERF_STATS_LABEL[x],
