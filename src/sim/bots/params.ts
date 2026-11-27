@@ -36,8 +36,8 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  *   can't walk to gets hunted there (bridge or hook over), not waited for at their plugged door. Replay a.faereplay:
  *   two PROs, each on the other's island with both bunkers sealed, stood still 10.7 min until sudden death.
  * - strandedSec: cut off from home (no walk, too few decks, no hook that reaches home from any shore here, none to
- *   buy) this long, the last resort: swim home (a death; the respawn puts me there). Meanwhile, on the center, it
- *   farms the gold station. It no longer doubles for a hook in hand: one that reaches home gets walked to its
+ *   buy) this long, the last resort: swim home (a death; the respawn puts me there). On the center it never swims:
+ *   it holds it and farms the gold station. It no longer doubles for a hook in hand: one that reaches home gets walked to its
  *   launch spot and fired, and two that couldn't held a PRO 178 s on the center (ffa8-pro seed 5).
  * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
  * - crossFire: hold fire at an enemy farther than this (m) who isn't on the island I stand on (across the water, or
