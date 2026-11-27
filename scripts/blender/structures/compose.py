@@ -279,6 +279,8 @@ if True:
     rgb *= np.where(lower & (t < -0.05), 0.55, 1.0)[..., None]
     # soffit: damp, dark, drips
     rgb *= np.where(soff, 0.75, 1.0)[..., None]; rough = np.where(soff, 0.8, rough)
+    # warmer + a touch darker overall: in direct sun the sky-lit faces read pale / bluish next to the deck
+    rgb = np.where(is_q[..., None], rgb * np.array([0.95, 0.90, 0.83]), rgb)
 log('compose: quay')
 
 # ---------------------------------------------------------------- cavity dirt from AO, wrap-up

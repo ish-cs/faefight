@@ -165,8 +165,8 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
     if (quayMod) {
       // module k spans rim angles [k, k + 1] · 2π / 16, the same vertices as the slab's 128-gon edge (CircleGeometry)
       const Q = new THREE.Matrix4().compose(new THREE.Vector3(isl.center.x, 0, isl.center.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(1, 1, 1));
-      // no shadow casting (like the old wall): it faces the open water
-      for (let k = 0; k < QUAY_MODS; k++) baked.add(M.structure, quayMod, Q.clone().multiply(mat(0, 0, 0, 0, ((k + 0.5) * 2 * Math.PI) / QUAY_MODS, 0)), 0xffffff, false);
+      // casts like the bunkers so both share one mesh (one draw per pass; its shadow falls on the open water)
+      for (let k = 0; k < QUAY_MODS; k++) baked.add(M.structure, quayMod, Q.clone().multiply(mat(0, 0, 0, 0, ((k + 0.5) * 2 * Math.PI) / QUAY_MODS, 0)));
       rimRays.push(new THREE.CylinderGeometry(R, R, groundY + QUAY_DEPTH, 128, 1, true).translate(isl.center.x, (groundY - QUAY_DEPTH) / 2, isl.center.z));
     }
 
@@ -299,7 +299,8 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
     wall.name = 'quayWalls';
     wall.receiveShadow = true;
     root.add(top, wall);
-    slabs.push(top, wall);
+    // baked rim: rays test the full-height cylinder in rimRays instead of this shortened visual wall (same cost as before)
+    slabs.push(...(rimRays.length ? [top] : [top, wall]));
   }
   yield;
   const bunkers = solid.build(root, 'bunkers', { chunked: true });
