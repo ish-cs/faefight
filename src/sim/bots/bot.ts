@@ -2144,6 +2144,8 @@ export class Bot {
     if (this.sieging(c) && c.on === c.rivalIsl.index) {
       const hp = (d: Doorway) => doorPieces(c.view.pieces, d).reduce((n, p) => n + p.hp, 0);
       const door = b.doorways.reduce((a, d) => (hp(d) < hp(a) ? d : a));
+      const layer = this.reinforce(c, door, hp(door));
+      if (layer) return layer;
       const spot = add(door.center, scale(forward(door.yaw), this.P.drive.siegeDist));
       const walk = this.goTo(spot, 1.2);
       return walk.dir ? walk : { dir: null, face: v3(door.center.x, door.center.y + CHEST, door.center.z) };
@@ -2163,6 +2165,26 @@ export class Bot {
       this.wander = { to: add(base, v3(dm.cos(a) * r, 0, dm.sin(a) * r)), until: now + 3 + this.rng() * 2 };
     }
     return this.goTo(this.wander.to, 1.0);
+  }
+
+  /**
+   * Sieging: a second wall outside the softest plug while it's under drive.reinforceHp (a respawn pistol shoots a wood
+   * plug out in ~7 s of the 10 s breakout window; two layers outlast it). Null: nothing to add, or no spot for it.
+   */
+  private reinforce(c: Ctx, door: Doorway, doorHp: number): Act | null {
+    const kind = TALL.find((k) => (c.me.inv.pieces[k] ?? 0) > 0);
+    if (!kind || doorHp >= this.P.drive.reinforceHp[this.difficulty]) return null;
+    const stand = add(door.center, scale(forward(door.yaw), 2.5));
+    const walk = this.goTo(stand, ARRIVE);
+    if (walk.dir) return walk;
+    const base = plugSpot(door, kind, 0);
+    if (c.me.busyUntil > c.view.now) return { dir: null, face: base };
+    // Just outside whatever already fills the doorway.
+    for (const push of [0.2, 0.3, 0.45, 0.6]) {
+      const pos = add(base, scale(forward(door.yaw), push));
+      if (c.view.canPlace(kind, pos, door.yaw).ok) return { dir: null, face: base, build: { kind, pos, rotY: door.yaw, free: true } };
+    }
+    return null;
   }
 
   private doSeal(c: Ctx): Act {
