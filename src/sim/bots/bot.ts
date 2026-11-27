@@ -67,8 +67,12 @@ const ENGAGE_RANGE = 25;
 const ESCAPE_STALL_M = 0.3, ESCAPE_STALL_SEC = 1;
 /** Attack score in sudden death with no ammo: above collect/shop (≤ 0.9), below storm and survival goals. */
 const SD_FISTS_ATTACK = 0.95;
-/** Final circle with nobody in sight: storm goal score for closing in on its centre, and how near counts as there. */
-const FINAL_HUNT = 0.6, FINAL_HUNT_NEAR = 4;
+/**
+ * Final circle with nobody in sight: storm goal score for hunting there, how near its centre counts as there, and
+ * how fast (rad/s) I then sweep round the centre at FINAL_HUNT_NEAR - 1 (one wall at the centre hid two teams from
+ * each other 1.7 m apart for 13 min: CI teams 4v4 seed 21).
+ */
+const FINAL_HUNT = 0.6, FINAL_HUNT_NEAR = 4, FINAL_HUNT_SWEEP = 0.5;
 /** Feet below the bunker roof (minus a margin): actually inside, not standing on top of it. */
 const underRoof = (home: IslandLayout, p: Vec3) => p.y < home.groundY + MAP.bunker.height - 0.5;
 /** My bunker sealed: clear it first unless an enemy is closer than this (then fight; turning my back loses). */
@@ -3159,7 +3163,7 @@ export class Bot {
   /** Sudden death, the ring at its final size, no enemy in sight, and I'm not yet near its centre. */
   private finalHunt(c: Ctx): boolean {
     const st = c.view.storm;
-    return !!st && c.view.suddenDeath && !c.enemy && st.r <= st.rf + 0.5 && Math.hypot(c.me.pos.x - st.x, c.me.pos.z - st.z) > FINAL_HUNT_NEAR;
+    return !!st && c.view.suddenDeath && !c.enemy && st.r <= st.rf + 0.5;
   }
 
   /**
@@ -3217,7 +3221,10 @@ export class Bot {
       return { ...this.goTo(v3(out.x, c.home.groundY, out.z), 0.8), sprint: true };
     }
     if (this.finalHunt(c)) {
-      const walk = this.goTo(v3(st.x, me.pos.y, st.z), FINAL_HUNT_NEAR - 1);
+      // Close in on the centre, then circle it: whoever hides behind cover there comes into view.
+      const far = Math.hypot(me.pos.x - st.x, me.pos.z - st.z) > FINAL_HUNT_NEAR;
+      const a = view.now * FINAL_HUNT_SWEEP + this.id * 2.4, r = FINAL_HUNT_NEAR - 1;
+      const walk = far ? this.goTo(v3(st.x, me.pos.y, st.z), r) : this.goTo(v3(st.x + dm.cos(a) * r, me.pos.y, st.z + dm.sin(a) * r), 1);
       if (walk.dir) return walk;
     }
     const go = this.stormLeave(c);
