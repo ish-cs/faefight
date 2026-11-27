@@ -90,6 +90,23 @@
 /* ---- lobby ---- */
 .lobby-card h1 { font-size: 52px; margin: 0 0 10px; }
 .lobby-card { padding-top: 30px; animation: none; } /* the lobby replaces the menu in place: no pop-in */
+/* The card always fits the window: title, invite code, buttons and chat stay in view; the seats/settings body scrolls inside the card. */
+.lobby-card { display: flex; flex-direction: column; max-height: calc(100vh - 24px); }
+.lobby-card > * { flex: none; }
+.lobby-card > .lobby-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--c-line-strong) transparent; }
+/* Two columns: the scrollbar sits in the card's right padding, so it never narrows the seat names (columns sized off the card, not the body). */
+@media (min-width: 980px) {
+  .lobby-card { container-type: inline-size; }
+  .lobby-card > .lobby-body { margin-right: -16px; grid-template-columns: calc(100cqw - 360px - 18px) 360px; }
+}
+@media (max-height: 920px) {
+  .lobby-card { padding-top: 22px; padding-bottom: 18px; }
+  .lobby-card h1 { font-size: 40px; margin-bottom: 6px; }
+  .invite-code { font-size: 44px; }
+  .lobby-card .lobby-hint { margin-bottom: 12px; }
+  .lobby-card .lobby-status { margin: 10px 0 8px; }
+  .lobby-card .lobby-chat { margin-top: 10px; padding-top: 8px; }
+}
 .code-row { gap: 14px; margin: 8px 0 6px; }
 .invite-code {
   font-family: var(--ff-display); font-weight: 900; font-size: 58px; line-height: 1; letter-spacing: 0.14em; color: var(--c-yellow);
