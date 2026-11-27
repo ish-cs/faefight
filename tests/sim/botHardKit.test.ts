@@ -6,6 +6,7 @@ import { PIECES } from '../../src/sim/constants';
 import { newPlayer } from '../../src/sim/player';
 import type { Difficulty } from '../../src/sim/types';
 import { v3 } from '../../src/sim/vec';
+import type { Doorway } from '../../src/sim/map';
 
 // A gun-upgraded bot whose kit is three wood plugs (a full kit by count): the only thing left to buy is metal.
 const woodKit = (cash: number) => {
@@ -38,5 +39,29 @@ describe('drive.hardKit: the seal kit is metal, not wood (a respawn pistol shoot
     expect(b.P.drive.hardKit.pro).toBe(DRIVE.hardKit.pro);
     expect(DRIVE.hardKit.easy).toBe(0);
     expect(PARAM_RANGES['drive.hardKit.pro']).toEqual([0, 4]);
+  });
+});
+
+describe('drive.reinforceHp: a sieger adds a second wall outside the softest plug', () => {
+  const door = { center: v3(0, 0, 0), yaw: 0, width: 2 } as unknown as Doorway;
+  const ctx = (pieces: Record<string, number>) => ({
+    me: { pos: v3(0, 0, 2.5), inv: { pieces }, busyUntil: 0 },
+    view: { now: 10, canPlace: () => ({ ok: true }) },
+  }) as never;
+  const bot = (d: Difficulty) => {
+    const b = new Bot(1, d, () => 0.5) as unknown as { goTo: () => unknown; reinforce: (c: never, d: Doorway, hp: number) => { build?: { kind: string } } | null };
+    b.goTo = () => ({ dir: null });
+    return b;
+  };
+  test('Hard/PRO stack a wall (strongest carried) on a lone wood plug', () => {
+    expect(bot('pro').reinforce(ctx({ wood: 1, metal: 1 }), door, PIECES.wood.hp)?.build?.kind).toBe('metal');
+    expect(bot('hard').reinforce(ctx({ wood: 1 }), door, PIECES.sandbags.hp * 2)?.build?.kind).toBe('wood');
+  });
+  test('not once the doorway holds enough hp, without a wall, or for Easy/Medium', () => {
+    expect(bot('pro').reinforce(ctx({ wood: 1 }), door, DRIVE.reinforceHp.pro)).toBeNull();
+    expect(bot('pro').reinforce(ctx({ sandbags: 4 }), door, PIECES.wood.hp)).toBeNull();
+    expect(bot('medium').reinforce(ctx({ wood: 1 }), door, PIECES.wood.hp)).toBeNull();
+    expect(bot('easy').reinforce(ctx({ wood: 1 }), door, PIECES.wood.hp)).toBeNull();
+    expect(PARAM_RANGES['drive.reinforceHp.pro']).toEqual([0, 1000]);
   });
 });
