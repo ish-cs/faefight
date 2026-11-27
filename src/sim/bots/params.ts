@@ -43,6 +43,8 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  *   shop for it first, so a kill at their bunker turns into a seal (by tier).
  * - hardKit: a seal kit of metal/steel plugs, not wood or sandbags: with fewer hard plugs than doors to seal, buy metal
  *   once the cash is this many metal prices (0 = never: Easy). A respawn pistol shoots a wood plug out in ~7 s.
+ * - reinforceHp: camping a sealed bunker with a wall in my pocket, add a second layer outside the softest doorway
+ *   while its plugs total less than this hp (0 = never: Easy/Medium).
  * - sealedCaution: added to the disengage hp line while my own bunker is sealed (by tier).
  * - sealedHome: added to defend (clear my plugged doorway) while my own bunker is sealed and no enemy is within
  *   SEALED_HOME_CLEAR m: dying sealed is an instant elimination, so unseal before picking fights.
@@ -92,6 +94,7 @@ export type DriveParams = {
   sealedFocus: number;
   kitlessAttack: Record<Difficulty, number>;
   hardKit: Record<Difficulty, number>;
+  reinforceHp: Record<Difficulty, number>;
   /**
    * Spoils of war: rival-choice bonus per $1000 of bounty on a sealed / trapped rival (skilled players only: an easy or
    * medium bot picking a PRO for the money was what flipped the botBuild seed-2 game); finishTrapped: one trapped in reach.
@@ -408,6 +411,9 @@ export const DRIVE: DriveParams = {
   // Mixed ×60 on main: respawn-window seals with a wood/sandbag plug ended in a breakout 75% of the time (owner's
   // pistol, ~7 s), all-metal/steel ones 3%. Hard/PRO buy metal plugs at once, Medium when it has 2× the price.
   hardKit: D(0, 2, 1, 1),
+  // Same data: breakouts went through a lone wood plug (338/449) or a sandbag pair (99) with the sieger within 10 m
+  // (90%) but the escapee spawn-protected: a second layer is what stops it (wood + wood ~14 s > the 10 s window).
+  reinforceHp: D(0, 0, 400, 400),
   spoilsTarget: D(0, 0, 0.5, 0.5),
   finishTrapped: 0.8,
   dockShot: D(0.15, 0.45, 0.65, 0.85),
@@ -554,7 +560,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sealRaceM', [10, 120]], ['drive.windowSlackSec', [0, 6]], ['drive.windowPush', [0, 1.5]],
   ['drive.respawnCautionSec', [0, 30]], ['drive.siegeDist', [4, 12]], ['drive.siegeAfterDeath', [5, 30]],
   ['drive.siegeScore', [0.3, 1.2]], ['drive.stallSec', [5, 25]], ['drive.stallDist', [1, 5]], ['drive.stallBanSec', [5, 60]], ['drive.fireRangeMult', [0.5, 2]], ['drive.crossFire.*', [15, 60]],
-  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome.*', [0, 1.2]], ['drive.sealedCaution.*', [0, 0.5]], ['drive.sealedFocus', [1, 3]], ['drive.kitlessAttack.*', [0, 0.8]], ['drive.hardKit.*', [0, 4]],
+  ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome.*', [0, 1.2]], ['drive.sealedCaution.*', [0, 0.5]], ['drive.sealedFocus', [1, 3]], ['drive.kitlessAttack.*', [0, 0.8]], ['drive.hardKit.*', [0, 4]], ['drive.reinforceHp.*', [0, 1000]],
   ['drive.spoilsTarget.*', [0, 1.5]], ['drive.finishTrapped', [0, 2]],
   ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]], ['drive.stormLead.*', [0, 40]], ['drive.barrierLead.*', [0, 60]], ['drive.shutInRange.*', [0, 40]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
