@@ -49,7 +49,18 @@ export class VaultPanel {
   /** Loadout as edited here (sent on every change; the sim's copy catches up a tick later). */
   private draft: Loadout = emptyLoadout();
 
-  constructor(private root: HTMLElement, private send: (a: VaultAction) => void) {}
+  constructor(private root: HTMLElement, private send: (a: VaultAction) => void) {
+    // A drag must never outlive its pointer: capture lost (cell re-rendered or removed), focus lost, or the game
+    // took the pointer back. Otherwise the ghost stays stuck on screen and the stale drag blocks every refresh.
+    document.addEventListener('lostpointercapture', () => this.cancelDrag(), true);
+    document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement) this.cancelDrag(); });
+    window.addEventListener('blur', () => this.cancelDrag());
+  }
+
+  /** Drop any drag in progress without moving anything (panel closing, pointer lost). */
+  cancelDrag() {
+    if (this.drag) this.endDrag();
+  }
 
   /** Full build (panel opened). */
   render(header: HTMLElement, me: PlayerState) {

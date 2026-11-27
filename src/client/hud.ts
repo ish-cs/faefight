@@ -360,6 +360,9 @@ export class Hud {
       }
     });
     window.addEventListener('keydown', (e) => { if (e.code === 'Escape' && this.dragFrom !== null) clearDrag(); });
+    // No pointerup will come (touch/pen cancel, window lost focus): drop the drag so the "Drop" tag can't stick.
+    window.addEventListener('pointercancel', () => { if (this.dragFrom !== null) clearDrag(); });
+    window.addEventListener('blur', () => { if (this.dragFrom !== null) clearDrag(); });
     this.hotbar.addEventListener('pointerdown', (e) => {
       const i = slotAt(e.target);
       if (i === null || e.button !== 0) return;
@@ -955,6 +958,7 @@ export class Hud {
 
   /** The home shop, or a potion seller's counter (`potions`). */
   openShop(kind: 'shop' | 'potions' = 'shop') {
+    this.vaultPanel.cancelDrag();
     this.panelKind = kind;
     this.panel.className = 'panel open';
     this.panel.dataset.kind = kind;
@@ -962,6 +966,7 @@ export class Hud {
   }
 
   openVault() {
+    this.vaultPanel.cancelDrag();
     this.panelKind = 'vault';
     this.panel.className = 'panel open';
     this.panel.dataset.kind = 'vault';
@@ -969,6 +974,7 @@ export class Hud {
   }
 
   closePanel() {
+    this.vaultPanel.cancelDrag();
     this.panelKind = null;
     this.hoverItem = null;
     delete this.panel.dataset.testid;

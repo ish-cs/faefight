@@ -114,6 +114,52 @@ test('vault panel: drag, split, quick-move, cash, loadout, hold E to quick-bank'
   expect(errors, errors.join('\n')).toEqual([]);
 });
 
+// Bug: closing the panel mid-drag left the drag ghost (an item icon "×n") stuck on screen, and the stale drag froze
+// the grids on the next open.
+test('vault panel: closing mid-drag leaves no drag ghost behind', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/?debug=1');
+  await page.getByTestId('play-easy').click();
+  await expect(page.getByTestId('cash')).toHaveText('$50', { timeout: 30_000 });
+  const humanId = await dbg<number>(page, 'humanId');
+  const map = await dbg<Isl[]>(page, 'map');
+  const me = async () => (await dbg<{ players: Me[] }>(page, 'snapshot')).players.find((p) => p.id === humanId)!;
+  const home = map[(await me()).island];
+  await dbg(page, 'give', { pieces: { wood: 25 } });
+  await expect.poll(async () => (await me()).inv.pieces.wood).toBe(25);
+  const dx = home.center.x - home.vault.x, dz = home.center.z - home.vault.z, d = Math.hypot(dx, dz);
+  await dbg(page, 'teleport', home.vault.x + (dx / d) * 1.2, home.vault.z + (dz / d) * 1.2);
+  await expect(page.getByText('E  Vault')).toBeVisible();
+  const ghost = page.locator('.vghost');
+  const panel = page.locator('.panel.open'); // (closePanel drops the 'panel' test id)
+
+  for (const close of ['Escape', 'KeyE'] as const) {
+    await page.locator('canvas.game').focus();
+    await page.keyboard.press('KeyE');
+    await expect(panel).toBeVisible();
+    const cell = `vault-hot-${(await me()).hotbar.indexOf('wood')}`;
+    const a = (await page.getByTestId(cell).boundingBox())!;
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(a.x + a.width / 2 + 40, a.y + a.height / 2 - 30, { steps: 5 });
+    await expect(ghost).toHaveCount(1);
+    await page.keyboard.press(close); // panel closes while the button is still held
+    await expect(panel).toBeHidden();
+    await expect(ghost).toHaveCount(0);
+    await page.mouse.up();
+    await expect(ghost).toHaveCount(0);
+  }
+  // The next open still draws the grids (a stuck drag used to block every refresh).
+  await page.locator('canvas.game').focus();
+  await page.keyboard.press('KeyE');
+  await expect(page.getByTestId(`vault-hot-${(await me()).hotbar.indexOf('wood')}`)).toBeVisible();
+  await page.keyboard.press('Escape');
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
 test('vault level: upgrade at the vault, then quick-bank (H) from anywhere on your island', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
