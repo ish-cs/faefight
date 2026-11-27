@@ -316,17 +316,21 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
           if (alive) dg.aliveSeals++; else dg.deadSeals++;
           if (!alive) {
             const isl = e.data.island as number, bc = bunkers[isl], doors = m.map[isl].bunker.doorways;
+            const roles: string[] = [];
             const snapIds = new Map<number, { kind: string; door: number }>(), doorKinds: string[][] = doors.map(() => []), kinds: string[] = [];
             for (const pc of SP.values()) {
               if (pc.kind === 'ramp' || pc.kind === 'scaffold' || Math.hypot(pc.pos.x - bc.x, pc.pos.z - bc.z) > 8) continue;
               let door = 0, bd = Infinity;
               doors.forEach((d, di) => { const dd = Math.hypot(pc.pos.x - d.center.x, pc.pos.z - d.center.z); if (dd < bd) { bd = dd; door = di; } });
               if (bd > 3.5) continue;
-              snapIds.set(pc.id, { kind: pc.kind, door }); doorKinds[door].push(pc.kind); kinds.push(pc.kind);
+              const po = (pc as unknown as { owner: number }).owner, role = po === by ? 'S' : po === (e.data.owner as number) ? 'O' : 'X';
+              snapIds.set(pc.id, { kind: pc.kind, door }); doorKinds[door].push(pc.kind); kinds.push(pc.kind); roles.push(pc.kind + ':' + role);
             }
             const prev = eps.get(isl); if (prev) { prev.out = 'resealed'; closeEp(prev); }
             eps.set(isl, { isl, owner: e.data.owner as number, by, sealT: e.t, kinds: kinds.sort(), doorKinds: doorKinds.map((k) => k.sort()), snapIds, trapT: o?.breakoutUntil != null ? Math.max(e.t - 10, (o.breakoutUntil as number) - 10) : null,
-              near10: 0, samples: 0, shots: 0, hitsOwner: 0, ownerShots: 0, addAfter: 0 });
+              near10: 0, samples: 0, shots: 0, hitsOwner: 0, ownerShots: 0, addAfter: 0,
+              roles: roles.sort(), sInv: { ...(snap.players[by - 1].inv as unknown as { pieces: Record<string, number> }).pieces }, sCash: snap.players[by - 1].inv.cash + snap.players[by - 1].vault.cash,
+              sHot: ((snap.players[by - 1] as unknown as { hotbar: (string | null)[] }).hotbar ?? []).filter((x) => x !== null).length } as Ep);
           }
         }
       } else if (e.type === 'unsealed') {
