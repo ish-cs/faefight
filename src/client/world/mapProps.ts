@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { containerLod } from './containerModel';
 import { boxUV, mat, StaticBatch } from './geo';
 import { cylinderLabel, dent, faceLabel, labelMaterial } from './labels';
 import { mats } from './materials';
@@ -118,6 +119,8 @@ export function containerCover(dress: StaticBatch, center: THREE.Vector3, half: 
 /** Cheap far-field container: body + top/bottom frame (36 tris). Base at origin, long axis X. */
 export function containerLite(b: StaticBatch, B: THREE.Matrix4, col: number) {
   const M = mats();
+  const baked = containerLod(1); // baked far-field LOD (10 tris, same atlas as the near containers)
+  if (baked) { b.add(M.container, baked, B, col); return; }
   b.add(M.corr, boxUV(6.0, 2.47, 2.38, 7.8), at(B, mat(0, 1.295, 0)), col);
   const c = new THREE.Color(col).multiplyScalar(0.55);
   for (const y of [0.06, 2.53]) b.add(M.paint, box(6.06, 0.12, 2.44), at(B, mat(0, y, 0)), c);
