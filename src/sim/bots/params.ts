@@ -36,8 +36,9 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
  *   can't walk to gets hunted there (bridge or hook over), not waited for at their plugged door. Replay a.faereplay:
  *   two PROs, each on the other's island with both bunkers sealed, stood still 10.7 min until sudden death.
  * - strandedSec: cut off from home (no walk, too few decks, no hook that reaches home from any shore here, none to
- *   buy) this long, the last resort: swim home (a death; the respawn puts me there). Was a fixed 90 s (×2 holding any
- *   hook): bots stood still 1.5-3 min on the center (ffa8-pro seed 5).
+ *   buy) this long, the last resort: swim home (a death; the respawn puts me there). Meanwhile, on the center, it
+ *   farms the gold station. It no longer doubles for a hook in hand: one that reaches home gets walked to its
+ *   launch spot and fired, and two that couldn't held a PRO 178 s on the center (ffa8-pro seed 5).
  * - fireRangeMult: Medium+ hold fire past this × the gun's falloff end (damage floor) unless that enemy is hitting me.
  * - crossFire: hold fire at an enemy farther than this (m) who isn't on the island I stand on (across the water, or
  *   either of us on a bridge) unless that enemy is hitting me or is my last rival: no plinking in passing, the
@@ -402,7 +403,7 @@ export const DRIVE: DriveParams = {
   siegeAfterDeath: 16,
   siegeScore: 0.75,
   huntSeenSec: 30,
-  strandedSec: 30,
+  strandedSec: 90,
   stallSec: 10,
   stallDist: 2.5,
   stallBanSec: 20,

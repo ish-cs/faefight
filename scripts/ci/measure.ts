@@ -84,7 +84,7 @@ type SeatOut = {
   frozenMax?: number; frozenAt?: number; frozenMaxSd?: number;
   /** The longest pre-sudden-death freeze ≥ FROZEN_GATE_SEC, as the brain saw it when it hit that: goal/move layer: why @ x,z. */
   frozenNote?: string;
-  /** Longest stretch (s) earning at its own generator or buying (EARN_M / EARN_SEC): excluded from frozenMax, shown on its own. */
+  /** Longest stretch (s) earning at its own generator or the center's gold, or buying (EARN_M / EARN_SEC): excluded from frozenMax, shown on its own. */
   econMax?: number;
   /** Movement jitter (src/sim/bots/moveStats.ts; refs without it leave this out). */
   jitter?: SeatJitter;
@@ -110,7 +110,7 @@ export type BuildOut = {
 };
 const FIGHT_GAP = 8, BLOCK_M = 4, HIGH_M = 1.2;
 const FROZEN_M = 1, FROZEN_GATE_SEC = 45;
-/** Earning at my own generator (within EARN_M m of it, carried cash up) or buying (money down, alive) in the last EARN_SEC s: not frozen. */
+/** Earning at my own generator or the center's gold station (within EARN_M m, carried cash up) or buying (money down, alive) in the last EARN_SEC s: not frozen. */
 const EARN_M = 3, EARN_SEC = 3.5;
 /** Dead air: no hit, kill or build anywhere while ≥ 2 players are still in the game. */
 const ACTION_EVENTS = new Set(['hit', 'kill', 'placed']);
@@ -201,6 +201,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const lastCash = new Map<number, [number, number]>();
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const gens = m.map.map((isl) => isl.generator);
+  const gold = m.def.center?.goldGen ?? null;
   /**
    * Last time each player's carried cash rose while at its own generator (it pays them there) or its money (carried +
    * vault) fell while alive (a purchase), and since when it has been doing that (econMax).
@@ -234,7 +235,8 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       if (b && s) {
         const dv = p.vault.cash - b[1], di = p.inv.cash - b[0];
         const g = gens[p.island];
-        if (p.alive && ((di > 0 && Math.hypot(p.pos.x - g.x, p.pos.z - g.z) <= EARN_M) || di + dv < 0)) earnAt.set(p.id, snap.time);
+        const atGen = Math.hypot(p.pos.x - g.x, p.pos.z - g.z) <= EARN_M || (!!gold && Math.hypot(p.pos.x - gold.x, p.pos.z - gold.z) <= EARN_M);
+        if (p.alive && ((di > 0 && atGen) || di + dv < 0)) earnAt.set(p.id, snap.time);
         if (dv > 0 && di < 0) { s.deposits!++; s.banked! += dv; }
         else if (dv > 0 && di === 0) s.interest! += dv; // vault interest (refs with it)
         else if (dv < 0 && di <= 0) s.vaultPaid!++;
@@ -650,7 +652,7 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     `### Stalls (frozen: alive, a rival in the game, moved ≤ ${FROZEN_M} m; dead air: no hit, kill or build anywhere)`, '',
     '| scenario | frozen max before 15:00 | worst | frozen max 15:00+ | games with a ≥ 45 s freeze | dead air max | worst | dead air median |', '|---|---|---|---|---|---|---|---|',
     ...sums.filter((s) => s.stalls).map((s) => { const x = s.stalls!; return `| ${s.scenario} | ${x.frozenMax.toFixed(0)} s | ${x.worst} | ${x.frozenMaxSd.toFixed(0)} s | ${x.gamesFrozen}/${s.games} | ${x.deadAirMax.toFixed(0)} s | ${x.deadAirWorst} | ${x.deadAirMedian === null ? '-' : x.deadAirMedian.toFixed(0)} s |`; }), '',
-    ...sums.filter((s) => s.stalls?.earnMax !== undefined).map((s) => `${s.scenario}: longest stretch earning at its own generator or buying (not counted as frozen): ${s.stalls!.earnMax!.toFixed(0)} s (${s.stalls!.earnWorst})`), '',
+    ...sums.filter((s) => s.stalls?.earnMax !== undefined).map((s) => `${s.scenario}: longest stretch earning at a generator (own or the center's gold) or buying (not counted as frozen): ${s.stalls!.earnMax!.toFixed(0)} s (${s.stalls!.earnWorst})`), '',
     ...sums.filter((s) => s.stalls?.freezes?.length).flatMap((s) => [`${s.scenario} freezes ≥ ${FROZEN_GATE_SEC} s (goal/move layer: why, when it hit ${FROZEN_GATE_SEC} s):`, ...s.stalls!.freezes!.slice(0, 25).map((t) => `- ${t}`), '']),
     '### Eliminations per game (means)', '',
     '| scenario | kills 15:00+ | eliminations | credited | spoils paid |', '|---|---|---|---|---|',
