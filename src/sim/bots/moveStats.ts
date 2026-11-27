@@ -8,6 +8,7 @@
  * the one before it (back and forth faster than a person taps A-D). An *episode* is jitter in place: FLIPS_MIN or more flips each within EPISODE_GAP_SEC
  * of the last, all while the body stays inside a circle of EPISODE_R m.
  */
+import * as dm from '../dmath';
 
 export const FLIP_DEG = 120;
 export const FLIP_SEC = 0.3;
@@ -17,7 +18,7 @@ export const FLIPS_MIN = 3;
 export const RAPID_SEC = 0.4;
 /** Below this the input counts as no input, and below VEL_MIN m/s the body as standing (no direction). */
 const WISH_MIN = 0.1, VEL_MIN = 1;
-const COS_FLIP = Math.cos((FLIP_DEG * Math.PI) / 180);
+const COS_FLIP = dm.cos((FLIP_DEG * Math.PI) / 180);
 
 export type MoveSample = {
   alive: boolean;
