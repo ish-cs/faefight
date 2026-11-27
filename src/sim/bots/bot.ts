@@ -1378,7 +1378,8 @@ export class Bot {
     const seenAt = rival && rival.alive && !view.suddenDeath && view.sealed[rival.island] ? this.mem.recent(rival.id, view.now, this.P.drive.huntSeenSec) : null;
     const seenNode = seenAt ? this.nav.nodeAt(seenAt.pos) : -1;
     const hunt = seenNode >= 0 && seenNode !== node && !from.some((n) => n === seenNode || this.nav.hop(n, seenNode) !== null) ? seenNode : null;
-    let bridgeTo: number | null = rivalIsl && !reach ? rivalIsl.index : null;
+    // Hunting: bridge toward where they stand, routed like any other bridge (via a teammate or the center when shorter).
+    let bridgeTo: number | null = hunt ?? (rivalIsl && !reach ? rivalIsl.index : null);
     const hookFrom = hunt !== null ? this.hookLaunch(view, me, node, home.index, hunt)
       : rivalIsl && !reach ? this.hookLaunch(view, me, node, home.index, rivalIsl.index) : null;
     // Teams: bridge to the teammate whose island is on the way (they lay the rest); already linked to them, wait
@@ -1390,9 +1391,8 @@ export class Bot {
     const slack = this.centerMinded ? 2 : this.difficulty !== 'easy' ? 0 : -Infinity;
     // A center bridge that wouldn't finish (laneBanSec): bridge to them directly for a while.
     if (C >= 0 && slack > -Infinity && !centerReach && !view.suddenDeath && stage === null && !((this.laneBan.get(C) ?? -Infinity) > view.now) &&
-        (bridgeTo === null ? this.centerMinded : this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
+        (bridgeTo === null ? this.centerMinded : bridgeTo !== home.index && this.scaffoldsTo(home.index, C) <= this.scaffoldsTo(home.index, bridgeTo) + slack)) bridgeTo = C;
     // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
-    if (hunt !== null) bridgeTo = hunt;
     if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
     const bridgeFrom = !homeReach && stand.length && stand[0] !== bridgeTo ? stand[0] : home.index;
     return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, hookFrom, hunt, homeReach, openDoors, bridgeTo, bridgeFrom, centerReach, danger };
