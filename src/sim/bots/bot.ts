@@ -1935,8 +1935,10 @@ export class Bot {
   private goalNoise(g: Goal, now: number): number {
     const n = this.noise.get(g);
     if (n && now < n.until) return n.v;
-    const v = (this.rng() - 0.5) * NOISE[this.difficulty];
-    this.noise.set(g, { v, until: now + NOISE_HOLD_SEC * (0.75 + 0.5 * this.rng()) });
+    // One draw per misjudgement, as when it was re-rolled at every rescore (a second draw would shift the whole rng
+    // stream: every goal choice from the first tick on differs). The hold length comes off the same draw's tail digits.
+    const r = this.rng(), v = (r - 0.5) * NOISE[this.difficulty];
+    this.noise.set(g, { v, until: now + NOISE_HOLD_SEC * (0.75 + 0.5 * ((r * 1024) % 1)) });
     return v;
   }
 
