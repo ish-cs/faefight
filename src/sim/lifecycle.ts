@@ -172,6 +172,14 @@ export function islandSealed(s: MatchStateCore, map: IslandLayout[], island: num
   return sealed;
 }
 
+/** Inside the bunker's outer footprint (room + doorway recesses), 2D. */
+function withinWalls(isl: IslandLayout, pos: Vec3): boolean {
+  const b = isl.bunker;
+  const l = rotateY(v3(pos.x - b.center.x, 0, pos.z - b.center.z), -b.facingYaw);
+  const h = MAP.bunker.interior / 2 + MAP.bunker.wall;
+  return Math.abs(l.x) <= h && Math.abs(l.z) <= h;
+}
+
 /** Pieces that count toward sealing this island's bunker: all but its owner's teammates' (teams.ts sealBlocker). */
 export function sealPieces(s: MatchStateCore, island: number): PieceState[] {
   let owner: PlayerState | undefined;
@@ -283,14 +291,17 @@ export function tickLifecycle(
     // Inside your own bunker while it's sealed (however you got there): the escape clock starts.
     // Inside means under the roof: standing on top of your own sealed bunker is not being sealed in (replay 7d6d6fa:
     // a bot that hopped onto its roof got the countdown and was eliminated up there).
+    // Inside also means within the walls (doorway recesses included): the exitRadius circle reaches past the walls'
+    // outer faces, and a player out behind the back wall at ~4 m toggled trapped/escaped every few ticks (replay 24a7c7).
     const underRoof = p.pos.y < map[p.island].groundY + MAP.bunker.height - 0.5;
-    if (!s.practice && p.breakoutUntil === null && underRoof && dist2D(p.pos, bunker) <= SEAL.exitRadius && islandSealed(s, map, p.island)) {
+    if (!s.practice && p.breakoutUntil === null && underRoof && withinWalls(map[p.island], p.pos) && islandSealed(s, map, p.island)) {
       p.breakoutUntil = now + LIFECYCLE.breakoutSec;
       out.push(ev(now, 'trapped', { player: p.id, until: p.breakoutUntil }));
       continue;
     }
     if (p.breakoutUntil === null) continue;
-    if (dist2D(p.pos, bunker) > SEAL.exitRadius) {
+    // Out: the seal is broken, or you are past exitRadius (where the seal fill counts as open ground) anyway.
+    if (!islandSealed(s, map, p.island) || dist2D(p.pos, bunker) > SEAL.exitRadius) {
       p.breakoutUntil = null;
       out.push(ev(now, 'escaped', { player: p.id }));
     } else if (now >= p.breakoutUntil) {
