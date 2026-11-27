@@ -2043,7 +2043,9 @@ export class Bot {
    * wants is bought before it (a PRO put $600 of $1082 into a level, then the hook and decks took the rest: no medkit).
    */
   wantsVaultUpgrade(me: PlayerState): boolean {
-    if (this.healWant > 0 && hpHealsHeld(me) === 0) return false;
+    // The heal stock for my money now, not the last plan's (cash just collected flipped this on for a tick, then off:
+    // a vault trip started and dropped).
+    if (healStock(me.inv.cash + me.vault.cash, this.difficulty, this.P.heal) > 0 && hpHealsHeld(me) === 0) return false;
     const price = vaultUpgradePrice(vaultLevel(me));
     return price !== null && funds(me) >= price + this.P.vault.upgradeAt[this.difficulty];
   }
