@@ -87,7 +87,12 @@ export class CritterSim {
   private flockClock = 8;
   private rnd: () => number;
   /** agents per (species, anchor index) */
-  private used = new Map<string, number>();
+  /** agents per anchor, per species (indexed like anchors(def)) */
+  private used = new Map<SpeciesDef, Uint16Array>();
+  private anchorCache = new Map<SpeciesDef, Anchor[]>();
+  /** populate() scratch (no per-call arrays) */
+  private cand: number[] = [];
+  private candScore: number[] = [];
 
   constructor(readonly hab: Habitats, readonly seed: number, readonly defs: SpeciesDef[] = SPECIES_DEFS) {
     this.rnd = mulberry(seed ^ 0x9e3779b9);
@@ -146,9 +151,11 @@ export class CritterSim {
         this.remove(far); n--;
       }
       const list = this.anchors(def);
-      const cand: number[] = [];
+      const used = this.usedOf(def);
+      const cand = this.cand, score = this.candScore;
+      cand.length = 0;
       for (let i = 0; i < list.length; i++) {
-        if ((this.used.get(`${def.name}:${i}`) ?? 0) >= def.perAnchor) continue;
+        if (used[i] >= def.perAnchor) continue;
         const p = list[i];
         const dd = d2(p.x, p.z, v.cam.x, v.cam.z);
         if (dd > R2) continue;
@@ -157,12 +164,8 @@ export class CritterSim {
         cand.push(i);
       }
       // favour anchors in view and close (ahead of the camera), with some randomness
-      const score = (i: number) => {
-        const p = list[i];
-        return Math.sqrt(d2(p.x, p.z, v.cam.x, v.cam.z)) * (v.visible(p.x, p.y, p.z, 1) ? 1 : 3);
-      };
-      const scores = new Map(cand.map((i) => [i, score(i)]));
-      cand.sort((a, b) => scores.get(a)! - scores.get(b)!);
+      for (const i of cand) { const p = list[i]; score[i] = Math.sqrt(d2(p.x, p.z, v.cam.x, v.cam.z)) * (v.visible(p.x, p.y, p.z, 1) ? 1 : 3); }
+      cand.sort((a, b) => score[a] - score[b]);
       if (n >= cap) {
         // recycle: with the cap reached, one animal that's off screen makes room for a spot in view near the
         // camera, so the view stays populated instead of the budget piling up behind the player
@@ -183,7 +186,7 @@ export class CritterSim {
         const k = Math.floor(this.rnd() ** 2 * cand.length);
         const i = cand[k];
         // flocks: fill the anchor up in one go
-        const group = Math.min(cap - n, def.perAnchor - (this.used.get(`${def.name}:${i}`) ?? 0));
+        const group = Math.min(cap - n, def.perAnchor - used[i]);
         const p = list[i], inView = v.visible(p.x, p.y, p.z, 1.5) && d2(p.x, p.z, v.cam.x, v.cam.z) < POP_R * POP_R;
         for (let g = 0; g < group; g++) {
           const a = this.spawn(def, i); n++;
@@ -195,14 +198,21 @@ export class CritterSim {
   }
 
   private anchors(def: SpeciesDef): Anchor[] {
-    return def.habitat.length === 1 ? this.hab[def.habitat[0]] : def.habitat.flatMap((h) => this.hab[h]);
+    let a = this.anchorCache.get(def);
+    if (!a) { a = def.habitat.length === 1 ? this.hab[def.habitat[0]] : def.habitat.flatMap((h) => this.hab[h]); this.anchorCache.set(def, a); }
+    return a;
+  }
+
+  private usedOf(def: SpeciesDef): Uint16Array {
+    let u = this.used.get(def);
+    if (!u) { u = new Uint16Array(this.anchors(def).length); this.used.set(def, u); }
+    return u;
   }
 
   private remove(i: number) {
     const a = this.agents[i];
-    const key = `${a.def.name}:${a.homeIdx}`;
-    const c = (this.used.get(key) ?? 1) - 1;
-    if (c <= 0) this.used.delete(key); else this.used.set(key, c);
+    const u = this.usedOf(a.def);
+    if (u[a.homeIdx] > 0) u[a.homeIdx]--;
     this.agents.splice(i, 1);
   }
 
@@ -223,8 +233,7 @@ export class CritterSim {
     if (def.emerges) { a.st = 'hidden'; a.show = 0; }
     if (def.rest && rnd() < def.rest.chance) { a.st = 'rest'; a.t = rr(rnd, def.rest.time[0], def.rest.time[1]); a.pose = 1; }
     this.place(a);
-    const key = `${def.name}:${idx}`;
-    this.used.set(key, (this.used.get(key) ?? 0) + 1);
+    this.usedOf(def)[idx]++;
     this.agents.push(a);
     return a;
   }
