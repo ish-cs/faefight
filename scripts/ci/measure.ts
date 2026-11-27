@@ -96,14 +96,14 @@ type SeatOut = {
    * Frozen bot: longest stretch (s) alive with a rival still in the game without moving > FROZEN_M (2D), before sudden
    * death and from it on; frozenAt: when the longest pre-sudden-death one started. Not counted: a breakout countdown,
    * holding inside my own bunker under fire (hurt in the last 3 s or an enemy within 30 m), earning at my own generator
-   * (it pays me there: carried cash up in the last EARN_SEC s within EARN_M m; earnMax), and in sudden death any
+   * or buying (carried cash up within EARN_M m of it, or money spent, in the last EARN_SEC s; econMax), and in sudden death any
    * bunker (the doorway slabs shut it). Optional: older shards.
    */
   frozenMax?: number; frozenAt?: number; frozenMaxSd?: number;
   /** The longest pre-sudden-death freeze ≥ FROZEN_GATE_SEC, as the brain saw it when it hit that: goal/move layer: why @ x,z. */
   frozenNote?: string;
-  /** Longest stretch (s) earning at its own generator (EARN_M / EARN_SEC): excluded from frozenMax, shown on its own. */
-  earnMax?: number;
+  /** Longest stretch (s) earning at its own generator or buying (EARN_M / EARN_SEC): excluded from frozenMax, shown on its own. */
+  econMax?: number;
   /** Movement jitter (src/sim/bots/moveStats.ts; refs without it leave this out). */
   jitter?: SeatJitter;
 };
@@ -128,8 +128,8 @@ export type BuildOut = {
 };
 const FIGHT_GAP = 8, BLOCK_M = 4, HIGH_M = 1.2;
 const FROZEN_M = 1, FROZEN_GATE_SEC = 45;
-/** Earning at my own generator (not frozen): within EARN_M m of it, carried cash up in the last EARN_SEC s. */
-const EARN_M = 3, EARN_SEC = 2;
+/** Earning at my own generator (within EARN_M m of it, carried cash up) or buying (money down, alive) in the last EARN_SEC s: not frozen. */
+const EARN_M = 3, EARN_SEC = 3.5;
 /** Dead air: no hit, kill or build anywhere while ≥ 2 players are still in the game. */
 const ACTION_EVENTS = new Set(['hit', 'kill', 'placed']);
 export type GameOut = {
@@ -227,7 +227,10 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const lastCash = new Map<number, [number, number]>();
   const bunkers = m.map.map((isl) => isl.bunker.center);
   const gens = m.map.map((isl) => isl.generator);
-  /** Last time each player's carried cash rose while at its own generator (it pays them there), and since when it has. */
+  /**
+   * Last time each player's carried cash rose while at its own generator (it pays them there) or its money (carried +
+   * vault) fell while alive (a purchase), and since when it has been doing that (econMax).
+   */
   const earnAt = new Map<number, number>(), earnSince = new Map<number, number>();
   const homeStreak = new Map<number, number>();
   let preSdElims = 0, preSdSeals = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
@@ -257,7 +260,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       if (b && s) {
         const dv = p.vault.cash - b[1], di = p.inv.cash - b[0];
         const g = gens[p.island];
-        if (di > 0 && p.alive && Math.hypot(p.pos.x - g.x, p.pos.z - g.z) <= EARN_M) earnAt.set(p.id, snap.time);
+        if (p.alive && ((di > 0 && Math.hypot(p.pos.x - g.x, p.pos.z - g.z) <= EARN_M) || di + dv < 0)) earnAt.set(p.id, snap.time);
         if (dv > 0 && di < 0) { s.deposits!++; s.banked! += dv; }
         else if (dv > 0 && di === 0) s.interest! += dv; // vault interest (refs with it)
         else if (dv < 0 && di <= 0) s.vaultPaid!++;
@@ -282,10 +285,11 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         const underFire = snap.time - (healSeen[p.id - 1]?.hurtAt ?? -99) < 3 ||
           snap.players.some((o) => o.id !== p.id && o.alive && Math.hypot(o.pos.x - p.pos.x, o.pos.z - p.pos.z) < THREAT_M);
         const shutIn = sd && bunkers.some((c) => Math.hypot(p.pos.x - c.x, p.pos.z - c.z) <= HOME_SIT_M);
-        // Earning: at my own generator while it pays me (carried cash rose in the last EARN_SEC): waiting for the price
-        // of the next buy, not frozen. Reported on its own (earnMax).
+        // Earning or buying: at my own generator while it pays me, or paying at a shop, within the last EARN_SEC (the
+        // slowest tier buys one item per 3 s): waiting for the price of the next buy, or buying it, not frozen.
+        // Reported on its own (econMax).
         const earning = p.alive && snap.time - (earnAt.get(p.id) ?? -99) < EARN_SEC;
-        if (earning) { const e0 = earnSince.get(p.id) ?? snap.time; earnSince.set(p.id, e0); seats[p.id - 1].earnMax = Math.max(seats[p.id - 1].earnMax ?? 0, snap.time - e0); }
+        if (earning) { const e0 = earnSince.get(p.id) ?? snap.time; earnSince.set(p.id, e0); seats[p.id - 1].econMax = Math.max(seats[p.id - 1].econMax ?? 0, snap.time - e0); }
         else earnSince.delete(p.id);
         const a = still.get(p.id);
         if (!p.alive || p.eliminated || !rivals || p.breakoutUntil !== null || (inOwn && underFire) || shutIn || earning || !a ||
@@ -603,7 +607,7 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     let earn = 0, earnWorst = '-';
     for (const g of games) {
       g.seats.forEach((x, i) => {
-        if ((x.earnMax ?? 0) > earn) { earn = x.earnMax!; earnWorst = `seed ${g.seed} p${i + 1} ${x.difficulty}`; }
+        if ((x.econMax ?? 0) > earn) { earn = x.econMax!; earnWorst = `seed ${g.seed} p${i + 1} ${x.difficulty}`; }
         if (x.frozenMax! >= FROZEN_GATE_SEC) freezes.push([x.frozenMax!, `${x.frozenMax!.toFixed(0)} s seed ${g.seed} p${i + 1} ${x.difficulty} from ${secs(x.frozenAt ?? 0)}: ${x.frozenNote ?? '-'}`]);
         if (x.frozenMax! > frozenMax) { frozenMax = x.frozenMax!; worst = `seed ${g.seed} p${i + 1} ${x.difficulty} from ${secs(x.frozenAt ?? 0)}`; }
         frozenMaxSd = Math.max(frozenMaxSd, x.frozenMaxSd ?? 0);
@@ -672,7 +676,7 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     `### Stalls (frozen: alive, a rival in the game, moved ≤ ${FROZEN_M} m; dead air: no hit, kill or build anywhere)`, '',
     '| scenario | frozen max before 15:00 | worst | frozen max 15:00+ | games with a ≥ 45 s freeze | dead air max | worst | dead air median |', '|---|---|---|---|---|---|---|---|',
     ...sums.filter((s) => s.stalls).map((s) => { const x = s.stalls!; return `| ${s.scenario} | ${x.frozenMax.toFixed(0)} s | ${x.worst} | ${x.frozenMaxSd.toFixed(0)} s | ${x.gamesFrozen}/${s.games} | ${x.deadAirMax.toFixed(0)} s | ${x.deadAirWorst} | ${x.deadAirMedian === null ? '-' : x.deadAirMedian.toFixed(0)} s |`; }), '',
-    ...sums.filter((s) => s.stalls?.earnMax !== undefined).map((s) => `${s.scenario}: longest wait earning at its own generator (not counted as frozen): ${s.stalls!.earnMax!.toFixed(0)} s (${s.stalls!.earnWorst})`), '',
+    ...sums.filter((s) => s.stalls?.earnMax !== undefined).map((s) => `${s.scenario}: longest stretch earning at its own generator or buying (not counted as frozen): ${s.stalls!.earnMax!.toFixed(0)} s (${s.stalls!.earnWorst})`), '',
     ...sums.filter((s) => s.stalls?.freezes?.length).flatMap((s) => [`${s.scenario} freezes ≥ ${FROZEN_GATE_SEC} s (goal/move layer: why, when it hit ${FROZEN_GATE_SEC} s):`, ...s.stalls!.freezes!.slice(0, 25).map((t) => `- ${t}`), '']),
     '### Eliminations per game (means)', '',
     '| scenario | kills 15:00+ | eliminations | credited | spoils paid |', '|---|---|---|---|---|',
