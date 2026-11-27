@@ -23,7 +23,7 @@ import { crossTo, escapeFrom, hookReady, yankReason, type HookIntent } from './h
 import { dropForHeal, healPlan, healStock, hpHealsHeld, type HealPlan } from './heal';
 import { Beliefs } from './belief';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
-import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
+import { HOP_UP, Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
   GUNS, TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
@@ -2311,7 +2311,14 @@ export class Bot {
     const f = m ?? this.nav.frontier(l);
     const sign = mirror ? -1 : 1;
     const at = (k: number) => laneAt(l, f.s + sign * k);
-    if (f.complete) { this.nextScoreAt = now; return IDLE; }
+    if (f.complete) {
+      // Done, yet not walkable from my end: something stands across its start on my shore (ffa4-pro seed 14: a rival's
+      // wood wall; the PRO stood at home 150 s, storm prep keeping 'bridge' on). Clear it, then walk over.
+      const clear = !mirror && l.from === c.bridgeFrom && !this.nav.bridge(c.bridgeFrom, to) ? this.clearBridgeStart(c, l) : null;
+      if (clear) return clear;
+      this.nextScoreAt = now;
+      return IDLE;
+    }
     if (toRival && this.scaffoldsNeeded(c) <= 1 && sealKit(c.me.inv) < c.openDoors.length) { this.nextScoreAt = now; return IDLE; }
     const key = `${l.from}>${l.to}`;
     // My bridge got shot out (a gap where decks were): skilled players lay an alternate one on the other lane
@@ -2510,6 +2517,25 @@ export class Bot {
     if (p.kind === 'metal') return hasAmmo(inv, 'rifle');
     if (isHard(p.kind)) return false;
     return ownsGun(inv) || !c.view.sealed[c.home.index] || insideBunker(c.home.bunker, c.me.pos);
+  }
+
+  /**
+   * A piece higher than a hop standing across the start of my finished bridge, on my shore: stand back on the shore and
+   * shoot it out (fists for a soft one when gunless). Null when there's none, or it's one I can't break that way.
+   */
+  private clearBridgeStart(c: Ctx, l: Lane): Act | null {
+    const from = this.nav.nodes[l.from];
+    const s = landEdge(from) + 0.5, ep = laneAt(l, s);
+    let p: PieceState | null = null;
+    for (const q of c.view.pieces)
+      if (dist2D(q.pos, ep) < 1.5 && q.pos.y + PIECES[q.kind].h - from.groundY > HOP_UP && (!p || dist2D(q.pos, ep) < dist2D(p.pos, ep))) p = q;
+    if (!p) return null;
+    const inv = c.me.inv;
+    const gun = p.kind === 'metal' ? hasAmmo(inv, 'rifle') : !isHard(p.kind) && ownsGun(inv);
+    if (!gun && isHard(p.kind)) return null;
+    const walk = this.goTo(laneAt(l, s - (gun ? 4 : 1.4)), gun ? 1.0 : 0.3);
+    const at = v3(p.pos.x, p.pos.y + PIECES[p.kind].h / 2, p.pos.z);
+    return walk.dir ? walk : { dir: null, shootAt: at, face: at };
   }
 
   /** Shoot (or punch) a plug from in front of its doorway, on my side of it. */
