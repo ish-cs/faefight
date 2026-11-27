@@ -30,6 +30,11 @@ await page.getByTestId('play-easy').click();
 await page.waitForFunction(() => window.__faefight?.snapshot?.() && !window.__faefightLoading?.visible(), null, { timeout: 180_000 });
 await page.waitForTimeout(3000);
 if (throttle > 1) { const cdp = await page.context().newCDPSession(page); await cdp.send('Emulation.setCPUThrottlingRate', { rate: throttle }); }
+await page.evaluate(() => {
+  const b = window.__faefight.renderer.gpu.backend, f = b.beginBundle?.bind(b);
+  window.__bundles = 0;
+  if (f) b.beginBundle = (...a) => { window.__bundles++; return f(...a); };
+});
 const dbg = (f, ...a) => page.evaluate(([f, a]) => window.__faefight[f](...a), [f, a]);
 const humanId = await dbg('humanId');
 const map = await dbg('map');
@@ -58,19 +63,21 @@ for (const s of SPOTS) {
     await set(on);
     await page.waitForTimeout(400);
     await dbg('resetFrames');
+    await page.evaluate(() => { window.__bundles = 0; });
     await page.waitForTimeout(sampleMs);
+    const rec = await page.evaluate(() => window.__bundles);
     const f = await dbg('frames');
     const gfps = await page.evaluate(() => window.__faefight.gpuFps?.() ?? 0);
     const submit = (await dbg('perfProbe'))?.submit ?? 0;
-    acc[on ? 'on' : 'off'].push({ cpu: f.cpuAvg, ms: f.avg, p99: f.p99, gfps, submit });
+    acc[on ? 'on' : 'off'].push({ cpu: f.cpuAvg, ms: f.avg, p99: f.p99, gfps, submit, rec });
   }
   await set(true);
   const row = { spot: s.name };
-  for (const k of ['on', 'off']) for (const m of ['cpu', 'submit', 'ms', 'p99', 'gfps']) row[`${k}.${m}`] = +med(acc[k].map((x) => x[m])).toFixed(3);
+  for (const k of ['on', 'off']) for (const m of ['cpu', 'submit', 'ms', 'p99', 'gfps', 'rec']) row[`${k}.${m}`] = +med(acc[k].map((x) => x[m])).toFixed(3);
   res.push(row);
 }
 await browser.close();
 console.log(`== toggle ${toggle} ${preset} ${throttle}x dpr${dpr} (medians of ${rounds} ABBA rounds)`);
-console.log('| spot | cpu on/off ms | submit on/off | frame on/off ms | p99 on/off | GPU-done fps on/off |');
-console.log('|---|---|---|---|---|---|');
-for (const r of res) console.log(`| ${r.spot} | ${r['on.cpu']} / ${r['off.cpu']} | ${r['on.submit']} / ${r['off.submit']} | ${r['on.ms']} / ${r['off.ms']} | ${r['on.p99']} / ${r['off.p99']} | ${r['on.gfps']} / ${r['off.gfps']} |`);
+console.log('| spot | cpu on/off ms | submit on/off | frame on/off ms | p99 on/off | GPU-done fps on/off | bundle records/sample on |');
+console.log('|---|---|---|---|---|---|---|');
+for (const r of res) console.log(`| ${r.spot} | ${r['on.cpu']} / ${r['off.cpu']} | ${r['on.submit']} / ${r['off.submit']} | ${r['on.ms']} / ${r['off.ms']} | ${r['on.p99']} / ${r['off.p99']} | ${r['on.gfps']} / ${r['off.gfps']} | ${r['on.rec']} |`);

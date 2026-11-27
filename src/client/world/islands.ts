@@ -323,7 +323,14 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
     bundle.name = 'staticBundle';
     for (const m of dressed) if (m.userData.lod) root.add(m);
     // + the other static island meshes (tops, walls, bunkers, structures, backdrop): the visible, never-toggled ones
-    for (const o of [...root.children]) if ((o as THREE.Mesh).isMesh && o.visible && !o.userData.lod) bundle.add(o);
+    // only map-wide meshes (bounding radius ≥ BUNDLE_MIN_R): frustum culling never drops those anyway, while the
+    // smaller ones (rock chunks, signs) are often off screen and are cheaper culled than drawn
+    for (const o of [...root.children]) {
+      const g = (o as THREE.Mesh).geometry;
+      if (!(o as THREE.Mesh).isMesh || !o.visible || o.userData.lod) continue;
+      if (!g.boundingSphere) g.computeBoundingSphere();
+      if (g.boundingSphere!.radius * o.scale.x >= BUNDLE_MIN_R) bundle.add(o);
+    }
     // a bundle draws every object it holds in every pass (no culling): the camera can afford that for these map-wide
     // meshes, the shadow cascades can't. So bundled meshes don't cast; a plain twin (same geometry + material) on a
     // shadow-only layer casts instead, culled per cascade as before.
@@ -345,6 +352,9 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
   }
   return { collidables, root };
 }
+
+/** static island meshes at least this big (bounding radius, m) are drawn from the render bundle (see buildIslandsSteps) */
+const BUNDLE_MIN_R = 120;
 
 type Rng = ReturnType<typeof makeRng>;
 type At = (x: number, y: number, z: number, ry?: number) => THREE.Matrix4;
