@@ -601,6 +601,7 @@
 .vault-link:hover { color: var(--c-text); border-color: var(--c-orange); }
 .vault-more { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; padding: 8px 10px; background: var(--c-ink-900); border-radius: var(--r-sm); }
 .vault-field { display: flex; align-items: center; gap: 6px; }
+.vault-tips { flex-basis: 100%; font-size: 13px; font-weight: 600; color: var(--c-text-dim); }
 .vault-field .cash-input, .vl-keep .cash-input { width: 84px; min-height: 30px; }
 .vault-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .vault-foot .shop-info { flex: 1; margin-top: 0; min-height: 32px; }
