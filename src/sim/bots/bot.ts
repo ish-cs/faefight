@@ -56,6 +56,8 @@ const BUY_RETRIES = 2;
 const BUY_BACKOFF_SEC = 20;
 const ARRIVE = 0.6;
 const USE_RANGE = ECONOMY.interactRadius - 0.2;
+/** Vault this close (m), e.g. from the shop next to it: the level is bought on the same trip (VaultParams.upgradeNear). */
+const UPGRADE_NEAR_M = 12;
 const COLLECT_AT = 40;
 const STUCK_SEC = 2, STUCK_DIST = 0.5, UNSTICK_SEC = 0.6;
 const TURN_RATE = 8;
@@ -1360,6 +1362,7 @@ export class Bot {
         : healStock(total, this.difficulty, this.P.heal)),
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
+      hardKit: this.P.drive.hardKit[this.difficulty],
       // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
       grapple: c.bridgeTo !== null && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c) && total >= this.P.hook.crossBuyAt[this.difficulty] ? 'cross'
         : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
@@ -1686,7 +1689,10 @@ export class Bot {
         const close = c.enemy && c.enemyDist < 8;
         if (close) return 0;
         // Rich enough for the next vault level (more interest, remote deposits): a trip to the vault to buy it.
-        if (this.wantsVaultUpgrade(me)) return this.P.vault.upgradeScore - dist2D(me.pos, home.vault) / 80;
+        if (this.wantsVaultUpgrade(me)) {
+          const d = dist2D(me.pos, home.vault);
+          return this.P.vault.upgradeScore + (d < UPGRADE_NEAR_M ? this.P.vault.upgradeNear : 0) - d / 80;
+        }
         if (excess < this.P.vault.bankMin) return 0;
         const leaving = c.reach || (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c);
         const want = 0.2 + Math.min(excess, 600) / 600 * (0.3 + 0.3 * t.caution + 0.2 * t.greed);
@@ -1936,7 +1942,8 @@ export class Bot {
       case 'trap': return s * 0.6;
       case 'cut': return this.crossing(c) ? s : s * 0.4;
       // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
-      case 'bank': return this.insuranceDue(me) > 0 || c.danger ? s : s * 0.5;
+      // Buying the vault level isn't idle banking (halved, it never beat the shop next door before a seal run).
+      case 'bank': return this.insuranceDue(me) > 0 || c.danger || this.wantsVaultUpgrade(me) ? s : s * 0.5;
       case 'loot': return s * 0.6;
     }
     return s;
@@ -2036,7 +2043,9 @@ export class Bot {
    * wants is bought before it (a PRO put $600 of $1082 into a level, then the hook and decks took the rest: no medkit).
    */
   wantsVaultUpgrade(me: PlayerState): boolean {
-    if (this.healWant > 0 && hpHealsHeld(me) === 0) return false;
+    // The heal stock for my money now, not the last plan's (cash just collected flipped this on for a tick, then off:
+    // a vault trip started and dropped).
+    if (healStock(me.inv.cash + me.vault.cash, this.difficulty, this.P.heal) > 0 && hpHealsHeld(me) === 0) return false;
     const price = vaultUpgradePrice(vaultLevel(me));
     return price !== null && funds(me) >= price + this.P.vault.upgradeAt[this.difficulty];
   }
@@ -2143,6 +2152,8 @@ export class Bot {
     if (this.sieging(c) && c.on === c.rivalIsl.index) {
       const hp = (d: Doorway) => doorPieces(c.view.pieces, d).reduce((n, p) => n + p.hp, 0);
       const door = b.doorways.reduce((a, d) => (hp(d) < hp(a) ? d : a));
+      const layer = this.reinforce(c, door, hp(door));
+      if (layer) return layer;
       const spot = add(door.center, scale(forward(door.yaw), this.P.drive.siegeDist));
       const walk = this.goTo(spot, 1.2);
       return walk.dir ? walk : { dir: null, face: v3(door.center.x, door.center.y + CHEST, door.center.z) };
@@ -2162,6 +2173,26 @@ export class Bot {
       this.wander = { to: add(base, v3(dm.cos(a) * r, 0, dm.sin(a) * r)), until: now + 3 + this.rng() * 2 };
     }
     return this.goTo(this.wander.to, 1.0);
+  }
+
+  /**
+   * Sieging: a second wall outside the softest plug while it's under drive.reinforceHp (a respawn pistol shoots a wood
+   * plug out in ~7 s of the 10 s breakout window; two layers outlast it). Null: nothing to add, or no spot for it.
+   */
+  private reinforce(c: Ctx, door: Doorway, doorHp: number): Act | null {
+    const kind = TALL.find((k) => (c.me.inv.pieces[k] ?? 0) > 0);
+    if (!kind || doorHp >= this.P.drive.reinforceHp[this.difficulty]) return null;
+    const stand = add(door.center, scale(forward(door.yaw), 2.5));
+    const walk = this.goTo(stand, ARRIVE);
+    if (walk.dir) return walk;
+    const base = plugSpot(door, kind, 0);
+    if (c.me.busyUntil > c.view.now) return { dir: null, face: base };
+    // Just outside whatever already fills the doorway.
+    for (const push of [0.2, 0.3, 0.45, 0.6]) {
+      const pos = add(base, scale(forward(door.yaw), push));
+      if (c.view.canPlace(kind, pos, door.yaw).ok) return { dir: null, face: base, build: { kind, pos, rotY: door.yaw, free: true } };
+    }
+    return null;
   }
 
   private doSeal(c: Ctx): Act {
