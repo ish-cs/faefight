@@ -57,6 +57,10 @@ export class GunFx {
   private ledMat = new THREE.MeshBasicNodeMaterial({ color: new THREE.Color(0xff2020).multiplyScalar(4) });
   private ledGeo = new THREE.SphereGeometry(0.02, 6, 4);
   private last = performance.now();
+  /** Effects clock (ms): real time × timeScale. Tracers and casings run on it. */
+  private clock = 0;
+  /** Killcam slow motion: tracers fly and casings fall at the replay's playback rate (1 = real time). */
+  timeScale = 1;
   private warmGroup: THREE.Group | null = null;
   private warmFrames = 0;
   /** Killcam: the killing shot's line, held through the slow-motion beat (same material setup as the tracers: no new shader). */
@@ -200,7 +204,7 @@ export class GunFx {
     t.len = t.dir.length();
     if (t.len < 0.3) return;
     t.dir.divideScalar(t.len);
-    t.born = performance.now();
+    t.born = this.clock;
     t.live = true;
     t.mesh.visible = true;
     t.mat.color.setHex(mine ? 0xfff2a8 : 0xffb070).multiplyScalar(UNLIT_BOOST * k);
@@ -288,14 +292,15 @@ export class GunFx {
   update(ageSec: number) {
     const now = performance.now();
     const dt = Math.min(0.05, (now - this.last) / 1000);
+    this.clock += (now - this.last) * this.timeScale;
     this.last = now;
-    this.casings.update(dt);
+    this.casings.update(dt * this.timeScale);
     for (const t of this.tracers) {
       if (!t.live) continue;
-      const travelled = ((now - t.born) / 1000) * TRACER_SPEED;
+      const travelled = ((this.clock - t.born) / 1000) * TRACER_SPEED;
       const head = Math.min(t.len, travelled + TRACER_LEN * 0.3);
       const tail = Math.max(0, head - TRACER_LEN);
-      if (tail >= t.len - 0.05 || now - t.born > 400) { t.live = false; t.mesh.visible = false; continue; }
+      if (tail >= t.len - 0.05 || this.clock - t.born > 400) { t.live = false; t.mesh.visible = false; continue; }
       t.mesh.position.copy(t.from).addScaledVector(t.dir, tail);
       t.mesh.lookAt(_d.copy(t.from).addScaledVector(t.dir, t.len));
       t.mesh.scale.z = Math.max(0.05, head - tail);

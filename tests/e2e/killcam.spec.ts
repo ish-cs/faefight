@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { NEEDS_GPU, ON_CI } from './gpu';
 import { LIFECYCLE } from '../../src/sim/constants';
+import { KILLCAM_SEC, SLOW_LEAD_MIN, SLOWMO } from '../../src/client/qol/killcamBuffer';
 
 const RESPAWN_MS = LIFECYCLE.respawnSec * 1000;
 
@@ -15,8 +16,8 @@ const dbg = <T>(page: Page, fn: string, ...args: unknown[]) =>
 type P = { id: number; alive: boolean };
 type Snap = { time: number; players: P[] };
 type KcInfo = {
-  active: boolean; started: boolean; reason: string; plan: { duration: number; real: number } | null; frames: number; killer: number | null;
-  real: number; slow: number; stats: { frames: number; blocked: number; maxStep: number; slowFrames: number; clampMax: number; sideSwitches: number };
+  active: boolean; started: boolean; reason: string; plan: { duration: number; real: number; lead: number } | null; frames: number; killer: number | null;
+  real: number; slow: number; stats: { frames: number; blocked: number; maxStep: number; slowFrames: number; clampMax: number; sideSwitches: number; slowReal: number };
 };
 type Spec = { active: boolean; mode: string; followId: number | null; killcam: boolean };
 
@@ -24,6 +25,8 @@ const ENV = (globalThis as { process?: { env: Record<string, string | undefined>
 const SHOTS = ENV.E2E_SHOTS;
 /** Where the three killcam frames go (establishing / glide / slow beat): KILLCAM_SHOTS, else E2E_SHOTS. */
 const KC_SHOTS = ENV.KILLCAM_SHOTS ?? SHOTS;
+/** A frame sequence of the slow-motion section (motion blur) goes here when set. */
+const KC_SEQ = ENV.KILLCAM_SEQ;
 
 test('dying shows the killcam cinematic, it ends before the respawn; any key / click skips; kill feed lines', async ({ page }) => {
   const errors: string[] = [];
@@ -51,6 +54,15 @@ test('dying shows the killcam cinematic, it ends before the respawn; any key / c
   // Killed by the bot: the killcam plays, then ends by itself before the respawn.
   await page.waitForTimeout(RESPAWN_MS + 500); // fresh history with the bot alive again
   const diedAt = Date.now();
+  // Longest frame gap around the killcam's start (the blur is compiled in up front: no shader build here).
+  await page.evaluate(() => {
+    const w = window as unknown as { __kcGap: number };
+    w.__kcGap = 0;
+    let last = performance.now();
+    const end = last + 1500;
+    const tick = (t: number) => { w.__kcGap = Math.max(w.__kcGap, t - last); last = t; if (t < end) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
   await dbg(page, 'kill', me, bot);
   const kc = page.getByTestId('killcam');
   await expect(kc).toBeVisible({ timeout: 5_000 });
@@ -59,7 +71,8 @@ test('dying shows the killcam cinematic, it ends before the respawn; any key / c
   const info = await dbg<KcInfo>(page, 'killcam');
   expect(info.started).toBe(true);
   expect(info.plan!.duration).toBeLessThan(LIFECYCLE.respawnSec); // fits in the respawn wait
-  expect(info.plan!.real).toBeLessThanOrEqual(4.6); // short: ≤ ~4.5 s, slow beat included
+  expect(info.plan!.real).toBeLessThanOrEqual(KILLCAM_SEC + 0.05); // ≤ 6 s, slow beat included
+  expect(info.plan!.lead).toBeGreaterThanOrEqual(SLOW_LEAD_MIN - 1e-6); // held slow-mo before the shot
   // Three frames: the establishing angle, the glide in, and the slow-motion beat on the kill.
   const plan = info.plan!;
   const shot = async (name: string, until: (i: KcInfo) => boolean) => {
@@ -68,6 +81,21 @@ test('dying shows the killcam cinematic, it ends before the respawn; any key / c
   };
   await shot('1-establishing', (i) => i.real > 0.45);
   await shot('2-glide', (i) => i.real > plan.real * 0.5);
+  if (KC_SEQ) {
+    // The slow-motion section as rendered (a screencast: screenshots would stall the frames), until it eases back out.
+    const { writeFileSync } = await import('node:fs');
+    await expect.poll(async () => { const i = await dbg<KcInfo>(page, 'killcam'); return !i.active || i.slow > 0.02; }, { timeout: 6_000, intervals: [20] }).toBe(true);
+    const cdp = await page.context().newCDPSession(page);
+    let n = 0;
+    cdp.on('Page.screencastFrame', (f: { data: string; sessionId: number }) => {
+      writeFileSync(`${KC_SEQ}/slowmo-${String(n++).padStart(3, '0')}.jpg`, Buffer.from(f.data, 'base64'));
+      void cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId }).catch(() => {});
+    });
+    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 85, everyNthFrame: 1 });
+    await expect.poll(async () => { const i = await dbg<KcInfo>(page, 'killcam'); return !i.active || i.slow < 0.02; }, { timeout: 8_000, intervals: [50] }).toBe(true);
+    await cdp.send('Page.stopScreencast');
+    await cdp.detach();
+  }
   await shot('3-slowmo', (i) => i.slow > 0.9);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/qol2-killcam.png` });
   await expect(kc).toBeHidden({ timeout: 5_000 });
@@ -75,6 +103,11 @@ test('dying shows the killcam cinematic, it ends before the respawn; any key / c
   console.log('[killcam e2e] stats', JSON.stringify(done.stats), 'real', done.plan!.real.toFixed(2));
   expect(done.reason).toBe('ended');
   expect(done.stats.slowFrames).toBeGreaterThan(5); // the slow beat played
+  // The slow-motion window happened: held at ~SLOWMO for the final shot(s) (lead + hold after, slowed), within frame jitter.
+  expect(done.stats.slowReal).toBeGreaterThan(((done.plan!.lead + 0.12) / SLOWMO) * 0.8);
+  const gap = await page.evaluate(() => (window as unknown as { __kcGap: number }).__kcGap);
+  console.log('[killcam e2e] longest frame around the start', gap.toFixed(1), 'ms');
+  expect(gap).toBeLessThan(50); // no hitch starting it
   expect(done.stats.maxStep).toBeLessThan(25); // no camera snaps (m/s)
   await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: RESPAWN_MS + 5_000 }).toBe(true);
   expect(Date.now() - diedAt).toBeLessThan(RESPAWN_MS + 3000); // respawn not held up
@@ -87,7 +120,7 @@ test('dying shows the killcam cinematic, it ends before the respawn; any key / c
   await page.keyboard.press('KeyQ');
   await expect(kc).toBeHidden({ timeout: 1_000 });
   expect((await dbg<KcInfo>(page, 'killcam')).reason).toBe('skipped');
-  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: 10_000 }).toBe(true);
+  await expect.poll(async () => (await dbg<Snap>(page, 'snapshot')).players.find((p) => p.id === me)!.alive, { timeout: RESPAWN_MS + 5_000 }).toBe(true);
 
   // And with a click.
   await page.waitForTimeout(RESPAWN_MS + 500);
@@ -130,7 +163,7 @@ test("spectating: the followed player's death plays the same killer-view killcam
   expect((await dbg<KcInfo>(page, 'killcam')).killer).toBe(other);
   expect((await dbg<Spec>(page, 'spectator')).killcam).toBe(false);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/qol2-killcam-spectator.png` });
-  await expect(kc).toBeHidden({ timeout: 5_000 });
+  await expect(kc).toBeHidden({ timeout: (KILLCAM_SEC + 1.5) * 1000 });
   expect((await dbg<Spec>(page, 'spectator')).mode).toBe('follow');
   expect(errors).toEqual([]);
 });

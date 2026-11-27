@@ -11,7 +11,7 @@ import { smoothstep } from '../camPath';
 /** History kept (s of sim time). */
 export const HISTORY_SEC = 6;
 /** Wanted replay length (s of real time, slow motion included). */
-export const KILLCAM_SEC = 4.5;
+export const KILLCAM_SEC = 6;
 /** Shorter than this isn't worth showing (s). */
 export const KILLCAM_MIN_SEC = 1.2;
 /** The replay ends this long before the respawn (s), so the respawn flow never waits on it. */
@@ -20,10 +20,21 @@ export const RESPAWN_MARGIN = 0.35;
 export const TAIL_SEC = 0.6;
 /** Gaps in the killer's track longer than this (s) cut the window: earlier frames aren't used. */
 export const MAX_GAP_SEC = 0.4;
-/** Slow motion on the killing shot: time scale held this low... */
-export const SLOWMO = 0.35;
-/** ...easing in over [killT - SLOW_IN, killT - SLOW_HOLD_PRE], held to killT + SLOW_HOLD_POST, easing out by killT + SLOW_OUT (sim s). */
-export const SLOW_IN = 0.3, SLOW_HOLD_PRE = 0.1, SLOW_HOLD_POST = 0.12, SLOW_OUT = 0.32;
+/** Slow motion on the final shot(s): time scale held this low... */
+export const SLOWMO = 0.3;
+/**
+ * ...held from killT - lead (the plan's `lead`, SLOW_LEAD_MIN..SLOW_LEAD_MAX: the killer's final burst) to killT +
+ * SLOW_HOLD_POST, easing in over the SLOW_IN before it and out by killT + SLOW_OUT (sim s).
+ */
+export const SLOW_IN = 0.25, SLOW_HOLD_POST = 0.12, SLOW_OUT = 0.4;
+/** Held slow lead before the killing shot (sim s): a lone shot gets the minimum, a burst up to the maximum. */
+export const SLOW_LEAD_MIN = 0.45, SLOW_LEAD_MAX = 1;
+/** ...shrunk as far as this on a respawn wait too short for the minimum. */
+const SLOW_LEAD_FLOOR = 0;
+/** The killer's shots / hits closer together than this (sim s) are one burst (all of it plays slowed). */
+export const BURST_GAP = 0.5;
+/** Full-speed lead-in kept ahead of the slow beat (real s): on a short respawn wait the slow lead shrinks first. */
+export const MIN_LEAD_IN = 1;
 /** The killing shot is looked for this far before the death (s); older → the death itself is the beat. */
 export const KILL_SHOT_WINDOW = 1.5;
 /** Positions that jump further than this between snapshots are teleports: no blending. */
@@ -78,32 +89,42 @@ export type KillcamPlan = {
   from: number; to: number; duration: number;
   /** Sim time of the killing shot (the slow-motion beat). */
   killT: number;
+  /** Slow motion is held from killT - lead (sim s; see timeScale). */
+  lead: number;
   /** Real seconds the replay takes (slow motion included). */
   real: number;
 };
 
-/** Playback speed at sim time t: 1, easing down to SLOWMO around the killing shot at killT and back. */
-export function timeScale(t: number, killT: number): number {
+/**
+ * Playback speed at sim time t: 1, easing down to SLOWMO over SLOW_IN, held from `lead` s before the killing shot
+ * at killT to SLOW_HOLD_POST after it, easing back to 1 by killT + SLOW_OUT.
+ */
+export function timeScale(t: number, killT: number, lead = SLOW_LEAD_MIN): number {
   const d = t - killT;
-  if (d <= -SLOW_IN || d >= SLOW_OUT) return 1;
-  const k = d < -SLOW_HOLD_PRE ? smoothstep((d + SLOW_IN) / (SLOW_IN - SLOW_HOLD_PRE))
+  if (d <= -lead - SLOW_IN || d >= SLOW_OUT) return 1;
+  const k = d < -lead ? smoothstep((d + lead + SLOW_IN) / SLOW_IN)
     : d <= SLOW_HOLD_POST ? 1 : 1 - smoothstep((d - SLOW_HOLD_POST) / (SLOW_OUT - SLOW_HOLD_POST));
   return 1 - (1 - SLOWMO) * k;
 }
 
-/** How slowed (0 = full speed, 1 = SLOWMO) playback is at t: drives the zoom, bars and shot emphasis. */
-export function slowAmount(t: number, killT: number): number {
-  return (1 - timeScale(t, killT)) / (1 - SLOWMO);
+/** How slowed (0 = full speed, 1 = SLOWMO) playback is at t: drives the zoom, bars, shot emphasis and motion blur. */
+export function slowAmount(t: number, killT: number, lead = SLOW_LEAD_MIN): number {
+  return (1 - timeScale(t, killT, lead)) / (1 - SLOWMO);
 }
 
 /** Real seconds to play the sim span [from, to] (midpoint rule; the slow beat is smooth). */
-export function realSpan(from: number, to: number, killT: number): number {
+export function realSpan(from: number, to: number, killT: number, lead = SLOW_LEAD_MIN): number {
   if (to <= from) return 0;
   const n = Math.max(8, Math.ceil((to - from) * 240));
   const h = (to - from) / n;
   let r = 0;
-  for (let i = 0; i < n; i++) r += h / timeScale(from + (i + 0.5) * h, killT);
+  for (let i = 0; i < n; i++) r += h / timeScale(from + (i + 0.5) * h, killT, lead);
   return r;
+}
+
+/** Held slow lead for a kill shot whose final burst started at `burst` (sim s): the whole burst, clamped. */
+export function slowLead(shot: Pick<KillShot, 't' | 'burst'>): number {
+  return Math.min(SLOW_LEAD_MAX, Math.max(SLOW_LEAD_MIN, shot.t - shot.burst + 0.15));
 }
 
 /**
@@ -115,14 +136,20 @@ export function realSpan(from: number, to: number, killT: number): number {
  *   the death (a gap > MAX_GAP_SEC, or not seen at all, trims the start)
  * Null (skip the killcam) when there's no killer or what's left is shorter than KILLCAM_MIN_SEC.
  */
-export function planKillcam(frames: readonly Snapshot[], deathT: number, killer: number | null, respawnIn: number | null, killT = deathT): KillcamPlan | null {
+export function planKillcam(frames: readonly Snapshot[], deathT: number, killer: number | null, respawnIn: number | null, killT = deathT, wantLead = SLOW_LEAD_MIN): KillcamPlan | null {
   if (killer === null) return null;
   const maxReal = respawnIn === null ? KILLCAM_SEC : Math.min(KILLCAM_SEC, respawnIn - RESPAWN_MARGIN);
   if (maxReal < KILLCAM_MIN_SEC) return null;
   const to = deathT + Math.min(TAIL_SEC, maxReal * 0.15);
+  // A long burst on a short wait: shorten the held slow lead so some full-speed lead-in still fits.
+  let lead = Math.max(SLOW_LEAD_MIN, wantLead);
+  const slowReal = (l: number) => realSpan(killT - l - SLOW_IN - 0.01, to, killT, l);
+  // (A very short wait goes below SLOW_LEAD_MIN, down to a beat on the shot itself.)
+  const leadIn = Math.min(MIN_LEAD_IN, maxReal * 0.3);
+  while (lead > SLOW_LEAD_FLOOR && slowReal(lead) + leadIn > maxReal) lead = Math.max(SLOW_LEAD_FLOOR, lead - 0.05);
   // The slow beat's extra real time comes out of the sim window.
-  const lead = killT - SLOW_IN - 0.01;
-  const extra = realSpan(lead, to, killT) - (to - lead);
+  const slowFrom = killT - lead - SLOW_IN - 0.01;
+  const extra = realSpan(slowFrom, to, killT, lead) - (to - slowFrom);
   let from = to - Math.max(KILLCAM_MIN_SEC, maxReal - extra);
   // Walk back from the death while the killer stays in view.
   let start: number | null = null;
@@ -140,10 +167,10 @@ export function planKillcam(frames: readonly Snapshot[], deathT: number, killer:
   from = Math.max(from, start);
   if (deathT - from < KILLCAM_MIN_SEC * 0.75 || to - from < KILLCAM_MIN_SEC) return null;
   // Still too long in real time (short window, so the slow beat is a bigger share): start later.
-  let real = realSpan(from, to, killT);
-  while (real > maxReal + 1e-6 && to - from > KILLCAM_MIN_SEC) { from += 1 / 30; real = realSpan(from, to, killT); }
+  let real = realSpan(from, to, killT, lead);
+  while (real > maxReal + 1e-6 && to - from > KILLCAM_MIN_SEC) { from += 1 / 30; real = realSpan(from, to, killT, lead); }
   if (real > maxReal + 1e-6) return null;
-  return { from, to, duration: to - from, killT, real };
+  return { from, to, duration: to - from, killT, lead, real };
 }
 
 export type KillShot = {
@@ -153,6 +180,8 @@ export type KillShot = {
   from: Vec3 | null;
   to: Vec3 | null;
   headshot: boolean;
+  /** Sim time the killer's final burst started (their shots / hits on the victim, gaps ≤ BURST_GAP; = t for one shot). */
+  burst: number;
 };
 
 /**
@@ -183,7 +212,20 @@ export function findKillShot(frames: readonly Snapshot[], deathT: number, killer
   }
   const v = (x: unknown) => (x && typeof x === 'object' && 'x' in x ? (x as Vec3) : null);
   const to = v(hit?.data.pos) ?? v(shot?.data.to);
-  return { t: hit?.t ?? shot?.t ?? deathT, from: v(shot?.data.from), to, headshot: hit?.data.part === 'head' };
+  const t = hit?.t ?? shot?.t ?? deathT;
+  // The final burst: walk back over the killer's shots and hits on the victim while they come in quick succession.
+  let burst = t;
+  for (let i = frames.length - 1; i >= 0; i--) {
+    const f = frames[i];
+    if (f.time > t + 1e-6) continue;
+    if (f.time < burst - BURST_GAP || f.time < t - SLOW_LEAD_MAX) break;
+    for (let j = f.events.length - 1; j >= 0; j--) {
+      const e = f.events[j];
+      if (e.t > t + 1e-6 || e.t < burst - BURST_GAP || e.t < t - SLOW_LEAD_MAX || e.data.by !== killer) continue;
+      if (e.type === 'shot' || (e.type === 'hit' && e.data.target === victim)) burst = Math.min(burst, e.t);
+    }
+  }
+  return { t, from: v(shot?.data.from), to, headshot: hit?.data.part === 'head', burst };
 }
 
 export type PlayerSample = { pos: Vec3; vel: Vec3; yaw: number; pitch: number };

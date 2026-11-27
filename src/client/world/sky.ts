@@ -31,7 +31,7 @@ type Preset = {
   post: PostOptions;
 };
 /** Competitive mode's post chain overrides (see setCompetitive). */
-const COMPETITIVE_POST: Partial<PostOptions> = { samples: 2, bloom: false, ao: false, flare: false, upscale: undefined };
+const COMPETITIVE_POST: Partial<PostOptions> = { samples: 2, bloom: false, ao: false, flare: false, upscale: undefined, motionBlur: false };
 
 /**
  * Ultra's upscaler (A/B, debug): `?upscale=0` off (native MSAA), `?upscale=taau` / `?upscale=fsr` picks the mode,
@@ -47,9 +47,9 @@ const UPSCALE_ULTRA: PostOptions['upscale'] = UP_MODE === '0' ? undefined
 // ultra: 4 cascades with a long reach. GTAO + bloom on high/ultra (AO at half resolution).
 const PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, shadow: { cascades: 2, mapSize: 1024, far: 90 }, post: { samples: 4, bloom: false, ao: false } },
-  high: { pixelRatio: 1.25, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true } },
+  high: { pixelRatio: 1.25, shadow: { cascades: 3, mapSize: 2048, far: 180 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 8 }, flare: true, motionBlur: true } },
   // ultra: native Retina output, scene rendered at 0.7× (MSAA ×4) and upscaled bilinear + contrast-adaptive sharpen in the grade pass
-  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, upscale: UPSCALE_ULTRA } },
+  ultra: { pixelRatio: 2, shadow: { cascades: 4, mapSize: 2048, far: 300 }, post: { samples: 4, bloom: true, ao: { resolution: 0.5, samples: 12 }, flare: true, upscale: UPSCALE_ULTRA, motionBlur: true } },
 };
 
 /** Far-cascade caster mask: layer 0 only (+ unused bit 31, see cascadeLayers). */

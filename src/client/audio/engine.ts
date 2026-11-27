@@ -388,6 +388,26 @@ export class AudioSystem {
     if (!ctx) return;
     this.world.gain.setTargetAtTime(on ? 0.35 : 1, ctx.currentTime, on ? 0.08 : 0.35);
     if (on) this.music?.duck(0.6, 5);
+    else if (this.kcSlow) { this.kcSlow = 0; this.muffle.frequency.setTargetAtTime(this.cutoff(), ctx.currentTime, 0.2); }
+  }
+
+  /**
+   * Killcam slow motion (0 = full speed, 1 = slowest), per frame while it plays: the ducked world dips further and
+   * goes dull (a low-pass sweep down to ~600 Hz), the time-stretched feel of a slowed replay. Writes only on change.
+   */
+  killcamSlow(k: number) {
+    const ctx = this.ctx;
+    const q = Math.round(k * 20) / 20;
+    if (!ctx || q === this.kcSlow) return;
+    this.kcSlow = q;
+    this.world.gain.setTargetAtTime(0.35 * (1 - 0.5 * q), ctx.currentTime, 0.06);
+    this.muffle.frequency.setTargetAtTime(this.cutoff(), ctx.currentTime, 0.06);
+  }
+  private kcSlow = 0;
+  /** World low-pass: low health muffles it; the killcam's slow motion muffles it further. */
+  private cutoff(): number {
+    const env = this.director.env;
+    return Math.min(muffleCutoff(env.hp, env.alive), 20000 * Math.pow(600 / 20000, this.kcSlow));
   }
 
   /** Killcam: the killing shot lands (2D: a heavy impact, plus the headshot ping). */
@@ -490,7 +510,7 @@ export class AudioSystem {
 
   private environment(ctx: AudioContext, env: Env) {
     const now = ctx.currentTime;
-    this.muffle.frequency.setTargetAtTime(muffleCutoff(env.hp, env.alive), now, 0.25);
+    this.muffle.frequency.setTargetAtTime(this.cutoff(), now, this.kcSlow ? 0.06 : 0.25);
     this.reverbSend.gain.setTargetAtTime(env.inBunker ? 0.5 : 0.06, now, 0.15);
     const a = this.ambient!;
     a.waves.gain.setTargetAtTime(0.5 * waveLevel(env.shoreDist) * (env.inBunker ? 0.35 : 1), now, 0.5);

@@ -4,7 +4,7 @@ import { islandColor } from '../colors';
 import { ICONS, type IconKind } from '../icons';
 import { clamp01, clampToAnchor, smoothDampV3, solveTwoShot, subjectAnchor, type Raycast, type TwoShotOut } from '../camPath';
 import {
-  eventsBetween, findKillShot, planKillcam, sampleSmooth, slowAmount, SLOW_OUT, SnapshotHistory, timeScale,
+  eventsBetween, findKillShot, planKillcam, sampleSmooth, slowAmount, slowLead, SLOW_OUT, SnapshotHistory, timeScale,
   type KillcamPlan, type KillShot, type PlayerSample,
 } from './killcamBuffer';
 
@@ -14,8 +14,9 @@ import {
  * - camera: a collision-aware two-shot (camPath.ts) easing from a wide establishing angle to over the killer's
  *   shoulder toward you, on critically damped springs (no snaps), horizon level;
  * - players on smooth curves through the recorded snapshots (exact at each one, nothing invented);
- * - a slow-motion beat on the killing shot (0.35×, ~0.6 s) with a small push-in, the shot line emphasised,
- *   an impact sound, letterbox bars, a lower-third card and a fade out at the end.
+ * - slow motion (0.3×) over the killer's final shot(s): the whole last burst (0.45–1 s of sim) eased in and out,
+ *   with a small push-in, motion blur (main → renderer, high/ultra), tracers in slow motion, the shot line
+ *   emphasised, the world sound ducked and muffled, an impact sound, letterbox bars, a lower-third card and a fade.
  * It only ever uses the existing respawn wait (the plan's real length ends before the respawn) and stops at once
  * on any key / click (after a short grace), on respawn or when the match ends. No killer / not enough of them on
  * record → no killcam. No three.js here (main loads the renderer lazily); main turns the frame into camera +
@@ -39,8 +40,10 @@ export type KillcamFrame = {
   look: Vec3;
   /** FOV multiplier (a small push-in during the slow beat). */
   zoom: number;
-  /** 0 = full speed, 1 = slowest. */
+  /** 0 = full speed, 1 = slowest (also the motion blur and audio slow-down amount). */
   slow: number;
+  /** Playback rate this frame (sim s per real s: 1 = full speed, SLOWMO = slowest). */
+  rate: number;
   /** The killing shot's line and how strongly to show it (k 0 = not shown). */
   beam: { from: Vec3; to: Vec3; k: number } | null;
   /** Playback crossed the killing shot this frame (play the impact). */
@@ -122,7 +125,7 @@ export class Killcam {
   /** Debug/e2e: how the last killcam went. */
   last: { started: boolean; reason: string; plan: KillcamPlan | null } = { started: false, reason: 'none', plan: null };
   /** Debug/e2e: the camera's minimum clearance this replay (both players seen from it every frame?). */
-  stats = { frames: 0, blocked: 0, maxStep: 0, slowFrames: 0, clampMax: 0, sideSwitches: 0 };
+  stats = { frames: 0, blocked: 0, maxStep: 0, slowFrames: 0, clampMax: 0, sideSwitches: 0, slowReal: 0 };
 
   constructor(private hudRoot: HTMLElement) {
     this.root.dataset.testid = 'killcam';
@@ -135,7 +138,7 @@ export class Killcam {
     this.frameEl.style.display = 'none';
     this.fadeEl.style.opacity = '0';
     this.out = {
-      snap: null as unknown as Snapshot, motion: this.motion, events: [], cam: { x: 0, y: 0, z: 0 }, look: this.lookPos, zoom: 1, slow: 0,
+      snap: null as unknown as Snapshot, motion: this.motion, events: [], cam: { x: 0, y: 0, z: 0 }, look: this.lookPos, zoom: 1, slow: 0, rate: 1,
       beam: null, impact: false, headshot: false,
     };
     hudRoot.append(this.frameEl, this.root, this.fadeEl);
@@ -155,7 +158,7 @@ export class Killcam {
   start(deathT: number, killer: number | null, respawnIn: number | null, info: KillcamInfo | null, nowMs = performance.now(), victim = -1): boolean {
     this.stop('replaced');
     const shot = killer !== null ? findKillShot(this.history.frames, deathT, killer, victim) : null;
-    const plan = shot ? planKillcam(this.history.frames, deathT, killer, respawnIn, shot.t) : null;
+    const plan = shot ? planKillcam(this.history.frames, deathT, killer, respawnIn, shot.t, slowLead(shot)) : null;
     if (!plan || !shot || killer === null || !info) {
       this.last = { started: false, reason: killer === null ? 'no killer' : !info ? 'no info' : 'not enough on record', plan: null };
       console.info(`[killcam] skipped: ${this.last.reason}`);
@@ -163,7 +166,7 @@ export class Killcam {
     }
     this.play = { plan, killer, victim, shot, t: plan.from, real: 0, startMs: nowMs, lastNow: nowMs, lastT: plan.from, first: true };
     this.last = { started: true, reason: 'playing', plan };
-    this.stats = { frames: 0, blocked: 0, maxStep: 0, slowFrames: 0, clampMax: 0, sideSwitches: 0 };
+    this.stats = { frames: 0, blocked: 0, maxStep: 0, slowFrames: 0, clampMax: 0, sideSwitches: 0, slowReal: 0 };
     this.side = 1;
     this.buildCard(info, shot.headshot || info.headshot);
     this.fill.style.transform = 'scaleX(0)';
@@ -172,7 +175,7 @@ export class Killcam {
     this.fadeEl.classList.remove('out');
     this.setFade(1);
     this.hudRoot.classList.add('killcam-on');
-    console.info(`[killcam] ${plan.real.toFixed(2)} s real (${plan.duration.toFixed(2)} s sim from ${plan.from.toFixed(2)}, shot ${shot.t.toFixed(2)}, death ${deathT.toFixed(2)})`);
+    console.info(`[killcam] ${plan.real.toFixed(2)} s real (${plan.duration.toFixed(2)} s sim from ${plan.from.toFixed(2)}, shot ${shot.t.toFixed(2)}, slow lead ${plan.lead.toFixed(2)}, death ${deathT.toFixed(2)})`);
     return true;
   }
 
@@ -253,7 +256,7 @@ export class Killcam {
     const s = sampleSmooth(this.history.frames, b.i, b.u, id, this.sample);
     if (!s) return null;
     // Velocity drives the walk cycle: slowed with the playback, so feet don't skate in slow motion.
-    const k = p ? timeScale(p.t, p.plan.killT) : 1;
+    const k = p ? timeScale(p.t, p.plan.killT, p.plan.lead) : 1;
     out.pos.set(s.pos.x, s.pos.y, s.pos.z);
     out.vel.set(s.vel.x * k, s.vel.y * k, s.vel.z * k);
     out.yaw = s.yaw;
@@ -271,7 +274,8 @@ export class Killcam {
     const dt = p.first ? 0 : Math.min(0.25, Math.max(0, (nowMs - p.lastNow) / 1000));
     p.lastNow = nowMs;
     p.real += dt;
-    p.t += dt * timeScale(p.t, p.plan.killT);
+    const rate = timeScale(p.t, p.plan.killT, p.plan.lead);
+    p.t += dt * rate;
     if (p.t >= p.plan.to || p.real >= p.plan.real + 0.25) { this.stop('ended'); return null; }
     const b = this.history.bracket(p.t);
     const k = b ? sampleSmooth(this.history.frames, b.i, b.u, p.killer, this.sample) : null;
@@ -305,14 +309,16 @@ export class Killcam {
     if (!p.first) this.stats.maxStep = Math.max(this.stats.maxStep, Math.hypot(o.cam.x - prevX, o.cam.y - prevY, o.cam.z - prevZ) / Math.max(dt, 1e-3));
     this.stats.frames++;
     if (!sol.clear) this.stats.blocked++;
-    const slow = slowAmount(p.t, p.plan.killT);
+    const slow = slowAmount(p.t, p.plan.killT, p.plan.lead);
     if (slow > 0.5) this.stats.slowFrames++;
+    if (slow > 0.9) this.stats.slowReal += dt;
     o.snap = b.a;
     o.events = eventsBetween(this.history.frames, p.lastT, p.t);
     o.impact = p.lastT < p.plan.killT && p.t >= p.plan.killT;
     o.headshot = p.shot.headshot;
     o.zoom = 1 - ZOOM_IN * slow;
     o.slow = slow;
+    o.rate = rate;
     const sh = p.shot;
     if (sh.from && sh.to && p.t >= sh.t - 0.02 && p.t <= p.plan.killT + SLOW_OUT + 0.3) {
       const bm = this.beam;
@@ -332,7 +338,7 @@ export class Killcam {
 
   info() {
     const p = this.play;
-    return { active: this.active, t: p?.t ?? 0, real: p?.real ?? 0, slow: p ? slowAmount(p.t, p.plan.killT) : 0, killer: p?.killer ?? null,
+    return { active: this.active, t: p?.t ?? 0, real: p?.real ?? 0, slow: p ? slowAmount(p.t, p.plan.killT, p.plan.lead) : 0, killer: p?.killer ?? null,
       ...this.last, frames: this.history.frames.length, stats: this.stats };
   }
 }

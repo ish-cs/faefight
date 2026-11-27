@@ -3,7 +3,7 @@ import { emptyInventory } from '../../src/sim/economy';
 import type { MatchEvent, MatchEventType, PlayerState, Snapshot, Vec3 } from '../../src/sim/types';
 import { sees, SHOT, smoothDamp, smoothDampV3, solveTwoShot, type Raycast, type TwoShotOut } from '../../src/client/camPath';
 import {
-  findKillShot, KILLCAM_SEC, planKillcam, realSpan, RESPAWN_MARGIN, sampleSmooth, SLOWMO, timeScale,
+  findKillShot, KILLCAM_SEC, MIN_LEAD_IN, planKillcam, realSpan, RESPAWN_MARGIN, sampleSmooth, SLOW_LEAD_MAX, SLOW_LEAD_MIN, slowAmount, slowLead, SLOWMO, timeScale,
 } from '../../src/client/qol/killcamBuffer';
 
 // ---- a box world for the raycast ----------------------------------------------------------------
@@ -177,18 +177,40 @@ function frames(t0: number, t1: number, ev: (t: number) => [MatchEventType, Reco
 }
 
 describe('killcam timing', () => {
-  it('slow motion: 0.35× around the killing shot for ~0.6 s, full speed away from it, eased (no step)', () => {
-    expect(timeScale(10, 10)).toBeCloseTo(SLOWMO);
-    expect(timeScale(9, 10)).toBe(1);
-    expect(timeScale(11, 10)).toBe(1);
-    // Real time spent at (nearly) the slowest speed.
-    let held = 0;
-    for (let t = 9; t < 11; t += 1 / 1000) if (timeScale(t, 10) < SLOWMO + 0.02) held += (1 / 1000) / timeScale(t, 10);
-    expect(held).toBeGreaterThan(0.5);
-    expect(held).toBeLessThan(0.8);
-    let maxJump = 0;
-    for (let t = 9; t < 11; t += 1 / 1000) maxJump = Math.max(maxJump, Math.abs(timeScale(t + 1 / 1000, 10) - timeScale(t, 10)));
-    expect(maxJump).toBeLessThan(0.01);
+  it('slow motion: 0.3× over the final shot(s), full speed away from it, eased in and out (no step)', () => {
+    expect(SLOWMO).toBeGreaterThanOrEqual(0.25);
+    expect(SLOWMO).toBeLessThanOrEqual(0.35);
+    for (const lead of [SLOW_LEAD_MIN, 1, SLOW_LEAD_MAX]) {
+      expect(timeScale(10, 10, lead)).toBeCloseTo(SLOWMO);
+      expect(timeScale(10 - lead, 10, lead)).toBeCloseTo(SLOWMO); // held from the burst's first shot
+      expect(timeScale(8, 10, lead)).toBe(1);
+      expect(timeScale(11, 10, lead)).toBe(1);
+      expect(slowAmount(10, 10, lead)).toBeCloseTo(1);
+      // Real time spent at (nearly) the slowest speed: the held sim span, slowed.
+      let held = 0;
+      for (let t = 8; t < 11; t += 1 / 1000) if (timeScale(t, 10, lead) < SLOWMO + 0.02) held += (1 / 1000) / timeScale(t, 10, lead);
+      expect(held).toBeGreaterThan((lead + 0.12) / SLOWMO);
+      expect(held).toBeLessThan((lead + 0.3) / SLOWMO);
+      let maxJump = 0;
+      for (let t = 8; t < 11; t += 1 / 1000) maxJump = Math.max(maxJump, Math.abs(timeScale(t + 1 / 1000, 10, lead) - timeScale(t, 10, lead)));
+      expect(maxJump).toBeLessThan(0.01);
+    }
+  });
+
+  it('slow lead covers the final burst (clamped): one shot → minimum, a long burst → maximum', () => {
+    expect(slowLead({ t: 10, burst: 10 })).toBe(SLOW_LEAD_MIN);
+    expect(slowLead({ t: 10, burst: 9.4 })).toBeCloseTo(0.75);
+    expect(slowLead({ t: 10, burst: 7 })).toBe(SLOW_LEAD_MAX);
+  });
+
+  it('a long burst on a short respawn wait: the slow lead shrinks to keep a full-speed lead-in', () => {
+    const fs = frames(0, 10);
+    const p = planKillcam(fs, 10, A, null, 9.9, SLOW_LEAD_MAX)!;
+    expect(p.lead).toBeGreaterThan(SLOW_LEAD_MAX - 0.1); // (KILLCAM_SEC leaves room for nearly all of it)
+    expect(realSpan(p.from, p.killT - p.lead - 0.25, p.killT, p.lead)).toBeGreaterThan(MIN_LEAD_IN - 0.05);
+    const q = planKillcam(fs, 10, A, 5, 9.9, SLOW_LEAD_MAX)!;
+    expect(q.lead).toBeLessThan(SLOW_LEAD_MAX);
+    expect(q.real).toBeLessThanOrEqual(5 - RESPAWN_MARGIN + 1e-6);
   });
 
   it('total real length ≤ KILLCAM_SEC and inside the 10 s respawn wait, slow beat included', () => {
@@ -196,7 +218,7 @@ describe('killcam timing', () => {
     const p = planKillcam(fs, 10, A, 9.8, 9.9)!;
     expect(p.real).toBeLessThanOrEqual(KILLCAM_SEC + 1e-6);
     expect(p.real).toBeLessThanOrEqual(9.8 - RESPAWN_MARGIN);
-    expect(realSpan(p.from, p.to, p.killT)).toBeCloseTo(p.real, 5);
+    expect(realSpan(p.from, p.to, p.killT, p.lead)).toBeCloseTo(p.real, 5);
     expect(p.killT).toBe(9.9);
     expect(p.from).toBeLessThan(p.killT - 1.5); // there's a lead-up to see
     // Short respawn: still fits.
@@ -212,8 +234,23 @@ describe('killcam timing', () => {
     expect(k.headshot).toBe(true);
     expect(k.from).toEqual({ x: 1, y: 1.6, z: 0 });
     expect(k.to).toEqual({ x: 0, y: 1.7, z: 0 });
+    expect(k.burst).toBeCloseTo(9.5); // the hit at 8 is 1.5 s earlier: not the same burst
     // No hit on record (debug kill, off-screen blast): the death is the beat.
-    expect(findKillShot(frames(0, 10), 10, A, ME)).toEqual({ t: 10, from: null, to: null, headshot: false });
+    expect(findKillShot(frames(0, 10), 10, A, ME)).toEqual({ t: 10, from: null, to: null, headshot: false, burst: 10 });
+  });
+});
+
+describe('killcam final burst', () => {
+  it('a burst of shots (gaps ≤ 0.5 s) all count; a shot by someone else or an older one does not', () => {
+    const at = (t: number, x: number) => Math.abs(t - x) < 1e-6;
+    const fs = frames(0, 10, (t) => at(t, 9.6) ? [['shot', { by: A }], ['hit', { by: A, target: ME, part: 'body' }]]
+      : at(t, 9.3) || at(t, 9) ? [['shot', { by: A }]]
+      : at(t, 8.7) ? [['shot', { by: ME }]]
+      : at(t, 8) ? [['shot', { by: A }]] : []);
+    const k = findKillShot(fs, 10, A, ME);
+    expect(k.t).toBeCloseTo(9.6);
+    expect(k.burst).toBeCloseTo(9);
+    expect(slowLead(k)).toBeCloseTo(0.75);
   });
 });
 

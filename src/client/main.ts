@@ -2162,6 +2162,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       renderer.setReplay(null);
       renderer.gunFx.killBeam(-1, null, null, 0);
       if (renderer.camera.fov !== killcamFov) { renderer.camera.fov = killcamFov; renderer.camera.updateProjectionMatrix(); }
+      renderer.killcamSlow(0, 1);
       audio.killcamDuck(false);
       if (!spectateChosen) hud.setEndVisible(true);
     }
@@ -2181,6 +2182,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       const fov = killcamFov * kc.zoom;
       if (Math.abs(cam.fov - fov) > 1e-3) { cam.fov = fov; cam.updateProjectionMatrix(); }
       renderer.gunFx.killBeam(killcam.killer, kc.beam?.from ?? null, kc.beam?.to ?? null, kc.beam?.k ?? 0);
+      renderer.killcamSlow(kc.slow, kc.rate); // motion blur + slow tracers (camera placed above)
+      audio.killcamSlow(kc.slow);
       if (kc.impact) audio.killcamImpact(kc.headshot);
     } else if (spectating) {
       spectator.enter(renderer.camera.position);

@@ -13,6 +13,7 @@ import { pieceGeometry, World } from './world';
 import { preloadPbr } from './world/pbr';
 import { PotionSellers, stall } from './world/potionSeller';
 import { loadQuality } from './world/sky';
+import { killcamBlur } from './world/post';
 import { DayNight } from './world/dayNight';
 import { StormFx } from './world/storm';
 import { IslandBeacons } from './world/beacons';
@@ -35,6 +36,8 @@ export { ISLAND_COLORS, ISLAND_NAMES } from './colors';
 /** WebGPURenderer tone-maps everything on output (per-material toneMapped is ignored), so unlit
  *  overlay-ish things (labels, ghost, tracers) get their colour pre-boosted to read at full brightness. */
 const UNLIT_BOOST = 2.6;
+/** prefers-reduced-motion (killcam: slow motion without the blur); looked up on first use. */
+let reducedMotion: MediaQueryList | null | undefined;
 const boosted = (hex: number) => new THREE.Color(hex).multiplyScalar(UNLIT_BOOST);
 
 /** Thud sound per ground surface (audio/events.ts Surface). */
@@ -294,6 +297,17 @@ export class Renderer {
   }
 
   get replaying() { return this.replay !== null; }
+
+  /**
+   * Killcam slow motion, per frame after the camera is placed (`slow` 0–1, `rate` = playback rate): the
+   * motion blur (high/ultra; off under prefers-reduced-motion) and tracers / casings at the playback rate. Pass 0 / 1
+   * when there's no killcam: free when it was already off.
+   */
+  killcamSlow(slow: number, rate: number) {
+    this.gunFx.timeScale = rate;
+    reducedMotion ??= typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+    killcamBlur(this.camera, reducedMotion?.matches ? 0 : slow);
+  }
 
   /** Effects of past events during a replay (tracers, muzzle flashes, hit sparks, explosions). */
   replayEvents(events: readonly MatchEvent[]) {

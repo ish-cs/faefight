@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  abs, builtinAOContext, dot, emissive, exp, float, interleavedGradientNoise, length, luminance, min, mix, mrt, normalView, output, pass, renderOutput, screenCoordinate, screenSize, screenUV, smoothstep, step,
+  abs, builtinAOContext, dot, emissive, exp, float, Fn, If, interleavedGradientNoise, length, luminance, min, mix, mrt, normalView, output, pass, renderOutput, screenCoordinate, screenSize, screenUV, smoothstep, step,
   uniform, vec2, vec3, vec4, velocity,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
@@ -23,7 +23,67 @@ export type PostOptions = {
    *   output-resolution GPU time at 2× DPR).
    */
   upscale?: { mode: 'fsr' | 'taau' | 'cas'; scale: number; sharpen: number };
+  /** Killcam slow-motion blur, compiled in up front and off (a uniform branch) until `killcamBlur` turns it on. */
+  motionBlur?: boolean;
 };
+
+/** Killcam motion blur (see motionBlurNode): on/off, previous-frame reprojection (prevVP × currVP⁻¹), shutter and radial. */
+const mb = { on: uniform(0), reproj: uniform(new THREE.Matrix4()), shutter: uniform(0), radial: uniform(0) };
+const MB_TAPS = 8;
+/** Longest blur streak (uv) and the radial smear at the screen edge at full strength (uv per uv from the centre). */
+const MB_MAX = 0.03, MB_RADIAL = 0.045;
+/** Exposure the camera motion is smeared over at full strength (s): a long, filmic shutter for the slow beat. */
+const MB_SHUTTER_SEC = 1 / 24;
+const _vp = new THREE.Matrix4(), _prevVP = new THREE.Matrix4(), _inv = new THREE.Matrix4();
+let mbWas = false, mbLastMs = 0;
+
+/**
+ * Per frame, after the camera is placed: killcam blur strength `k` (0 off, 1 full). Off and staying off
+ * it returns at once (no uniform writes), so normal play pays nothing; the first frame on has no history (no blur
+ * from the cut into the replay). No-op on a pipeline built without `motionBlur`.
+ */
+export function killcamBlur(camera: THREE.Camera, k: number) {
+  if (k <= 0 && !mbWas) return;
+  // the real time since the last frame (not the loop's clamped dt): a stalled frame's longer camera move is not a faster one
+  const now = performance.now(), dt = (now - mbLastMs) / 1000;
+  mbLastMs = now;
+  camera.updateMatrixWorld();
+  _vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  if (!mbWas) _prevVP.copy(_vp);
+  mb.reproj.value.multiplyMatrices(_prevVP, _inv.copy(_vp).invert());
+  _prevVP.copy(_vp);
+  mbWas = k > 0;
+  mb.on.value = mbWas ? 1 : 0;
+  mb.shutter.value = k * MB_SHUTTER_SEC / Math.min(0.5, Math.max(dt, 1 / 240));
+  mb.radial.value = k * MB_RADIAL;
+}
+
+/**
+ * Killcam motion blur over `col` (the scene colour, sampled from `raw`), 8 taps along a per-pixel streak: the camera's
+ * own motion (depth reprojected through the previous view-projection: glide, push-in) over a long shutter, plus a
+ * radial smear growing from the screen centre (the two-shot's subject) to the edges. No per-object velocity: in slow
+ * motion the players barely move between frames, and the camera carries the motion. Behind a uniform branch, so with
+ * it off the pass runs the same work as without it.
+ */
+function motionBlurNode(raw: THREE.TextureNode, depth: THREE.TextureNode, col: THREE.Node<'vec4'>): THREE.Node<'vec4'> {
+  return Fn(() => {
+    const c = vec4(col).toVar();
+    If(mb.on.greaterThan(0.5), () => {
+      const uv = screenUV;
+      const d = depth.sample(uv).r;
+      const prev = mb.reproj.mul(vec4(uv.x.mul(2).sub(1), float(1).sub(uv.y.mul(2)), d, 1));
+      const prevUV = vec2(prev.x.div(prev.w).mul(0.5).add(0.5), float(0.5).sub(prev.y.div(prev.w).mul(0.5)));
+      const v = uv.sub(prevUV).mul(mb.shutter).add(uv.sub(0.5).mul(mb.radial)).toVar();
+      const len = length(v);
+      v.assign(v.mul(min(len, MB_MAX).div(len.max(1e-5))));
+      const acc = vec3(0, 0, 0).toVar();
+      for (let i = 0; i < MB_TAPS; i++) acc.addAssign(raw.sample(uv.add(v.mul((i + 0.5) / MB_TAPS - 0.5))).level(float(0)).rgb);
+      // a sub-pixel streak keeps the sharpened colour (no softening where nothing moves)
+      c.assign(vec4(mix(c.rgb, acc.div(MB_TAPS), smoothstep(0.0005, 0.002, len)), 1));
+    });
+    return c;
+  })();
+}
 
 /**
  * Opt a material out of TAAU motion vectors (writes zero velocity; the history clamp absorbs the error). Needed for
@@ -110,6 +170,8 @@ export function buildPipeline(
     const t = taau(raw, scenePass.getTextureNode('depth'), scenePass.getTextureNode('velocity'), camera).getTextureNode();
     col = casSample(t, vec2(1, 1).div(screenSize)); // TAAU resolves at output size: output-pixel taps
   }
+
+  if (o.motionBlur) col = motionBlurNode(raw, scenePass.getTextureNode('depth'), col);
 
   let aoPass: ReturnType<typeof ao> | null = null;
   let hdr = col.rgb;
