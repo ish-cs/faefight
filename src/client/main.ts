@@ -1133,7 +1133,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const applyBlur = (st: ReturnType<typeof settings.get>) => {
     renderer.blur.play = st.video.motionBlur;
     renderer.blur.spectate = st.video.motionBlurSpectate;
-    // TODO(perf stage A, power.ts): renderer.blur.saver = power.saver (the power saver forces motion blur off)
+    renderer.blur.saver = power.saver; // the power saver forces motion blur off
   };
   applyBlur(settings.get());
   const applySettings = (st: ReturnType<typeof settings.get>) => {
@@ -1154,6 +1154,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const offSettings = settings.subscribe(applySettings);
   /** saver on/off: live knobs only (no recompile), so it may switch mid-match */
   const applyPower = () => {
+    renderer.blur.saver = power.saver;
     governor.enabled = settings.get().video.dynamicResolution || power.saver;
     applyGovernor();
     console.info(`[power] ${power.saver ? 'saver' : 'full'} (${power.reason})`);
