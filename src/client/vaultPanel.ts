@@ -1,7 +1,7 @@
 import { countOf, HOTBAR_SIZE } from '../sim/hotbar';
 import type { HotbarItem, Loadout, PlayerState, VaultAction } from '../sim/types';
 import { VAULT_LEVELS, VAULT_MAX_LEVEL } from '../sim/constants';
-import { bankAboveLoadout, emptyLoadout, funds, isUnit as isUnitKind, itemUnits, LOADOUT_MAX_KEEP, vaultLevel, vaultSpec, vaultUpgradePrice } from '../sim/vault';
+import { bankAboveLoadout, emptyLoadout, funds, isUnit as isUnitKind, itemUnits, LOADOUT_MAX_KEEP, loadoutMax, vaultLevel, vaultSpec, vaultUpgradePrice } from '../sim/vault';
 import { ICONS, iconGroup } from './icons';
 import { bumpLoadout, cellCount, keepCashAction, loadoutKinds, moveAction, moveCount, vaultCells, type MoveMods } from './vaultUi';
 
@@ -14,30 +14,40 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''):
 const setText = (e: HTMLElement, t: string) => { if (e.textContent !== t) e.textContent = t; };
 
 /** Smallest vault grid (empty cells pad it so it reads as storage, and is a big drop target). */
-const MIN_VAULT_CELLS = 12;
+const MIN_VAULT_CELLS = 10;
 const DRAG_PX = 5;
 
 type Side = 'carried' | 'stored';
 type Drag = { kind: HotbarItem; from: Side; cell: HTMLElement; x0: number; y0: number; shift: boolean; one: boolean; moved: boolean; ghost: HTMLElement | null };
 
-export const VAULT_HINT = 'Drag between hotbar and vault · Shift-drag half · Ctrl/Alt-drag one · Shift-click whole stack · scroll a stack or type an amount for an exact count · hold E at the vault to quick-bank';
-export const DEATH_HINT = 'Carried cash and items drop when you die. The vault is always safe, and shops take vault cash too.';
+export const VAULT_HINT = 'Click to move · Shift-click: move 1';
+export const DEATH_HINT = 'What you carry drops when you die';
 
 /**
- * The vault panel: hotbar and vault as icon grids with drag and drop (split stacks by modifier, wheel or amount
- * box), one-click cash moves, quick-bank, and the restock loadout editor. Renders into the HUD's panel element;
- * every change goes out as a VaultAction (moves need you at your vault; the loadout is accepted anywhere).
+ * The vault panel, built to read in a few seconds: one big cash control (bank / take) with the death rule, the two
+ * grids ("On you" / "In vault": click a stack, Shift-click one, or drag), one level line with the upgrade, and the
+ * respawn refill as a single toggle with its editor folded away. Exact amounts, keep-$ and quick-bank sit behind
+ * "More". Renders into the HUD's panel element; every change goes out as a VaultAction (moves need you at your
+ * vault; the loadout is accepted anywhere).
  */
 export class VaultPanel {
   private carriedGrid = el('div', 'vault-grid carried');
   private storedGrid = el('div', 'vault-grid stored');
   private carriedTitle = el('div', 'vault-col-title');
   private storedTitle = el('div', 'vault-col-title');
+  private bankBtn = el('button', 'btn primary vault-bank');
+  private takeBtn = el('button', 'btn vault-take');
   private amount = el('input', 'cash-input vault-amount');
   private keep = el('input', 'cash-input');
   private info = el('div', 'shop-info', VAULT_HINT);
+  private more = el('div', 'vault-more');
+  private moreBtn = el('button', 'vault-link');
   private loadoutBox = el('div', 'vl-items');
-  private loadoutTitle = el('div', 'vault-col-title');
+  private loadoutTitle = el('div', 'vault-k');
+  private loadoutBody = el('div', 'vl-body');
+  private loadoutOn = el('input');
+  private loadoutSum = el('span', 'vl-sum');
+  private editBtn = el('button', 'vault-link');
   private loadoutKeep = el('input', 'cash-input');
   private loadoutBuy = el('input');
   private levelText = el('div', 'vault-level-text');
@@ -48,51 +58,48 @@ export class VaultPanel {
   private me: PlayerState | null = null;
   /** Loadout as edited here (sent on every change; the sim's copy catches up a tick later). */
   private draft: Loadout = emptyLoadout();
+  /** The refill switched off: what it held, so switching it back on restores it. */
+  private saved: Loadout | null = null;
 
-  constructor(private root: HTMLElement, private send: (a: VaultAction) => void) {}
+  constructor(private root: HTMLElement, private send: (a: VaultAction) => void) {
+    // A drag must never outlive its pointer: capture lost (cell re-rendered or removed), focus lost, or the game
+    // took the pointer back. Otherwise the ghost stays stuck on screen and the stale drag blocks every refresh.
+    document.addEventListener('lostpointercapture', () => this.cancelDrag(), true);
+    document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement) this.cancelDrag(); });
+    window.addEventListener('blur', () => this.cancelDrag());
+  }
+
+  /** Drop any drag in progress without moving anything (panel closing, pointer lost). */
+  cancelDrag() {
+    if (this.drag) this.endDrag();
+  }
 
   /** Full build (panel opened). */
   render(header: HTMLElement, me: PlayerState) {
     this.me = me;
     this.draft = structuredClone(me.loadout ?? emptyLoadout());
-    const btn = (t: string, tip: string, id: string, f: () => void) => {
-      const b = el('button', 'btn small', t);
+    const btn = (t: string, tip: string, id: string, f: () => void, b = el('button', 'btn small', t)) => {
       b.type = 'button';
       b.dataset.testid = id;
       b.onclick = f;
       this.tip(b, tip);
       return b;
     };
-    const money = el('div', 'vault-cash');
-    this.keep.type = 'number'; this.keep.min = '0'; this.keep.placeholder = 'Keep $'; this.keep.dataset.testid = 'vault-keep-input';
-    this.tip(this.keep, 'Carried cash to keep on you: Keep banks the rest (or takes what is missing out of the vault)');
-    money.append(
-      btn('Deposit cash', 'Bank all carried cash (it drops if you die)', 'vault-deposit-all', () => {
-        const m = this.me; if (m && m.inv.cash > 0) this.send({ deposit: { cash: Math.floor(m.inv.cash) } });
-      }),
-      btn('Withdraw all', 'Take all vault cash (shops take vault cash anyway)', 'vault-withdraw-all', () => {
-        const m = this.me; if (m && m.vault.cash >= 1) this.send({ withdraw: { cash: Math.floor(m.vault.cash) } });
-      }),
-      this.keep,
-      btn('Keep', 'Keep this much carried cash on you; the rest goes in the vault', 'vault-keep', () => {
-        const m = this.me; const v = Number(this.keep.value);
-        if (!m || this.keep.value === '' || !Number.isFinite(v)) return;
-        const a = keepCashAction(m.inv.cash, m.vault.cash, v);
-        if (a) this.send(a);
-      }),
-      btn('Quick-bank', 'Bank everything above your restock loadout (same as holding E at the vault)', 'vault-quick-bank', () => this.quickBank()),
-    );
-    const warn = el('div', 'vault-warn', DEATH_HINT);
-    warn.dataset.testid = 'vault-death-hint';
-    const level = el('div', 'vault-level');
-    this.levelText.dataset.testid = 'vault-level';
-    this.upgradeBtn.type = 'button';
-    this.upgradeBtn.dataset.testid = 'vault-upgrade';
-    this.upgradeBtn.onclick = () => { if (this.upgradeBtn.getAttribute('aria-disabled') !== 'true') this.send({ upgrade: true }); };
-    this.upgradeBtn.addEventListener('mouseenter', () => { setText(this.info, this.upgradeBtn.title); this.info.classList.add('on'); });
-    this.upgradeBtn.addEventListener('mouseleave', () => { setText(this.info, VAULT_HINT); this.info.classList.remove('on'); });
-    level.append(this.levelText, this.upgradeBtn);
 
+    // ---- cash: the one big action, and the rule that makes it matter ----
+    const money = el('div', 'vault-money');
+    btn('', 'Put all carried cash in the vault', 'vault-deposit-all', () => {
+      const m = this.me; if (m && m.inv.cash > 0) this.send({ deposit: { cash: Math.floor(m.inv.cash) } });
+    }, this.bankBtn);
+    btn('', 'Take all vault cash out (shops take vault cash anyway)', 'vault-withdraw-all', () => {
+      const m = this.me; if (m && m.vault.cash >= 1) this.send({ withdraw: { cash: Math.floor(m.vault.cash) } });
+    }, this.takeBtn);
+    const safe = el('div', 'vault-safe');
+    safe.dataset.testid = 'vault-death-hint';
+    safe.append(el('b', '', 'Vault is safe from death'), el('span', '', DEATH_HINT));
+    money.append(this.bankBtn, this.takeBtn, safe);
+
+    // ---- the two grids ----
     const cols = el('div', 'vault-cols');
     const col = (title: HTMLElement, grid: HTMLElement, side: Side) => {
       const c = el('div', `vault-col ${side}`);
@@ -103,14 +110,32 @@ export class VaultPanel {
     };
     cols.append(col(this.carriedTitle, this.carriedGrid, 'carried'), col(this.storedTitle, this.storedGrid, 'stored'));
 
-    const amountRow = el('div', 'vault-amount-row');
-    this.amount.type = 'number'; this.amount.min = '0'; this.amount.placeholder = 'All'; this.amount.dataset.testid = 'vault-move-amount';
-    this.tip(this.amount, 'Exact amount per move (blank = the whole stack, or half / one with Shift / Ctrl while dragging)');
-    const sortBtn = btn('Sort', 'The vault is always sorted: guns, pieces, gear, potions', 'vault-sort', () => this.refresh(this.me!, true));
-    amountRow.append(el('span', 'vault-k', 'Move amount'), this.amount, sortBtn);
+    // ---- level: one line + upgrade ----
+    const level = el('div', 'vault-level');
+    this.levelText.dataset.testid = 'vault-level';
+    this.upgradeBtn.type = 'button';
+    this.upgradeBtn.dataset.testid = 'vault-upgrade';
+    this.upgradeBtn.onclick = () => { if (this.upgradeBtn.getAttribute('aria-disabled') !== 'true') this.send({ upgrade: true }); };
+    for (const n of [this.upgradeBtn, this.levelText]) {
+      n.addEventListener('mouseenter', () => { setText(this.info, n.title); this.info.classList.add('on'); });
+      n.addEventListener('mouseleave', () => { setText(this.info, VAULT_HINT); this.info.classList.remove('on'); });
+    }
+    level.append(this.levelText, this.upgradeBtn);
 
+    // ---- respawn refill: one switch; the editor is folded away ----
     const lo = el('div', 'vault-loadout');
     lo.dataset.testid = 'vault-loadout';
+    const sw = el('label', 'ui-toggle');
+    this.loadoutOn.type = 'checkbox'; this.loadoutOn.dataset.testid = 'loadout-on';
+    this.loadoutOn.onchange = () => this.setRefill(this.loadoutOn.checked);
+    sw.append(this.loadoutOn, el('span', 'knob'));
+    const swLabel = el('label', 'vl-label', 'Auto-refill my hotbar on respawn');
+    swLabel.onclick = (e) => { e.preventDefault(); this.loadoutOn.click(); };
+    this.editBtn.type = 'button'; this.editBtn.dataset.testid = 'vault-loadout-edit';
+    this.editBtn.onclick = () => this.showEdit(this.loadoutBody.hidden);
+    const head = el('div', 'vl-head');
+    head.append(sw, swLabel, this.loadoutSum, this.editBtn);
+    this.tip(head, 'On respawn the vault tops your hotbar back up to these amounts');
     this.loadoutKeep.type = 'number'; this.loadoutKeep.min = '0'; this.loadoutKeep.max = String(LOADOUT_MAX_KEEP); this.loadoutKeep.placeholder = '$0';
     this.loadoutKeep.dataset.testid = 'loadout-keep';
     this.loadoutKeep.onchange = () => this.editLoadout({ ...this.draft, keep: Math.max(0, Math.min(LOADOUT_MAX_KEEP, Math.floor(Number(this.loadoutKeep.value) || 0))) });
@@ -118,18 +143,82 @@ export class VaultPanel {
     this.loadoutBuy.type = 'checkbox'; this.loadoutBuy.dataset.testid = 'loadout-buy';
     this.loadoutBuy.onchange = () => this.editLoadout({ ...this.draft, buy: this.loadoutBuy.checked });
     const buyLabel = el('label', 'vl-buy');
-    buyLabel.append(this.loadoutBuy, el('span', '', 'Buy what the vault lacks with vault cash'));
+    buyLabel.append(this.loadoutBuy, el('span', '', 'Buy what the vault lacks'));
     this.tip(buyLabel, 'On respawn, anything the vault is short of is bought at shop price from vault cash');
     const keepLabel = el('label', 'vl-keep');
-    keepLabel.append(el('span', '', 'Keep $ on me'), this.loadoutKeep);
+    keepLabel.append(el('span', '', 'Start with'), this.loadoutKeep, el('span', '', 'on me'));
     const opts = el('div', 'vl-opts');
-    opts.append(keepLabel, buyLabel);
-    lo.append(this.loadoutTitle, this.loadoutBox, opts);
+    opts.append(this.loadoutTitle, keepLabel, buyLabel);
+    this.loadoutBody.replaceChildren(this.loadoutBox, opts);
+    lo.append(head, this.loadoutBody);
+    this.showEdit(false);
 
+    // ---- More: exact amounts, keep $, quick-bank ----
+    this.amount.type = 'number'; this.amount.min = '0'; this.amount.placeholder = 'All'; this.amount.dataset.testid = 'vault-move-amount';
+    this.tip(this.amount, 'Move exactly this many per click or drag (blank = the whole stack) · scroll over a stack to set it');
+    this.keep.type = 'number'; this.keep.min = '0'; this.keep.placeholder = '$'; this.keep.dataset.testid = 'vault-keep-input';
+    this.tip(this.keep, 'Carried cash to keep on you: banks the rest, or takes what is missing out of the vault');
+    const exact = el('label', 'vault-field');
+    exact.append(el('span', 'vault-k', 'Move'), this.amount);
+    const keep = el('label', 'vault-field');
+    keep.append(el('span', 'vault-k', 'Keep'), this.keep);
+    this.more.replaceChildren(el('div', 'vault-tips', 'Drag works too: Shift-drag half, Ctrl/Alt-drag one · scroll a stack for an exact amount · hold E at the vault: bank all extras'), exact, keep,
+      btn('Keep $', 'Keep this much carried cash on you; the rest goes in the vault', 'vault-keep', () => {
+        const m = this.me; const v = Number(this.keep.value);
+        if (!m || this.keep.value === '' || !Number.isFinite(v)) return;
+        const a = keepCashAction(m.inv.cash, m.vault.cash, v);
+        if (a) this.send(a);
+      }),
+      btn('Bank all extras', 'Bank everything above your auto-refill (same as holding E at the vault)', 'vault-quick-bank', () => this.quickBank()),
+    );
+    this.moreBtn.type = 'button'; this.moreBtn.dataset.testid = 'vault-more';
+    this.moreBtn.onclick = () => this.showMore(this.more.hidden);
+    this.showMore(false);
+
+    const foot = el('div', 'vault-foot');
     this.info.dataset.testid = 'vault-info';
-    this.root.replaceChildren(header, money, warn, level, cols, amountRow, lo, this.info);
+    foot.append(this.info, this.moreBtn);
+    this.root.replaceChildren(header, money, cols, level, lo, this.more, foot);
     this.root.oncontextmenu = (e) => e.preventDefault(); // Ctrl-click on a Mac is a right click
     this.refresh(me, true);
+  }
+
+  private showEdit(open: boolean) {
+    this.loadoutBody.hidden = !open;
+    setText(this.editBtn, open ? 'Done ▴' : 'Edit ▾');
+  }
+
+  private showMore(open: boolean) {
+    this.more.hidden = !open;
+    setText(this.moreBtn, open ? 'Less ▴' : 'More ▾');
+  }
+
+  /**
+   * The refill switch. Off: an empty loadout (remembered, so on restores it). On: the remembered one, else what
+   * you carry now (up to your level's kinds); with nothing to copy it just opens the editor.
+   */
+  private setRefill(on: boolean) {
+    const me = this.me;
+    if (!me) return;
+    if (!on) {
+      if (refillOn(this.draft)) this.saved = this.draft;
+      this.editLoadout(emptyLoadout());
+      return;
+    }
+    let l = this.saved;
+    if (!l || !refillOn(l)) {
+      l = emptyLoadout();
+      const maxKinds = vaultSpec(me).kinds;
+      for (const k of me.hotbar) {
+        if (!k || Object.keys(l.items).length >= maxKinds) continue;
+        const n = Math.min(countOf(me.inv, k), loadoutMax(k));
+        if (n > 0) l.items[k] = n;
+      }
+    }
+    this.saved = null;
+    if (refillOn(l)) this.editLoadout(l);
+    else { this.loadoutOn.checked = false; setText(this.info, 'Nothing on you to refill: add items with +'); this.info.classList.add('on'); }
+    this.showEdit(true);
   }
 
   /** Live update from the latest snapshot (cheap when nothing changed; deferred while dragging). */
@@ -139,11 +228,17 @@ export class VaultPanel {
     const sig = JSON.stringify([me.inv, me.vault, me.hotbar, me.loadout ?? null, me.vaultLevel ?? 1]);
     if (!force && sig === this.sig) return;
     this.sig = sig;
-    setText(this.carriedTitle, `Hotbar · $${Math.floor(me.inv.cash)} carried`);
     const spec = vaultSpec(me), lv = vaultLevel(me);
-    setText(this.storedTitle, `Vault · $${Math.floor(me.vault.cash)} banked · ${itemUnits(me.vault)}/${spec.storage} items`);
+    const carriedCash = Math.floor(me.inv.cash), banked = Math.floor(me.vault.cash);
+    setText(this.carriedTitle, `On you · $${carriedCash}`);
+    setText(this.storedTitle, `In vault · $${banked} · ${itemUnits(me.vault)}/${spec.storage}`);
+    setText(this.bankBtn, `Bank $${carriedCash}`);
+    this.bankBtn.disabled = carriedCash <= 0;
+    setText(this.takeBtn, `Take $${banked}`);
+    this.takeBtn.disabled = banked < 1;
     const perMin = Math.floor(Math.min(me.vault.cash, spec.base) * spec.rate);
-    setText(this.levelText, `Vault Lv${lv} · ${Math.round(spec.rate * 100)}%/min interest on up to $${spec.base} (now +$${perMin}/min)${spec.remote ? ' · deposits from anywhere on your island (H)' : ''}`);
+    setText(this.levelText, `Vault Lv${lv} · ${perMin > 0 ? `earns +$${perMin}/min` : `banked $ earns ${Math.round(spec.rate * 100)}%/min`}`);
+    this.levelText.title = `Interest: ${Math.round(spec.rate * 100)}%/min on up to $${spec.base} banked · holds ${spec.storage} items · refills ${spec.kinds} kinds${spec.remote ? ' · H banks from anywhere on your island' : ''}`;
     const price = vaultUpgradePrice(lv);
     if (price === null) {
       setText(this.upgradeBtn, `Lv${VAULT_MAX_LEVEL} · max`);
@@ -153,7 +248,7 @@ export class VaultPanel {
       const next = VAULT_LEVELS[lv];
       setText(this.upgradeBtn, `Upgrade → Lv${lv + 1} · $${price}`);
       this.upgradeBtn.setAttribute('aria-disabled', String(funds(me) < price));
-      this.upgradeBtn.title = `Lv${lv + 1}: ${Math.round(next.rate * 100)}%/min interest on up to $${next.base}, ${next.storage} item storage, ${next.kinds} loadout kinds${next.remote ? ', deposit from anywhere on your island (H)' : ''}${funds(me) < price ? ` · need $${price - funds(me)} more` : ''}`;
+      this.upgradeBtn.title = `Lv${lv + 1}: ${Math.round(next.rate * 100)}%/min interest on up to $${next.base}, holds ${next.storage} items, refills ${next.kinds} kinds${next.remote ? ', H banks from anywhere on your island' : ''}${funds(me) < price ? ` · need $${price - funds(me)} more` : ''}`;
     }
     const carried: HTMLElement[] = [];
     for (let i = 0; i < HOTBAR_SIZE; i++) {
@@ -185,9 +280,9 @@ export class VaultPanel {
     const icon = el('span', 'sicon');
     icon.innerHTML = ICONS[kind];
     c.append(icon, el('span', 'vcount', cellCount(kind, inv)));
-    const name = LABELS[kind] ?? kind;
+    const name = ITEM_NAMES[kind] ?? kind;
     c.setAttribute('aria-label', `${name} ${cellCount(kind, inv)} (${side === 'carried' ? 'carried' : 'in vault'})`);
-    this.tip(c, `${name} ${cellCount(kind, inv)} · ${side === 'carried' ? 'drag into the vault' : 'drag onto your hotbar'} (Shift half · Ctrl one · Shift-click all · scroll for an exact amount)`);
+    this.tip(c, `${name} ${cellCount(kind, inv)} · click to ${side === 'carried' ? 'bank' : 'take'} · Shift-click: 1`);
     c.onpointerdown = (e) => this.down(e, c, kind, side);
     c.onpointermove = (e) => this.move(e);
     c.onpointerup = (e) => this.up(e);
@@ -257,7 +352,8 @@ export class VaultPanel {
     if (!me) return;
     const to: Side = d.from === 'carried' ? 'stored' : 'carried';
     let n = 0;
-    if (!d.moved) n = shift ? this.count(d, { shift: false, one: false, drag: false }, true) : this.count(d, { shift: false, one, drag: one });
+    // Click: the whole stack (or the exact amount under More); Shift / Ctrl / Alt-click: just one.
+    if (!d.moved) n = shift || one ? this.count(d, { shift: false, one: true, drag: true }, true) : this.count(d, { shift: false, one: false, drag: false });
     else if (target === to) n = this.count(d, { shift, one, drag: true });
     const a = moveAction(d.kind, n, d.from, d.from === 'carried' ? me.inv : me.vault);
     if (a?.deposit && itemUnits(me.vault) + (isUnitKind(d.kind) ? 1 : n) > vaultSpec(me).storage) {
@@ -287,11 +383,12 @@ export class VaultPanel {
     this.wheelAcc = 0;
     const v = Math.max(0, Math.min(max, this.exact() + step));
     this.amount.value = v ? String(v) : '';
-    setText(this.info, v ? `Moves ${v} per click or drag (scroll or type to change, clear for the whole stack)` : VAULT_HINT);
+    this.showMore(true); // the amount box shows what a click will move now
+    setText(this.info, v ? `Moves ${v} per click or drag (scroll to change, clear the box for the whole stack)` : VAULT_HINT);
     this.info.classList.toggle('on', true);
   }
 
-  /** Everything above the restock loadout into the vault (also hold E at the vault). */
+  /** Everything above the refill loadout into the vault (also hold E at the vault). */
   quickBank() {
     const me = this.me;
     if (!me) return;
@@ -308,7 +405,13 @@ export class VaultPanel {
   private renderLoadout(me: PlayerState) {
     const used = Object.values(this.draft.items).filter((n) => (n ?? 0) > 0).length;
     const maxKinds = vaultSpec(me).kinds;
-    setText(this.loadoutTitle, `Restock on respawn · ${used}/${maxKinds} kinds`);
+    setText(this.loadoutTitle, `${used}/${maxKinds} kinds`);
+    this.loadoutOn.checked = refillOn(this.draft);
+    const sum = Object.entries(this.draft.items).filter(([, n]) => (n ?? 0) > 0)
+      .map(([k, n]) => `${n} ${ITEM_NAMES[k as HotbarItem] ?? k}`);
+    if (this.draft.keep > 0) sum.push(`$${this.draft.keep}`);
+    setText(this.loadoutSum, sum.join(', '));
+    this.loadoutSum.title = sum.join(', ');
     const rows: HTMLElement[] = [];
     for (const kind of loadoutKinds(me.inv, me.vault, this.draft)) {
       const n = this.draft.items[kind] ?? 0;
@@ -323,17 +426,17 @@ export class VaultPanel {
         b.onclick = (e) => {
           const next = bumpLoadout(this.draft, kind, d * (e.shiftKey ? 5 : 1), maxKinds);
           if (next) this.editLoadout(next);
-          else if (d > 0 && n === 0) { setText(this.info, `Lv${vaultLevel(me)} loadouts hold ${maxKinds} kinds: take one out first (or upgrade the vault)`); this.info.classList.add('on'); }
+          else if (d > 0 && n === 0) { setText(this.info, `Lv${vaultLevel(me)} refills ${maxKinds} kinds: remove one first (or upgrade the vault)`); this.info.classList.add('on'); }
         };
         return b;
       };
       const num = el('span', 'vl-n', String(n));
       num.dataset.testid = `loadout-n-${kind}`;
-      r.append(icon, el('span', 'vl-name', LABELS[kind] ?? kind), step('−', -1, 'minus'), num, step('+', 1, 'plus'));
-      this.tip(r, `${LABELS[kind] ?? kind}: refill to ${n} on respawn from the vault (${countOf(me.vault, kind)} stored) · Shift-click ±5`);
+      r.append(icon, el('span', 'vl-name', ITEM_NAMES[kind] ?? kind), step('−', -1, 'minus'), num, step('+', 1, 'plus'));
+      this.tip(r, `${ITEM_NAMES[kind] ?? kind}: refill to ${n} on respawn from the vault (${countOf(me.vault, kind)} stored) · Shift-click ±5`);
       rows.push(r);
     }
-    if (!rows.length) rows.push(el('div', 'vault-empty', 'Buy or store gear to add it to your loadout'));
+    if (!rows.length) rows.push(el('div', 'vault-empty', 'Buy or store gear to add it here'));
     this.loadoutBox.replaceChildren(...rows);
   }
 
@@ -344,10 +447,13 @@ export class VaultPanel {
   }
 }
 
-const LABELS: Record<string, string> = {
-  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
-  sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
-  ramp: 'Ramp', container: 'Container', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit', trap: 'Spike trap',
-  shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
-  grapple: 'Grappling hook',
+/** Short item names, the same on the hotbar, the vault and its tips. */
+export const ITEM_NAMES: Record<HotbarItem, string> = {
+  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket',
+  sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
+  grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit', trap: 'Trap',
+  shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', grapple: 'Hook',
 };
+
+/** The refill does something on respawn: items to top up or cash to hand back. */
+const refillOn = (l: Loadout) => l.keep > 0 || Object.values(l.items).some((n) => (n ?? 0) > 0);

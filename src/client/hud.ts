@@ -13,7 +13,7 @@ import { insideBunker } from '../sim/bots/nav';
 import { ICONS, LOCK_ICON, iconGroup, type IconKind } from './icons';
 import { chipState } from './chipState';
 import { dragOutcome } from './hotbarDrag';
-import { VaultPanel } from './vaultPanel';
+import { ITEM_NAMES as SHORT, VaultPanel } from './vaultPanel';
 import { bankAboveLoadout, funds, vaultSpec } from '../sim/vault';
 import { SEALED_OUTSIDE_TEXT } from './qol/alerts';
 import { FEED_FADE_MS, FEED_LIFE_MS, FeedList, feedEntries, feedText, type FeedEntry, type FeedMarker } from './qol/killFeed';
@@ -117,13 +117,6 @@ const fmtClock = (s: number) => {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 };
 
-/** Short hotbar labels (slots are narrow). */
-const SHORT: Record<HotbarItem, string> = {
-  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket',
-  sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
-  grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit', trap: 'Trap',
-  shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', grapple: 'Hook',
-};
 
 export type HudContext = {
   /** Locally selected hotbar slot (sent to the sim every input). */
@@ -360,6 +353,9 @@ export class Hud {
       }
     });
     window.addEventListener('keydown', (e) => { if (e.code === 'Escape' && this.dragFrom !== null) clearDrag(); });
+    // No pointerup will come (touch/pen cancel, window lost focus): drop the drag so the "Drop" tag can't stick.
+    window.addEventListener('pointercancel', () => { if (this.dragFrom !== null) clearDrag(); });
+    window.addEventListener('blur', () => { if (this.dragFrom !== null) clearDrag(); });
     this.hotbar.addEventListener('pointerdown', (e) => {
       const i = slotAt(e.target);
       if (i === null || e.button !== 0) return;
@@ -616,7 +612,7 @@ export class Hud {
     this.lastCash = inv.cash;
     // Carried cash drops on death; the vault never does (and shops take it). Warn once a fair sum is carried.
     const risky = !this.practice && inv.cash >= CARRY_WARN;
-    setText(this.bankNote, risky ? `$${Math.floor(inv.cash)} carried drops if you die · bank it` : '');
+    setText(this.bankNote, risky ? `$${Math.floor(inv.cash)} drops if you die · bank it${(me.vaultLevel ?? 1) > 1 ? ' (H)' : ''}` : '');
     this.bankNote.classList.toggle('risk', risky);
     this.updateStamina(watching ? me.stamina : ctx.stamina ?? me.stamina, me.alive);
     setText(this.watchTag, watching ? `${me.isBot ? 'BOT · ' : ''}${me.name}` : '');
@@ -955,6 +951,7 @@ export class Hud {
 
   /** The home shop, or a potion seller's counter (`potions`). */
   openShop(kind: 'shop' | 'potions' = 'shop') {
+    this.vaultPanel.cancelDrag();
     this.panelKind = kind;
     this.panel.className = 'panel open';
     this.panel.dataset.kind = kind;
@@ -962,6 +959,7 @@ export class Hud {
   }
 
   openVault() {
+    this.vaultPanel.cancelDrag();
     this.panelKind = 'vault';
     this.panel.className = 'panel open';
     this.panel.dataset.kind = 'vault';
@@ -969,6 +967,7 @@ export class Hud {
   }
 
   closePanel() {
+    this.vaultPanel.cancelDrag();
     this.panelKind = null;
     this.hoverItem = null;
     delete this.panel.dataset.testid;
