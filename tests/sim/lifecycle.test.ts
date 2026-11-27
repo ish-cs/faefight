@@ -288,6 +288,55 @@ describe('trapped inside a sealed bunker at any time', () => {
     run(2, 2.2);
     expect(b.breakoutUntil).not.toBeNull();
   });
+
+  // Replay faefight-20261127-1644-24a7c7: bots standing OUTSIDE their sealed bunker, behind its back wall (no door)
+  // or beside a side wall, sat right at SEAL.exitRadius from its center and logged ~20 trapped/escaped pairs each.
+  /** Bunker-local spot on island 1: `back` m behind the bunker center (away from the front door), `side` m to its right. */
+  const behind = (back: number, side: number): Vec3 => {
+    const bk = map[1].bunker;
+    const p = add(add(bk.center, scale(forward(bk.facingYaw), -back)), scale(right(bk.facingYaw), side));
+    return v3(p.x, map[1].groundY, p.z);
+  };
+  test('outside behind the back wall of your sealed bunker, jittering across exitRadius: never trapped (replay 24a7c7)', async () => {
+    const { s, b, run } = await setup();
+    b.pos = behind(3.2, 2.2); // 3.9 m from the center, but outside the walls
+    sealIsland(s, 1);
+    const evs = run(0, 0.1);
+    for (let k = 0; k < 40; k++) {
+      b.pos = behind(3.2, k % 2 ? 2.7 : 2.2); // 4.2 m ↔ 3.9 m
+      evs.push(...run(0.1 + k * 0.3, 0.1 + (k + 1) * 0.3));
+    }
+    expect(evs.filter((e) => e.type === 'trapped' || e.type === 'escaped')).toEqual([]);
+    expect(b.breakoutUntil).toBeNull();
+    expect(b.eliminated).toBe(false);
+  });
+  test('trapped inside, jittering between the room and a doorway recess: one countdown, never reset, eliminated on time', async () => {
+    const { s, b, run } = await setup();
+    sealIsland(s, 1);
+    const evs = run(0, 0.1);
+    const until = b.breakoutUntil;
+    expect(until).not.toBeNull();
+    const d = map[1].bunker.doorways[1];
+    const recess = v3(d.center.x, map[1].groundY, d.center.z);
+    for (let k = 0; k < 30 && !b.eliminated; k++) {
+      b.pos = k % 2 ? recess : { ...map[1].spawn };
+      evs.push(...run(0.1 + k * 0.35, 0.1 + (k + 1) * 0.35));
+      if (!b.eliminated) expect(b.breakoutUntil).toBe(until);
+    }
+    expect(evs.filter((e) => e.type === 'trapped')).toHaveLength(1);
+    expect(evs.filter((e) => e.type === 'escaped')).toHaveLength(0);
+    expect(b.eliminated).toBe(true);
+  });
+  test('the seal breaking frees you at once, wherever you stand inside', async () => {
+    const { s, b, run } = await setup();
+    const plugs = sealIsland(s, 1);
+    run(0, 1);
+    expect(b.breakoutUntil).not.toBeNull();
+    s.pieces.delete(plugs[0].id); // broke one plug from the inside
+    const evs = run(1, 1.2);
+    expect(evs.filter((e) => e.type === 'escaped')).toHaveLength(1);
+    expect(b.breakoutUntil).toBeNull();
+  });
 });
 
 describe('anti spawn-camping', () => {
