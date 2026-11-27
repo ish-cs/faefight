@@ -552,18 +552,22 @@ export class Nav {
     let best: Lane | null = null, bestOff = 2.5;
     // Standing on a deck: only a lane that deck runs along. Where two lanes cross, the other one (no decks under me)
     // read as mine sent a PRO off the side of its bridge tip toward home along it, over and over: 713 s (mixed seed 3).
+    // (A deck no lane runs along, e.g. one laid across mine: no filter.)
     const deck = this.deckUnder(p);
+    for (const filter of deck ? [true, false] : [false]) {
+    if (best) break;
     for (let i = 0; i < nodes.length; i++) for (let j = 0; j < nodes.length; j++) {
       if (i === j) continue;
       const l = this.lane(i, j);
       const s = laneS(l, p);
       if (s < 0 || s > l.length) continue;
-      if (deck && Math.abs(l.dir.x * dm.sin(deck.rotY) + l.dir.z * dm.cos(deck.rotY)) < 0.9) continue;
+      if (filter && Math.abs(l.dir.x * dm.sin(deck!.rotY) + l.dir.z * dm.cos(deck!.rotY)) < 0.9) continue;
       // Opposite islands' lane runs right over the center island's own (same line): the shorter one is the one I'm on
       // (ties broken by length), unless I'm heading for a node one of them ends at: then that one (taking the far
       // island's turned a bot on the center bridge round, back to where it came from).
       const off = laneOff(l, p) + 2e-4 * l.length - (prefer >= 0 && (l.from === prefer || l.to === prefer) ? 0.05 : 0);
       if (off < bestOff) { bestOff = off; best = l; }
+    }
     }
     return best;
   }
