@@ -160,6 +160,8 @@ const NADE_MIN = 6.5, NADE_MAX = 22, NADE_GAP = 3, NADE_SEEN_SEC = 2.5;
 const NADE_RICH: Record<Difficulty, number> = { easy: Infinity, medium: 900, hard: 450, pro: 400 };
 /** Torching wooden bases: rocket range window (m), one rocket per gap (s), and the cash it takes to buy in. */
 const TORCH_RANGE = [9, 45] as const, TORCH_GAP = 8, TORCH_RICH = 900;
+/** After a torch shot, the launcher stays in hand this long past TORCH_GAP while I'm still in range of the base. */
+const TORCH_KEEP_SEC = 6;
 /** Rebuy money for after a death: pistol + a box of ammo. */
 const INSURANCE = WEAPONS.pistol.price + 25;
 /**
@@ -327,6 +329,7 @@ export class Bot {
   private targetBan = new Map<number, number>();
   private lastNadeAt = -Infinity;
   private lastTorchAt = -Infinity;
+  private lastTorchSpot: Vec3 | null = null;
   /** Healing (heal.ts): hp + shield last tick, damage in the current burst and when it began, last time hurt. */
   private lastEff = 0;
   private burst = 0;
@@ -633,7 +636,7 @@ export class Bot {
       const want = lookAt(eye, torch);
       look = hand(want, TURN_RATE);
       fire = me.equipped === 'rocket' && angleBetween(look, want) < 0.03 && gunReady(dist2D(me.pos, torch));
-      if (fire) this.lastTorchAt = now;
+      if (fire) { this.lastTorchAt = now; this.lastTorchSpot = torch; }
     } else if (act.shootAt) {
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
@@ -791,6 +794,13 @@ export class Bot {
         !act.shootAt && !act.build && !act.trap && !act.placeCharge && !act.shop && !act.vault) {
       want = 'rocket';
       why = 'rocket: reload it between fights';
+    } else if (want !== 'rocket' && me.equipped === 'rocket' && !threat && rocket && rocket.mag + rocket.spare > 0 &&
+        this.lastTorchSpot && now - this.lastTorchAt < TORCH_GAP + TORCH_KEEP_SEC && dist2D(me.pos, this.lastTorchSpot) <= TORCH_RANGE[1]) {
+      // Torching a base, still in range of it and nobody on me (weapon.threatM): the next shot comes once the fire dies
+      // down. Keep the launcher in hand (reloading it) instead of a rifle round trip per shot for a long-range plink
+      // (two switches each; a bot holding its spot in cover by a rival's wooden base did that every ~10 s).
+      want = 'rocket';
+      why = 'rocket: next torch shot';
     }
     const loaded = (w: WeaponKind) => w === 'fists' || (me.inv.weapons[w]?.mag ?? 0) > 0;
     let slot: WeaponKind | null = null;
