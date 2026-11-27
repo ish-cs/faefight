@@ -2,18 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { POWER, PowerState, SAVER_TRIM } from '../../src/client/power';
 import { FULL_KNOBS } from '../../src/client/governor';
 
-const BUDGET_120 = 1000 / 120;
+/** a frame too slow for 60 (< 50 fps) */
+const SLOW = 25;
 /** feed `sec` seconds of frames of `ms` interval and `work` main-thread ms; returns how often saver changed */
-const run = (p: PowerState, sec: number, ms: number, work: number, budget = BUDGET_120) => {
+const run = (p: PowerState, sec: number, ms: number, work: number) => {
   let changes = 0;
-  for (let t = 0; t < sec * 1000; t += ms) if (p.frame(ms, work, budget)) changes++;
+  for (let t = 0; t < sec * 1000; t += ms) if (p.frame(ms, work)) changes++;
   return changes;
 };
 
 /** feed frames until saver flips; returns the seconds it took (Infinity if it never did) */
-const until = (p: PowerState, maxSec: number, ms: number, work: number, budget = BUDGET_120) => {
+const until = (p: PowerState, maxSec: number, ms: number, work: number) => {
   const was = p.saver;
-  for (let t = 0; t < maxSec * 1000; t += ms) { p.frame(ms, work, budget); if (p.saver !== was) return (t + ms) / 1000; }
+  for (let t = 0; t < maxSec * 1000; t += ms) { p.frame(ms, work); if (p.saver !== was) return (t + ms) / 1000; }
   return Infinity;
 };
 
@@ -37,20 +38,23 @@ describe('PowerState', () => {
     expect(p.saver).toBe(false);
   });
 
-  it('auto enters on sustained slowness only (a short burst does not)', () => {
+  it('auto enters on sustained slowness only (a short burst, or 85 fps on a 120 Hz panel, does not)', () => {
+    const q = new PowerState();
+    run(q, 20, 1000 / 85, 6);
+    expect(q.saver).toBe(false);
     const p = new PowerState();
-    run(p, 10, BUDGET_120, 4);
-    run(p, POWER.slowSec - 1.5, 20, 15);
-    run(p, 3, BUDGET_120, 4);
+    run(p, 10, 1000 / 120, 4);
+    run(p, POWER.slowSec - 1.5, SLOW, 15);
+    run(p, 3, 1000 / 120, 4);
     expect(p.saver).toBe(false);
-    expect(run(p, POWER.slowSec + 2, 20, 15)).toBe(1);
+    expect(run(p, POWER.slowSec + 2, SLOW, 15)).toBe(1);
     expect(p.saver).toBe(true);
     expect(p.reason).toBe('slow frames');
   });
 
   it('holds at least holdSec, then leaves after exitSec of main-thread headroom', () => {
     const p = new PowerState();
-    run(p, POWER.slowSec + 2, 20, 15);
+    run(p, POWER.slowSec + 2, SLOW, 15);
     expect(p.saver).toBe(true);
     // capped at 60 with plenty of headroom: held until holdSec (entered ~1.7 s before this phase)
     const t = until(p, 60, 1000 / 60, 2);
@@ -61,18 +65,18 @@ describe('PowerState', () => {
 
   it('does not leave while the main thread stays busy', () => {
     const p = new PowerState();
-    run(p, POWER.slowSec + 2, 20, 15);
-    run(p, POWER.holdSec + POWER.exitSec + 10, 1000 / 60, 9);
+    run(p, POWER.slowSec + 2, SLOW, 15);
+    run(p, POWER.holdSec + POWER.exitSec + 10, 1000 / 60, 12);
     expect(p.saver).toBe(true);
   });
 
   it('a quick re-entry doubles the hold (no flapping)', () => {
     const p = new PowerState();
-    run(p, POWER.slowSec + 2, 20, 15);
+    run(p, POWER.slowSec + 2, SLOW, 15);
     until(p, 60, 1000 / 60, 2);
     expect(p.saver).toBe(false);
-    // uncapped, frames are still slow: back in, and this time held twice as long
-    expect(until(p, 20, 20, 15)).toBeLessThan(POWER.slowSec + 2);
+    // frames are slow again: back in, and this time held twice as long
+    expect(until(p, 20, SLOW, 15)).toBeLessThan(POWER.slowSec + 2);
     expect(p.saver).toBe(true);
     const t = until(p, 120, 1000 / 60, 2);
     expect(t).toBeGreaterThan(2 * POWER.holdSec - 1);

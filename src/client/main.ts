@@ -2116,7 +2116,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       // main-thread work of the previous frame tells the governor whether frames are GPU- or CPU-bound
       // budget: the frame cap, else the display's refresh (120 Hz ProMotion → 8.3 ms, not 60 fps)
       if (governor.frame(now - last, frameBudgetMs(cap, displayRefresh.hz), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
-      if (power.frame(now - last, workMs[workMs.length - 1] ?? now - last, frameBudgetMs(0, displayRefresh.hz))) applyPower();
+      if (power.frame(now - last, workMs[workMs.length - 1] ?? now - last)) applyPower();
     }
     frameMs.push(now - last);
     frameT.push(now);

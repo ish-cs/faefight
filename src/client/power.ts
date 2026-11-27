@@ -6,7 +6,7 @@ import type { GovernorKnobs } from './governor';
  * - quality: never trims (plugged-in behaviour; the frame cap and dynamic resolution settings as set).
  * - performance: always the saver.
  * - auto (default): the saver while the battery is discharging (navigator.getBattery, where the browser has it)
- *   or while frames are persistently slow (frame-time average over the display's budget × slowFrac for slowSec),
+ *   or while frames are persistently slow (frame-time average under ~50 fps for slowSec),
  *   with hysteresis: it holds at least holdSec, leaves only after exitSec of main-thread headroom, and a saver
  *   that had to come straight back holds twice as long next time (no flapping).
  *
@@ -21,10 +21,14 @@ export type PowerMode = (typeof POWER_MODES)[number];
 export const POWER = {
   /** saver frame cap (Hz): a steady 60 beats a 90–140 swing on efficiency cores */
   capHz: 60,
-  /** auto: frame-time EMA above display budget × slowFrac for slowSec → saver */
-  slowFrac: 1.3,
+  /**
+   * auto: frame-time EMA above (1000 / capHz) × slowFrac for slowSec → saver. Measured against 60 fps, not the
+   * display: 85 fps on a 120 Hz panel is fine plugged in (and with vsync off the refresh probe reads the uncapped
+   * rate as the display's), but under ~50 fps frames judder and spike.
+   */
+  slowFrac: 1.2,
   slowSec: 5,
-  /** auto (slow-triggered): leave after exitSec with main-thread work EMA below display budget × exitWorkFrac */
+  /** auto (slow-triggered): leave after exitSec with main-thread work EMA below (1000 / capHz) × exitWorkFrac */
   exitWorkFrac: 0.6,
   exitSec: 15,
   /** minimum time in the saver once entered; doubled (up to maxHoldSec) when it re-enters within reentrySec */
@@ -64,10 +68,10 @@ export class PowerState {
   }
 
   /**
-   * One drawn frame: `ms` interval, `workMs` main-thread time, `displayBudgetMs` the display's own frame time
-   * (uncapped). Returns true when `saver` changed.
+   * One drawn frame: `ms` interval, `workMs` main-thread time. Returns true when `saver` changed.
    */
-  frame(ms: number, workMs: number, displayBudgetMs: number): boolean {
+  frame(ms: number, workMs: number): boolean {
+    const budget = 1000 / POWER.capHz;
     if (!(ms > 0) || ms > 250) return false;
     const dt = ms / 1000;
     const k = 1 - Math.exp(-ms / POWER.tauMs);
@@ -76,7 +80,7 @@ export class PowerState {
     this.sinceExit += dt;
     if (this.mode !== 'auto' || this.onBattery === true) { this.overT = this.underT = 0; return false; }
     if (!this.slow) {
-      this.overT = this.ema > displayBudgetMs * POWER.slowFrac ? this.overT + dt : 0;
+      this.overT = this.ema > budget * POWER.slowFrac ? this.overT + dt : 0;
       if (this.overT < POWER.slowSec) return false;
       this.slow = true;
       this.heldT = 0;
@@ -85,7 +89,7 @@ export class PowerState {
       return true;
     }
     this.heldT += dt;
-    this.underT = this.workEma < displayBudgetMs * POWER.exitWorkFrac ? this.underT + dt : 0;
+    this.underT = this.workEma < budget * POWER.exitWorkFrac ? this.underT + dt : 0;
     if (this.heldT < this.hold || this.underT < POWER.exitSec) return false;
     this.slow = false;
     this.overT = 0;
