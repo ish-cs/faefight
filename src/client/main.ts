@@ -77,6 +77,7 @@ import { isWheelId, quipLines, type WheelId } from '../sim/emotes';
 // UI theme last: its tokens and skin win over style.css / qol.css / settings.css (docs/ui-style.md).
 import { setLeaveGuard } from './leaveGuard';
 import { probe, S } from './perfHud';
+import { PowerState, watchBattery } from './power';
 import './ui/theme.css';
 import './ui/skin.css';
 
@@ -1098,9 +1099,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const sky = renderer.world.sky;
   const govSkip = () => governor.setSkip((s) => s === 'ao' && !sky.presetHasAo);
   govSkip();
-  governor.enabled = settings.get().video.dynamicResolution;
+  /** Power mode (power.ts): on battery / sustained slow frames → stable 60 cap, dynamic resolution, trimmed effects. */
+  const power = new PowerState();
+  power.mode = settings.get().video.power;
+  governor.enabled = settings.get().video.dynamicResolution || power.saver;
   const applyGovernor = () => {
-    const k = governor.knobs;
+    const k = power.trim(governor.knobs);
     sky.setGovernor(k);
     renderer.world.grass.densityScale = k.grass;
     lods.bias = k.lodBias;
@@ -1133,12 +1137,25 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     // the quality key sets the sky's preset before saving it, so compare with what was last compiled, not the sky
     const key = `${st.video.quality}/${st.video.competitive}`;
     if (key !== chainKey) { chainKey = key; if (revealed) recompileAfterChange(); }
-    governor.enabled = st.video.dynamicResolution;
+    power.mode = st.video.power;
+    governor.enabled = st.video.dynamicResolution || power.saver;
     perfDetail = st.video.perfDetail || DEBUG;
     if (sky.quality !== govQuality) { govQuality = sky.quality; governor.reset(); govSkip(); }
     applyGovernor();
   };
   const offSettings = settings.subscribe(applySettings);
+  /** saver on/off: live knobs only (no recompile), so it may switch mid-match */
+  const applyPower = () => {
+    governor.enabled = settings.get().video.dynamicResolution || power.saver;
+    applyGovernor();
+    console.info(`[power] ${power.saver ? 'saver' : 'full'} (${power.reason})`);
+  };
+  const offBattery = watchBattery((discharging) => { const was = power.saver; power.onBattery = discharging; if (power.saver !== was) applyPower(); });
+  // menus / unfocused window: a low frame cap (hidden tabs get no rAF at all)
+  let focused = true;
+  const onBlur = () => { focused = false; }, onFocus = () => { focused = true; };
+  window.addEventListener('blur', onBlur);
+  window.addEventListener('focus', onFocus);
   /** Shift + the FPS key (F3 / `): perf detail under the FPS counter (Settings → Video → Performance stats). */
   let perfDetail = settings.get().video.perfDetail || DEBUG, detailShown = false;
 
@@ -1952,6 +1969,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       frameLog: () => ({ t: frameT.slice(), dt: frameMs.slice() }),
       /** ?perf: per-system main-thread ms (EMA), heap, GC count (perfHud.ts). */
       perfProbe: () => probe.stats(),
+      /** Power mode state (power.ts): mode, battery, saver on/off and why. */
+      power: () => power.info(),
       resetFrames: () => { frameMs.length = 0; frameT.length = 0; workMs.length = 0; renderer.gpuMs.length = 0; gpuDoneT.length = 0; },
       /** frames the GPU actually finished per second (true throughput; rAF fps overstates it when frames queue) */
       gpuFps: () => (gpuDoneT.length > 1 ? ((gpuDoneT.length - 1) * 1000) / (gpuDoneT[gpuDoneT.length - 1] - gpuDoneT[0]) : 0),
@@ -2076,7 +2095,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   const frame = () => {
     const now = performance.now();
     // Settings → Video frame cap (rAF itself is vsync-locked; this only skips frames below it).
-    const cap = settings.get().video.frameCap;
+    const cap = power.cap(settings.get().video.frameCap, !!paused || !focused);
     if (cap && now - lastDrawn < 1000 / cap - 2) { requestAnimationFrame(frame); return; }
     // GPU queue too deep: wait (look→GPU-done latency stays ≈ 40 ms however GPU-bound; refresh.ts FrameQueue)
     if (gpuQueue.busy(now)) { requestAnimationFrame(frame); return; }
@@ -2087,6 +2106,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       // main-thread work of the previous frame tells the governor whether frames are GPU- or CPU-bound
       // budget: the frame cap, else the display's refresh (120 Hz ProMotion → 8.3 ms, not 60 fps)
       if (governor.frame(now - last, frameBudgetMs(cap, displayRefresh.hz), workMs[workMs.length - 1] ?? now - last)) applyGovernor();
+      if (power.frame(now - last, workMs[workMs.length - 1] ?? now - last, frameBudgetMs(0, displayRefresh.hz))) applyPower();
     }
     frameMs.push(now - last);
     frameT.push(now);
@@ -2105,7 +2125,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
         hud.setFpsDetail([
           `${((now - fpsSince) / fpsFrames).toFixed(1)} ms${g !== null ? ` · gpu ${g.toFixed(1)} ms` : ''}`,
           `${ri.drawCalls} draws · ${(ri.triangles / 1e6).toFixed(2)}M tris`,
-          `gov ${governor.level}${governor.gpuBound ? ' gpu' : ' cpu'} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
+          `${power.saver ? 'saver · ' : ''}gov ${governor.level}${governor.gpuBound ? ' gpu' : ' cpu'} · res ${sky.pixelRatio.toFixed(2)} · lod ×${lods.scale.toFixed(2)}`,
         ]);
       }
       fpsFrames = 0; fpsSince = now;
@@ -2400,7 +2420,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     destroy() {
       if (!running) return;
       running = false;
-      offSettings();
+      offSettings(); offBattery(); window.removeEventListener('blur', onBlur); window.removeEventListener('focus', onFocus);
       clearTimeout(revealTimer);
       if (!revealed) { revealed = true; void loading.hide(); }
       input.enabled = false;
