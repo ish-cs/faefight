@@ -550,11 +550,15 @@ export class Nav {
   private nearestLane(p: Vec3, prefer = -1): Lane | null {
     const nodes = this.nodeList;
     let best: Lane | null = null, bestOff = 2.5;
+    // Standing on a deck: only a lane that deck runs along. Where two lanes cross, the other one (no decks under me)
+    // read as mine sent a PRO off the side of its bridge tip toward home along it, over and over: 713 s (mixed seed 3).
+    const deck = this.deckUnder(p);
     for (let i = 0; i < nodes.length; i++) for (let j = 0; j < nodes.length; j++) {
       if (i === j) continue;
       const l = this.lane(i, j);
       const s = laneS(l, p);
       if (s < 0 || s > l.length) continue;
+      if (deck && Math.abs(l.dir.x * dm.sin(deck.rotY) + l.dir.z * dm.cos(deck.rotY)) < 0.9) continue;
       // Opposite islands' lane runs right over the center island's own (same line): the shorter one is the one I'm on
       // (ties broken by length), unless I'm heading for a node one of them ends at: then that one (taking the far
       // island's turned a bot on the center bridge round, back to where it came from).
@@ -562,6 +566,17 @@ export class Nav {
       if (off < bestOff) { bestOff = off; best = l; }
     }
     return best;
+  }
+
+  /** The deck (scaffold) p stands on, or null. */
+  private deckUnder(p: Vec3): { rotY: number } | null {
+    for (const q of this.view.pieces) {
+      if (q.kind !== 'scaffold' || Math.abs(q.pos.y + PIECES.scaffold.h - p.y) > 0.6) continue;
+      const dx = p.x - q.pos.x, dz = p.z - q.pos.z;
+      if (Math.abs(dx * dm.cos(q.rotY) - dz * dm.sin(q.rotY)) < PIECES.scaffold.w / 2 &&
+        Math.abs(dx * dm.sin(q.rotY) + dz * dm.cos(q.rotY)) < PIECES.scaffold.d / 2) return q;
+    }
+    return null;
   }
 
   /** s on lane l where node i's solid land starts, a little inland. */
