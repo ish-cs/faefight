@@ -353,12 +353,13 @@ export type WeaponParams = { holdSec: number; rocketHoldSec: number; threatM: nu
  * - buy: >= 0.5 lets the vault buy what it lacks for the loadout with vault cash.
  * - carry: carried cash a bank trip leaves on me, by skill (a weak player carries too much); bankMin: carried excess worth a trip to the vault.
  * - upgradeAt: cash (carried + banked) to have to spare beyond the next vault level's price before buying it.
- * - upgradeScore: goal score of the trip to the vault to buy that level.
+ * - upgradeScore: goal score of the trip to the vault to buy that level; upgradeNear: added when the vault is within
+ *   UPGRADE_NEAR_M (at the shop next door: buy it on the same trip, before a geared bot's seal/attack takes over).
  * - healSlot: hotbar slots of the building reserve (buildTuning.freeSlots) a medkit on the hotbar already fills.
  */
 export type VaultParams = {
   medkits: Record<Difficulty, number>; scaffolds: Record<Difficulty, number>; keep: Record<Difficulty, number>;
-  buy: Record<Difficulty, number>; carry: Record<Difficulty, number>; bankMin: number; upgradeAt: Record<Difficulty, number>; upgradeScore: number;
+  buy: Record<Difficulty, number>; carry: Record<Difficulty, number>; bankMin: number; upgradeAt: Record<Difficulty, number>; upgradeScore: number; upgradeNear: number;
   healSlot: number;
 };
 
@@ -514,7 +515,7 @@ export const WEAPON: WeaponParams = { holdSec: 0.6, rocketHoldSec: 2.5, threatM:
 
 export const VAULT: VaultParams = {
   medkits: D(0, 1, 2, 2), scaffolds: D(0, 0, 0, 0), keep: D(0, 0, 40, 40), buy: D(0, 0, 1, 1), carry: D(400, 400, 25, 25), bankMin: 80,
-  upgradeAt: D(Infinity, 500, 200, 100), upgradeScore: 0.75, healSlot: 1,
+  upgradeAt: D(Infinity, 500, 200, 100), upgradeScore: 0.75, upgradeNear: 0.3, healSlot: 1,
 };
 
 export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT });
@@ -597,7 +598,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['heal.slotValue', [0, 1]], ['heal.keep.*', [0, 1]],
   ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
   ['vault.medkits.*', [0, 4]], ['vault.scaffolds.*', [0, 15]], ['vault.keep.*', [0, 150]], ['vault.buy.*', [0, 1]],
-  ['vault.carry.*', [0, 400]], ['vault.bankMin', [30, 300]], ['vault.upgradeAt.*', [100, 2000]], ['vault.upgradeScore', [0.1, 1]], ['vault.healSlot', [0, 1]],
+  ['vault.carry.*', [0, 400]], ['vault.bankMin', [30, 300]], ['vault.upgradeAt.*', [100, 2000]], ['vault.upgradeScore', [0.1, 1]], ['vault.upgradeNear', [0, 1]], ['vault.healSlot', [0, 1]],
   ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {
