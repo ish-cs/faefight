@@ -30,6 +30,8 @@ const params = arg('params', '');
 
 const q = (xs, k) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * k))] ?? 0; };
 const base = (u) => (u || '').split('/').pop().split('?')[0];
+/** game code (dev: /src/…, prod: /assets/<module>-<hash>.js), not three.js or other vendor chunks */
+const isApp = (u) => !!u && (/\/src\//.test(u) || (/\/assets\//.test(u) && !/three|vendor|rapier|peerjs|transformers/i.test(base(u))));
 
 const GC_RE = /^(MinorGC|MajorGC|V8\.GC_|BlinkGC\.|V8\.GCScavenger|V8\.GCFinalizeMC|V8\.GCIncrementalMarking|V8\.GCCompactor)/;
 const LAYOUT_RE = /^(UpdateLayoutTree|Layout|RecalculateStyles|Paint|PrePaint|Layerize|Commit|UpdateLayer|HitTest|ParseAuthorStyleSheet)$/;
@@ -54,6 +56,7 @@ async function run(rate) {
     }
     const w = window;
     w.__bp = { pipes: [], uploads: [] };
+    if (new URLSearchParams(location.search).has('bpstacks')) w.__bpStacks = new Map();
     if (window.GPUDevice) {
       for (const name of ['createRenderPipeline', 'createComputePipeline']) {
         const orig = GPUDevice.prototype[name];
@@ -61,7 +64,12 @@ async function run(rate) {
       }
       for (const name of ['writeTexture', 'copyExternalImageToTexture']) {
         const orig = GPUQueue.prototype[name];
-        GPUQueue.prototype[name] = function (...a) { const t = performance.now(); const r = orig.apply(this, a); w.__bp.uploads.push([t, performance.now() - t]); return r; };
+        GPUQueue.prototype[name] = function (...a) {
+          const t = performance.now(); const r = orig.apply(this, a); const ms = performance.now() - t;
+          w.__bp.uploads.push([t, ms]);
+          if (w.__bpStacks) { const k = (new Error().stack ?? '').split('\n').slice(2).filter((l) => !/three\./.test(l)).slice(0, 2).map((l) => l.trim().replace(/\?v=\w+|https?:\/\/[^/]+/g, '')).join(' < '); const e = w.__bpStacks.get(k) ?? [0, 0]; e[0]++; e[1] += ms; w.__bpStacks.set(k, e); }
+          return r;
+        };
       }
     }
   }, { quality, power, battery });
@@ -127,6 +135,7 @@ async function run(rate) {
   await pull();
   const probeStats = await dbg('perfProbe');
   const bp = await page.evaluate(() => window.__bp);
+  const upStacks = await page.evaluate(() => (window.__bpStacks ? [...window.__bpStacks].sort((a, b) => b[1][0] - a[1][0]).slice(0, 8).map(([k, [n, ms]]) => `${n}× ${ms.toFixed(0)}ms ${k}`) : null));
   const gfps = await page.evaluate(() => window.__faefight.gpuFps?.() ?? 0);
   const powerState = await page.evaluate(() => window.__faefight.power?.() ?? null);
   let heapTop = null;
@@ -135,9 +144,9 @@ async function run(rate) {
     const by = new Map();
     const walk = (n, appFn) => {
       const cf = n.callFrame;
-      const here = /\/src\//.test(cf.url) ? `${cf.functionName || '(anon)'} ${base(cf.url)}:${cf.lineNumber + 1}` : appFn;
+      const here = isApp(cf.url) ? `${cf.functionName || '(anon)'} ${base(cf.url)}:${cf.lineNumber + 1}` : appFn;
       const self = n.selfSize ?? 0;
-      if (self) { const k = /\/src\//.test(cf.url) ? here : `${here ?? '?'} → ${cf.functionName || '(anon)'}${cf.url ? ` ${base(cf.url)}` : ''}`; by.set(k, (by.get(k) ?? 0) + self); }
+      if (self) { const k = isApp(cf.url) ? here : `${here ?? '?'} → ${cf.functionName || '(anon)'}${cf.url ? ` ${base(cf.url)}` : ''}`; by.set(k, (by.get(k) ?? 0) + self); }
       for (const c of n.children ?? []) walk(c, here);
     };
     walk(profile.head, null);
@@ -157,7 +166,7 @@ async function run(rate) {
     rate, n: dts.length, fps: +(1000 / (dts.reduce((a, b) => a + b, 0) / (dts.length || 1))).toFixed(1), gpuFps: +gfps.toFixed(1),
     p50: +q(dts, 0.5).toFixed(1), p95: +q(dts, 0.95).toFixed(1), p99: +q(dts, 0.99).toFixed(1), max: +Math.max(0, ...dts).toFixed(1),
     s33: +(dts.filter((x) => x > 33.4).length / mins).toFixed(1), s50: +(dts.filter((x) => x > 50).length / mins).toFixed(1),
-    pipes: bp.pipes.length, uploads: bp.uploads.length, probe: probeStats, power: powerState, heapTop, spikes, errors: errors.slice(0, 5),
+    pipes: bp.pipes.length, uploads: bp.uploads.length, uploadMs: +bp.uploads.reduce((a, u) => a + u[1], 0).toFixed(1), upStacks, probe: probeStats, power: powerState, heapTop, spikes, errors: errors.slice(0, 5),
   };
 }
 
@@ -195,7 +204,7 @@ function attribute(evs, frames, syncPerf, bp) {
     const appOf = (id) => {
       if (lab.has(id)) return lab.get(id);
       let n = nodes.get(id), r = null;
-      while (n) { const cf = n.callFrame; if (/\/src\//.test(cf.url)) { r = `${cf.functionName || '(anon)'} ${base(cf.url)}:${cf.lineNumber + 1}`; break; } n = nodes.get(n.parent); }
+      while (n) { const cf = n.callFrame; if (isApp(cf.url)) { r = `${cf.functionName || '(anon)'} ${base(cf.url)}:${cf.lineNumber + 1}`; break; } n = nodes.get(n.parent); }
       lab.set(id, r);
       return r;
     };
@@ -240,8 +249,9 @@ function attribute(evs, frames, syncPerf, bp) {
     cand.sort((a, b) => b[1] - a[1]);
     let cause = cand[0][0];
     if (pipes.length) cause = `pipeline compile (${pipes.length}: ${pipes[0][2] || 'unlabelled'})`;
-    else if (ups.length && cand[0][1] < 8000) cause = 'texture upload';
+    else if (ups.reduce((a, u) => a + u[1], 0) > 3) cause = 'texture upload';
     else if (idle > 0.6 * (w1 - w0) && cand[0][1] < 8000) cause = 'main idle (GPU / present wait)';
+    else if (cand[0][1] < 0.3 * busy) cause = `overloaded frame (no single cause; top JS ${topJs[0] || '-'})`;
     const leaf = [...leaves].filter(([k]) => k.startsWith(`${topJs[0]}|`)).sort((a, b) => b[1] - a[1])[0]?.[0].split('|')[1] ?? '';
     list.push({ at: +((t - frames[0][0]) / 1000).toFixed(2), dt: +dt.toFixed(1), cause, busyMs: +(busy / 1000).toFixed(1), gcMs: +(gc / 1000).toFixed(1), layoutMs: +(layout / 1000).toFixed(1), jsTop: topJs[0], jsMs: +(topJs[1] / 1000).toFixed(1), leaf });
     const c = causes.get(cause) ?? { n: 0, ms: 0, over: 0, leaf: new Map() };
@@ -253,7 +263,7 @@ function attribute(evs, frames, syncPerf, bp) {
     .map(([cause, c]) => ({ cause, n: c.n, avgMs: +(c.ms / c.n).toFixed(1), overMs: Math.round(c.over), leaf: [...c.leaf].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '' }));
   // whole-window main-thread self time by src/ frame (what the steady frame costs, for the allocation hunt)
   const all = new Map();
-  for (const s of samples) { if (/^\((idle|root)\)/.test(s.leaf)) continue; const k = s.leaf.startsWith('(garbage collector)') ? '(GC)' : s.leaf.startsWith('(program)') ? '(program)' : s.app ?? s.leaf; all.set(k, (all.get(k) ?? 0) + s.dur); }
+  for (const s of samples) { if (/^\((idle|root)\)/.test(s.leaf)) continue; const k = s.leaf.startsWith('(garbage collector)') ? '(GC)' : s.leaf.startsWith('(program)') ? '(program)' : s.leaf; all.set(k, (all.get(k) ?? 0) + s.dur); }
   const span = samples.length ? (samples[samples.length - 1].ts - samples[0].ts) / 1000 : 1;
   const steady = [...all].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, us]) => ({ fn: k, msPerSec: +(us / span).toFixed(2) }));
   return { n: list.length, top, worst: list.sort((a, b) => b.dt - a.dt).slice(0, 12), steady, samples: samples.length };
@@ -278,6 +288,8 @@ for (const r of rows) {
     r.spikes.top.forEach((c, i) => console.log(`| ${i + 1} | ${c.cause} | ${c.n} | ${c.avgMs} | ${c.overMs} | ${c.leaf} |`));
     console.log('steady main-thread self time (ms/s):', r.spikes.steady.map((s) => `${s.fn}=${s.msPerSec}`).join('; '));
   } else if (r.spikes) console.log('spikes:', JSON.stringify(r.spikes));
+  console.log(`uploads ${r.uploads} (${r.uploadMs} ms)`);
+  if (r.upStacks) console.log('upload sources:', r.upStacks.join(' | '));
   if (r.heapTop) console.log('alloc KB/s:', r.heapTop.map((h) => `${h.fn}=${h.kbPerSec}`).join('; '));
   if (r.errors.length) console.log('errors:', JSON.stringify(r.errors));
 }
