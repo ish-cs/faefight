@@ -61,6 +61,8 @@ export type BrainDigest = {
   build: { kind: PieceKind; x: number; y: number; z: number; rotY: number; why: string } | null;
   /** Grappling hook: on a rope now, or its last use (a few seconds), or what it carries it for; absent when none. */
   hook?: string;
+  /** Cut off from home (no walk, no decks, no hook hold home): for how long, and when it swims for it (drive.strandedSec). */
+  stranded?: string;
   /** Healing intent (heal.ts): the last heal decision (a few seconds), else heals carried vs the stock it wants. */
   heal?: string;
   /** Weapon it wants in hand and why ("rocket: reload it between fights"); absent when dead or not yet decided. */
@@ -126,6 +128,7 @@ type Internals = {
   pushLead(view: BotView): { id: number; target: number | null } | null; allyIsland(view: BotView, i: number): boolean;
   sieging(c: Ctx): boolean; nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null;
   hookNote: { t: number; text: string } | null;
+  strandedSince: number | null;
   healNote: { t: number; text: string } | null; healWant: number;
   weaponIntent: { want: string; why: string } | null;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
@@ -748,6 +751,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     ...hookLine(I, me, now),
+    ...(me?.alive && I.strandedSince !== null ? { stranded: `Cut off from home ${Math.round(now - I.strandedSince)} s: swims home at ${I.P.drive.strandedSec} s unless a hook or a seller gets me there` } : {}),
     ...healLine(I, me, now),
     ...(me?.alive && I.weaponIntent ? { weapon: I.weaponIntent.why } : {}),
     path: me ? pathOf(I, p, me) : [],
