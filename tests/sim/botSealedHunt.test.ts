@@ -71,3 +71,37 @@ describe('sealed out of reach of each other (replay a.faereplay)', () => {
     expect(r.kill).not.toBeNull();
   }, 120_000);
 });
+
+/**
+ * ffa8-mixed seed 10 (bot-measure): a Hard bot out of ammo, with a charge, sealed out of its home by a wood plug.
+ * 'defend' counted on the charge (canClear) but only hard plugs got one; fists can't punch from outside a sealed
+ * bunker, so it stood still 9.5 min. The charge goes on the wood plug.
+ */
+describe('sealed out of my home with only a charge', () => {
+  test('a gunless bot blows its soft plug with the charge instead of standing still', async () => {
+    const m = await Match.create({ players: [1, 2].map((i) => ({ name: `p${i}`, isBot: true, difficulty: 'hard' as const })), map: 'harbor', seed: 1 });
+    for (let i = 0; i < 30; i++) m.tick(new Map());
+    for (const d of m.map[0].bunker.doorways) {
+      const out = forward(d.yaw), off = MAP.bunker.wall / 2 + PIECES.wood.d / 2 + 0.05;
+      m.debugPlacePiece('wood', v3(d.center.x + out.x * off, d.center.y - 0.01, d.center.z + out.z * off), d.yaw, 2);
+    }
+    const d = m.map[0].bunker.doorways[0], o = forward(d.yaw);
+    m.debugTeleport(1, v3(d.center.x + o.x * 8, m.map[0].groundY, d.center.z + o.z * 8));
+    m.debugGive(1, { charges: 1 });
+    // Out of ammo and cash: no gun, no shop trip.
+    const p1 = (m as unknown as { mustPlayer(id: number): { inv: { cash: number; weapons: Record<string, { mag: number; spare: number }> } } }).mustPlayer(1);
+    for (const w of Object.values(p1.inv.weapons)) { w.mag = 0; w.spare = 0; }
+    p1.inv.cash = 0;
+    let snap: Snapshot = m.tick(new Map());
+    expect(snap.sealed?.[0]).toBe(true);
+    const start = snap.time;
+    let charged: number | null = null;
+    while (snap.time < start + 60 && charged === null) {
+      snap = m.tick(new Map());
+      const me = snap.players.find((p) => p.id === 1)!;
+      if (me.inv.charges === 0) charged = snap.time - start;
+    }
+    m.dispose();
+    expect(charged).not.toBeNull();
+  }, 120_000);
+});
