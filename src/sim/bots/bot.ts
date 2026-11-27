@@ -171,11 +171,6 @@ const INSURANCE = WEAPONS.pistol.price + 25;
 const BUNKER_OUT = SEAL.exitRadius + 0.8;
 /** Grappling hook: uses are weighed this often; a chosen one holds this long while I turn to fire it. */
 const HOOK_CHECK_SEC = 0.25, HOOK_HOLD_SEC = 1.2;
-/**
- * Cut off from home with no hook to buy and no way to bridge: hold out (fight, collect) this long before the last
- * resort, the water (a death; the respawn puts me home).
- */
-const STRANDED_LAST_SEC = 90;
 /** Goals that want me at home (hooked back to when I can't walk there). */
 const HOME_GOALS = new Set<Goal>(['shop', 'bank', 'collect', 'fortify', 'defend', 'guard', 'heal']);
 
@@ -534,8 +529,9 @@ export class Bot {
     this.moveSrc = this.retreat ? 'retreat' : thinking ? 'hesitate' : this.goal;
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
     // Cut off from home: get a hook here and hook home (fighting comes first: enemies in sight keep the goal's act).
+    // (A rival in sight across the water isn't a fight: one 90 m off held a PRO still 3 min, ffa8-pro seed 5.)
     const rescue = this.strandedAct(ctx);
-    if (rescue && !ctx.enemy) { act = rescue; this.moveSrc = 'stranded'; }
+    if (rescue && !ctx.danger) { act = rescue; this.moveSrc = 'stranded'; }
     // An enemy spike trap in my way with nobody in sight: shoot it out before walking on.
     if (!ctx.enemy && !act.shootAt && !act.build && !act.trap) {
       const spikes = this.trapInWay(ctx, act.dir);
@@ -869,9 +865,10 @@ export class Bot {
    * Where I could hook over to node `to` from (I can't walk there): my shore facing it, or the tip of my bridge toward
    * it, whichever is within hook reach (HookParams.crossMax, rim to rim, from eye height) and I can walk to. Null:
    * no hook in hand, no way back from there (canReturn), or nowhere close enough yet (lay more decks first).
+   * anyHooks: as if I had one (could a hook get there from here at all).
    */
-  private hookLaunch(view: BotView, me: PlayerState, node: number, home: number, to: number): Vec3 | null {
-    if ((me.inv.grapples ?? 0) <= 0 || view.suddenDeath) return null;
+  private hookLaunch(view: BotView, me: PlayerState, node: number, home: number, to: number, anyHooks = false): Vec3 | null {
+    if ((!anyHooks && (me.inv.grapples ?? 0) <= 0) || view.suddenDeath) return null;
     const dest = this.nav.nodes[to];
     if (!dest) return null;
     const H = this.P.hook;
@@ -911,6 +908,9 @@ export class Bot {
    */
   private cutOff(c: Ctx): boolean {
     const me = c.me, node = this.nav.nodeAt(me.pos), home = c.home.index;
+    // Over the rim on the way into the water (the ditch): still cut off. Resetting here held a stranded bot at the
+    // edge, its clock starting over each time it got there.
+    if (node < 0 && this.strandedSince !== null && !c.homeReach) return true;
     const cut = node >= 0 && node !== home && !c.homeReach && (me.inv.pieces.scaffold ?? 0) < this.scaffoldsTo(node, home) &&
       !c.view.map.some((isl) => isl.index === node || this.nav.hop(node, isl.index) !== null);
     if (!cut) this.strandedSince = null;
@@ -927,6 +927,9 @@ export class Bot {
     if (!this.cutOff(c)) return null;
     const me = c.me, node = this.nav.nodes[this.nav.nodeAt(me.pos)];
     if (!node) return null;
+    // A hook only helps when some shore of this node is in hook reach of home (harbor's center isn't: 69 m).
+    const hookHome = this.hookLaunch(c.view, me, node.index, c.home.index, c.home.index, true) !== null;
+    if (!hookHome) return null;
     if ((me.inv.grapples ?? 0) > 0) {
       if (me.hook || me.mv?.pull) return null;
       const d = flat(sub(c.home.center, node.center)), l = Math.hypot(d.x, d.z) || 1;
@@ -941,17 +944,20 @@ export class Bot {
   }
 
   /**
-   * The last resort: cut off for STRANDED_LAST_SEC with no hook and no way to get one here: walk off into the water
-   * toward home (the respawn puts me back there). Returns that heading, or null.
+   * The last resort: cut off for drive.strandedSec with no hook that reaches home and no way to get one here: walk off
+   * into the water toward home (the respawn puts me back there). Returns that heading, or null.
    */
   private strandedDitch(c: Ctx): Vec3 | null {
     const me = c.me;
     const held = c.view.now - (this.strandedSince ?? Infinity);
-    if (!(held >= STRANDED_LAST_SEC) || me.hook || me.mv?.pull) return null;
-    // A hook in hand that never finds a hold home (out of reach from every shore): give it twice as long.
-    if ((me.inv.grapples ?? 0) > 0 && held < 2 * STRANDED_LAST_SEC) return null;
+    const S = this.P.drive.strandedSec;
+    if (!(held >= S) || me.hook || me.mv?.pull) return null;
     const node = this.nav.nodeAt(me.pos);
-    const seller = (c.view.potionShops ?? []).some((s) => this.nav.nodeAt(s) === node);
+    // A hook that could reach home from some shore here: give it twice as long to find its hold. One that can't (out of
+    // reach from every shore) is no reason to wait: ffa8-pro seed 5, a PRO with two hooks stood 178 s on the center.
+    const hookHome = this.hookLaunch(c.view, me, node, c.home.index, c.home.index, true) !== null;
+    if (hookHome && (me.inv.grapples ?? 0) > 0 && held < 2 * S) return null;
+    const seller = hookHome && (c.view.potionShops ?? []).some((s) => this.nav.nodeAt(s) === node);
     if (seller && funds(me) >= GRAPPLE.price) return null;
     return norm(flat(sub(c.home.center, me.pos)));
   }
@@ -2668,7 +2674,9 @@ export class Bot {
     let push: Vec3 | null = null;
     for (const h of c.view.hazards ?? []) {
       // A live barrel is only a maybe; in the storm, staying inside the ring matters more (fusing ones still send everyone running).
-      if (h.radius <= 0 || (!h.fusing && (!c.enemy || c.view.storm))) continue;
+      // Only in a real fight (danger: hurt just now or a foe within 40 m): a rival in sight on their own island 90 m off
+      // held a bot 4 min at a center barrel's edge, its route to the gold running straight at it (mixed ×60 seed 24).
+      if (h.radius <= 0 || (!h.fusing && (!c.danger || c.view.storm))) continue;
       const d = dist2D(h.pos, me.pos);
       // Fights: only out of the inner part of a live barrel's blast, where it would really hurt (measured on the
       // bot ladder: a wider berth costs the stronger bot its fights).
