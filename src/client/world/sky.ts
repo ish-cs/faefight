@@ -10,6 +10,7 @@ import { SHADOW_ONLY_FIRST_LAYER, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from '
 import { cascadeToRefresh, type CascadeCacheState, nearCascadeDue, newCacheState, SHADOW_CACHE } from './shadowCache';
 import { buildPipeline, grade, type PostOptions, sunScreen, upscaleInput } from './post';
 import { lightU } from './lightUniforms';
+import { beginBatchCullFrame } from './batchCull';
 
 export type Quality = 'low' | 'high' | 'ultra';
 const QUALITIES: Quality[] = ['low', 'high', 'ultra'];
@@ -300,8 +301,14 @@ export class SkyLighting {
       sunScreen.aspect.value = this.camera.aspect;
     }
     this.cascadeLayers();
+    const lights = this.lighting.csm?.lights ?? [];
+    const cams = this.cascadeCams;
+    cams.length = 0;
+    for (const l of lights) if (l.shadow) cams.push(l.shadow.camera);
+    beginBatchCullFrame(this.camera, cams); // BatchedMeshes cull once per frame for all passes (batchCull.ts)
     this.pipeline!.render();
   }
+  private cascadeCams: THREE.Camera[] = [];
 
   /**
    * Shadow-caster culling per cascade: the near cascades see every caster (camera's layers); the far ones skip the
