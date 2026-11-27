@@ -56,7 +56,7 @@ async function run(rate) {
     }
     const w = window;
     w.__bp = { pipes: [], uploads: [] };
-    if (new URLSearchParams(location.search).has('bpstacks')) w.__bpStacks = new Map();
+    if (new URLSearchParams(location.search).has('bpstacks')) { w.__bpStacks = new Map(); Error.stackTraceLimit = 60; }
     if (window.GPUDevice) {
       for (const name of ['createRenderPipeline', 'createComputePipeline']) {
         const orig = GPUDevice.prototype[name];
@@ -67,7 +67,7 @@ async function run(rate) {
         GPUQueue.prototype[name] = function (...a) {
           const t = performance.now(); const r = orig.apply(this, a); const ms = performance.now() - t;
           w.__bp.uploads.push([t, ms]);
-          if (w.__bpStacks) { const k = (new Error().stack ?? '').split('\n').slice(2).filter((l) => !/three\./.test(l)).slice(0, 2).map((l) => l.trim().replace(/\?v=\w+|https?:\/\/[^/]+/g, '')).join(' < '); const e = w.__bpStacks.get(k) ?? [0, 0]; e[0]++; e[1] += ms; w.__bpStacks.set(k, e); }
+          if (w.__bpStacks) { const k = (new Error().stack ?? '').split('\n').slice(2).filter((l) => !/three\.|batteryProxy|<computed>|__bp/.test(l)).slice(0, 2).map((l) => l.trim().replace(/\?v=\w+|https?:\/\/[^/]+/g, '')).join(' < ') + (name === 'writeTexture' ? ` [${a[0].texture.label || '-'} ${a[0].texture.width}x${a[0].texture.height} ${a[0].texture.format} mip${a[0].mipLevel ?? 0}]` : ''); const e = w.__bpStacks.get(k) ?? [0, 0]; e[0]++; e[1] += ms; w.__bpStacks.set(k, e); }
           return r;
         };
       }
@@ -113,7 +113,7 @@ async function run(rate) {
       traceConfig: { includedCategories: ['toplevel', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8', 'v8.execute', 'disabled-by-default-v8.gc', 'disabled-by-default-v8.cpu_profiler', 'blink.user_timing'] },
     });
   }
-  if (heap) { await cdp.send('HeapProfiler.enable'); await cdp.send('HeapProfiler.startSampling', { samplingInterval: 8192 }); }
+  if (heap) { await cdp.send('HeapProfiler.enable'); await cdp.send('HeapProfiler.startSampling', { samplingInterval: 8192, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true }); }
   const syncPerf = await page.evaluate(() => { console.timeStamp('bp-sync'); return performance.now(); });
   await page.evaluate(() => { window.__bp.pipes.length = 0; window.__bp.uploads.length = 0; window.__faefight.resetFrames(); });
   const t0 = await page.evaluate(() => performance.now());
@@ -135,7 +135,7 @@ async function run(rate) {
   await pull();
   const probeStats = await dbg('perfProbe');
   const bp = await page.evaluate(() => window.__bp);
-  const upStacks = await page.evaluate(() => (window.__bpStacks ? [...window.__bpStacks].sort((a, b) => b[1][0] - a[1][0]).slice(0, 8).map(([k, [n, ms]]) => `${n}× ${ms.toFixed(0)}ms ${k}`) : null));
+  const upStacks = await page.evaluate(() => (window.__bpStacks ? [...window.__bpStacks].sort((a, b) => b[1][0] - a[1][0]).slice(0, 14).map(([k, [n, ms]]) => `${n}× ${ms.toFixed(0)}ms ${k}`) : null));
   const gfps = await page.evaluate(() => window.__faefight.gpuFps?.() ?? 0);
   const powerState = await page.evaluate(() => window.__faefight.power?.() ?? null);
   let heapTop = null;
