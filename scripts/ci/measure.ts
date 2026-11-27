@@ -168,6 +168,12 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
     deadSealElim: 0, deadSealUnseal: 0, close: { n: 0, kit0: 0, kitShort: 0, kitFull: 0, sealedInWindow: 0, killerDeadIn10: 0 }, brk: { n: 0, sealerNear: 0, sealerAlive: 0, sealerKit: 0, foeNear: 0, sealerGoal: {} as Record<string, number> }, lateGoal: {} as Record<string, number>, sealedAtSd: 0, leftAtSd: 0 };
   const sealEp = new Map<number, { t: number; alive: boolean; by: number }>();
   const closeKills: { t: number; k: number; v: number; isl: number }[] = [];
+  // DIAG (seals): respawn-window seal episodes: plug materials, breakout time, escapee weapon, sieger behaviour.
+  const SP = (m as unknown as { s: { pieces: Map<number, { id: number; kind: string; pos: { x: number; y: number; z: number } }> } }).s.pieces;
+  type Ep = { isl: number; owner: number; by: number; sealT: number; kinds: string[]; doorKinds: string[][]; snapIds: Map<number, { kind: string; door: number }>; trapT: number | null;
+    near10: number; samples: number; shots: number; hitsOwner: number; ownerShots: number; out?: string; brkSec?: number | null; brokenKind?: string; brokenDoor?: string; breaker?: string; escW?: string; sNearEnd?: boolean; addAfter: number };
+  const eps = new Map<number, Ep>(); const epOut: Ep[] = []; const lastHit = new Map<number, number | null>();
+  const closeEp = (ep: Ep) => { eps.delete(ep.isl); const { snapIds: _x, ...rest } = ep; epOut.push(rest as Ep); };
   const kitOf = (inv: unknown) => { const pc = (inv as { pieces: Record<string, number> }).pieces; return Object.entries(pc).filter(([k]) => k !== 'scaffold').reduce((a, [, n]) => a + n, 0); };
   let preSdElims = 0, preSdSeals = 0, firstSeal: number | null = null, lateKills = 0, elims = 0, credited = 0, spoils = 0;
   const bo: BuildOut[] = diffs.map(() => ({ fights: 0, built: 0, builtWon: 0, plainWon: 0, pieces: 0, kinds: {}, bulletsTaken: 0, bulletsBlocked: 0, hits: 0, highHits: 0 }));
@@ -242,8 +248,17 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       h.alive = p.alive; h.n = n; h.healAt = healAt; h.drinking = drinking;
     }
     for (let i = 0; i < fight.length; i++) if (fight[i] && snap.time - fight[i]!.last > FIGHT_GAP) endFight(i, false);
+    for (const ep of eps.values()) if (ep.trapT !== null) {
+      const sp = snap.players[ep.by - 1], bc = bunkers[ep.isl]; ep.samples++;
+      if (sp.alive && Math.hypot(sp.pos.x - bc.x, sp.pos.z - bc.z) <= 10) ep.near10++;
+    }
     for (const e of snap.events) {
+      if (e.type === 'pieceHit') lastHit.set(e.data.piece as number, (e.data.by as number | null) ?? null);
+      else if (e.type === 'trapped') { for (const ep of eps.values()) if (ep.owner === e.data.player && ep.trapT === null) ep.trapT = e.t; }
+      else if (e.type === 'shot') { for (const ep of eps.values()) if (ep.trapT !== null) { if (e.data.by === ep.by) ep.shots++; if (e.data.by === ep.owner) ep.ownerShots++; } }
+      else if (e.type === 'hit') { for (const ep of eps.values()) if (ep.trapT !== null && e.data.by === ep.by && e.data.target === ep.owner) ep.hitsOwner++; }
       if (e.type === 'placed') {
+        for (const ep of eps.values()) { const bc = bunkers[ep.isl], pp = e.data.pos as { x: number; z: number } | undefined; if (pp && Math.hypot(pp.x - bc.x, pp.z - bc.z) < 8) ep.addAfter++; }
         const by = e.data.by as number, kind = e.data.kind as string;
         pieceOwner.set(e.data.piece as number, by);
         const f = fight[by - 1];
@@ -299,8 +314,36 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
           sealEp.set(e.data.island as number, { t: e.t, alive, by });
           for (const ck of closeKills) if (ck.isl === e.data.island && e.t - ck.t <= 12 && !alive) { dg.close.sealedInWindow++; ck.t = -99; }
           if (alive) dg.aliveSeals++; else dg.deadSeals++;
+          if (!alive) {
+            const isl = e.data.island as number, bc = bunkers[isl], doors = m.map[isl].bunker.doorways;
+            const snapIds = new Map<number, { kind: string; door: number }>(), doorKinds: string[][] = doors.map(() => []), kinds: string[] = [];
+            for (const pc of SP.values()) {
+              if (pc.kind === 'ramp' || pc.kind === 'scaffold' || Math.hypot(pc.pos.x - bc.x, pc.pos.z - bc.z) > 8) continue;
+              let door = 0, bd = Infinity;
+              doors.forEach((d, di) => { const dd = Math.hypot(pc.pos.x - d.center.x, pc.pos.z - d.center.z); if (dd < bd) { bd = dd; door = di; } });
+              if (bd > 3.5) continue;
+              snapIds.set(pc.id, { kind: pc.kind, door }); doorKinds[door].push(pc.kind); kinds.push(pc.kind);
+            }
+            const prev = eps.get(isl); if (prev) { prev.out = 'resealed'; closeEp(prev); }
+            eps.set(isl, { isl, owner: e.data.owner as number, by, sealT: e.t, kinds: kinds.sort(), doorKinds: doorKinds.map((k) => k.sort()), snapIds, trapT: o?.breakoutUntil != null ? Math.max(e.t - 10, (o.breakoutUntil as number) - 10) : null,
+              near10: 0, samples: 0, shots: 0, hitsOwner: 0, ownerShots: 0, addAfter: 0 });
+          }
         }
       } else if (e.type === 'unsealed') {
+        const sep = eps.get(e.data.island as number);
+        if (sep) {
+          let gone: { id: number; kind: string; door: number } | null = null;
+          for (const [id, v] of sep.snapIds) if (!SP.has(id)) { gone = { id, ...v }; }
+          sep.out = sep.trapT !== null ? 'breakout' : 'preRespawn';
+          sep.brkSec = sep.trapT !== null ? Math.round((e.t - sep.trapT) * 10) / 10 : null;
+          if (gone) {
+            sep.brokenKind = gone.kind; sep.brokenDoor = sep.doorKinds[gone.door].join('+');
+            const h = lastHit.get(gone.id); sep.breaker = h == null ? 'env' : h === sep.owner ? 'owner' : h === sep.by ? 'sieger' : 'other';
+          } else sep.brokenKind = 'none';
+          const ow = snap.players[sep.owner - 1] as unknown as { equipped?: string }, sp = snap.players[sep.by - 1], bc = bunkers[sep.isl];
+          sep.escW = ow.equipped ?? '?'; sep.sNearEnd = sp.alive && Math.hypot(sp.pos.x - bc.x, sp.pos.z - bc.z) <= 10;
+          closeEp(sep);
+        }
         const ep = sealEp.get(e.data.island as number);
         if (ep && e.t < SD) { sealEp.delete(e.data.island as number); if (ep.alive) { dg.aliveSealUnseal++; dg.aliveSealDur += e.t - ep.t; } else {
           dg.deadSealUnseal++;
@@ -318,6 +361,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (s) s.restocks!++;
       } else if (e.type === 'eliminated') {
         const id = e.data.player as number;
+        { const sep = eps.get(snap.players[id - 1].island); if (sep && sep.owner === id) { sep.out = e.t < SD ? 'elim' : 'sd'; sep.brkSec = sep.trapT !== null ? Math.round((e.t - sep.trapT) * 10) / 10 : null; closeEp(sep); } }
         if (seats[id - 1].eliminatedAt === null) {
           seats[id - 1].eliminatedAt = e.t;
           if (e.t < SD) preSdElims++;
@@ -328,6 +372,8 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       }
     }
   }
+  for (const ep of [...eps.values()]) { ep.out = 'open'; closeEp(ep); }
+  (dg as unknown as { eps: Ep[] }).eps = epOut;
   for (let i = 0; i < fight.length; i++) endFight(i, false);
   seats.forEach((s, i) => { s.build = bo[i]; });
   const msPerTick = (performance.now() - w0) / Math.max(1, ticks);
