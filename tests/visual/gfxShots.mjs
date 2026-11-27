@@ -9,6 +9,8 @@ const out = arg('out', 'shot');
 const quality = arg('preset', 'ultra');
 const dpr = Number(arg('dpr', '2'));
 const params = arg('params', '');
+/** map template for the menu picker (harbor | yard); yard has the built-in container cover for the close-up view */
+const mapName = arg('map', 'harbor');
 const url = process.env.GAME_URL ?? 'http://localhost:5299';
 
 const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu', '--mute-audio'] });
@@ -18,9 +20,12 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-  await page.addInitScript((q) => {
-    try { localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q, dynamicResolution: false } })); } catch { /* fresh profile */ }
-  }, quality);
+  await page.addInitScript(([q, m]) => {
+    try {
+      localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q, dynamicResolution: false } }));
+      localStorage.setItem('faefight.map', m);
+    } catch { /* fresh profile */ }
+  }, [quality, mapName]);
   await page.goto(`${url}/?debug=1&bots=7${params ? `&${params}` : ''}`);
   await page.getByTestId('play-easy').click();
   await page.waitForFunction(() => window.__faefight?.snapshot?.(), null, { timeout: 120_000 });
@@ -43,6 +48,16 @@ try {
   // spawn island: from the island's front edge back toward the bunker
   const a = toWorld(-6, 14), b = toWorld(0, 0);
   await look(a, Math.atan2(-(b.x - a.x), -(b.z - a.z)), -0.08, 'spawn');
+  // close-up container: the built-in container cover nearest the home island centre, from 4.5 m on its open side
+  const def = await dbg('mapDef');
+  const boxes = (def?.statics ?? []).filter((st) => st.look !== 'barrier');
+  if (boxes.length) {
+    const d2 = (st) => (st.center.x - home.center.x) ** 2 + (st.center.z - home.center.z) ** 2;
+    const st = boxes.reduce((a, b) => (d2(b) < d2(a) ? b : a));
+    const ox = home.center.x - st.center.x, oz = home.center.z - st.center.z, ol = Math.hypot(ox, oz) || 1;
+    const p = { x: st.center.x + (ox / ol) * 4.5, z: st.center.z + (oz / ol) * 4.5 };
+    await look(p, Math.atan2(-(st.center.x - p.x), -(st.center.z - p.z)), -0.05, 'container');
+  } else console.log('no container cover on this map');
   // mid-fight: on the centre island looking across at the other islands and the bots
   const L = Math.hypot(home.center.x, home.center.z), ux = home.center.x / L, uz = home.center.z / L;
   await dbg('time', 150);
@@ -55,7 +70,7 @@ try {
   const sx = Math.sin(az), sz = Math.cos(az);
   await look({ x: home.center.x + sx * 10, z: home.center.z + sz * 10 }, az + Math.PI, 0.04, 'sunset');
   if (errors.length) console.log('errors:', JSON.stringify(errors.slice(0, 5)));
-  console.log(`shots: ${out}-{spawn,midfight,sunset}.png`);
+  console.log(`shots: ${out}-{spawn,container,midfight,sunset}.png`);
 } finally {
   await browser.close();
 }

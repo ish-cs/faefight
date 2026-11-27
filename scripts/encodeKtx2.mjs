@@ -17,7 +17,10 @@ const jpeg = require('jpeg-js');
 
 const ROOT = 'public/assets/textures';
 const only = process.argv.slice(2);
-const sets = readdirSync(ROOT).filter((d) => statSync(join(ROOT, d)).isDirectory() && (!only.length || only.includes(d)));
+// JPEG-only sets: the baked container atlas (unique UVs, crisp stencils, livery mask in arm.b) came out visibly
+// blocky as KTX2 in every mode tried (ETC1S, UASTC ± RDO) while its JPEGs are clean, and its 3 × 1K maps are small
+const JPEG_ONLY = new Set(['container']);
+const sets = readdirSync(ROOT).filter((d) => statSync(join(ROOT, d)).isDirectory() && !JPEG_ONLY.has(d) && (!only.length || only.includes(d)));
 // Block-compressed GPU formats need the base level to be a multiple of 4 in both axes (WebGPU rejects the texture
 // otherwise: linen is 1024×1026). Resample (nearest, keeps tiling) down to the multiple of 4 below.
 const imageDecoder = async (buf) => {
