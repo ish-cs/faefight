@@ -1892,7 +1892,9 @@ export class Bot {
         if (!cv || !c.centerReach || view.suddenDeath) return 0;
         const room = me.hotbar.includes(null) || me.hotbar.includes('sandbags');
         const supplies = cv.bags + cv.steel > 0 && room ? 0.12 + 0.05 * cv.steel : 0;
-        if (cv.gold < (this.centerMinded ? CONTEST_AT : 2.5 * CONTEST_AT) && !supplies) return 0;
+        // Cut off on the center (no way home but the water): its gold is the one thing here that pays, any amount.
+        const marooned = this.strandedSince !== null && this.nav.nodeAt(me.pos) === this.nav.centerNode;
+        if (!marooned && cv.gold < (this.centerMinded ? CONTEST_AT : 2.5 * CONTEST_AT) && !supplies) return 0;
         const far = dist2D(me.pos, cv.island.center) / 150;
         // Rich bots have better things to do than farm the middle.
         const rich = Math.min(0.3, (me.inv.cash + me.vault.cash) / 3000);
@@ -2285,7 +2287,8 @@ export class Bot {
     const room = c.me.hotbar.includes(null) || c.me.hotbar.includes('sandbags');
     const supplyFirst = cv.bags + cv.steel > 0 && room && (cv.gold < CONTEST_AT ||
       dist2D(c.me.pos, cv.island.supplyGen) < dist2D(c.me.pos, cv.island.goldGen));
-    if (cv.gold < 1 && !supplyFirst) { this.nextScoreAt = c.view.now; return IDLE; }
+    // Cut off here: wait at the gold station (it pays as it fills) rather than standing about.
+    if (cv.gold < 1 && !supplyFirst && this.strandedSince === null) { this.nextScoreAt = c.view.now; return IDLE; }
     return this.goTo(supplyFirst ? cv.island.supplyGen : cv.island.goldGen, 1.6);
   }
 
