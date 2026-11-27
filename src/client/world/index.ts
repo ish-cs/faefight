@@ -189,7 +189,7 @@ export class World {
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
     // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
     // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
-    for (const r of [this.islands, this.scatter.root, this.cosmetics.root]) {
+    for (const r of [this.islands, this.scatter.root, this.cosmetics.root, this.grass.root]) {
       if (!r) continue;
       r.updateMatrixWorld(true);
       r.traverse((o) => { o.matrixAutoUpdate = false; o.matrixWorldAutoUpdate = false; });
