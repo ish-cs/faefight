@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { addNpcSpot } from '../characters/npcSpots';
 import { boxUV, mat, StaticBatch, strut } from './geo';
 import { cylinderLabel, labelMaterial } from './labels';
+import { containerLod } from './containerModel';
 import { CONTAINER_COLORS, mats } from './materials';
 import { makeRng, signTex } from './textures';
 
@@ -17,6 +18,8 @@ const at = (B: THREE.Matrix4, L: THREE.Matrix4) => B.clone().multiply(L);
 /** 20 ft container (6.06 × 2.59 × 2.44), base at local origin, long axis along X, doors at +X. */
 export function container(b: StaticBatch, B: THREE.Matrix4, col: number) {
   const M = mats();
+  const baked = containerLod(0); // Blender-baked model (containerModel.ts); the boxes below are its fallback
+  if (baked) { b.add(M.container, baked, B, col); return; }
   const L = 6.06, H = 2.59, D = 2.44;
   b.add(M.corr, boxUV(L - 0.1, H - 0.12, D - 0.06, 7.8), at(B, mat(0, H / 2, 0)), col);
   const c = new THREE.Color(col).multiplyScalar(0.55);

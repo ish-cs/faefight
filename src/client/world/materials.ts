@@ -1,8 +1,9 @@
 import * as THREE from 'three/webgpu';
-import { color, cos, float, mix, positionLocal, positionWorld, sin, smoothstep, step, texture, time, uv, vec2, vec3, vertexColor } from 'three/tsl';
+import { color, cos, float, mix, normalMap, positionLocal, positionWorld, sin, smoothstep, step, texture, time, uv, vec2, vec3, vertexColor } from 'three/tsl';
 import { MAP } from '../../sim/constants';
 import { lightU } from './lightUniforms';
-import { applyPbr, pbrMaterial, pbrSample, worldNoise } from './pbr';
+import { applyPbr, pbrMaterial, pbrSample, pbrTex, worldNoise } from './pbr';
+import { applyWet } from './wetness';
 import { weather } from './weathering';
 import { NO_SHADOW } from './lod';
 import { awningTex, barkTex, chainTex, frondTex, leafBlobTex, seawallTex } from './textures';
@@ -43,6 +44,34 @@ function frondMaterial() {
   return m;
 }
 
+/** Atlas UV units per metre of the baked container (build_container.py logs UV_PER_M) → detail tiles per UV unit. */
+const CONTAINER_UV_PER_M = 0.1122, DETAIL_TILE_M = 0.7;
+
+/**
+ * Baked shipping container (containerModel.ts): unique-UV atlas from Blender — baked normals (corrugation, dents,
+ * castings, door hardware), AO into the ambient term only (aoNode; the sun stays dynamic), rust / wear / stencils in
+ * the albedo. arm.b codes the livery: 1 = paint tinted by the per-container vertex colour, 0.5 = untinted (rust,
+ * stencils, rubber), 0 = bare metal. A tiled CC0 painted-metal normal adds close-up grain the 1K atlas can't hold.
+ */
+function containerMaterial() {
+  const m = new THREE.MeshStandardNodeMaterial();
+  m.name = 'container';
+  const t = pbrTex('container');
+  const u = uv();
+  const arm = texture(t.arm, u).rgb;
+  const code = arm.b;
+  const vc = vertexColor() as unknown as THREE.Node<'vec3'>;
+  m.colorNode = texture(t.map, u).rgb.mul(mix(vec3(1, 1, 1), vc, code.mul(2).sub(1).clamp(0, 1)));
+  const n = texture(t.normal, u).rgb.mul(2).sub(1);
+  const d = texture(pbrTex('painted_metal').normal, u.mul(1 / (CONTAINER_UV_PER_M * DETAIL_TILE_M))).rgb.mul(2).sub(1);
+  m.normalNode = normalMap(vec3(n.xy.mul(3).add(d.xy.mul(0.3)), n.z).normalize().mul(0.5).add(0.5));
+  m.roughnessNode = arm.g;
+  m.metalnessNode = float(1).sub(code.mul(2)).clamp(0, 1).mul(0.85);
+  m.aoNode = arm.r;
+  applyWet(m, { porosity: 0.35 });
+  return weather(m, { grime: 0.25, streaks: 0.3, vary: 0.12 });
+}
+
 let M: ReturnType<typeof make> | null = null;
 function make() {
   return {
@@ -67,6 +96,8 @@ function make() {
     paint: weather(pbrMaterial('paint', 'painted_metal', { lum: 0.069, lumPow: 0.3, triplanar: 0.35, normalScale: 0.1, roughMul: 0.9, metalness: 0.2 }), { rust: 0.6, edge: 0.75, grime: 0.6, streaks: 0.55 }),
     /** tarps, plates, generic painted parts: fine canvas weave + grime */
     matte: weather(pbrMaterial('matte', 'linen', { lum: 0.4, lumPow: 0.35, uvScale: 3, normalScale: 0.45, roughAdd: 0.15, metalness: 0, untile: false }), { grime: 0.45, streaks: 0.3, edge: 0.25, chip: 'light' }),
+    /** baked shipping containers (one shared atlas, livery = vertex colour) */
+    container: containerMaterial(),
     corr: weather(pbrMaterial('corr', 'corrugated', { lum: 0.44, uvScale: [2, 1], normalScale: 1.2, metalness: 0.35, roughMul: 0.95, macro: 0.12, untile: 'shift' }), { rust: 0.35, edge: 0.4, streaks: 0.75, grime: 0.45 }),
     awning: std('awning', { map: awningTex(), roughness: 0.8, side: THREE.DoubleSide }),
     leaf: std('leaf', { map: leafBlobTex(), roughness: 0.95 }),
