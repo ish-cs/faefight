@@ -203,7 +203,7 @@ export class Lighting {
       const pmrem = new THREE.PMREMGenerator(this.gpu);
       this.scene.environment = pmrem.fromScene(envScene, 0.02).texture;
       if (this.envPmrem) this.envPmrem.value = this.scene.environment;
-      else {
+      else if (!perfOff('noenvtint')) {
         this.envPmrem = pmremTexture(this.scene.environment);
         this.envNode = this.envPmrem.mul(this.u.envTint);
         this.scene.environmentNode = this.envNode;

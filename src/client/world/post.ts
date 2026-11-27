@@ -185,7 +185,7 @@ export function buildPipeline(
   // Triangular ±1 LSB dither before the 8-bit canvas: breaks the banding in smooth sky gradients (sunset). Two
   // interleaved-gradient-noise taps at different pixel offsets, no texture, no extra pass.
   const px = screenCoordinate.xy;
-  c = c.add(interleavedGradientNoise(px).add(interleavedGradientNoise(px.add(vec2(47, 113)))).sub(1).mul(grade.dither));
+  if (!perfOff('nodither')) c = c.add(interleavedGradientNoise(px).add(interleavedGradientNoise(px.add(vec2(47, 113)))).sub(1).mul(grade.dither));
   pipe.outputNode = c;
   return { pipe, scenePass, aoPass, bloomPass }; // the scene pass: the warm-up compiles world materials for its exact target/MRT
 }
