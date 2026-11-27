@@ -503,7 +503,7 @@ function shopList(items: ShopItem[]): string {
 function needsWhy(n: Needs): string {
   const p: string[] = [];
   if (n.scaffolds) p.push(`${n.scaffolds} decks to bridge`);
-  if (n.kit) p.push(`walls for ${n.kit} door${n.kit === 1 ? '' : 's'}`);
+  if (n.kit) p.push(`${n.hardKit ? 'metal ' : ''}walls for ${n.kit} door${n.kit === 1 ? '' : 's'}`);
   if (n.charge) p.push('a charge for my plugged door');
   if (n.grenades) p.push(`${n.grenades} grenades`);
   if (n.medkits) p.push(`${n.medkits} medkits`);
