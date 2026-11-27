@@ -318,16 +318,16 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
   // replayed after that (no per-object projection, sort, pipeline lookup or draw encoding). Distance-culled chunks
   // toggle .visible, which a bundle can't follow, so they stay outside it. ?nobundle = A/B.
   const bundle = typeof location !== 'undefined' && location.search.includes('nobundle') ? null : new THREE.BundleGroup();
-  const dressed = dress.build(bundle ?? root, 'dressing', { chunked: true });
+  dress.build(root, 'dressing', { chunked: true });
   if (bundle) {
     bundle.name = 'staticBundle';
-    for (const m of dressed) if (m.userData.lod) root.add(m);
-    // + the other static island meshes (tops, walls, bunkers, structures, backdrop): the visible, never-toggled ones
-    // only map-wide meshes (bounding radius ≥ BUNDLE_MIN_R): frustum culling never drops those anyway, while the
+    // dressing + the other static island meshes (tops, walls, bunkers, structures, backdrop): visible, never toggled,
+    // opaque, and map-wide (bounding radius ≥ BUNDLE_MIN_R): frustum culling never drops those anyway, while the
     // smaller ones (rock chunks, signs) are often off screen and are cheaper culled than drawn
     for (const o of [...root.children]) {
       const g = (o as THREE.Mesh).geometry;
-      if (!(o as THREE.Mesh).isMesh || !o.visible || o.userData.lod) continue;
+      // transparent ones (decals, puddles, glow) must draw after the opaque scene, and bundles draw first
+      if (!(o as THREE.Mesh).isMesh || !o.visible || o.userData.lod || ((o as THREE.Mesh).material as THREE.Material).transparent) continue;
       if (!g.boundingSphere) g.computeBoundingSphere();
       if (g.boundingSphere!.radius * o.scale.x >= BUNDLE_MIN_R) bundle.add(o);
     }
