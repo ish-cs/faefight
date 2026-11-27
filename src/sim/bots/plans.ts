@@ -70,6 +70,8 @@ export type Needs = {
   scaffolds: number; kit: number; charge: boolean; grenades?: number;
   /** Heals to carry (medkits + heal potions; HealParams stock). */
   medkits?: number; steel?: boolean; genLevel?: number;
+  /** Metal plugs wanted in the kit (drive.hardKit): buy metal while fewer metal/steel than `kit`, at this many metal prices of cash (0 = no). */
+  hardKit?: number;
   /** Carry a grappling hook: 'cross' (a crossing to make: bought before scaffolds), 'rich' (spare cash). */
   grapple?: 'cross' | 'rich';
   /** Spike traps to carry (on top of the ones standing). */
@@ -140,6 +142,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
     if (wantMetal && room('metal')) return 'metal';
     if (room('wood')) return cash >= PIECES.wood.price ? 'wood' : null;
   }
+  // A kit of wood/sandbags gets shot out by the respawned owner: swap in metal plugs when the cash is there.
+  const hardPlugs = (inv.pieces.metal ?? 0) + (inv.pieces.steel ?? 0);
+  if (needs.hardKit && hardPlugs < needs.kit && cash >= needs.hardKit * PIECES.metal.price && room('metal')) return 'metal';
   // The rest of the heal stock right after the seal kit.
   if (heals < (needs.medkits ?? 0) && room('medkit') && cash >= MEDKIT.price) return 'medkit';
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
