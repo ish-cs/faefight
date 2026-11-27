@@ -140,6 +140,8 @@ export class World {
     const wm = this.water.mesh.material as THREE.MeshStandardNodeMaterial;
     wm.envMap = this.scene.environment;
     wm.envMapIntensity = 0.62;
+    // same map, tinted for the time of day like every other surface (envMap stays set: it picks envMapIntensity)
+    if (this.sky.lighting.envNode) wm.envNode = this.sky.lighting.envNode;
     this.waterEnv = wm;
     this.groundAO = perfOff('nogroundao') ? null : buildGroundAO(def);
     if (this.groundAO) this.scene.add(this.groundAO);

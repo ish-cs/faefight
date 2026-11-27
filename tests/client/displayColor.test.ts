@@ -9,7 +9,7 @@ describe('name tag colours survive tone mapping + grade', () => {
     for (const exposure of [0.7, 1, 1.6]) for (const hex of ISLAND_COLORS) {
       const want = rgb(hex).map((v) => Math.min(v, 0.93)) as [number, number, number];
       const got = displayOf(hdrFor(want, exposure), exposure);
-      // Teal sits just outside what ACES can output (its red would need negative light): off by ~13/255 in red.
+      // Teal sits at the edge of what the tone curve can output (its red would need ~no light): allow some slack.
       const tol = hex === 0x3dd0d0 ? 0.06 : 2 / 255;
       for (let i = 0; i < 3; i++) expect(Math.abs(got[i] - want[i])).toBeLessThan(tol);
     }

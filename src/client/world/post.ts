@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  abs, builtinAOContext, dot, emissive, exp, float, length, luminance, min, mix, mrt, normalView, output, pass, renderOutput, screenSize, screenUV, smoothstep, step,
+  abs, builtinAOContext, dot, emissive, exp, float, interleavedGradientNoise, length, luminance, min, mix, mrt, normalView, output, pass, renderOutput, screenCoordinate, screenSize, screenUV, smoothstep, step,
   uniform, vec2, vec3, vec4, velocity,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
@@ -60,24 +60,26 @@ export const sunScreen = { uv: uniform(new THREE.Vector2(0.5, 0.5)), front: unif
 
 /**
  * Display-space colour grade, shared by every preset (tweak live via `World.sky.grade` in ?debug=1).
- * Warm highlights / cool shadows, gentle S-contrast, a touch of saturation, soft vignette.
+ * Warm highlights / cool shadows, gentle S-contrast, soft vignette, ±1 LSB dither.
  */
 export const grade = {
   shadowTint: uniform(new THREE.Color(0.94, 0.99, 1.07)),
   highlightTint: uniform(new THREE.Color(1.03, 1.0, 0.95)),
   contrast: uniform(1.08),
-  saturation: uniform(1.1),
+  saturation: uniform(1),
   vignette: uniform(0.26),
   /** ambient-occlusion strength (high/ultra) */
   ao: uniform(0.9),
   /** scene-linear luminance where geometry highlights start to bloom (high/ultra) */
   bloomThreshold: uniform(6),
+  /** output dither amplitude (display units; 1/255 = ±1 LSB triangular) */
+  dither: uniform(1 / 255),
 };
 
 /**
  * Builds the frame's render pipeline from ONE scene pass. (A separate GTAO normal pre-pass cost ~3 ms of CPU per
  * frame for ~600 draws, so normals come out of the main pass as an extra MRT target instead.)
- *   lit scene (MSAA; MRT output/emissive/normal) → [GTAO] → [bloom of emissive] → ACES → grade.
+ *   lit scene (MSAA; MRT output/emissive/normal) → [GTAO] → [bloom of emissive] → Neutral tone map → grade (+ dither).
  */
 export function buildPipeline(
   gpu: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera, o: PostOptions, ambientOcclusion?: THREE.Node<'float'>,
@@ -166,17 +168,24 @@ export function buildPipeline(
     flare = vec3(1, 0.93, 0.8).mul(halo).add(ghosts).mul(vis);
   }
 
-  // Tone map (renderer.toneMapping, ACES) + sRGB, then grade in display space.
+  // Tone map (renderer.toneMapping, Neutral) + sRGB, then grade in display space. world/displayColor.ts inverts this
+  // chain for name tags: keep the two in step.
   const ldr = renderOutput(vec4(hdr, 1)).rgb;
   const l = luminance(ldr);
   const tint = mix(grade.shadowTint, grade.highlightTint, smoothstep(0.15, 0.75, l));
-  let c: THREE.Node<'vec3'> = ldr.mul(tint);
-  c = c.sub(0.5).mul(grade.contrast).add(0.5).max(0);
-  c = mix(vec3(luminance(c)), c, grade.saturation);
+  let c: THREE.Node<'vec3'> = ldr.mul(tint).clamp(0, 1);
+  // S-curve contrast that pins 0 and 1: mid-tone slope = contrast, toe and shoulder ease off instead of clipping
+  // (a linear stretch around 0.5 crushed everything below ~4 % to black and clipped the top end)
+  c = mix(c, c.mul(c).mul(c.mul(-2).add(3)), grade.contrast.sub(1).mul(2));
+  c = mix(vec3(luminance(c)), c, grade.saturation).max(0);
   const v = screenUV.sub(0.5);
   const vig = float(1).sub(grade.vignette.mul(smoothstep(0.06, 0.5, dot(v, v))));
   c = c.mul(vig);
   if (flare) c = c.add(flare);
+  // Triangular ±1 LSB dither before the 8-bit canvas: breaks the banding in smooth sky gradients (sunset). Two
+  // interleaved-gradient-noise taps at different pixel offsets, no texture, no extra pass.
+  const px = screenCoordinate.xy;
+  if (!perfOff('nodither')) c = c.add(interleavedGradientNoise(px).add(interleavedGradientNoise(px.add(vec2(47, 113)))).sub(1).mul(grade.dither));
   pipe.outputNode = c;
   return { pipe, scenePass, aoPass, bloomPass }; // the scene pass: the warm-up compiles world materials for its exact target/MRT
 }
