@@ -16,7 +16,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro'] as const;
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro', 'ffa4-pro'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
@@ -38,6 +38,7 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
     }
     case 'ffa8-pro': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
     case 'ffa3-pro': return { diffs: Array(3).fill('pro'), maxSec: SD + 180 };
+    case 'ffa4-pro': return { diffs: Array(4).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
     case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 180 };
     case 'ffa8-pro-arch': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
@@ -73,6 +74,13 @@ type SeatOut = {
   archetype?: string; traits?: Record<string, number>; damage?: number; seals?: number;
   /** Vault use (read off snapshots, so it works on any ref): deposits, $ banked, shop buys paid from the vault, respawn restocks. */
   deposits?: number; banked?: number; vaultPaid?: number; restocks?: number; interest?: number; vaultLv?: number;
+  /**
+   * Frozen bot: longest stretch (s) alive with a rival still in the game without moving > FROZEN_M (2D), before sudden
+   * death and from it on; frozenAt: when the longest pre-sudden-death one started. Not counted: a breakout countdown,
+   * holding inside my own bunker under fire (hurt in the last 3 s or an enemy within 30 m), and in sudden death any
+   * bunker (the doorway slabs shut it). Optional: older shards.
+   */
+  frozenMax?: number; frozenAt?: number; frozenMaxSd?: number;
   /** Movement jitter (src/sim/bots/moveStats.ts; refs without it leave this out). */
   jitter?: SeatJitter;
 };
@@ -96,12 +104,17 @@ export type BuildOut = {
   bulletsTaken: number; bulletsBlocked: number; hits: number; highHits: number;
 };
 const FIGHT_GAP = 8, BLOCK_M = 4, HIGH_M = 1.2;
+const FROZEN_M = 1, FROZEN_GATE_SEC = 45;
+/** Dead air: no hit, kill or build anywhere while ≥ 2 players are still in the game. */
+const ACTION_EVENTS = new Set(['hit', 'kill', 'placed']);
 export type GameOut = {
   scenario: Scenario; seed: number; winner: number | null; winnerDifficulty: Difficulty | null;
   time: number; decisive: boolean; preSdElims: number; preSdSeals?: number; firstSeal: number | null; msPerTick: number; wallSec: number;
   seats: SeatOut[];
   /** Player kills at or after sudden death (15:00+), eliminations in all, credited ones (refs with elimination rewards) and their spoils. */
   lateKills?: number; elims?: number; credited?: number; spoils?: number;
+  /** Longest dead-air stretch (s) and when it started (absent on old shard files). */
+  deadAir?: number; deadAirAt?: number;
 };
 
 /** What src/sim/bots/params.ts exports, depending on the ref (the trainer branch adds sanitize/toBotParams). */
@@ -170,8 +183,10 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   const seats: SeatOut[] = diffs.map((d, i) => ({
     difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
     archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0, healsGot: 0, healsUsed: 0, healsUsedFight: 0, lowHpDeaths: 0,
-    deposits: 0, banked: 0, vaultPaid: 0, restocks: 0, interest: 0, vaultLv: 1,
+    deposits: 0, banked: 0, vaultPaid: 0, restocks: 0, interest: 0, vaultLv: 1, frozenMax: 0, frozenAt: 0, frozenMaxSd: 0,
   }));
+  const still = new Map<number, { x: number; z: number; t: number }>();
+  let lastAction = 0, deadAir = 0, deadAirAt = 0;
   type HealSeen = { alive: boolean; n: number; healAt: unknown; drinking: { kind: string } | null; lowSince: number | null; hurtAt: number };
   const healSeen: HealSeen[] = diffs.map(() => ({ alive: false, n: 0, healAt: null, drinking: null, lowSince: null, hurtAt: -99 }));
   type HealP = { id: number; alive: boolean; hp: number; shield: number; pos: { x: number; z: number }; healAt?: unknown; drinking?: { kind: string } | null; inv: { medkits: number; potions?: Record<string, number | undefined> } };
@@ -218,7 +233,27 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
       srcs[p.id - 1].push(b?.moveSrc ?? '?');
       goals[p.id - 1].push(b?.currentGoal ?? '?');
     }
+    if ((snap.events as { type: string }[]).some((e) => ACTION_EVENTS.has(e.type))) lastAction = snap.time;
+    if (snap.players.filter((p) => !p.eliminated).length >= 2 && snap.time - lastAction > deadAir) { deadAir = snap.time - lastAction; deadAirAt = lastAction; }
     if (ticks % SAMPLE_TICKS === 0) {
+      const rivals = snap.players.filter((p) => !p.eliminated).length >= 2;
+      const sd = snap.time >= SD;
+      for (const p of snap.players) {
+        const b = bunkers[p.island];
+        const inOwn = Math.hypot(p.pos.x - b.x, p.pos.z - b.z) <= HOME_SIT_M;
+        const underFire = snap.time - (healSeen[p.id - 1]?.hurtAt ?? -99) < 3 ||
+          snap.players.some((o) => o.id !== p.id && o.alive && Math.hypot(o.pos.x - p.pos.x, o.pos.z - p.pos.z) < THREAT_M);
+        const shutIn = sd && bunkers.some((c) => Math.hypot(p.pos.x - c.x, p.pos.z - c.z) <= HOME_SIT_M);
+        const a = still.get(p.id);
+        if (!p.alive || p.eliminated || !rivals || p.breakoutUntil !== null || (inOwn && underFire) || shutIn || !a ||
+            Math.hypot(p.pos.x - a.x, p.pos.z - a.z) > FROZEN_M || (a.t < SD && sd)) {
+          still.set(p.id, { x: p.pos.x, z: p.pos.z, t: snap.time });
+          continue;
+        }
+        const s = seats[p.id - 1], held = snap.time - a.t;
+        if (sd) s.frozenMaxSd = Math.max(s.frozenMaxSd ?? 0, held);
+        else if (held > (s.frozenMax ?? 0)) { s.frozenMax = held; s.frozenAt = a.t; }
+      }
       const dt = SAMPLE_TICKS / TICK_HZ;
       for (const p of snap.players) {
         if (!p.alive || p.breakoutUntil !== null) continue;
@@ -331,6 +366,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   return {
     scenario, seed, winner, winnerDifficulty: winner ? diffs[winner - 1] : null, time: snap.time,
     decisive: winner !== null && snap.time < SD, preSdElims, preSdSeals, lateKills, elims, credited, spoils, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
+    deadAir, deadAirAt,
   };
 }
 
@@ -393,6 +429,11 @@ export type ScenarioSummary = {
   /** Vault use per game (all seats together). */
   vault: { deposits: number; banked: number; vaultPaid: number; restocks: number; interest: number; upgrades: number };
   shipCheck: { pass: boolean | null; checks: Check[] };
+  /**
+   * Stalls (absent on old shard files): the longest frozen bot (s) before sudden death, where (seed, seat, start), and
+   * from sudden death on; games with a bot frozen ≥ FROZEN_GATE_SEC; longest and median per-game dead air (s).
+   */
+  stalls?: { frozenMax: number; worst: string; frozenMaxSd: number; gamesFrozen: number; deadAirMax: number; deadAirWorst: string; deadAirMedian: number | null };
   /** Means per game (absent on old shard files): kills at 15:00+, eliminations, credited eliminations, spoils paid. */
   perGame?: { lateKills: number; elims: number; credited: number; spoils: number };
   /** Movement jitter per tier (per minute alive), the layers behind the flips, and the worst episodes. */
@@ -503,6 +544,18 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
       {} as { lateKills: number; elims: number; credited: number; spoils: number }),
     jitter: jitterSummary(games),
   };
+  if (seats.every((x) => x.frozenMax !== undefined) && games.every((g) => g.deadAir !== undefined)) {
+    let worst = '-', frozenMax = 0, frozenMaxSd = 0, gamesFrozen = 0, deadAirMax = 0, deadAirWorst = '-';
+    for (const g of games) {
+      g.seats.forEach((x, i) => {
+        if (x.frozenMax! > frozenMax) { frozenMax = x.frozenMax!; worst = `seed ${g.seed} p${i + 1} ${x.difficulty} from ${secs(x.frozenAt ?? 0)}`; }
+        frozenMaxSd = Math.max(frozenMaxSd, x.frozenMaxSd ?? 0);
+      });
+      if (g.seats.some((x) => Math.max(x.frozenMax!, x.frozenMaxSd ?? 0) >= FROZEN_GATE_SEC)) gamesFrozen++;
+      if (g.deadAir! > deadAirMax) { deadAirMax = g.deadAir!; deadAirWorst = `seed ${g.seed} from ${secs(g.deadAirAt ?? 0)}`; }
+    }
+    s.stalls = { frozenMax, worst, frozenMaxSd, gamesFrozen, deadAirMax, deadAirWorst, deadAirMedian: median(games.map((g) => g.deadAir!)) };
+  }
   const withBuild = seats.filter((x) => x.build);
   if (withBuild.length) {
     s.build = {};
@@ -521,6 +574,11 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
   } else if (ladder) {
     const name = scenario === '1v1-pro-vs-hard' ? 'PRO beats hard' : `${ladder.higher} beats ${ladder.lower}`;
     checks.push({ name: `${name} ≥ 80%`, pass: ladder.share >= 0.8, value: `${(100 * ladder.share).toFixed(0)}%` });
+  }
+  // Frozen bots (replay a.faereplay: two PROs stood still 10.7 min): the mixed FFA and the 4-PRO game.
+  if ((scenario === 'ffa8-mixed' || scenario === 'ffa4-pro') && s.stalls) {
+    const worst = Math.max(s.stalls.frozenMax, s.stalls.frozenMaxSd);
+    checks.push({ name: `no bot frozen ≥ ${FROZEN_GATE_SEC} s`, pass: worst < FROZEN_GATE_SEC, value: `${worst.toFixed(0)} s (${s.stalls.gamesFrozen} games)` });
   }
   s.shipCheck = { pass: checks.length ? checks.every((c) => c.pass) : null, checks };
   return s;
@@ -554,6 +612,9 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     ...sums.filter((s) => s.placementByTier).flatMap((s) => [`### ${s.scenario}: average placement by tier (1 = won)`, '',
       '| tier | mean placement | 95% CI | seats |', '|---|---|---|---|',
       ...Object.entries(s.placementByTier!).map(([d, p]) => `| ${d} | ${p!.mean.toFixed(2)} | ± ${p!.ci95.toFixed(2)} | ${p!.n} |`), '']),
+    `### Stalls (frozen: alive, a rival in the game, moved ≤ ${FROZEN_M} m; dead air: no hit, kill or build anywhere)`, '',
+    '| scenario | frozen max before 15:00 | worst | frozen max 15:00+ | games with a ≥ 45 s freeze | dead air max | worst | dead air median |', '|---|---|---|---|---|---|---|---|',
+    ...sums.filter((s) => s.stalls).map((s) => { const x = s.stalls!; return `| ${s.scenario} | ${x.frozenMax.toFixed(0)} s | ${x.worst} | ${x.frozenMaxSd.toFixed(0)} s | ${x.gamesFrozen}/${s.games} | ${x.deadAirMax.toFixed(0)} s | ${x.deadAirWorst} | ${x.deadAirMedian === null ? '-' : x.deadAirMedian.toFixed(0)} s |`; }), '',
     '### Eliminations per game (means)', '',
     '| scenario | kills 15:00+ | eliminations | credited | spoils paid |', '|---|---|---|---|---|',
     ...sums.filter((s) => s.perGame).map((s) => `| ${s.scenario} | ${s.perGame!.lateKills.toFixed(1)} | ${s.perGame!.elims.toFixed(1)} | ${s.perGame!.credited.toFixed(1)} | $${s.perGame!.spoils.toFixed(0)} |`), '',
