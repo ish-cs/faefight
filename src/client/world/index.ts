@@ -127,6 +127,7 @@ export class World {
     this.scene.add(this.scatter.root);
     this.scene.add(root);
     this.islands = root;
+    this.bundleOn = true;
     this.islandHulls = collidables;
     this.collidables.push(...collidables);
     const map = def.islands;
@@ -189,7 +190,7 @@ export class World {
     impostors.flush(this.gpu, this.scene.environment); // before the shader warm-up sees their materials
     // Static subtrees never move: compute their world matrices once and stop three re-deriving them every frame
     // (updateMatrixWorld was ~0.5 ms/frame of main-thread time). LOD only toggles .visible, which is unaffected.
-    for (const r of [this.islands, this.scatter.root, this.cosmetics.root]) {
+    for (const r of [this.islands, this.scatter.root, this.cosmetics.root, this.grass.root]) {
       if (!r) continue;
       r.updateMatrixWorld(true);
       r.traverse((o) => { o.matrixAutoUpdate = false; o.matrixWorldAutoUpdate = false; });
@@ -281,9 +282,29 @@ export class World {
   pieceEvent(e: MatchEvent, players: PlayerState[]) { this.pieceFx.onEvent(e, players); }
 
   /** `feet`: live player feet positions (grass bends away from them). */
+  /** Power saver on (main.ts): the static render bundle is used on every preset then. */
+  powerSaver = false;
+  private bundleOn = true;
+  /**
+   * The static render bundle (islands.ts) cuts main-thread submit cost but draws its map-wide meshes before the
+   * opaque list, so their pixels can't be early-z rejected under near objects: on ultra at 2× DPR (GPU-bound when
+   * plugged in) that cost ~5 % GPU-done fps at some views. So: on for low/high and whenever the power saver runs
+   * (battery: CPU-bound); off for ultra on mains. Off = the bundle group is drawn as a plain, culled group.
+   */
+  private applyBundle() {
+    const want = this.sky.quality !== 'ultra' || this.powerSaver;
+    if (want === this.bundleOn || !this.islands) return;
+    this.bundleOn = want;
+    for (const o of this.islands.children) if ((o as THREE.BundleGroup).type === 'BundleGroup') {
+      (o as unknown as { isBundleGroup: boolean }).isBundleGroup = want;
+      if (want) (o as THREE.BundleGroup).needsUpdate = true;
+    }
+  }
+
   render(waterY: number, focus?: THREE.Vector3, feet: THREE.Vector3[] = []) {
     const now = performance.now(), dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
+    this.applyBundle();
     if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY, dt);
     // water reflections follow the weather (its own envMapIntensity ignores scene.environmentIntensity)
     if (this.waterEnv) this.waterEnv.envMapIntensity = 0.62 * (1 - 0.65 * this.sky.lighting.weather);

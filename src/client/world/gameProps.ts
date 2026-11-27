@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { installBatchCull } from './batchCull';
 import { PROP_KIND_LIST, PROP_KINDS, type PropKind, type PropPose, type PropSpawn } from '../../sim/props';
 import type { Vec3 } from '../../sim/types';
 import { v3 } from '../../sim/vec';
@@ -128,6 +129,7 @@ export class GameProps {
       const instances = group.reduce((n, x) => n + x.list.length, 0);
       const verts = group.reduce((n, x) => n + x.geometry.getAttribute('position').count, 0);
       const mesh = new THREE.BatchedMesh(instances, verts, 0, material);
+      installBatchCull(mesh);
       mesh.name = `gameProp:${material.name || 'mat'}`;
       mesh.castShadow = false; // the shadow batch below casts for every material at once
       mesh.receiveShadow = true;
@@ -161,6 +163,7 @@ export class GameProps {
     }
     const merged = [...byKind].map(([, e]) => ({ geo: mergeGeometries(e.geos, false)!, list: e.list }));
     const shadow = new THREE.BatchedMesh(merged.reduce((n, x) => n + x.list.length, 0), merged.reduce((n, x) => n + x.geo.getAttribute('position').count, 0), 0, SHADOW_MAT);
+    installBatchCull(shadow);
     shadow.name = 'gameProp:shadow';
     shadow.castShadow = true;
     shadow.layers.set(SHADOW_ONLY_FIRST_LAYER);

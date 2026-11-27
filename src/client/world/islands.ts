@@ -5,7 +5,7 @@ import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec
 import { bunkerSlitBoxes, bunkerWallBoxes, harborBackdropFrame, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { registerDistanceCull } from './lod';
+import { registerDistanceCull, SHADOW_ONLY_FIRST_LAYER, SHADOW_ONLY_LAYER, TINY_CASTER_LAYER } from './lod';
 import { buildCenter, paintedTopMaterial } from './center';
 import { boxUV, mat, StaticBatch } from './geo';
 import { barrierProp, containerCover, containerLite, reefer, rtg } from './mapProps';
@@ -314,9 +314,47 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
     for (const p of raycastProxies(m, 24)) { if (p !== m) root.add(p); collidables.push(p); }
   }
   yield;
+  // static dressing (~50 materials, map-wide merged meshes) + island meshes as one WebGPU render bundle: recorded once per pass,
+  // replayed after that (no per-object projection, sort, pipeline lookup or draw encoding). Distance-culled chunks
+  // toggle .visible, which a bundle can't follow, so they stay outside it. ?nobundle = A/B.
+  const bundle = typeof location !== 'undefined' && location.search.includes('nobundle') ? null : new THREE.BundleGroup();
   dress.build(root, 'dressing', { chunked: true });
+  if (bundle) {
+    bundle.name = 'staticBundle';
+    // dressing + the other static island meshes (tops, walls, bunkers, structures, backdrop): visible, never toggled,
+    // opaque, and map-wide (bounding radius ≥ BUNDLE_MIN_R): frustum culling never drops those anyway, while the
+    // smaller ones (rock chunks, signs) are often off screen and are cheaper culled than drawn
+    for (const o of [...root.children]) {
+      const g = (o as THREE.Mesh).geometry;
+      // transparent ones (decals, puddles, glow) must draw after the opaque scene, and bundles draw first
+      if (!(o as THREE.Mesh).isMesh || !o.visible || o.userData.lod || ((o as THREE.Mesh).material as THREE.Material).transparent) continue;
+      if (!g.boundingSphere) g.computeBoundingSphere();
+      if (g.boundingSphere!.radius * o.scale.x >= BUNDLE_MIN_R) bundle.add(o);
+    }
+    // a bundle draws every object it holds in every pass (no culling): the camera can afford that for these map-wide
+    // meshes, the shadow cascades can't. So bundled meshes don't cast; a plain twin (same geometry + material) on a
+    // shadow-only layer casts instead, culled per cascade as before.
+    for (const o of [...bundle.children]) {
+      const m = o as THREE.Mesh;
+      const L = m.layers.mask;
+      const layer = L === 1 ? SHADOW_ONLY_LAYER : L === 1 << TINY_CASTER_LAYER ? SHADOW_ONLY_FIRST_LAYER : -1;
+      if (layer < 0) { root.add(m); continue; } // other layer setups (near-cascade-only casters): not bundled
+      if (!m.castShadow) continue;
+      const twin = new THREE.Mesh(m.geometry, m.material);
+      twin.name = `${m.name}#shadow`;
+      twin.castShadow = true; twin.receiveShadow = false;
+      twin.layers.set(layer);
+      twin.position.copy(m.position); twin.quaternion.copy(m.quaternion); twin.scale.copy(m.scale);
+      root.add(twin);
+      m.castShadow = false;
+    }
+    root.add(bundle);
+  }
   return { collidables, root };
 }
+
+/** static island meshes at least this big (bounding radius, m) are drawn from the render bundle (see buildIslandsSteps) */
+const BUNDLE_MIN_R = 120;
 
 type Rng = ReturnType<typeof makeRng>;
 type At = (x: number, y: number, z: number, ry?: number) => THREE.Matrix4;

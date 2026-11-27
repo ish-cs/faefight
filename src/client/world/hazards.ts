@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { installBatchCull } from './batchCull';
 import { HAZARD } from '../../sim/constants';
 import type { HazardDef, HazardKind } from '../../sim/map';
 import type { HazardNet, MatchEvent, Vec3 } from '../../sim/types';
@@ -227,6 +228,7 @@ export class HazardLayer {
     }
     if (shadowGeos.length) {
       const sh = new THREE.BatchedMesh(shadowGeos.reduce((n, x) => n + x.list.length, 0), shadowGeos.reduce((n, x) => n + x.geo.getAttribute('position').count, 0), 0, SHADOW_MAT);
+      installBatchCull(sh);
       sh.name = 'hazard:shadow';
       sh.castShadow = true;
       sh.layers.set(SHADOW_ONLY_FIRST_LAYER);

@@ -20,6 +20,11 @@ export const TINY_CASTER_LAYER = 5;
  */
 export const SHADOW_ONLY_FIRST_LAYER = 6;
 /**
+ * Shadow-only casters for every cascade (never drawn by the camera): the plain, per-cascade-culled shadow twins of
+ * the static meshes the camera draws from a render bundle (islands.ts; a bundle can't cull per cascade).
+ */
+export const SHADOW_ONLY_LAYER = 7;
+/**
  * Materials whose static parts never cast shadows (StaticBatch.add drops `cast`): self-lit panels, LEDs and lamp
  * lenses sit on or inside other surfaces, so their shadow is invisible but each is one more draw per cascade.
  */
