@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { cameraPosition, color, dot, exp, float, fog, luminance, max, mix, normalize, positionView, positionWorld, pow, smoothstep, uniform, vec3, vec4 } from 'three/tsl';
+import { cameraPosition, color, dot, exp, float, fog, luminance, max, mix, normalize, pmremTexture, positionView, positionWorld, pow, smoothstep, uniform, vec3, vec4 } from 'three/tsl';
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { perfOff } from './perfFlags';
@@ -31,7 +31,7 @@ export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathU
 type WeatherKey = {
   sun: number; sunColor: THREE.Color;
   hemi: number; hemiSky: THREE.Color; hemiGround: THREE.Color;
-  env: number; exposure: number;
+  env: number; exposure: number; envTint: THREE.Color;
   skyGain: number; skySat: number; turbidity: number; rayleigh: number; clouds: number; cloudDensity: number;
   haze: THREE.Color; hazeSun: THREE.Color; hazeDensity: number;
 };
@@ -39,17 +39,24 @@ const CLEAR: WeatherKey = {
   sun: 7.8, sunColor: new THREE.Color(0xffdfb4),
   // sky-blue from above, warm sand + teal sea bounce from below
   hemi: 0.2, hemiSky: new THREE.Color(0xbcd6f0), hemiGround: new THREE.Color(0xb8a27a).lerp(new THREE.Color(0x4f7f86), 0.35),
-  env: 0.68, exposure: 0.52,
+  env: 0.68, exposure: 0.572, envTint: new THREE.Color(1, 1, 1),
   skyGain: 0.7, skySat: 1.12, turbidity: 3, rayleigh: 1.5, clouds: 0.35, cloudDensity: 0.5,
   haze: new THREE.Color(0xa6c3dc), hazeSun: new THREE.Color(0xf6dcb0), hazeDensity: 0.0012,
 };
 const STORM: WeatherKey = {
   sun: 0.5, sunColor: new THREE.Color(0xa8b4c4),
   hemi: 0.75, hemiSky: new THREE.Color(0x7c8a9a), hemiGround: new THREE.Color(0x3c4a50),
-  env: 0.3, exposure: 0.62,
+  env: 0.3, exposure: 0.682, envTint: new THREE.Color(1, 1, 1),
   skyGain: 0.24, skySat: 0.12, turbidity: 10, rayleigh: 0.4, clouds: 1, cloudDensity: 1,
   haze: new THREE.Color(0x5f6a74), hazeSun: new THREE.Color(0x707a84), hazeDensity: 0.0065,
 };
+
+const WHITE = new THREE.Color(1, 1, 1);
+/** Extra exposure at full night (× 1 + this). */
+const NIGHT_LIFT = 0.25;
+/** How far the ambient (IBL) colour follows the haze hue away from the noon sky it was baked from (0..1). */
+const ENV_TINT = 0.45;
+const LUMA = new THREE.Vector3(0.2126, 0.7152, 0.0722), tmpV = new THREE.Vector3();
 
 /** The cycle's phase-0 look (= late morning, what CLEAR is tuned for): setDay scales CLEAR by look ÷ this. */
 const DAY0 = dayLook(0);
@@ -62,7 +69,7 @@ function ratioTint(base: THREE.Color, look: Rgb, ref: Rgb, out: THREE.Color, hue
   return out.setRGB(base.r * r, base.g * g, base.b * bl);
 }
 const cloneKey = (k: WeatherKey): WeatherKey => ({
-  ...k, sunColor: k.sunColor.clone(), hemiSky: k.hemiSky.clone(), hemiGround: k.hemiGround.clone(), haze: k.haze.clone(), hazeSun: k.hazeSun.clone(),
+  ...k, envTint: k.envTint.clone(), sunColor: k.sunColor.clone(), hemiSky: k.hemiSky.clone(), hemiGround: k.hemiGround.clone(), haze: k.haze.clone(), hazeSun: k.hazeSun.clone(),
 });
 
 const SKY = { turbidity: CLEAR.turbidity, rayleigh: CLEAR.rayleigh, mieCoefficient: 0.002, mieDirectionalG: 0.9 };
@@ -105,7 +112,19 @@ export class Lighting {
     hazeHeightFalloff: uniform(0.012),
     /** brightness of the bounce hemisphere baked into the environment map (tweak, then buildEnvironment()) */
     envGround: uniform(12),
+    /**
+     * Colour of the image-based ambient for the time of day (linear, ~1 at the brightest channel). The env map is
+     * baked once from the late-morning sky; without this, golden hour and dusk shade every surface in noon blue
+     * (backlit sunset ground read as lavender snow). Intensity stays scene.environmentIntensity.
+     */
+    envTint: uniform(new THREE.Color(1, 1, 1)),
   };
+  /**
+   * The scene's IBL: the PMREM'd sky env map × envTint. Set as scene.environmentNode (and the water's envNode), so
+   * the tint is a uniform: changing the time of day never recompiles.
+   */
+  envNode: THREE.Node<'vec3'> | null = null;
+  private envPmrem: ReturnType<typeof pmremTexture> | null = null;
   /** current weather 0 (clear) .. 1 (storm) */
   weather = 0;
   /** time of day: 0 day → 1 night (setDay) */
@@ -120,7 +139,9 @@ export class Lighting {
   csm: CSMShadowNode | null = null;
 
   constructor(private gpu: THREE.WebGPURenderer, private scene: THREE.Scene) {
-    gpu.toneMapping = THREE.ACESFilmicToneMapping; // the display grade (post.ts) is tuned around ACES' shoulder
+    // Khronos PBR Neutral: linear up to ~0.76, then a soft shoulder with little hue shift. Keeps base colours and the
+    // blue sky honest (ACES washed the noon frame out and pushed sunsets to yellow); the grade (post.ts) adds contrast.
+    gpu.toneMapping = THREE.NeutralToneMapping;
     gpu.toneMappingExposure = CLEAR.exposure;
     gpu.shadowMap.enabled = true;
     gpu.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is removed in WebGPURenderer; soften via radius
@@ -181,6 +202,12 @@ export class Lighting {
       envScene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 48, 16, 0, Math.PI * 2, Math.PI / 2 + 0.02, Math.PI / 2), groundMat));
       const pmrem = new THREE.PMREMGenerator(this.gpu);
       this.scene.environment = pmrem.fromScene(envScene, 0.02).texture;
+      if (this.envPmrem) this.envPmrem.value = this.scene.environment;
+      else {
+        this.envPmrem = pmremTexture(this.scene.environment);
+        this.envNode = this.envPmrem.mul(this.u.envTint);
+        this.scene.environmentNode = this.envNode;
+      }
       this.scene.environmentIntensity = this.envIntensity();
       pmrem.dispose();
     } catch (err) {
@@ -222,6 +249,10 @@ export class Lighting {
     ratioTint(CLEAR.sunColor, look.lightC, r.lightC, d.sunColor);
     d.hemi = CLEAR.hemi * amb;
     ratioTint(CLEAR.hemiSky, look.haze, r.haze, d.hemiSky, true);
+    // ambient hue follows the sky haze (warmer golden hour, mauve dusk, blue night), part of the way; hue only (unit
+    // luminance): how bright the ambient is stays look.env
+    ratioTint(WHITE, look.haze, r.haze, d.envTint);
+    d.envTint.multiplyScalar(1 / Math.max(1e-4, LUMA.dot(tmpV.set(d.envTint.r, d.envTint.g, d.envTint.b)))).lerp(WHITE, 1 - ENV_TINT);
     d.env = CLEAR.env * amb;
     d.exposure = CLEAR.exposure * (look.exposure / r.exposure);
     d.skyGain = CLEAR.skyGain * (look.skyGain / r.skyGain);
@@ -260,6 +291,7 @@ export class Lighting {
     q.haze.copy(STORM.haze).multiplyScalar(dark);
     q.hazeSun.copy(STORM.hazeSun).multiplyScalar(dark);
     q.hazeDensity = Math.max(d.hazeDensity, STORM.hazeDensity);
+    q.envTint.copy(d.envTint).lerp(WHITE, 0.5); // overcast: greyer ambient
 
     const L = THREE.MathUtils.lerp;
     const C = (a: THREE.Color, b: THREE.Color, out: THREE.Color) => out.copy(a).lerp(b, t);
@@ -269,7 +301,9 @@ export class Lighting {
     C(d.hemiSky, q.hemiSky, this.hemi.color);
     C(d.hemiGround, q.hemiGround, this.hemi.groundColor);
     this.scene.environmentIntensity = this.envIntensity();
-    this.gpu.toneMappingExposure = L(d.exposure, q.exposure, t);
+    C(d.envTint, q.envTint, this.u.envTint.value);
+    // Neutral has no toe lift (ACES had): open up a little more as night falls so the dark stays readable
+    this.gpu.toneMappingExposure = L(d.exposure, q.exposure, t) * (1 + NIGHT_LIFT * n);
     const u = this.u;
     u.skyGain.value = L(d.skyGain, q.skyGain, t);
     u.skySaturation.value = L(d.skySat, q.skySat, t);

@@ -80,7 +80,7 @@ function addNightSky(sky: SkyMesh) {
 }
 
 /**
- * Sky dome, image-based lighting, warm cascaded-shadow sun, aerial-perspective haze, ACES tone mapping, colour
+ * Sky dome, image-based lighting, warm cascaded-shadow sun, aerial-perspective haze, Neutral tone mapping, colour
  * grade, and (high/ultra) GTAO + bloom. Owns the frame's final draw so the post chain follows the quality preset.
  */
 export class SkyLighting {
