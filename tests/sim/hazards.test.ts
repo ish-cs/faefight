@@ -339,8 +339,10 @@ describe('bots and hazards', () => {
 
   test('pro bots sometimes shoot the barrel next to an enemy; easy bots never do', async () => {
     // Deliberate (the bot chose the barrel as its target), not a stray bullet: a choice, so not every time.
+    // Seeds 1–16 (was 1–6: on main 21 of 32 seeds aim at the very first roll, so 6 seeds all at once, failing the
+    // spread check, was a ~8% draw; with 16 it's (21/32)^16 ≈ 0.1%). Main (0974cc78): 16/16 shoot it, aim times 0.03–4.9 s.
     const pro = [];
-    for (const seed of [1, 2, 3, 4, 5, 6]) pro.push(await duel('pro', seed));
+    for (let seed = 1; seed <= 16; seed++) pro.push(await duel('pro', seed));
     expect(pro.filter((r) => r.aimed && r.barrelBy === 2).length).toBeGreaterThan(0);
     // A roll per opportunity (BARREL_ROLL_SEC apart), not a reflex: some bots pass on the first ones.
     const times = pro.map((r) => r.aimedAt).sort((a, b) => a - b);
@@ -363,8 +365,10 @@ describe('bots and hazards', () => {
   });
 
   test('a bot breaks a supply crate it is standing near when nothing else is going on', async () => {
+    // Was ≥ 2 of seeds 1–4, and main sat on exactly 2. Main (0974cc78) over seeds 1–32: 18 break it (p 0.56, a roll per
+    // chance, not a reflex). Floor for 16 seeds = 16 × (p − 2·sqrt(s²/16 + s²/32)) = 4.1 → ≥ 5 (main on 1–16: 9).
     let broke = 0;
-    for (const seed of [1, 2, 3, 4]) {
+    for (let seed = 1; seed <= 16; seed++) {
       const m = await Match.create({ players: [{ name: 'me', isBot: false }, { name: 'Bot', isBot: true, difficulty: 'hard' }], seed });
       const c = firstOf(m, 'crate', 1);
       place(m, 1, m.def.islands[0].center);
@@ -373,6 +377,6 @@ describe('bots and hazards', () => {
       const { events } = tick(m, 10);
       if (events.some((e) => e.type === 'hazard' && e.data.what === 'break' && e.data.id === c.id && e.data.by === 2)) broke++;
     }
-    expect(broke).toBeGreaterThan(1);
+    expect(broke).toBeGreaterThanOrEqual(5);
   });
 });
