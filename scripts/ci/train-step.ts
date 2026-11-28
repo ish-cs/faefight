@@ -1,15 +1,13 @@
 /// <reference types="node" />
-// @ts-nocheck — imports the ES trainer (scripts/train/*, src/sim/bots/params.ts), which isn't on main yet.
-// Remove this line once the trainer lands so tsc checks this file too.
 /**
- * One step of the ES trainer (scripts/train-bots.ts) split for GitHub Actions (.github/workflows/bot-train.yml):
+ * One step of the ES trainer (scripts/train/*) split for GitHub Actions (.github/workflows/bot-train.yml):
  * one workflow run = one generation, its games sharded over a job matrix, the state carried in an artifact.
  *
  *   tsx scripts/ci/train-step.ts play   --state <dir> --phase gen|eval --shard i --shards n --out shard.json
  *   tsx scripts/ci/train-step.ts update --state <dir> --results <dir> --out <dir>     (ES update after the gen games)
  *   tsx scripts/ci/train-step.ts eval   --state <dir> --results <dir> --out <dir>     (champion vs hand-tuned)
  *
- * <dir> holds state.json + log.jsonl (same format as the local trainer's .train/, so `--resume` works on it),
+ * <dir> holds state.json + log.jsonl (read by scripts/gh-train.sh fetch),
  * ci-config.json (the run's TrainConfig, fixed at generation 0) and trained-params.json (the champion).
  * The games of a generation are reproduced on every shard from the state alone: runGeneration/headToHead are
  * seeded, so each shard asks them for the match list, plays its slice, and the update job feeds the gathered
@@ -19,7 +17,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_PARAMS, HAND_PARAMS, decode, encode, sanitize } from '../../src/sim/bots/params';
+import { HAND_PARAMS, PROXY_HAS_PRE_STRENGTH, decode, encode, sanitize, type FlatParams } from '../train/params';
 import { DEFAULT_ES, initEs, type EsState } from '../train/es';
 import { headToHead, runGeneration, type TrainConfig } from '../train/generation';
 import { runMatch, type MatchResult, type MatchSpec } from '../train/runMatch';
@@ -63,7 +61,7 @@ async function capture(f: (run: (s: MatchSpec[]) => Promise<MatchResult[]>) => P
 const evalSeeds = (cfg: CiConfig) => Array.from({ length: Math.ceil(cfg.evalGames / 2) }, (_, i) => 900_000 + i);
 const genSpecs = (s: Saved, c: CiConfig) => capture((run) => runGeneration(s.es, decode(s.es.mean), s.hall.map(decode), c.train, run));
 const evalSpecs = (s: Saved, c: CiConfig) => capture((run) => headToHead(
-  { kind: 'new', params: decode(s.es.mean), difficulty: 'pro' }, { kind: 'new', params: HAND_PARAMS, difficulty: 'pro' },
+  { kind: 'new', params: decode(s.es.mean), difficulty: 'pro' }, { kind: 'new', params: { ...HAND_PARAMS }, difficulty: 'pro' },
   evalSeeds(c), c.train.players, c.train.maxSec, run));
 
 /** Results from all shards, back in spec order; fails loudly if any game is missing or doesn't match. */
@@ -111,24 +109,34 @@ const cmd = args[0];
 if (cmd === 'init') {
   // New run: generation 0 from hand-tuned params (or the current champion with --from-trained).
   const over = JSON.parse(get('config') || '{}') as Record<string, unknown>;
-  const known = ['lambda', 'games', 'candSeats', 'players', 'maxSec', 'seed', 'duels', 'duelWeight', 'evalEvery', 'evalGames'];
+  const known = ['lambda', 'games', 'candSeats', 'players', 'maxSec', 'seed', 'duels', 'duelWeight', 'proxySeats', 'evalEvery', 'evalGames'];
   for (const k of Object.keys(over)) if (!known.includes(k)) throw new Error(`train-step: unknown config key "${k}" (known: ${known.join(', ')})`);
   const num = (k: string, d: number) => { const v = over[k] ?? d; if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`train-step: config.${k} must be a number`); return v; };
   const gens = Number(need('generations'));
   if (!Number.isInteger(gens) || gens < 1 || gens > MAX_GENERATIONS) throw new Error(`train-step: generations must be 1..${MAX_GENERATIONS}, got ${gens}`);
-  // Defaults = scripts/train-bots.ts.
+  // 8-player FFAs: 4 candidates + champion + 2 human proxies (1 seat in 4) + hall of fame / hand; 14 FFAs + 6 duels a generation.
+  const players = num('players', 8), candSeats = num('candSeats', 4);
   const train: TrainConfig = {
-    es: { ...DEFAULT_ES, lambda: num('lambda', DEFAULT_ES.lambda) }, games: num('games', 5), candSeats: num('candSeats', 5),
-    players: num('players', 8), maxSec: num('maxSec', 18 * 60), seed: num('seed', 1), duels: num('duels', 6), duelWeight: num('duelWeight', 1.5),
+    es: { ...DEFAULT_ES, lambda: num('lambda', DEFAULT_ES.lambda) }, games: num('games', 4), candSeats,
+    players, maxSec: num('maxSec', 18 * 60), seed: num('seed', 1), duels: num('duels', 6), duelWeight: num('duelWeight', 1.5),
+    proxySeats: num('proxySeats', Math.max(0, Math.min(players - candSeats - 1, Math.round(players / 4)))),
   };
   const fromTrained = get('from-trained') === 'true';
+  let start: FlatParams = { ...HAND_PARAMS };
+  if (fromTrained) {
+    const f = path.resolve('src/sim/bots/trained-params.json');
+    if (!fs.existsSync(f)) throw new Error(`train-step: --from-trained true but ${f} does not exist`);
+    const j = JSON.parse(fs.readFileSync(f, 'utf8')) as { params?: Record<string, number> };
+    if (!j.params) throw new Error(`train-step: ${f} has no params`);
+    start = sanitize(j.params);
+  }
   const cfg: CiConfig = { train, evalEvery: num('evalEvery', 5), evalGames: num('evalGames', 100), stopAtGen: gens, fromTrained };
-  const saved: Saved = { es: initEs(encode(fromTrained ? DEFAULT_PARAMS : HAND_PARAMS), train.es), hall: [], games: 0, evals: [] };
+  const saved: Saved = { es: initEs(encode(start), train.es), hall: [], games: 0, evals: [] };
   const dir = need('out');
   save(dir, saved, cfg);
   fs.writeFileSync(path.join(dir, 'log.jsonl'), '');
   const specs = await genSpecs(saved, cfg);
-  console.log(`init: ${gens} generations, λ=${train.es.lambda}, ${specs.length} games/generation, eval every ${cfg.evalEvery} (${cfg.evalGames} games)`);
+  console.log(`init: ${gens} generations, λ=${train.es.lambda}, ${specs.length} games/generation (${train.proxySeats} human-proxy seats per FFA, proxy params: ${PROXY_HAS_PRE_STRENGTH ? 'PRE_STRENGTH_PARAMS' : 'DEFAULT_BOT_PARAMS'}), eval every ${cfg.evalEvery} (${cfg.evalGames} games)`);
 } else if (cmd === 'match') {
   const spec = JSON.parse(fs.readFileSync(need('spec'), 'utf8')) as MatchSpec;
   fs.writeFileSync(need('out'), JSON.stringify(await runMatch(spec)));
@@ -153,7 +161,7 @@ if (cmd === 'init') {
     return results;
   });
   saved.games += stats.games;
-  if (saved.es.gen % 3 === 0) saved.hall = [...saved.hall, saved.es.mean].slice(-8); // as scripts/train-bots.ts
+  if (saved.es.gen % 3 === 0) saved.hall = [...saved.hall, saved.es.mean].slice(-8); // hall of fame: every 3rd mean, last 8
   saved.es = next;
   fs.mkdirSync(outDir, { recursive: true });
   if (outDir !== dir) fs.copyFileSync(path.join(dir, 'log.jsonl'), path.join(outDir, 'log.jsonl'));
@@ -161,7 +169,7 @@ if (cmd === 'init') {
   save(outDir, saved, cfg);
   const evalDue = saved.es.gen % cfg.evalEvery === 0 || saved.es.gen >= cfg.stopAtGen;
   const done = saved.es.gen >= Math.min(cfg.stopAtGen, MAX_GENERATIONS);
-  const line = `gen ${stats.gen}: fit mean ${stats.meanFit.toFixed(3)} best ${stats.bestFit.toFixed(3)} · field ${Object.entries(stats.field).map(([k, v]) => `${k} ${v.toFixed(3)}`).join(' ')} · duels vs old ${stats.duelWinRate === null ? '-' : `${(100 * stats.duelWinRate).toFixed(0)}%`} · decisive ${(100 * stats.decisive).toFixed(0)}% · ${stats.avgMinutes.toFixed(1)} min · σ ${stats.sigma.toFixed(3)}`;
+  const line = `gen ${stats.gen}: fit mean ${stats.meanFit.toFixed(3)} best ${stats.bestFit.toFixed(3)} · field ${Object.entries(stats.field).map(([k, v]) => `${k} ${v.toFixed(3)}`).join(' ')} · duels vs proxy ${stats.duelWinRate === null ? '-' : `${(100 * stats.duelWinRate).toFixed(0)}%`} · above all proxies ${stats.beatProxy === null ? '-' : `${(100 * stats.beatProxy).toFixed(0)}%`} · decisive ${(100 * stats.decisive).toFixed(0)}% · ${stats.avgMinutes.toFixed(1)} min · σ ${stats.sigma.toFixed(3)}`;
   console.log(line);
   fs.writeFileSync(path.join(outDir, 'summary.md'), `### Generation ${stats.gen} (of ${cfg.stopAtGen})\n\n${line}\n\n${stats.games} games · ${saved.games} total\n`);
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `gen=${saved.es.gen}\neval_due=${evalDue}\ndone=${done}\n`);
@@ -170,7 +178,7 @@ if (cmd === 'init') {
   const { saved, cfg } = load(dir);
   const specs = await evalSpecs(saved, cfg);
   const results = gather(need('results'), specs, 'eval', saved.es.gen);
-  const h = await headToHead({ kind: 'new', params: decode(saved.es.mean), difficulty: 'pro' }, { kind: 'new', params: HAND_PARAMS, difficulty: 'pro' },
+  const h = await headToHead({ kind: 'new', params: decode(saved.es.mean), difficulty: 'pro' }, { kind: 'new', params: { ...HAND_PARAMS }, difficulty: 'pro' },
     evalSeeds(cfg), cfg.train.players, cfg.train.maxSec, async () => results);
   saved.games += h.results.length;
   const ev = { gen: saved.es.gen, share: h.share, ci95: h.ci95, decisive: h.decisive, games: h.results.length, fitA: h.fitA, fitB: h.fitB };
