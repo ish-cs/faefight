@@ -292,6 +292,26 @@ export type AimFeel = { spring: number; damping: number; maxAccel: number; drift
 export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; switchRatio: number };
 
 /**
+ * Where a bot looks when it isn't shooting (gaze.ts): like a person, along the way it walks, drifting a little, with
+ * the odd glance at a threat or around; eyes on an enemy only to shoot, when threatened, or a short look on first
+ * sighting. Per skill:
+ * - firstLookSec: look at a newly sighted enemy this long (× 0.6–1.4), then back to the path.
+ * - glanceRate: calm glances per second (look at an enemy in sight / where one was last seen, or around).
+ * - glanceSec: how long a glance lasts (× 0.6–1.4).
+ * - threatShare: share of glances that check an enemy (in sight or last seen) rather than just looking around.
+ * - driftDeg: how far the calm view wanders off the path (SD, degrees).
+ * - turnRate: calm turn speed cap (rad/s); engaging uses the aim hand's full speed.
+ */
+export type GazeSkill = { firstLookSec: number; glanceRate: number; glanceSec: number; threatShare: number; driftDeg: number; turnRate: number };
+/**
+ * - engageHoldSec: keep my eyes on the enemy I engaged this long after I'd stop shooting (no flicking away mid-fight).
+ * - threatSec: an enemy who hit me within this long is a threat: eyes on them (or where they were).
+ * - aimedAtDeg / aimedAtM: an armed enemy within aimedAtM whose view points within aimedAtDeg of me is a threat.
+ * - resightSec / firstLookM: an enemy unseen this long gets a fresh first look when they show up again within firstLookM.
+ */
+export type GazeParams = { skill: Record<Difficulty, GazeSkill>; engageHoldSec: number; threatSec: number; aimedAtDeg: number; aimedAtM: number; resightSec: number; firstLookM: number };
+
+/**
  * Gun handling against recoil (the sim's recoil climbs the shooter's real aim, gunplay.recoilKick), per skill. Like a
  * strong human: pull the climb back down, tap/burst at range so recoil and bloom settle, spray up close.
  * - recoilComp: share of each kick pulled back down on the next tick (0 = rides the climb, 1 = perfect).
@@ -389,7 +409,7 @@ export type StrengthParams = {
   leaderFocus: Record<Difficulty, number>;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams; strength: StrengthParams };
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gaze: GazeParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams; strength: StrengthParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -518,6 +538,16 @@ export const AIM_PARAMS: AimParams = {
   switchRatio: 0.6,
 };
 
+export const GAZE: GazeParams = {
+  skill: {
+    easy: { firstLookSec: 1.3, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.35, driftDeg: 12, turnRate: 4 },
+    medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5 },
+    hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6 },
+    pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7 },
+  },
+  engageHoldSec: 1.2, threatSec: 2.5, aimedAtDeg: 6, aimedAtM: 35, resightSec: 10, firstLookM: 50,
+};
+
 /** Easy sprays at any range (sprayRange Infinity: not tunable); better players compensate harder and burst at range. */
 export const GUN_SKILL: Record<Difficulty, GunSkill> = {
   easy: { recoilComp: 0.25, burstShots: 30, burstPause: 0.3, sprayRange: Infinity },
@@ -555,7 +585,7 @@ export const STRENGTH: StrengthParams = {
   leaderFocus: D(0, 0, 0, 0),
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH });
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gaze: GAZE, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH });
 
 /**
  * The hand params with every strength.* knob off: bot behaviour exactly as before 2026-11-28 (same code path). The
@@ -638,6 +668,8 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['trap.carry.*', [0, 3]], ['trap.rich', [100, 1200]], ['trap.setScore', [0.1, 1]], ['trap.avoidPad', [0, 1.5]], ['trap.shootRange', [3, 20]],
   ['aim.feel.*.spring', [6, 45]], ['aim.feel.*.damping', [0.55, 1.2]], ['aim.feel.*.maxAccel', [40, 600]],
   ['aim.feel.*.driftHz', [0.5, 8]], ['aim.feel.*.holdSec', [0, 2]], ['aim.commitSec', [0, 2]], ['aim.switchRatio', [0.3, 1]],
+  ['gaze.skill.*.firstLookSec', [0.1, 2.5]], ['gaze.skill.*.glanceRate', [0, 0.6]], ['gaze.skill.*.glanceSec', [0.2, 2.5]], ['gaze.skill.*.threatShare', [0, 1]],
+  ['gaze.skill.*.driftDeg', [0, 25]], ['gaze.skill.*.turnRate', [2, 12]], ['gaze.engageHoldSec', [0.2, 4]], ['gaze.threatSec', [0.5, 6]], ['gaze.aimedAtDeg', [0, 20]], ['gaze.aimedAtM', [0, 80]], ['gaze.resightSec', [1, 30]], ['gaze.firstLookM', [10, 120]],
   ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
   ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
