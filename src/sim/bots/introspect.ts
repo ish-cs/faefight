@@ -61,6 +61,8 @@ export type BrainDigest = {
   build: { kind: PieceKind; x: number; y: number; z: number; rotY: number; why: string } | null;
   /** Grappling hook: on a rope now, or its last use (a few seconds), or what it carries it for; absent when none. */
   hook?: string;
+  /** Cut off from home (no walk, no decks, no hook hold home): for how long, and when it swims for it (drive.strandedSec). */
+  stranded?: string;
   /** Healing intent (heal.ts): the last heal decision (a few seconds), else heals carried vs the stock it wants. */
   heal?: string;
   /** Smoke / flash (utilityPlan.ts): its last throw or reaction (a few seconds), else what it carries; absent when none. */
@@ -118,7 +120,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; lowHpFarOff(c: Ctx): boolean; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; richRifle(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null;
   stormPrep(view: BotView): boolean; sealingSoon(view: BotView): boolean; leaveBeforeBarriers(c: Ctx): boolean; rivalShutIn(c: Ctx): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
@@ -128,6 +130,7 @@ type Internals = {
   pushLead(view: BotView): { id: number; target: number | null } | null; allyIsland(view: BotView, i: number): boolean;
   sieging(c: Ctx): boolean; nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null;
   hookNote: { t: number; text: string } | null;
+  strandedSince: number | null;
   healNote: { t: number; text: string } | null; healWant: number;
   utilNote: { t: number; text: string } | null;
   slitNote: { t: number; text: string } | null;
@@ -200,7 +203,8 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     case 'disengage': {
       if (!c.enemy && now - I.mem.lastHurtAt > 1.5) return zero('not under fire');
       const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + I.sealedCaution(c);
-      if (hp < low) {
+      const reach = !I.lowHpFarOff(c);
+      if (hp < low && reach) {
         return { f: [['low hp', 1.15], ['below bail line', low - hp]], why: `Down to ${Math.round(me.hp)} hp, under my bail-out line of ${Math.round(low * 100)}: backing off` };
       }
       const e = c.enemy;
@@ -338,15 +342,17 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const blocked = (I as unknown as { buyBlockedUntil: Map<ShopItem, number> }).buyBlockedUntil.get(plan.items[0]) ?? -Infinity;
       if (blocked > now) return zero(`${plan.items[0]} buy failed, waiting`);
       const list = shopList(plan.items);
-      if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return { f: [['at the shop', 0.9]], why: `At the shop: buying ${list}` };
-      const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv));
+      if (dist2D(me.pos, shop) < 4 && plan.spent <= me.inv.cash) return { f: [['at the shop', Math.max(0.9, I.richRifle(c, plan.items))]], why: `At the shop: buying ${list}` };
+      const decksHome = !c.homeReach && !me.inv.pieces.scaffold && plan.items.includes('scaffold');
+      const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv)) || decksHome;
       const v0 = urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0;
-      const rifle = plan.items[0] === 'rifle' && I.outrangedLately(now) ? 0.7 : 0, eg = I.endgameKit(c, plan.items);
-      const v = Math.max(v0, rifle, eg);
+      const rifle = plan.items[0] === 'rifle' && I.outrangedLately(now) ? 0.7 : 0, rich = I.richRifle(c, plan.items), eg = I.endgameKit(c, plan.items);
+      const base = Math.max(v0, rifle, eg), useRich = rich > 0 && rich >= base - away;
+      const v = useRich ? rich : base;
       if (!v) return zero('saving up');
-      const f: [string, number][] = [[v === v0 ? (urgent ? 'urgent buy' : 'kit affordable') : v === rifle ? 'out-ranged: rifle' : 'endgame seal kit', v]];
-      if (away) f.push(['away', -away]);
-      return { f, why: `Off to buy ${list} ($${Math.round(plan.spent)})${urgent ? `: I need ${plan.items.includes('pistol') ? 'a gun' : plan.items.includes('charge') ? 'a charge' : 'ammo'}` : ''}` };
+      const f: [string, number][] = [[useRich ? 'rich: rifle' : v === v0 ? (urgent ? 'urgent buy' : 'kit affordable') : v === rifle ? 'out-ranged: rifle' : 'endgame seal kit', v]];
+      if (away && !useRich) f.push(['away', -away]);
+      return { f, why: `Off to buy ${list} ($${Math.round(plan.spent)})${urgent ? `: I need ${plan.items.includes('pistol') ? 'a gun' : plan.items.includes('charge') ? 'a charge' : decksHome ? 'decks to get home' : 'ammo'}` : ''}` };
     }
     case 'bridge': {
       const have = me.inv.pieces.scaffold ?? 0;
@@ -433,7 +439,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const state = rivalDown
         ? `${died !== undefined ? `died ${secs(now - died)} ago, ` : ''}respawn in ${secs(c.rival!.respawnAt! - now)}`
         : ownerAway ? 'they are away from home' : 'their doors are open';
-      return { f, why: `Sealing ${rivalName(c)}'s bunker: ${state}, I carry ${pieceWord(kit)} for ${c.openDoors.length} door${c.openDoors.length === 1 ? '' : 's'}${!c.reach ? ' (hooking over: no bridge yet)' : ''}` };
+      return { f, why: `Sealing ${rivalName(c)}'s bunker: ${state}${!c.reach ? ' (hooking over: no bridge yet)' : ''}, I carry ${pieceWord(kit)} for ${c.openDoors.length} door${c.openDoors.length === 1 ? '' : 's'}` };
     }
     case 'cut': {
       if (!gun) return zero('no gun');
@@ -769,6 +775,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     plan: plan.steps, planAt: plan.at,
     shop: p.shop, build: p.build(now),
     ...hookLine(I, me, now),
+    ...(me?.alive && I.strandedSince !== null ? { stranded: `Cut off from home ${Math.round(now - I.strandedSince)} s: swims home at ${I.P.drive.strandedSec} s unless a hook or a seller gets me there` } : {}),
     ...healLine(I, me, now),
     ...utilLine(I, me, now),
     ...(me?.alive && I.weaponIntent ? { weapon: I.weaponIntent.why } : {}),

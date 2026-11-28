@@ -24,7 +24,7 @@ import { crossTo, escapeFrom, hookReady, yankReason, type HookIntent } from './h
 import { dropForHeal, healPlan, healStock, hpHealsHeld, type HealPlan } from './heal';
 import { Beliefs } from './belief';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
-import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
+import { HOP_UP, Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
 import {
   GUNS, TALL, bestGun, doorBlocked, doorPieces, hasAmmo, isHard, nextPurchase, ownsGun, plugFor, plugSpot, potionAction, sealKit,
@@ -74,6 +74,10 @@ const FOE_HOLD_SEC = 0.5, FOE_SWITCH = 0.7;
 const COVER_LEAVE_M = 1.5;
 /** Out of a barrel's danger zone (hazardAvoid), this much further is where I stop walking straight back toward it. */
 const HAZARD_FENCE_M = 1;
+/** Standing this much higher than my vault, it's out of reach (Match: within 2 m of its height). */
+const VAULT_REACH_Y = 1.8;
+/** Lower than this above my feet a piece is stepped over, not hopped. */
+const STEP_HOP = 0.4;
 const TURN_RATE = 8;
 /** Beyond this, an enemy on another island isn't worth abandoning the current goal for. */
 const ENGAGE_RANGE = 25;
@@ -143,6 +147,10 @@ const STORM_PREP_SEC = 150;
 const KIT_PIECES: PieceKind[] = ['steel', 'metal', 'wood', 'sandbags'];
 /** Shop score of the trip for a rifle while out-ranged lately (strength.outranged). */
 const RIFLE_TRIP = 0.7;
+/** Shop trip score for the early rifle once rich enough (strength.rifleAt): as good as standing at the counter. */
+const RICH_RIFLE_TRIP = 0.9;
+/** ... and with the counter this close and nobody on me: a few seconds that beat camping a sealed door (attack ~1.75). */
+const RICH_RIFLE_NEAR_M = 20, RICH_RIFLE_NEAR = 1.8;
 /** Storm goal score for leaving my bunker before sudden death's slabs drop (above every other goal), and how far past the doorway to go. */
 const BARRIER_LEAVE = 2, BUNKER_EXIT = 3;
 /** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
@@ -181,11 +189,6 @@ const INSURANCE = WEAPONS.pistol.price + 25;
 const BUNKER_OUT = SEAL.exitRadius + 0.8;
 /** Grappling hook: uses are weighed this often; a chosen one holds this long while I turn to fire it. */
 const HOOK_CHECK_SEC = 0.25, HOOK_HOLD_SEC = 1.2;
-/**
- * Cut off from home with no hook to buy and no way to bridge: hold out (fight, collect) this long before the last
- * resort, the water (a death; the respawn puts me home).
- */
-const STRANDED_LAST_SEC = 90;
 /** Goals that want me at home (hooked back to when I can't walk there). */
 const HOME_GOALS = new Set<Goal>(['shop', 'bank', 'collect', 'fortify', 'defend', 'guard', 'heal']);
 
@@ -403,6 +406,8 @@ export class Bot {
   private nextHookCheck = 0;
   /** When I noticed I'm stranded with no way home (strandedDitch). */
   private strandedSince: number | null = null;
+  /** Last tick strandedDitch sent me into the water (the off-node "still cut off" rule holds only while it does). */
+  private ditching = false;
   hookNote: { t: number; text: string } | null = null;
   /** Blowing out a pier section under an enemy (or under the piece they hide behind): which, how, and why. */
   private dockPlan: { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number } | null = null;
@@ -513,6 +518,7 @@ export class Bot {
       this.fightSince = null;
       this.hookIntent = null;
       this.strandedSince = null;
+      this.ditching = false;
       this.healHideAt = null;
       this.lastEff = 0;
       this.nextScoreAt = -Infinity;
@@ -556,8 +562,9 @@ export class Bot {
     this.moveSrc = this.retreat ? 'retreat' : thinking ? 'hesitate' : this.goal;
     let act = this.retreat ? { dir: norm(flat(sub(me.pos, this.retreat.from))) } : thinking ? IDLE : this.act(this.goal, ctx);
     // Cut off from home: get a hook here and hook home (fighting comes first: enemies in sight keep the goal's act).
+    // (A rival in sight across the water isn't a fight: one 90 m off held a PRO still 3 min, ffa8-pro seed 5.)
     const rescue = this.strandedAct(ctx);
-    if (rescue && !ctx.enemy) { act = rescue; this.moveSrc = 'stranded'; }
+    if (rescue && !ctx.danger) { act = rescue; this.moveSrc = 'stranded'; }
     // An enemy spike trap in my way with nobody in sight: shoot it out before walking on.
     if (!ctx.enemy && !act.shootAt && !act.build && !act.trap) {
       const spikes = this.trapInWay(ctx, act.dir);
@@ -727,6 +734,12 @@ export class Bot {
     turned(was, dir, 'stormFence'); was = dir;
     if (dir) dir = this.nav.safeDir(dir);
     turned(was, dir, 'safeDir'); was = dir;
+    // A low piece right in my way, nobody near (a sandbag across my bridge's start, ffa4-pro seed 5: 76 s pressed
+    // into it): hop it, the way escape() hops one in a doorway. Nav counts a bridge end up to HOP_UP as walkable.
+    // (On a deck too, which safeJump never hops from: the arc itself must come down on something solid.)
+    const hop = !!dir && !jump && !ctx.danger && Math.abs(me.vel.y) <= 0.05 && this.lowPieceAhead(view, me, dir) &&
+      this.nav.landsOnGround(dir, !!act.sprint, PLAYER.jumpVelocity, true);
+    if (hop) jump = true;
     // Sudden death: concrete barriers fill every doorway (barriers.ts). Inside a bunker no step leads out: whatever
     // the goal wants, don't push into a slab (the stuck recovery would only thrash about the room).
     if (dir && view.suddenDeath)
@@ -754,12 +767,13 @@ export class Bot {
     turned(was, dir, 'rimRescue');
     // Stranded with no way home at all: walk off into the water toward home (the respawn puts me back there).
     const ditch = this.strandedDitch(ctx);
+    this.ditching = ditch !== null;
     if (ditch) { dir = ditch; jump = false; act = { ...act, sprint: true }; this.moveSrc = 'ditch'; }
     this.moveDir = dir;
     // Stuck means pushing and not moving; held back at an edge by safeDir isn't stuck (a hop there goes in the water).
     this.trackStuck(now, me, dir);
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
-    if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
+    if (jump && !hop && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     if (rope || grapple) jump = false; // a jump lets go of the rope
     const move = dir
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
@@ -909,9 +923,10 @@ export class Bot {
    * Where I could hook over to node `to` from (I can't walk there): my shore facing it, or the tip of my bridge toward
    * it, whichever is within hook reach (HookParams.crossMax, rim to rim, from eye height) and I can walk to. Null:
    * no hook in hand, no way back from there (canReturn), or nowhere close enough yet (lay more decks first).
+   * anyHooks: as if I had one (could a hook get there from here at all).
    */
-  private hookLaunch(view: BotView, me: PlayerState, node: number, home: number, to: number): Vec3 | null {
-    if ((me.inv.grapples ?? 0) <= 0 || view.suddenDeath) return null;
+  private hookLaunch(view: BotView, me: PlayerState, node: number, home: number, to: number, anyHooks = false): Vec3 | null {
+    if ((!anyHooks && (me.inv.grapples ?? 0) <= 0) || view.suddenDeath) return null;
     const dest = this.nav.nodes[to];
     if (!dest) return null;
     const H = this.P.hook;
@@ -951,6 +966,11 @@ export class Bot {
    */
   private cutOff(c: Ctx): boolean {
     const me = c.me, node = this.nav.nodeAt(me.pos), home = c.home.index;
+    // Over the rim on the way into the water (the ditch under way): still cut off. Resetting here held a stranded bot
+    // at the edge, its clock starting over each time it got there. Only once the ditch is under way: walking out on a
+    // bridge with decks picked up (botDrown mixed seed 2: a PRO marooned on the center found 3, walked to the bridge
+    // tip and the held clock swam it home) is not the ditch.
+    if (node < 0 && this.ditching && this.strandedSince !== null && !c.homeReach && c.view.now - this.strandedSince >= this.P.drive.strandedSec) return true;
     const cut = node >= 0 && node !== home && !c.homeReach && (me.inv.pieces.scaffold ?? 0) < this.scaffoldsTo(node, home) &&
       !c.view.map.some((isl) => isl.index === node || this.nav.hop(node, isl.index) !== null);
     if (!cut) this.strandedSince = null;
@@ -967,11 +987,14 @@ export class Bot {
     if (!this.cutOff(c)) return null;
     const me = c.me, node = this.nav.nodes[this.nav.nodeAt(me.pos)];
     if (!node) return null;
+    // A hook only helps from where home is in hook reach: my shore facing it, or the tip of a bridge toward it
+    // (harbor's center shore isn't: 69 m). Walk there, not just to the shore (ffa8-pro seed 5: a PRO stood 59 s on
+    // the center's shore while the hold was in reach from the bridge tip).
+    const launch = this.hookLaunch(c.view, me, node.index, c.home.index, c.home.index, true);
+    if (!launch) return null;
     if ((me.inv.grapples ?? 0) > 0) {
       if (me.hook || me.mv?.pull) return null;
-      const d = flat(sub(c.home.center, node.center)), l = Math.hypot(d.x, d.z) || 1;
-      const rim = add(node.center, scale(d, (node.radius - 0.7) / l));
-      return this.goTo(v3(rim.x, node.groundY, rim.z), 0.8);
+      return this.goTo(launch, 0.8);
     }
     if (funds(me) < GRAPPLE.price) return null;
     const seller = (c.view.potionShops ?? []).find((s) => this.nav.nodeAt(s) === node.index);
@@ -981,17 +1004,22 @@ export class Bot {
   }
 
   /**
-   * The last resort: cut off for STRANDED_LAST_SEC with no hook and no way to get one here: walk off into the water
-   * toward home (the respawn puts me back there). Returns that heading, or null.
+   * The last resort: cut off for drive.strandedSec with no hook that reaches home and no way to get one here: walk off
+   * into the water toward home (the respawn puts me back there). Returns that heading, or null.
    */
   private strandedDitch(c: Ctx): Vec3 | null {
     const me = c.me;
     const held = c.view.now - (this.strandedSince ?? Infinity);
-    if (!(held >= STRANDED_LAST_SEC) || me.hook || me.mv?.pull) return null;
-    // A hook in hand that never finds a hold home (out of reach from every shore): give it twice as long.
-    if ((me.inv.grapples ?? 0) > 0 && held < 2 * STRANDED_LAST_SEC) return null;
+    const S = this.P.drive.strandedSec;
+    if (!(held >= S) || me.hook || me.mv?.pull) return null;
     const node = this.nav.nodeAt(me.pos);
-    const seller = (c.view.potionShops ?? []).some((s) => this.nav.nodeAt(s) === node);
+    // Marooned on the center: hold it and farm its gold (doContest) rather than drown (botDrown: a swim home is a water
+    // death nobody caused); whoever bridges over brings a fight and a way off.
+    if (node === this.nav.centerNode) return null;
+    // A hook that can reach home from here has had drive.strandedSec to walk to its launch spot and fire (it used to
+    // get twice as long, and one that can't reach at all held a PRO with two hooks 178 s on the center, ffa8-pro seed 5).
+    const hookHome = this.hookLaunch(c.view, me, node, c.home.index, c.home.index, true) !== null;
+    const seller = hookHome && (c.view.potionShops ?? []).some((s) => this.nav.nodeAt(s) === node);
     if (seller && funds(me) >= GRAPPLE.price) return null;
     return norm(flat(sub(c.home.center, me.pos)));
   }
@@ -1790,7 +1818,12 @@ export class Bot {
         // in sudden death likewise.
         if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
         const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + this.sealedCaution(c);
-        if (hp < low) return 1.15 + (low - hp);
+        // Low hp backs me off, except at home from a foe out of gun range with no walk over to me (ffa8-hard seed 11:
+        // a Hard bot swung between this and its generator for 63 s over a pistol 80 m across the water). Any foe who
+        // can walk over still counts: ignoring those at home cost the low-hp bot its life (ffa8-mixed x60: pre-SD
+        // decisive 15/60 vs 24/60 with the old line).
+        const reach = !this.lowHpFarOff(c);
+        if (hp < low && reach) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
           (c.enemyDist < Math.min(ENGAGE_RANGE, WEAPONS[c.enemy.equipped].range) || view.now - this.mem.lastHurtAt < 1.5);
@@ -1894,15 +1927,18 @@ export class Bot {
         if (view.storm && Math.hypot(shop.x - view.storm.x, shop.z - view.storm.z) > this.stormSafeR(view.storm) - 2) return 0;
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
-        if (dist2D(me.pos, shop) < 4 && plan.spent <= this.spendCash(me)) return 0.9;
+        if (dist2D(me.pos, shop) < 4 && plan.spent <= this.spendCash(me)) return Math.max(0.9, this.richRifle(c, plan.items));
         // Topping up heals is no reason for a trip home once I hold one (they're bought on the next visit anyway).
         const items = hpHealsHeld(me) > 0 ? plan.items.filter((i) => i !== 'medkit') : plan.items;
         if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
         // An empty gun is as good as none: restocking it is as urgent as buying one.
-        const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv));
+        // Can't walk home with no decks (mixed seed 22: off a half bridge, 322 s 'saving up'): decks get me home.
+        const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv)) ||
+          (!c.homeReach && !me.inv.pieces.scaffold && items.includes('scaffold'));
         // Out-ranged by a rifle lately and the rifle is next: go get one (strength.outranged).
         const rifle = items[0] === 'rifle' && this.outrangedLately(view.now) ? RIFLE_TRIP : 0;
-        return Math.max(urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0, rifle, this.endgameKit(c, items)) - away;
+        // (Rich for the rifle: worth the trip from anywhere.)
+        return Math.max(Math.max(urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0, rifle, this.endgameKit(c, items)) - away, this.richRifle(c, items));
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
@@ -1921,7 +1957,9 @@ export class Bot {
         if (!cv || !c.centerReach || view.suddenDeath) return 0;
         const room = me.hotbar.includes(null) || me.hotbar.includes('sandbags');
         const supplies = cv.bags + cv.steel > 0 && room ? 0.12 + 0.05 * cv.steel : 0;
-        if (cv.gold < (this.centerMinded ? CONTEST_AT : 2.5 * CONTEST_AT) && !supplies) return 0;
+        // Cut off on the center (no way home but the water): its gold is the one thing here that pays, any amount.
+        const marooned = this.strandedSince !== null && this.nav.nodeAt(me.pos) === this.nav.centerNode;
+        if (!marooned && cv.gold < (this.centerMinded ? CONTEST_AT : 2.5 * CONTEST_AT) && !supplies) return 0;
         const far = dist2D(me.pos, cv.island.center) / 150;
         // Rich bots have better things to do than farm the middle.
         const rich = Math.min(0.3, (me.inv.cash + me.vault.cash) / 3000);
@@ -2071,6 +2109,25 @@ export class Bot {
     const S = this.P.strength, v = S.endgameSeal[this.difficulty];
     if (v <= 0 || c.view.suddenDeath) return 0;
     return 1 + c.view.others.filter((o) => !o.eliminated).length <= S.endgameLeft ? v : 0;
+  }
+
+  /** At home, an enemy out of their gun range on another island with no finished bridge to mine, not hurting me: low hp needn't back off from them. */
+  lowHpFarOff(c: Ctx): boolean {
+    const e = c.enemy;
+    if (c.on !== c.home.index || !e || c.view.now - this.mem.lastHurtAt < 1.5 || c.enemyDist < WEAPONS[e.equipped].range) return false;
+    const node = this.nav.nodeAt(e.pos);
+    return node >= 0 && node !== c.on && this.nav.hop(node, c.on) === null;
+  }
+
+  /**
+   * Rich enough for the early rifle (strength.rifleAt) and it's on my list: the shop trip scores like standing at the
+   * counter (else 0). botStrength seed 1: PRO/Hard carried $800-2000 for minutes, collecting and looting, and never
+   * went to buy it ('kit affordable' 0.6 lost to everything). Off with rifleAt at its Infinity default.
+   */
+  richRifle(c: Ctx, items: ShopItem[]): number {
+    if (!items.includes('rifle') || this.spendCash(c.me) < this.P.strength.rifleAt[this.difficulty]) return 0;
+    const shop = this.shopSpot(c);
+    return shop && !c.danger && dist2D(shop, c.me.pos) < RICH_RIFLE_NEAR_M ? RICH_RIFLE_NEAR : RICH_RIFLE_TRIP;
   }
 
   /** Endgame, short of a seal kit for the rival's open doors and the shop sells me a plug: that trip's score (else 0). */
@@ -2278,6 +2335,9 @@ export class Bot {
     const remote = vaultSpec(me).remote && !upgrade && c.on === c.home.index;
     const walk = remote ? IDLE : this.goTo(c.home.vault, 1.8);
     if ((!remote && dist2D(me.pos, c.home.vault) > USE_RANGE) || me.busyUntil > c.view.now) return walk;
+    // Up on something (my own stacked sandbags) the vault is out of reach (the sim wants me within 2 m of its height),
+    // though it's right below: step off first (mixed seed 14: a PRO stood 116 s up there, depositing nothing).
+    if (!remote && me.pos.y - c.home.vault.y >= VAULT_REACH_Y) return { dir: norm(flat(sub(me.pos, c.home.vault))) };
     const cash = Math.max(Math.floor(me.inv.cash - this.bankKeep(c)), this.insuranceDue(me));
     if (cash <= 0 && !upgrade) { this.nextScoreAt = c.view.now; return walk; }
     this.nextScoreAt = c.view.now + 1.2;
@@ -2314,7 +2374,8 @@ export class Bot {
     const room = c.me.hotbar.includes(null) || c.me.hotbar.includes('sandbags');
     const supplyFirst = cv.bags + cv.steel > 0 && room && (cv.gold < CONTEST_AT ||
       dist2D(c.me.pos, cv.island.supplyGen) < dist2D(c.me.pos, cv.island.goldGen));
-    if (cv.gold < 1 && !supplyFirst) { this.nextScoreAt = c.view.now; return IDLE; }
+    // Cut off here: wait at the gold station (it pays as it fills) rather than standing about.
+    if (cv.gold < 1 && !supplyFirst && this.strandedSince === null) { this.nextScoreAt = c.view.now; return IDLE; }
     return this.goTo(supplyFirst ? cv.island.supplyGen : cv.island.goldGen, 1.6);
   }
 
@@ -2329,7 +2390,14 @@ export class Bot {
     const f = m ?? this.nav.frontier(l);
     const sign = mirror ? -1 : 1;
     const at = (k: number) => laneAt(l, f.s + sign * k);
-    if (f.complete) { this.nextScoreAt = now; return IDLE; }
+    if (f.complete) {
+      // Done, yet not walkable from my end: something stands across its start on my shore (ffa4-pro seed 14: a rival's
+      // wood wall; the PRO stood at home 150 s, storm prep keeping 'bridge' on). Clear it, then walk over.
+      const clear = !mirror && l.from === c.bridgeFrom && !this.nav.bridge(c.bridgeFrom, to) ? this.clearBridgeStart(c, l) : null;
+      if (clear) return clear;
+      this.nextScoreAt = now;
+      return IDLE;
+    }
     if (toRival && this.scaffoldsNeeded(c) <= 1 && sealKit(c.me.inv) < c.openDoors.length) { this.nextScoreAt = now; return IDLE; }
     const key = `${l.from}>${l.to}`;
     // My bridge got shot out (a gap where decks were): skilled players lay an alternate one on the other lane
@@ -2580,6 +2648,25 @@ export class Bot {
     if (p.kind === 'metal') return hasAmmo(inv, 'rifle');
     if (isHard(p.kind)) return false;
     return ownsGun(inv) || !c.view.sealed[c.home.index] || insideBunker(c.home.bunker, c.me.pos);
+  }
+
+  /**
+   * A piece higher than a hop standing across the start of my finished bridge, on my shore: stand back on the shore and
+   * shoot it out (fists for a soft one when gunless). Null when there's none, or it's one I can't break that way.
+   */
+  private clearBridgeStart(c: Ctx, l: Lane): Act | null {
+    const from = this.nav.nodes[l.from];
+    const s = landEdge(from) + 0.5, ep = laneAt(l, s);
+    let p: PieceState | null = null;
+    for (const q of c.view.pieces)
+      if (dist2D(q.pos, ep) < 1.5 && q.pos.y + PIECES[q.kind].h - from.groundY > HOP_UP && (!p || dist2D(q.pos, ep) < dist2D(p.pos, ep))) p = q;
+    if (!p) return null;
+    const inv = c.me.inv;
+    const gun = p.kind === 'metal' ? hasAmmo(inv, 'rifle') : !isHard(p.kind) && ownsGun(inv);
+    if (!gun && isHard(p.kind)) return null;
+    const walk = this.goTo(laneAt(l, s - (gun ? 4 : 1.4)), gun ? 1.0 : 0.3);
+    const at = v3(p.pos.x, p.pos.y + PIECES[p.kind].h / 2, p.pos.z);
+    return walk.dir ? walk : { dir: null, shootAt: at, face: at };
   }
 
   /** Shoot (or punch) a plug from in front of its doorway, on my side of it. */
@@ -2875,13 +2962,26 @@ export class Bot {
     return this.dockPlan;
   }
 
+  /** A piece too low to stop a hop (sandbags) within a stride ahead along dir. */
+  private lowPieceAhead(view: BotView, me: PlayerState, dir: Vec3): boolean {
+    return view.pieces.some((p) => {
+      if (p.kind === 'ramp' || p.kind === 'scaffold') return false;
+      const top = p.pos.y + PIECES[p.kind].h - me.pos.y;
+      if (top <= STEP_HOP || top >= SEAL.blockHeight) return false;
+      const to = flat(sub(p.pos, me.pos)), ahead = to.x * dir.x + to.z * dir.z;
+      return ahead > 0 && ahead < 1.4 && Math.abs(to.x * dir.z - to.z * dir.x) < PIECES[p.kind].w / 2 + 0.3;
+    });
+  }
+
   /** Run from a fusing barrel; in a fight (outside the storm), also step out of blast range of live ones (they could be shot). */
   private hazardAvoid(c: Ctx, dir: Vec3 | null): Vec3 | null {
     const me = c.me;
     let push: Vec3 | null = null;
     for (const h of c.view.hazards ?? []) {
       // A live barrel is only a maybe; in the storm, staying inside the ring matters more (fusing ones still send everyone running).
-      if (h.radius <= 0 || (!h.fusing && (!c.enemy || c.view.storm))) continue;
+      // Only in a real fight (danger: hurt just now or a foe within 40 m): a rival in sight on their own island 90 m off
+      // held a bot 4 min at a center barrel's edge, its route to the gold running straight at it (mixed ×60 seed 24).
+      if (h.radius <= 0 || (!h.fusing && (!c.danger || c.view.storm))) continue;
       const d = dist2D(h.pos, me.pos);
       // Fights: only out of the inner part of a live barrel's blast, where it would really hurt (measured on the
       // bot ladder: a wider berth costs the stronger bot its fights).
@@ -2892,7 +2992,10 @@ export class Bot {
         // Just got out: don't walk straight back in (the fight pulls me toward them, the barrel pushes me out, and I
         // shuffle on the line between): slide along the edge instead.
         const k = dir ? dir.x * away.x + dir.z * away.z : 0;
-        if (dir && k < 0) { const t = v3(dir.x - away.x * k, 0, dir.z - away.z * k); dir = Math.hypot(t.x, t.z) < 0.2 ? null : norm(t); }
+        // Heading straight in (nothing left to slide along) with nobody within ENGAGE_RANGE: go round it, the same side
+        // each time (stopping here held bots 1-2.5 min at a barrel's edge, their route running through it: ffa4-pro
+        // seed 6). Closer, the fight moves me.
+        if (dir && k < 0) { const t = v3(dir.x - away.x * k, 0, dir.z - away.z * k); dir = Math.hypot(t.x, t.z) >= 0.2 ? norm(t) : c.enemyDist > ENGAGE_RANGE ? scale(right(yawOf(away)), this.id % 2 ? 1 : -1) : null; }
         continue;
       }
       push = add(push ?? v3(), scale(away, (h.fusing ? 3 : 2) * (1 - d / R) + 0.4));
@@ -3664,7 +3767,14 @@ export class Bot {
    * anyone and take vault cash; upgrades and gun locks stay home-only). Null: none in reach.
    */
   private shopSpot(c: Ctx): Vec3 | null {
-    if (c.homeReach) return c.home.shop;
+    if (c.homeReach) {
+      // On a rival's island with them sealed in (camping their door): their counter, when nearer than mine, is safe to
+      // use (botStrength seed 3: a PRO with $600 camped 15 m from it, its own shop 120 m off, and had no rifle).
+      // (Not in the storm: the dash for the ring decides where decks come from; replay 02ce1c Ash.)
+      const isl = !c.view.storm && c.on >= 0 && c.on !== c.home.index && c.view.sealed[c.on] &&
+        c.view.others.some((o) => o.island === c.on && !o.eliminated) ? c.view.map[c.on] : null;
+      return isl && dist2D(isl.shop, c.me.pos) < dist2D(c.home.shop, c.me.pos) ? isl.shop : c.home.shop;
+    }
     const starts = this.nav.standNodes(c.me.pos);
     let best: Vec3 | null = null, bestD = Infinity;
     for (const isl of c.view.map) {
