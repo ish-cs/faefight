@@ -22,6 +22,8 @@ import { StormFx } from './world/storm';
 import { IslandBeacons } from './world/beacons';
 import { settings } from './settings/store';
 import { TrapLayer } from './world/traps';
+import { SmokeFx, smokeDepth } from './world/smokeFx';
+import { smokeBlocks } from '../sim/utility';
 import { BarrierLayer } from './world/barriers';
 import type { WorldSurface } from './world/surfaces';
 import { wetness } from './world/wetness';
@@ -46,6 +48,26 @@ let reducedMotion: MediaQueryList | null | undefined;
 const boosted = (hex: number) => new THREE.Color(hex).multiplyScalar(UNLIT_BOOST);
 
 /** Thud sound per ground surface (audio/events.ts Surface). */
+/**
+ * three's WebGPU backend queues render bundles (the static island BundleGroup, world/index.ts applyBundle) and executes
+ * them at the END of the pass, after the transparent objects. Anything transparent that doesn't write depth (smoke,
+ * dust, explosions, decals, beams) was then painted over by bundled geometry behind it: a smoke cloud in front of an
+ * island showed the island through it. Execute each bundle where three draws it — first, before opaque and
+ * transparent objects — and drop the pass's cached pipeline/bind groups/buffers, which executeBundles clears.
+ */
+function bundlesFirst(gpu: THREE.WebGPURenderer) {
+  type Data = { currentPass: { executeBundles?: (b: unknown[]) => void } | null; currentSets: unknown };
+  const be = gpu.backend as unknown as { isWebGPUBackend?: boolean; addBundle?: (rc: unknown, b: unknown) => void; get(o: unknown): Data & { bundleGPU?: unknown } };
+  if (!be.isWebGPUBackend || typeof be.addBundle !== 'function') return;
+  const queue = be.addBundle;
+  be.addBundle = function (rc, bundle) {
+    const d = this.get(rc), gpuBundle = this.get(bundle).bundleGPU;
+    if (!d.currentPass?.executeBundles || !gpuBundle) { queue.call(this, rc, bundle); return; } // unexpected: three's own path
+    d.currentPass.executeBundles([gpuBundle]);
+    d.currentSets = { attributes: {}, bindingGroups: [], pipeline: null, index: null };
+  };
+}
+
 const THUD_SURFACE: Record<WorldSurface, Surface> = {
   concrete: 'concrete', quay: 'concrete', asphalt: 'concrete', metal: 'metal', container: 'metal', wood: 'wood', bark: 'wood',
   sand: 'sand', gravel: 'gravel', grass: 'grass', water: 'water',
@@ -84,6 +106,15 @@ export class Renderer {
   private potionSellers = new PotionSellers(this.scene);
   /** Spike traps (world/traps.ts) and their placement ghost. */
   readonly traps = new TrapLayer();
+  /** Smoke grenade clouds (one instanced sprite). */
+  readonly smoke = new SmokeFx();
+  /** How deep the camera is in smoke this frame, 0..1 (screenFx.ts fog). */
+  smokeFog = 0;
+  /** This frame's clouds and their time (tags behind smoke: characters.tagsHiddenBy). */
+  private smokeClouds: Snapshot['smokes'] = undefined;
+  private smokeNow = 0;
+  private smokeEye = { x: 0, y: 0, z: 0 };
+  private smokeHead = { x: 0, y: 0, z: 0 };
   /** Sudden-death doorway barriers (world/barriers.ts): built per map, hidden until they drop. */
   barriers: BarrierLayer | null = null;
   /** Animated shop keepers (characters/npcs.ts). */
@@ -151,14 +182,24 @@ export class Renderer {
   static async create(canvas: HTMLCanvasElement): Promise<Renderer> {
     const r = new Renderer(canvas);
     await r.gpu.init();
+    bundlesFirst(r.gpu);
     // compressed PBR maps in place before any material samples them; the baked container + structures before the world builds
     await Promise.all([preloadPbr(r.gpu, loadQuality()), preloadContainerModel(), preloadStructureModel()]);
     r.characters.camera = r.camera;
+    r.characters.tagsHiddenBy = (feet) => {
+      const c = r.smokeClouds;
+      if (!c?.length) return false;
+      const e = r.smokeEye, h = r.smokeHead, cp = r.camera.position;
+      e.x = cp.x; e.y = cp.y; e.z = cp.z;
+      h.x = feet.x; h.y = feet.y + PLAYER.height; h.z = feet.z;
+      return smokeBlocks(c, e, h, r.smokeNow);
+    };
     r.world = new World(r.gpu, r.scene, r.camera, r.collidables); // tone mapping, pixel ratio, shadows, sky
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
     r.scene.add(r.traps.root);
+    r.scene.add(r.smoke.sprite);
     r.dayNight = new DayNight(r.world.sky);
     r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
     r.beacons = new IslandBeacons(r.world.sky, r.scene);
@@ -333,7 +374,7 @@ export class Renderer {
 
   /** Effects of past events during a replay (tracers, muzzle flashes, hit sparks, explosions). */
   replayEvents(events: readonly MatchEvent[]) {
-    for (const e of events) if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion') this.onEvent(e);
+    for (const e of events) if (e.type === 'shot' || e.type === 'hit' || e.type === 'explosion' || e.type === 'smoke' || e.type === 'flash') this.onEvent(e);
   }
 
   /** Feed a snapshot's discrete state (pieces, loot, events). Returns its events for the HUD. */
@@ -408,10 +449,36 @@ export class Renderer {
       const k = e.data.kind;
       if (pos) this.addBoom(pos, k === 'charge' ? 2 : k === 'rocket' ? 3.6 : k === 'barrel' ? 5 : k === 'propane' ? 4.6 : 4);
       if (typeof e.data.hazard === 'number') this.world.hazardEvent(e);
+    } else if (e.type === 'smoke' || e.type === 'flash') {
+      const pos = e.data.pos as Vec3 | undefined;
+      if (pos) this.utilityPop(e.type, pos);
     } else if (e.type === 'lightning') {
       const pos = e.data.pos as Vec3 | undefined;
       if (pos) this.storm.strike(pos, this.camera);
     }
+  }
+
+  /**
+   * A smoke grenade / flashbang going off (pooled particles, no light): smoke — a grey gush from the canister (the
+   * cloud itself is Snapshot.smokes, drawn by SmokeFx); flash — a 0.15 s white-hot burst that blooms, and a few sparks.
+   */
+  private utilityPop(kind: 'smoke' | 'flash', pos: Vec3) {
+    const { dust, sparks } = this.world.pieceFx.particles;
+    const rr = (a: number, b: number) => a + Math.random() * (b - a);
+    if (kind === 'smoke') {
+      for (let i = 0; i < 14; i++) {
+        const a = Math.random() * Math.PI * 2, v = rr(1.5, 4);
+        dust.spawn(pos.x, pos.y + 0.15, pos.z, Math.cos(a) * v, rr(0.6, 2.2), Math.sin(a) * v, rr(1.2, 2), rr(0.4, 0.7), rr(1.8, 2.8), 0.8, 0.8, 0.82, 0.7, -0.2, 1.4);
+      }
+      return;
+    }
+    sparks.spawn(pos.x, pos.y + 0.15, pos.z, 0, 0, 0, 0.15, 1.6, 4.2, 1.6, 1.6, 1.6, 1, 0, 0);
+    sparks.spawn(pos.x, pos.y + 0.15, pos.z, 0, 0, 0, 0.09, 0.6, 1.8, 2, 2, 2, 1, 0, 0);
+    for (let i = 0; i < 10; i++) {
+      const a = Math.random() * Math.PI * 2, v = rr(3, 8);
+      sparks.spawn(pos.x, pos.y + 0.15, pos.z, Math.cos(a) * v, rr(1, 5), Math.sin(a) * v, rr(0.15, 0.35), 0.06, 0.02, 1, 0.95, 0.85, 1, 9, 0.5);
+    }
+    dust.spawn(pos.x, pos.y + 0.2, pos.z, 0, 0.3, 0, 1.4, 0.5, 1.6, 0.75, 0.75, 0.75, 0.5, -0.1, 1);
   }
 
   /** Template for explosion fireballs (each boom clones it: same shader, its own opacity). */
@@ -593,6 +660,8 @@ export class Renderer {
     this.lastFrame = now;
     const snap = this.replay?.snap ?? this.curr;
     const motion = this.replay?.motion ?? this.motionOf;
+    this.smokeClouds = snap?.smokes;
+    this.smokeNow = this.replay ? this.replay.snap.time : this.playT ?? snap?.time ?? 0;
     if (snap) {
       // Replay: nobody is "local" (everyone's yaw comes from the recording).
       this.characters.sync(snap.players, this.replay ? -1 : this.humanId, localYaw, snap.time, motion, snap.hidden);
@@ -624,6 +693,8 @@ export class Renderer {
     this.storm.frame(dt, this.camera, this.world.sky.quality, simT);
     this.beacons.frame(dt, settings.get().gameplay.islandBeacons);
     this.traps.frame(simT);
+    this.smoke.frame(snap?.smokes, this.smokeNow, this.camera.position);
+    this.smokeFog = smokeDepth(snap?.smokes, this.camera.position, this.smokeNow);
     this.barriers?.frame(simT, this.world.pieceFx.particles);
     const feet = this.feet.slice(0, nf);
     this.npcs.frame(dt, this.camera, feet);

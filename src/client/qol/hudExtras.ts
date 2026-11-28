@@ -220,7 +220,7 @@ const WEAPON_NAME: Record<string, string> = {
 };
 const ITEM_NAME: Record<string, string> = {
   ...WEAPON_NAME, sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
-  ammo: 'Ammo', medkit: 'Medkit', shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', genUpgrade: 'Generator ↑',
+  ammo: 'Ammo', medkit: 'Medkit', smoke: 'Smoke', flash: 'Flashbang', shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', genUpgrade: 'Generator ↑',
 };
 
 /** Eliminations, with assists after a plus (older hosts send neither: 0). */
