@@ -2677,7 +2677,7 @@ export class Bot {
       if (q.pos.y + sz.h - y <= HOP_UP || q.pos.y > y + 1.8) continue;
       const qs = laneS(l, q.pos), r = Math.max(sz.w, sz.d);
       if (qs < lo - r || qs > hi + r || Math.abs((q.pos.x - l.origin.x) * l.dir.z - (q.pos.z - l.origin.z) * l.dir.x) > r) continue;
-      const cs = Math.cos(-q.rotY), sn = Math.sin(-q.rotY);
+      const cs = dm.cos(-q.rotY), sn = dm.sin(-q.rotY);
       for (let s = Math.max(lo, qs - r); s <= Math.min(hi, qs + r); s += 0.25) {
         const p = laneAt(l, s), dx = p.x - q.pos.x, dz = p.z - q.pos.z;
         if (c.view.map.some((i) => dist2D(p, i.center) <= i.radius)) continue; // on an island: not the walkway
