@@ -106,7 +106,7 @@ describe('bot brain introspection', () => {
     for (const [, from, to, why] of d.log) { expect(from).not.toBe(to); expect(why.length).toBeGreaterThan(5); }
     // Seal reasons name the rival, why now, and the kit: "Sealing @3's bunker: … I carry 2 walls for 2 doors".
     const seal = r.digests.find((x) => x.goal === 'seal' && x.why.startsWith('Sealing'));
-    if (seal) expect(seal.why).toMatch(/^Sealing @\d+'s bunker: .+, I carry \d+ walls? for \d+ doors?$/);
+    if (seal) expect(seal.why).toMatch(/^Sealing @\d+'s bunker: .+, I carry \d+ walls? for \d+ doors?( \(hooking over: no bridge yet\))?$/);
   }, 120_000);
 
   test('digests stay within the network budget (8 bots, whole match)', async () => {
