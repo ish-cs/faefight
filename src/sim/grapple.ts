@@ -1,6 +1,7 @@
 import { GRAPPLE, PLAYER } from './constants';
 import { aimDir, eyePos } from './combat';
 import { removeIfEmpty, setGrapples } from './hotbar';
+import { capFling } from './movement';
 import type { RayHit } from './physics';
 import type { MatchEvent, PieceState, PlayerState, Vec3 } from './types';
 import { isAlly } from './teams';
@@ -9,7 +10,8 @@ import { add, dist, scale, v3 } from './vec';
 /**
  * Grappling hook. Fired from the selected hotbar slot: the hook flies out along the aim (hitscan picks the
  * point, the hook takes dist / GRAPPLE.tipSpeed to get there). On the world (terrain, docks, props, pieces,
- * cranes) it reels its owner in (movement.ts stepPull: mv.pull); on a player it yanks them toward the owner;
+ * cranes) it ropes its owner to the point with an elastic rope that reels in (movement.ts stepPull: mv.pull; you
+ * swing under gravity, and a release keeps your velocity); if the piece it bit breaks, the rope snaps ('snap'); on a player it yanks them toward the owner;
  * water, sky or too close is a miss and the rope comes back. A use is spent only when the hook latches.
  *
  * Rules: the rope never passes firing slits; a yank needs clear line of sight from the owner's eye to the
@@ -73,7 +75,18 @@ export function tickGrapple(ctx: GrappleCtx, p: PlayerState, now: number): Match
   if (h.st === 0) return now >= h.at - 1e-9 ? latch(ctx, p, h, now) : [];
   if (h.st === 1) {
     const broke = h.pc !== undefined && !ctx.pieces.has(h.pc);
-    if (p.mv?.pull && !p.mv.pull.yank && !broke) return [];
+    const pull = p.mv?.pull && !p.mv.pull.yank ? p.mv.pull : null;
+    if (pull && !broke) {
+      // Everyone draws the rope's slack / stretch from its rest length (cm, so the wire delta stays small).
+      if (pull.len !== undefined) h.len = Math.round(pull.len * 100) / 100;
+      return [];
+    }
+    if (broke) {
+      // The piece it bit went down: the rope snaps (you fly on with what you had, capped like any release).
+      const out = release(ctx, p, now);
+      out.push(ev(now, { by: p.id, phase: 'snap', x: h.x, y: h.y, z: h.z }));
+      return out;
+    }
     return release(ctx, p, now);
   }
   const q = ctx.players.get(h.tgt ?? -1);
@@ -127,7 +140,7 @@ function spend(p: PlayerState) {
 export function release(ctx: GrappleCtx, p: PlayerState, now: number): MatchEvent[] {
   const h = p.hook;
   if (!h) return [];
-  if (h.st === 1 && p.mv?.pull && !p.mv.pull.yank) delete p.mv.pull;
+  if (h.st === 1 && p.mv?.pull && !p.mv.pull.yank) { delete p.mv.pull; capFling(p.vel); }
   if (h.st === 2) {
     const q = ctx.players.get(h.tgt ?? -1);
     if (q?.mv?.pull?.yank) delete q.mv.pull;

@@ -60,6 +60,8 @@ const DICT = [
   'hook', 'st', 't0', 'tgt', 'pc', 'hookReadyAt', 'pull', 'left', 'yank', 'grapple', 'grapples', 'phase',
   // appended after main's keys (keep earlier indices stable): gameplay props
   'pr', 'p', 'q',
+  // elastic grapple rope (rest length on mv.pull and HookState)
+  'len',
 ];
 
 const enc = new TextEncoder();
