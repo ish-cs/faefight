@@ -1463,7 +1463,8 @@ export class Bot {
       build: this.buildNeeds(c, total),
       combatKit: this.combatKit(c),
       rifle: this.wantsRifle(c),
-      rifleSlot: Number.isFinite(this.P.strength.rifleAt[this.difficulty]),
+      // rifleAt past any real cash (Infinity, or a finite 1e9 from a params file) = no early rifle: no slot kept either.
+      rifleSlot: this.P.strength.rifleAt[this.difficulty] < 1e6,
     };
   }
 
