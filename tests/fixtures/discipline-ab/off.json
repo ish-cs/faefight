@@ -1,0 +1,22 @@
+{
+ "params": {
+  "discipline.homeFirst.hard": 0,
+  "discipline.chargeShop.hard": 0,
+  "discipline.bankRisk.hard": 0,
+  "discipline.sticky.hard": 0.1,
+  "discipline.commitSec.hard": 0,
+  "discipline.sealAbortSec.hard": 0,
+  "discipline.bridgeShort.hard": 99,
+  "discipline.cheapKit.hard": 0,
+  "discipline.kitShop.hard": 0,
+  "discipline.homeFirst.pro": 0,
+  "discipline.chargeShop.pro": 0,
+  "discipline.bankRisk.pro": 0,
+  "discipline.sticky.pro": 0.1,
+  "discipline.commitSec.pro": 0,
+  "discipline.sealAbortSec.pro": 0,
+  "discipline.bridgeShort.pro": 99,
+  "discipline.cheapKit.pro": 0,
+  "discipline.kitShop.pro": 0
+ }
+}

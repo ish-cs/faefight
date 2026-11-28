@@ -405,7 +405,49 @@ export type StrengthParams = {
   leaderFocus: Record<Difficulty, number>;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams; strength: StrengthParams; util: UtilParams };
+/**
+ * Discipline (PRO match analysis, 2026-11-27: seed 1, 1 PRO + 7 Hard on harbor; the PRO lived ~8 min with plugged
+ * doorways, re-sealed a rival with its own bunker sealed and was eliminated carrying $7,923). By tier; 0 = off.
+ * - homeFirst: a plug in my own doorway is a debt. While I can clear it (or buy the charge that does) and can walk
+ *   home, offence (seal / attack / raid / contest, bridging to a rival) is capped at debtCap, unless an enemy is
+ *   within SEALED_HOME_CLEAR m (then fight). debtDefend: defend's floor in that state (unsealed home).
+ *   debtSec: the cap is time-boxed: a debt with no plug cleared for this long lifts the cap for as long again (clear,
+ *   then go; a plug it can't get through in time no longer pins it home). Camping a dead rival's respawn window is
+ *   never capped (the kill ends their game).
+ * - chargeShop: defend score when nothing I carry gets through the plug but I can pay for a charge: defend then
+ *   walks to the shop and buys it (it used to score 0 and the plug dropped out of the bot's thinking).
+ * - bankRisk / bankTripAt: carrying at least bankTripAt, banking scores bankRisk (never halved by the push) on my
+ *   island before heading out, and from anywhere while my own bunker is plugged or sealed (a death then may be the
+ *   end of the cash). The ungated walk home to bank is strength.bankAway.
+ * - sticky: score bonus for the goal I'm on (was STICKY 0.1 for everyone); commitSec / commitBonus: for this long
+ *   after a switch the new goal gets commitBonus on top (fight/defend/heal and bridge/shop were re-chosen every
+ *   tick), out of combat only (no enemy in sight, no hit in the last 1.5 s) and never against disengage / storm / cover.
+ * - sealAbortSec: a seal attempt that neither closes a doorway nor gets nearer the bunker for this long is dropped
+ *   (goal ban of drive.stallBanSec).
+ * - bridgeShort: short of decks for the gap by more than this, buy them first instead of laying a partial bridge
+ *   (seen: bridging with 1 of 10 decks, then a trip back for the rest). 5, not 2: at 2 the PRO saved for decks and
+ *   skipped the rifle (botStrength rifleAt test 1/6 seats).
+ * - cheapKit: short of a full kit and the cash doesn't cover it in metal, buy wood plugs (hardKit never blocks a
+ *   seal). kitShop: shop score for a seal kit while camping a rival's respawn window without one.
+ */
+export type DisciplineParams = {
+  homeFirst: Record<Difficulty, number>;
+  debtCap: number;
+  debtDefend: number;
+  debtSec: Record<Difficulty, number>;
+  chargeShop: Record<Difficulty, number>;
+  bankTripAt: number;
+  bankRisk: Record<Difficulty, number>;
+  sticky: Record<Difficulty, number>;
+  commitSec: Record<Difficulty, number>;
+  commitBonus: number;
+  sealAbortSec: Record<Difficulty, number>;
+  bridgeShort: Record<Difficulty, number>;
+  cheapKit: Record<Difficulty, number>;
+  kitShop: Record<Difficulty, number>;
+};
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams; strength: StrengthParams; util: UtilParams; discipline: DisciplineParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -577,15 +619,42 @@ export const STRENGTH: StrengthParams = {
   leaderFocus: D(0, 0, 0, 0),
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH, util: UTIL });
+// PRO only by default: on Hard too, the 1v1 PRO > Hard step fell to 70-90% (main 100%) and Hard sat at home up to
+// 114 s in mixed ×60 (tests/fixtures/discipline-ab/hard-too.json turns Hard on for A/B).
+export const DISCIPLINE: DisciplineParams = {
+  homeFirst: D(0, 0, 0, 1),
+  debtCap: 0.4,
+  debtDefend: 0.95,
+  debtSec: D(Infinity, Infinity, Infinity, 45),
+  chargeShop: D(0, 0, 0, 1.1),
+  bankTripAt: 500,
+  bankRisk: D(0, 0, 0, 0.9),
+  sticky: D(0.1, 0.1, 0.1, 0.1),
+  commitSec: D(0, 0, 0, 2),
+  commitBonus: 0.25,
+  sealAbortSec: D(0, 0, 0, 20),
+  bridgeShort: D(Infinity, Infinity, Infinity, 5),
+  cheapKit: D(0, 0, 0, 1),
+  kitShop: D(0, 0, 0, 0.95),
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH, util: UTIL, discipline: DISCIPLINE });
 
 /**
  * The hand params with every strength.* knob off: bot behaviour exactly as before 2026-11-28 (same code path). The
  * human-proxy benchmark (scripts/replays/proxy.ts) re-runs recorded games with it bit-exactly up to a mined moment, and
  * uses it for the fixed "human-style" opponent so before/after compare against the same player.
  */
+/** Every discipline.* knob off: the goal brain as before 2026-11-27 (STICKY 0.1, no caps, commitment or gates). */
+export const DISCIPLINE_OFF: DisciplineParams = {
+  ...DISCIPLINE, homeFirst: D(0, 0, 0, 0), chargeShop: D(0, 0, 0, 0), bankRisk: D(0, 0, 0, 0), sticky: D(0.1, 0.1, 0.1, 0.1),
+  commitSec: D(0, 0, 0, 0), sealAbortSec: D(0, 0, 0, 0), bridgeShort: D(Infinity, Infinity, Infinity, Infinity), cheapKit: D(0, 0, 0, 0), kitShop: D(0, 0, 0, 0),
+};
+export const PRE_DISCIPLINE_PARAMS: Readonly<BotParams> = Object.freeze({ ...DEFAULT_BOT_PARAMS, discipline: DISCIPLINE_OFF });
+
 export const PRE_STRENGTH_PARAMS: Readonly<BotParams> = Object.freeze({
   ...DEFAULT_BOT_PARAMS,
+  discipline: DISCIPLINE_OFF,
   strength: {
     ...STRENGTH, rifleAt: D(Infinity, Infinity, Infinity, Infinity), longGun: D(0, 0, 0, 0), outranged: D(0, 0, 0, 0),
     bankAway: D(0, 0, 0, 0), endgameSeal: D(0, 0, 0, 0), leaderFocus: D(0, 0, 0, 0),
@@ -672,6 +741,10 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
   ['vault.medkits.*', [0, 4]], ['vault.scaffolds.*', [0, 15]], ['vault.keep.*', [0, 150]], ['vault.buy.*', [0, 1]],
   ['vault.carry.*', [0, 400]], ['vault.bankMin', [30, 300]], ['vault.upgradeAt.*', [100, 2000]], ['vault.upgradeScore', [0.1, 1]], ['vault.upgradeNear', [0, 1]], ['vault.healSlot', [0, 1]],
+  ['discipline.homeFirst.*', [0, 1]], ['discipline.debtCap', [0, 0.8]], ['discipline.debtDefend', [0.5, 1.5]], ['discipline.debtSec.*', [10, 120]], ['discipline.chargeShop.*', [0, 1.5]],
+  ['discipline.bankTripAt', [200, 2000]], ['discipline.bankRisk.*', [0, 1.3]], ['discipline.sticky.*', [0, 0.4]],
+  ['discipline.commitSec.*', [0, 6]], ['discipline.commitBonus', [0, 0.6]], ['discipline.sealAbortSec.*', [0, 60]], ['discipline.bridgeShort.*', [0, 10]],
+  ['discipline.cheapKit.*', [0, 1]], ['discipline.kitShop.*', [0, 1.3]],
   ['strength.rifleAt.*', [300, 1500]], ['strength.longGun.*', [0, 1]], ['strength.outranged.*', [0, 1.5]], ['strength.outrangedM', [20, 50]], ['strength.outrangedSec', [1, 6]],
   ['strength.outrangedMemSec', [10, 240]], ['strength.bankAway.*', [0, 1.5]], ['strength.richCarry', [200, 1500]], ['strength.endgameSeal.*', [0, 1.5]],
   ['strength.endgameLeft', [2, 4]], ['strength.leaderFocus.*', [0, 1.5]],
