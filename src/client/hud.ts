@@ -1,4 +1,4 @@
-import { CHARGE, ECONOMY, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, TRAP, WEAPONS } from '../sim/constants';
+import { CHARGE, ECONOMY, FLASH, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, SMOKE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, TRAP, WEAPONS } from '../sim/constants';
 import { elimView } from './elimBanner';
 import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
 import { grappleRange, type CenterIsland, type IslandLayout } from '../sim/map';
@@ -30,6 +30,7 @@ const LABEL: Record<string, string> = {
   fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
   ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit', trap: 'Spike trap',
+  smoke: 'Smoke grenade', flash: 'Flashbang',
   shieldSmall: 'Small shield potion', shieldBig: 'Big shield potion', healPotion: 'Heal potion', speedPotion: 'Speed potion',
   grapple: 'Grappling hook',
 };
@@ -54,6 +55,8 @@ function priceOf(item: ShopItem, genLevel = 1, me?: PlayerState | null): number 
   if (item === 'grenade') return GRENADE.price;
   if (item === 'medkit') return MEDKIT.price;
   if (item === 'trap') return TRAP.price;
+  if (item === 'smoke') return SMOKE.price;
+  if (item === 'flash') return FLASH.price;
   if (isPotionItem(item)) return POTIONS[item].price;
   return CHARGE.price;
 }
@@ -89,6 +92,8 @@ function detailsOf(item: ShopItem, price: number, genLevel: number, me: PlayerSt
     return g ? `Ammo box · +${ammoPerBox(g)} rounds for your ${LABEL[g]} · $${price}` : 'Ammo box · equip a gun first';
   }
   if (item === 'grenade') return `Grenade · ${GRENADE.dmg} dmg in a ${GRENADE.radius} m blast · $${price}`;
+  if (item === 'smoke') return `Smoke grenade · a ${SMOKE.radius} m cloud for ${SMOKE.lifeSec}s nobody sees through · carry ${SMOKE.maxCarry} · $${price}`;
+  if (item === 'flash') return `Flashbang · blinds whoever faces it within ${FLASH.range} m (never you) · carry ${FLASH.maxCarry} · $${price}`;
   if (item === 'charge') return `Breach charge · cracks walls and sealed doors · $${price}`;
   if (item === 'grapple') return `Grappling hook · ${GRAPPLE.uses} uses · ${Math.round(hookRange)} m · hook a wall to swing to it, a player to yank them to you · Space lets go · $${price}`;
   if (item === 'trap') return `Spike trap · set on a floor or wall; ${TRAP.dmg} dmg to enemies who step in, never you · max ${TRAP.maxPerPlayer} out · $${price}`;
@@ -1031,7 +1036,7 @@ export class Hud {
       } else {
         section('Weapons', [...GUNS, 'ammo']);
         section('Building', PIECE_ORDER);
-        section('Gear', ['grenade', 'charge', 'trap', 'medkit', 'grapple']);
+        section('Gear', ['grenade', 'smoke', 'flash', 'charge', 'trap', 'medkit', 'grapple']);
         // Lock cards only show up once you own (or have locked) that gun.
         section('Upgrades', ['genUpgrade', ...GUNS.map(lockItem)]);
       }
