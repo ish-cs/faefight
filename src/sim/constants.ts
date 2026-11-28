@@ -133,7 +133,8 @@ export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
  * 2026-11-27). Hooking the world ropes you to the point with an elastic rope (spring `ropeK` /s², damping `ropeDamp`
  * /s on the stretch rate, pull capped at `tensionMax` m/s², slack when shorter than its rest length) that reels in at
  * `reelSpeed` m/s; gravity always applies (you swing under the anchor), speed is capped at `ropeMaxSpeed`, strafe
- * pushes the swing (`swingSteer` m/s²) and holding back holds the length. At most `pullSec` on the rope; within
+ * pushes the swing (`swingSteer` m/s²) and holding back holds the length (slack still taken up at `slackTake`
+ * m/s). At most `pullSec` on the rope; within
  * `arriveDist` you let go keeping `arriveKeep` of your speed plus a little `arrivePop` up, so you land on the ledge.
  * Jump (or fire) lets go early keeping your velocity, capped at `flingMax` (the reach rule holds). Hooking a
  * player yanks them toward you at `yankSpeed` for at most `yankSec` (their own movement is off meanwhile),
@@ -145,7 +146,7 @@ export const GRAPPLE = {
   price: 90, uses: 3, range: 26, gapMargin: 8, tipSpeed: 160,
   pullSec: 4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.25,
   /** The elastic rope (movement.ts stepPull): see the comment above. */
-  reelSpeed: 26, ropeK: 80, ropeDamp: 6, tensionMax: 140, ropeMaxSpeed: 30, ropeMinLen: 0.5, swingSteer: 6, flingMax: 15,
+  reelSpeed: 26, ropeK: 80, ropeDamp: 6, tensionMax: 140, ropeMaxSpeed: 30, ropeMinLen: 0.5, slackTake: 8, swingSteer: 6, flingMax: 15,
   yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
   cooldownSec: 0.5, missCooldownSec: 0.2, minDist: 2.5, yankCreditSec: 5,
 };

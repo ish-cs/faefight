@@ -214,7 +214,7 @@ export function capFling(vel: Vec3): void {
  * or jump pressed on your own hook) so the caller runs a normal step instead. Pulls never hurt on landing.
  *
  * Your own hook is an elastic rope (spring-damper with slack) of rest length `len`, reeled in at
- * GRAPPLE.reelSpeed (holding back on the move stick holds the length: swing). Gravity always applies, so you
+ * GRAPPLE.reelSpeed (holding back on the move stick holds the length, slack taken up at GRAPPLE.slackTake: swing). Gravity always applies, so you
  * swing under the anchor; momentum is kept. Taut (stretched past `len`), the rope pulls you toward the anchor
  * with stiffness GRAPPLE.ropeK and damping GRAPPLE.ropeDamp on the stretch rate, solved implicitly along the
  * rope (stable at the 30 Hz step), capped at GRAPPLE.tensionMax; slack, it does nothing. Strafe steers the swing.
@@ -228,7 +228,11 @@ function stepPull(m: Mover, cmd: MoveCmd, moving: boolean, dt: number, body: Mov
   const d = Math.hypot(dx, dy, dz);
   const left = pl.left - dt;
   const hold = !pl.yank && cmd.moveZ < -0.3;
-  const len = pl.yank ? undefined : Math.max(GRAPPLE.ropeMinLen, (pl.len ?? d) - (hold ? 0 : GRAPPLE.reelSpeed * dt));
+  // Reeling: the rest length shrinks at reelSpeed. Holding: it stays, but the winch still takes up slack (at
+  // slackTake), so a swing stays on a snug rope instead of a long slack fall.
+  const len0 = pl.len ?? d;
+  const len = pl.yank ? undefined : Math.max(GRAPPLE.ropeMinLen,
+    hold ? (d < len0 ? Math.max(d, len0 - GRAPPLE.slackTake * dt) : len0) : len0 - GRAPPLE.reelSpeed * dt);
   // A fresh object, never mutated in place: prediction shares it with snapshots and render-time part steps.
   mv.pull = pl.yank ? { ...pl, left } : { ...pl, left, len };
   if (d <= (pl.yank ? GRAPPLE.yankStop : GRAPPLE.arriveDist) || left <= EPS) {
@@ -268,10 +272,18 @@ function stepPull(m: Mover, cmd: MoveCmd, moving: boolean, dt: number, body: Mov
     const sp = Math.hypot(m.vel.x, m.vel.y, m.vel.z);
     if (sp > GRAPPLE.ropeMaxSpeed) { const k = GRAPPLE.ropeMaxSpeed / sp; m.vel.x *= k; m.vel.y *= k; m.vel.z *= k; }
   }
+  const p0 = m.pos;
   const r = body.movePlayer({ x: m.vel.x * dt, y: m.vel.y * dt, z: m.vel.z * dt });
   m.pos = r.pos;
   mv.grounded = r.grounded;
   if (r.grounded && m.vel.y < 0) m.vel.y = 0;
+  if (!pl.yank) {
+    // Whatever stopped the capsule (a cliff face, a wall) takes that part of the velocity: none stored up behind it.
+    const ax = (r.pos.x - p0.x) / dt, ay = (r.pos.y - p0.y) / dt, az = (r.pos.z - p0.z) / dt;
+    if (Math.abs(ax) < Math.abs(m.vel.x) - 1e-6) m.vel.x = ax;
+    if (Math.abs(ay) < Math.abs(m.vel.y) - 1e-6) m.vel.y = ay;
+    if (Math.abs(az) < Math.abs(m.vel.z) - 1e-6) m.vel.z = az;
+  }
   mv.airTime = r.grounded ? 0 : Math.min(AIR_CAP, mv.airTime + dt);
   mv.jumpBuf = 0;
   return true;

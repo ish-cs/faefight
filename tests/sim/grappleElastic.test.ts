@@ -79,26 +79,24 @@ describe('elastic rope physics (movement.ts)', () => {
     expect(taut.vel.x).toBeGreaterThan(2);
   });
 
-  test('an elastic string: stretched and held, it springs back past its length, bounces and settles', () => {
-    // Hanging 1 m past an 8 m rope straight under the anchor: recoil (goes slack above), fall, re-catch, smaller each time.
-    const A = v3(0, 10, 0), L = 8;
+  test('an elastic string: stretched and held, it springs back, oscillates about its static stretch and settles', () => {
+    // Hanging 1 m past an 8 m rope straight under the anchor: recoil (the winch takes up the slack), re-catch, bounce,
+    // each swing of the stretch smaller, settling at the static stretch g / k.
+    const A = v3(0, 10, 0), L = 8, still = PLAYER.gravity / GRAPPLE.ropeK;
     const m = bob(v3(0, 10 - L - 1, 0), { x: A.x, y: A.y, z: A.z, left: 4, len: L });
-    const ext: number[] = [];
-    let prev = dist(m.pos, A), dir = -1;
+    const e: number[] = [];
     for (let i = 0; i < 110 && m.mv.pull; i++) {
       stepMove(m, cmd({ moveZ: -1 }), DT, free(m));
-      const d = dist(m.pos, A);
-      if ((d - prev) * dir < 0) { ext.push(prev - L); dir = -dir; }
-      prev = d;
+      e.push(dist(m.pos, A) - m.mv.pull!.len!);
     }
-    // Turning points alternate short / long of the rest length; the stretch at each bottom shrinks.
-    expect(ext.length).toBeGreaterThanOrEqual(3);
-    expect(ext[0]).toBeLessThan(0); // recoiled past the rest length: slack at the top
-    const bottoms = ext.filter((_, i) => i % 2 === 1);
-    expect(bottoms[0]).toBeGreaterThan(0);
-    for (let i = 1; i < bottoms.length; i++) expect(bottoms[i]).toBeLessThan(bottoms[i - 1] + 1e-9);
-    // Settles near the static stretch g / k.
-    expect(Math.abs(bottoms[bottoms.length - 1] - PLAYER.gravity / GRAPPLE.ropeK)).toBeLessThan(1);
+    expect(e.length).toBe(110);
+    let crossings = 0;
+    for (let i = 1; i < e.length; i++) if ((e[i] - still) * (e[i - 1] - still) < 0) crossings++;
+    expect(crossings).toBeGreaterThanOrEqual(3); // it bounces, not just creeps back
+    expect(Math.min(...e.slice(0, 15))).toBeLessThan(0); // recoiled past its length (slack for a moment)
+    const env = (a: number[]) => Math.max(...a.map((x) => Math.abs(x - still)));
+    expect(env(e.slice(0, 20))).toBeGreaterThan(0.5);
+    expect(env(e.slice(-20))).toBeLessThan(env(e.slice(0, 20)) / 4); // settled
   });
 
   test('a reeled pull starts with a springy kick: the stretch builds, then the speed tops out at the cap', () => {
