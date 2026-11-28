@@ -1809,7 +1809,7 @@ export class Bot {
         // the water (ffa8-hard seed 11: a Hard bot swung between this and its generator for 63 s, never collecting it).
         // Away from home it still sends me back (botStrength seed 3: a PRO on 9 hp kept bridging and spent its rifle
         // money on decks instead of going home to collect).
-        const reach = c.on !== c.home.index || view.now - this.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
+        const reach = true || view.now - this.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
         if (hp < low && reach) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
