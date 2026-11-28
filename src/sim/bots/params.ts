@@ -301,7 +301,8 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
  * - threatShare: share of glances that check an enemy (in sight or last seen) rather than just looking around.
  * - driftDeg: how far the calm view wanders off the path (SD, degrees).
  * - turnRate: calm turn speed cap (rad/s); engaging uses the aim hand's full speed.
- * - engageLeadM: eyes go on an enemy this many metres before they come into shooting distance (about to shoot).
+ * - engageLeadM: eyes go on an enemy this many metres before they come into shooting distance (about to shoot). 0 by
+ *   default: A/B (ffa8-mixed x60) at PRO 10 / Hard 8 / Medium 5 / Easy 3 m lifted Hard but not PRO and tied Medium with Easy.
  */
 export type GazeSkill = { firstLookSec: number; glanceRate: number; glanceSec: number; threatShare: number; driftDeg: number; turnRate: number; engageLeadM: number };
 /**
@@ -541,10 +542,10 @@ export const AIM_PARAMS: AimParams = {
 
 export const GAZE: GazeParams = {
   skill: {
-    easy: { firstLookSec: 1.3, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.35, driftDeg: 12, turnRate: 4, engageLeadM: 3 },
-    medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5, engageLeadM: 5 },
-    hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6, engageLeadM: 8 },
-    pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7, engageLeadM: 10 },
+    easy: { firstLookSec: 1.3, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.35, driftDeg: 12, turnRate: 4, engageLeadM: 0 },
+    medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5, engageLeadM: 0 },
+    hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6, engageLeadM: 0 },
+    pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7, engageLeadM: 0 },
   },
   engageHoldSec: 1.2, threatSec: 2.5, aimedAtDeg: 6, aimedAtM: 35, resightSec: 10, firstLookM: 50,
 };
