@@ -1878,7 +1878,9 @@ export class Bot {
         const items = hpHealsHeld(me) > 0 ? plan.items.filter((i) => i !== 'medkit') : plan.items;
         if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
         // An empty gun is as good as none: restocking it is as urgent as buying one.
-        const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv));
+        // Can't walk home with no decks (mixed seed 22: off a half bridge, 322 s 'saving up'): decks get me home.
+        const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv)) ||
+          (!c.homeReach && !me.inv.pieces.scaffold && items.includes('scaffold'));
         // Out-ranged by a rifle lately and the rifle is next: go get one (strength.outranged).
         const rifle = items[0] === 'rifle' && this.outrangedLately(view.now) ? RIFLE_TRIP : 0;
         return Math.max(urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0, rifle, this.endgameKit(c, items)) - away;

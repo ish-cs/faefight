@@ -339,14 +339,15 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (blocked > now) return zero(`${plan.items[0]} buy failed, waiting`);
       const list = shopList(plan.items);
       if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return { f: [['at the shop', 0.9]], why: `At the shop: buying ${list}` };
-      const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv));
+      const decksHome = !c.homeReach && !me.inv.pieces.scaffold && plan.items.includes('scaffold');
+      const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv)) || decksHome;
       const v0 = urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0;
       const rifle = plan.items[0] === 'rifle' && I.outrangedLately(now) ? 0.7 : 0, eg = I.endgameKit(c, plan.items);
       const v = Math.max(v0, rifle, eg);
       if (!v) return zero('saving up');
       const f: [string, number][] = [[v === v0 ? (urgent ? 'urgent buy' : 'kit affordable') : v === rifle ? 'out-ranged: rifle' : 'endgame seal kit', v]];
       if (away) f.push(['away', -away]);
-      return { f, why: `Off to buy ${list} ($${Math.round(plan.spent)})${urgent ? `: I need ${plan.items.includes('pistol') ? 'a gun' : plan.items.includes('charge') ? 'a charge' : 'ammo'}` : ''}` };
+      return { f, why: `Off to buy ${list} ($${Math.round(plan.spent)})${urgent ? `: I need ${plan.items.includes('pistol') ? 'a gun' : plan.items.includes('charge') ? 'a charge' : decksHome ? 'decks to get home' : 'ammo'}` : ''}` };
     }
     case 'bridge': {
       const have = me.inv.pieces.scaffold ?? 0;
