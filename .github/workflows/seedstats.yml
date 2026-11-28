@@ -60,9 +60,10 @@ jobs:
           if [[ "$LABEL" == test-* ]]; then
             # TASKS = test files (from this commit) separated by ';' -> run them against the ref's src.
             IFS=';' read -ra files <<< "$TASKS"
-            for f in "${files[@]}"; do cp "../tools/$f" "$f"; done
-            cp ../tools/tests/sim/unarmed.ts tests/sim/unarmed.ts 2>/dev/null || true
-            pnpm exec vitest run "${files[@]}" 2>&1 | tee ../out/vitest.log
+            run=()
+            for f in "${files[@]}"; do cp "../tools/$f" "$f"; [[ "$f" == *.test.ts ]] && run+=("$f"); done
+            git -C . status --short | head -20
+            pnpm exec vitest run "${run[@]}" 2>&1 | tee ../out/vitest.log
             echo "exit ${PIPESTATUS[0]}" >> ../out/vitest.log
           else
             cp ../tools/tests/sim/zzSeedStats.test.ts tests/sim/zzSeedStats.test.ts
