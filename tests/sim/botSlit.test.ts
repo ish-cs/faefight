@@ -51,9 +51,9 @@ describe('firing slits: shooting into a bunker', () => {
  * out in time). PRO / Hard take a line through a firing slit and kill them before the breakout clock does; Easy
  * waits at the door. User replay 8e57e4: a Hard sealed the user three times and only hit them after they broke out.
  */
-async function siege(d: Difficulty, seed: number, params?: BotParams) {
-  const m = await Match.create({ players: [{ name: 'sieger', isBot: true, difficulty: d }, { name: 'trapped', isBot: true, difficulty: 'medium' }], seed },
-    { makeBot: (id, diff, rng) => new Bot(id, diff, rng, undefined, id === 1 ? params : undefined) });
+async function siege(d: Difficulty, seed: number, params?: BotParams, victim: Difficulty = 'medium', victimParams?: BotParams) {
+  const m = await Match.create({ players: [{ name: 'sieger', isBot: true, difficulty: d }, { name: 'trapped', isBot: true, difficulty: victim }], seed },
+    { makeBot: (id, diff, rng) => new Bot(id, diff, rng, undefined, id === 1 ? params : victimParams) });
   for (let i = 0; i < 30; i++) m.tick(new Map());
   const isl = m.map[1], b = isl.bunker;
   m.debugKill(2, 1);
@@ -70,13 +70,16 @@ async function siege(d: Difficulty, seed: number, params?: BotParams) {
   for (let i = 0; i < 30 * (LIFECYCLE.respawnSec + 1) && !p(2).alive; i++) snap = m.tick(new Map());
   expect(p(2).breakoutUntil).not.toBeNull();
   const brain = () => m.botBrain(1) as unknown as { slitNote: { t: number; text: string } | null };
-  let slitKill = false, usedSlit = false, sieger = 0;
+  let slitKill = false, usedSlit = false, sieger = 0, out = 0, shootOut = false;
+  const victimBrain = () => m.botBrain(2) as unknown as { slitNote: { t: number; text: string } | null };
   const end = snap.time + LIFECYCLE.breakoutSec + 0.5;
   while (snap.time < end && !p(2).eliminated) {
     snap = m.tick(new Map());
     if (brain().slitNote?.text.includes('window slit')) usedSlit = true;
+    if (victimBrain().slitNote?.text.includes('shooting out')) shootOut = true;
     for (const e of snap.events) {
       if (e.type === 'hit' && e.data.target === 2 && e.data.by === 1) sieger++;
+      if (e.type === 'hit' && e.data.target === 1 && e.data.by === 2 && p(2).breakoutUntil !== null) out++;
       if (e.type === 'kill' && e.data.victim === 2 && e.data.killer === 1 && insideBunker(b, p(2).pos)) slitKill = true;
     }
     if (ENV.SLIT_TRACE && snap.tick % 10 === 0) {
@@ -86,7 +89,7 @@ async function siege(d: Difficulty, seed: number, params?: BotParams) {
     }
   }
   m.dispose();
-  return { slitKill, usedSlit, sieger };
+  return { slitKill, usedSlit, sieger, out, shootOut };
 }
 
 describe('bots shoot a trapped rival through the firing slits', () => {
@@ -109,6 +112,15 @@ describe('bots shoot a trapped rival through the firing slits', () => {
     for (const s of SEEDS.slice(0, 3)) rs.push(await siege('pro', s, params));
     expect(rs.filter((r) => r.usedSlit || r.slitKill)).toEqual([]);
   }, 60_000);
+  test('counterplay: a trapped Hard turns to shoot out of a slit at the PRO sieger lining up on it (never with drive.slitOut 0)', async () => {
+    const off: BotParams = { ...DEFAULT_BOT_PARAMS, drive: { ...DEFAULT_BOT_PARAMS.drive, slitOut: { easy: 0, medium: 0, hard: 0, pro: 0 } } };
+    const on = [], none = [];
+    for (const s of SEEDS) on.push(await siege('pro', s, undefined, 'hard'));
+    for (const s of SEEDS) none.push(await siege('pro', s, undefined, 'hard', off));
+    if (ENV.SLIT_TRACE) console.log(on, none);
+    expect(on.filter((r) => r.shootOut).length).toBeGreaterThanOrEqual(4);
+    expect(none.filter((r) => r.shootOut || r.out > 0)).toEqual([]);
+  }, 120_000);
   test('Easy: never takes a slit line (waits at the door)', async () => {
     const rs = [];
     for (const s of SEEDS.slice(0, 3)) rs.push(await siege('easy', s));
