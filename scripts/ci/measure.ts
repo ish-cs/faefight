@@ -116,14 +116,13 @@ type SeatOut = {
   /**
    * Frozen bot: longest stretch (s) alive with a rival still in the game without moving > FROZEN_M (2D), before sudden
    * death and from it on; frozenAt: when the longest pre-sudden-death one started. Not counted: a breakout countdown,
-   * holding inside my own bunker under fire (hurt in the last 3 s or an enemy within 30 m), earning at my own generator
-   * or buying (carried cash up within EARN_M m of it, or money spent, in the last EARN_SEC s; econMax) for at most ECON_CAP_SEC per stretch, and in sudden death any
+   * holding inside my own bunker under fire (hurt in the last 3 s or an enemy within 30 m), and in sudden death any
    * bunker (the doorway slabs shut it). Optional: older shards.
    */
   frozenMax?: number; frozenAt?: number; frozenMaxSd?: number;
   /** The longest pre-sudden-death freeze ≥ FROZEN_GATE_SEC, as the brain saw it when it hit that: goal/move layer: why @ x,z. */
   frozenNote?: string;
-  /** Longest stretch (s) earning at its own generator or the center's gold, or buying (EARN_M / EARN_SEC): excluded from frozenMax, shown on its own. */
+  /** Longest stretch (s) earning at its own generator or the center's gold, or buying (EARN_M / EARN_SEC): reported on its own; it does NOT reduce frozenMax or the freeze count (coordinator 2026-11-28: exclusions hide bugs). */
   econMax?: number;
   /** When the longest econ stretch started. */
   econAt?: number;
@@ -153,10 +152,8 @@ export type BuildOut = {
 };
 const FIGHT_GAP = 8, BLOCK_M = 4, HIGH_M = 1.2;
 const FROZEN_M = 1, FROZEN_GATE_SEC = 45;
-/** Earning at my own generator or the center's gold station (within EARN_M m, carried cash up) or buying (money down, alive) in the last EARN_SEC s: not frozen. */
+/** Earning at my own generator or the center's gold station (within EARN_M m, carried cash up) or buying (money down, alive) in the last EARN_SEC s: reported as econMax only (still counts as frozen). */
 const EARN_M = 3, EARN_SEC = 3.5;
-/** An earning/buying stretch is excluded from frozenMax for at most this long; past it, standing still counts as frozen again. */
-const ECON_CAP_SEC = 60;
 /** Dead air: no hit, kill or build anywhere while ≥ 2 players are still in the game. */
 const ACTION_EVENTS = new Set(['hit', 'kill', 'placed']);
 export type GameOut = {
@@ -343,7 +340,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (earning) { const e0 = earnSince.get(p.id) ?? snap.time; earnSince.set(p.id, e0); const se = seats[p.id - 1]; if (snap.time - e0 > (se.econMax ?? 0)) { se.econMax = snap.time - e0; se.econAt = e0; } }
         else earnSince.delete(p.id);
         const a = still.get(p.id);
-        if (!p.alive || p.eliminated || !rivals || p.breakoutUntil !== null || (inOwn && underFire) || shutIn || (earning && snap.time - earnSince.get(p.id)! <= ECON_CAP_SEC) || !a ||
+        if (!p.alive || p.eliminated || !rivals || p.breakoutUntil !== null || (inOwn && underFire) || shutIn || !a ||
             Math.hypot(p.pos.x - a.x, p.pos.z - a.z) > FROZEN_M || (a.t < SD && sd)) {
           still.set(p.id, { x: p.pos.x, z: p.pos.z, t: snap.time });
           continue;
@@ -777,7 +774,7 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     `### Stalls (frozen: alive, a rival in the game, moved ≤ ${FROZEN_M} m; dead air: no hit, kill or build anywhere)`, '',
     '| scenario | frozen max before 15:00 | worst | frozen max 15:00+ | games with a ≥ 45 s freeze | dead air max | worst | dead air median |', '|---|---|---|---|---|---|---|---|',
     ...sums.filter((s) => s.stalls).map((s) => { const x = s.stalls!; return `| ${s.scenario} | ${x.frozenMax.toFixed(0)} s | ${x.worst} | ${x.frozenMaxSd.toFixed(0)} s | ${x.gamesFrozen}/${s.games} | ${x.deadAirMax.toFixed(0)} s | ${x.deadAirWorst} | ${x.deadAirMedian === null ? '-' : x.deadAirMedian.toFixed(0)} s |`; }), '',
-    ...sums.filter((s) => s.stalls?.earnMax !== undefined).map((s) => `${s.scenario}: longest stretch earning at a generator (own or the center's gold) or buying (not counted as frozen for the first ${ECON_CAP_SEC} s of a stretch): ${s.stalls!.earnMax!.toFixed(0)} s (${s.stalls!.earnWorst})`), '',
+    ...sums.filter((s) => s.stalls?.earnMax !== undefined).map((s) => `${s.scenario}: longest stretch earning at a generator (own or the center's gold) or buying (still counted as frozen): ${s.stalls!.earnMax!.toFixed(0)} s (${s.stalls!.earnWorst})`), '',
     ...sums.filter((s) => s.stalls?.freezes?.length).flatMap((s) => [`${s.scenario} freezes ≥ ${FROZEN_GATE_SEC} s (goal/move layer: why, when it hit ${FROZEN_GATE_SEC} s):`, ...s.stalls!.freezes!.slice(0, 25).map((t) => `- ${t}`), '']),
     '### Eliminations per game (means)', '',
     '| scenario | kills 15:00+ | eliminations | credited | spoils paid |', '|---|---|---|---|---|',
