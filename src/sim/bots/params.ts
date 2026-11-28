@@ -367,7 +367,29 @@ export type VaultParams = {
   healSlot: number;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams };
+/**
+ * Strength against a strong human (user replay 8a2134, 2026-11-28: a rifle user at ~45 m beat 7 Hard bots that
+ * carried SMGs at 25-30 m, dropped $2651 on a death, and never sealed him in a 3 min 1v1 endgame).
+ * - rifleAt: cash I could spend (carried + banked above the insurance) from which the rifle is bought right after the
+ *   gun's ammo, before bridging gear (30 dmg to 25 m, still ~22 at 45 m; an SMG is down at its 6 dmg floor past 35 m).
+ *   Infinity = the old late buy. longGun: >= 0.5 skips the SMG for the rifle (as a Sniper personality does).
+ * - outranged: a rifle hitting me from past outrangedM (in the last outrangedSec) while my best gun at that range isn't
+ *   a rifle: score of breaking line of sight when I can't close on them (not on the same ground), and for
+ *   outrangedMemSec afterwards the rifle buy needs only its price (and the shop trip for it counts as urgent). 0 = unaware.
+ * - bankAway / richCarry: carrying at least richCarry away from home with a walk home and nobody near: the trip home
+ *   to the vault scores this (carried cash drops on death; the shops pay from the vault anywhere).
+ * - endgameSeal / endgameLeft: with this many players or fewer still in, added to seal on the rival's open bunker and to
+ *   the shop trip for a seal kit: the endgame is won by seal → kill → out, not by trading shots.
+ * - leaderFocus: the rival leading in kills (at least 2, and more than mine) gets this rival-choice bonus, and counts
+ *   (1 + this) times closer when choosing whom to shoot.
+ */
+export type StrengthParams = {
+  rifleAt: Record<Difficulty, number>; longGun: Record<Difficulty, number>; outranged: Record<Difficulty, number>; outrangedM: number; outrangedSec: number; outrangedMemSec: number;
+  bankAway: Record<Difficulty, number>; richCarry: number; endgameSeal: Record<Difficulty, number>; endgameLeft: number;
+  leaderFocus: Record<Difficulty, number>;
+};
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams; strength: StrengthParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -523,7 +545,13 @@ export const VAULT: VaultParams = {
   upgradeAt: D(Infinity, 500, 200, 100), upgradeScore: 0.75, upgradeNear: 0.3, healSlot: 1,
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT });
+export const STRENGTH: StrengthParams = {
+  rifleAt: D(Infinity, Infinity, 300, 300), longGun: D(0, 0, 1, 1), outranged: D(0, 0, 0.9, 1), outrangedM: 30, outrangedSec: 2.5, outrangedMemSec: 90,
+  bankAway: D(0, 0, 0.8, 0.85), richCarry: 700, endgameSeal: D(0, 0, 0.45, 0.6), endgameLeft: 3,
+  leaderFocus: D(0, 0, 0.35, 0.5),
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
 export function flattenParams(p: BotParams = DEFAULT_BOT_PARAMS): Record<string, number> {
@@ -604,6 +632,9 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
   ['vault.medkits.*', [0, 4]], ['vault.scaffolds.*', [0, 15]], ['vault.keep.*', [0, 150]], ['vault.buy.*', [0, 1]],
   ['vault.carry.*', [0, 400]], ['vault.bankMin', [30, 300]], ['vault.upgradeAt.*', [100, 2000]], ['vault.upgradeScore', [0.1, 1]], ['vault.upgradeNear', [0, 1]], ['vault.healSlot', [0, 1]],
+  ['strength.rifleAt.*', [300, 1500]], ['strength.longGun.*', [0, 1]], ['strength.outranged.*', [0, 1.5]], ['strength.outrangedM', [20, 50]], ['strength.outrangedSec', [1, 6]],
+  ['strength.outrangedMemSec', [10, 240]], ['strength.bankAway.*', [0, 1.5]], ['strength.richCarry', [200, 1500]], ['strength.endgameSeal.*', [0, 1.5]],
+  ['strength.endgameLeft', [2, 4]], ['strength.leaderFocus.*', [0, 1.5]],
   ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {

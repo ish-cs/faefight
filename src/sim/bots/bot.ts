@@ -133,6 +133,8 @@ const EASY_DODGE = 0.4;
 const STORM_PREP_SEC = 150;
 /** Pieces that plug a doorway (sealKit counts tall pieces and sandbag pairs). */
 const KIT_PIECES: PieceKind[] = ['steel', 'metal', 'wood', 'sandbags'];
+/** Shop score of the trip for a rifle while out-ranged lately (strength.outranged). */
+const RIFLE_TRIP = 0.7;
 /** Storm goal score for leaving my bunker before sudden death's slabs drop (above every other goal), and how far past the doorway to go. */
 const BARRIER_LEAVE = 2, BUNKER_EXIT = 3;
 /** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
@@ -351,6 +353,8 @@ export class Bot {
   /** Last heal decision (spectators), heals wanted (stock target), slots dropped to fit a heal (not looted back). */
   private healNote: { t: number; text: string } | null = null;
   private healWant = 0;
+  /** Last rifle hit that out-ranged my guns (strength.outranged): who and when. */
+  private outranged: { id: number; t: number } | null = null;
   private lastHealDropAt = -Infinity;
   private healDrops: { pos: Vec3; t: number }[] = [];
   private grid: { key: string; grid: BunkerGrid } | null = null;
@@ -408,7 +412,7 @@ export class Bot {
     const t = this.t;
     this.style = {
       upgradeFirst: t.patience > 0.65,
-      longGun: t.range > 0.75,
+      longGun: t.range > 0.75 || P.strength.longGun[difficulty] >= 0.5,
       closeGun: t.range < 0.3,
       metal: t.builder > 0.6,
       steel: t.patience > 0.75 && t.greed > 0.75,
@@ -471,6 +475,7 @@ export class Bot {
     const dt = Number.isNaN(this.lastNow) || skipped ? DT : Math.max(0, now - this.lastNow);
     this.lastNow = now;
     this.mem.update(view);
+    this.noteOutranged(view);
     if (!me.alive) {
       this.moveDir = null;
       this.aim.reset();
@@ -1125,12 +1130,18 @@ export class Bot {
     return { perK: this.P.drive.spoilsTarget[this.difficulty], trapped: this.P.drive.finishTrapped };
   }
 
+  /** leaderFocus by player id (0 for anyone not in view.others). */
+  leaderFocusId(view: BotView, id: number): number {
+    const o = view.others.find((x) => x.id === id);
+    return o ? this.leaderFocus(view, o) : 0;
+  }
+
   /** Score every rival; keep the current one unless another is clearly better. */
   private chooseTarget(view: BotView) {
     let best: number | null = null, bestScore = -Infinity, cur = -Infinity;
     for (const f of this.rivalFacts(view)) {
       const s = rivalScore(f, this.t, this.P.drive.sealAwayTarget, this.spoilsWeights) + (this.rng() - 0.5) * NOISE[this.difficulty] -
-        ((this.targetBan.get(f.id) ?? -Infinity) > view.now ? 1.5 : 0) + this.teamFocus(view, f.id);
+        ((this.targetBan.get(f.id) ?? -Infinity) > view.now ? 1.5 : 0) + this.teamFocus(view, f.id) + this.leaderFocusId(view, f.id);
       if (f.id === this.targetId) cur = s;
       if (s > bestScore) { bestScore = s; best = f.id; }
     }
@@ -1360,6 +1371,8 @@ export class Bot {
       let eff = !view.suddenDeath && view.sealed[e.island] ? d / this.P.drive.sealedFocus : d;
       // Teams: focus fire on whoever is hurting a teammate.
       if (view.allies?.some((a) => a.hurtBy === e.id && view.now - a.hurtAt <= this.P.team.assistSec)) eff /= this.P.team.focusFire;
+      // The kill leader is the threat to stop (strength.leaderFocus).
+      eff /= 1 + this.leaderFocus(view, e);
       if (this.shutInIgnored(view, e, d)) continue;
       if (e.alive && eff < pickD) { enemy = e; enemyDist = d; pickD = eff; }
     }
@@ -1454,6 +1467,8 @@ export class Bot {
       genLevel: c.view.genLevels?.[c.home.index],
       build: this.buildNeeds(c, total),
       combatKit: this.combatKit(c),
+      rifle: this.wantsRifle(c),
+      rifleSlot: Number.isFinite(this.P.strength.rifleAt[this.difficulty]),
     };
   }
 
@@ -1716,7 +1731,9 @@ export class Bot {
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
           (c.enemyDist < Math.min(ENGAGE_RANGE, WEAPONS[c.enemy.equipped].range) || view.now - this.mem.lastHurtAt < 1.5);
-        return outgunned ? 0.95 + 0.2 * t.caution : 0;
+        // A rifle picking me off from across the water, out of my gun's range: get out of its sight, don't trade.
+        const outranged = this.outrangedBy(c) ? this.P.strength.outranged[this.difficulty] : 0;
+        return Math.max(outgunned ? 0.95 + 0.2 * t.caution : 0, outranged);
       }
       case 'defend': {
         if (trapped) return 2;
@@ -1769,7 +1786,9 @@ export class Bot {
       }
       case 'bank': {
         // Storm coming: getting to the center beats a trip to the vault (the shop takes vault cash anyway).
-        if (c.on !== home.index || view.suddenDeath || this.stormPrep(view)) return 0;
+        // Away from home with a lot on me (it drops if I die): the walk home to bank it.
+        if (c.on !== home.index) return this.bankAway(c);
+        if (view.suddenDeath || this.stormPrep(view)) return 0;
         // Death insurance: before heading out, leave enough in the vault to rebuy a gun after a death.
         const leavingSoon = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
         if (leavingSoon && this.insuranceDue(me) > 0 && !(c.enemy && c.enemyDist < 8)) return 0.8;
@@ -1818,7 +1837,9 @@ export class Bot {
         if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
         // An empty gun is as good as none: restocking it is as urgent as buying one.
         const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv));
-        return (urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0) - away;
+        // Out-ranged by a rifle lately and the rifle is next: go get one (strength.outranged).
+        const rifle = items[0] === 'rifle' && this.outrangedLately(view.now) ? RIFLE_TRIP : 0;
+        return Math.max(urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0, rifle, this.endgameKit(c, items)) - away;
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
@@ -1873,7 +1894,7 @@ export class Bot {
         // Standing on their island with nobody home (not seen here lately): the door is open, plug it now.
         const empty = c.on === c.rivalIsl.index && !!c.rival && c.rival.alive && !ownerAway &&
           this.mem.recent(c.rival.id, view.now, this.P.drive.emptyHomeSec)?.island !== c.rival.island;
-        return this.P.drive.sealBonus + (this.inWindow(c) ? this.P.drive.windowPush : 0) + (kit >= c.openDoors.length ? 0.6 : 0.3) + (rivalDown ? 0.5 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
+        return this.P.drive.sealBonus + this.endgameSeal(c) + (this.inWindow(c) ? this.P.drive.windowPush : 0) + (kit >= c.openDoors.length ? 0.6 : 0.3) + (rivalDown ? 0.5 + 0.3 * t.opportunism : 0) + (near ? 0.1 : 0) +
           (ownerAway || empty ? this.P.drive.sealAway + 0.2 * t.opportunism : 0);
       }
       case 'cut': {
@@ -1937,6 +1958,67 @@ export class Bot {
     // Only when the shop would sell me a plug now (a full hotbar can't take a new piece kind: botWeaponCommit seed 1,
     // half the marked-down ticks had no plug in the plan and the bot hung about home instead).
     return this.plan(c).items.some((i) => (KIT_PIECES as string[]).includes(i)) ? pen : 0;
+  }
+
+  /** A visible rifle just hit me from past strength.outrangedM, where my own best gun isn't a rifle: remember it. */
+  private noteOutranged(view: BotView) {
+    const S = this.P.strength;
+    if (S.outranged[this.difficulty] <= 0 || this.mem.lastHurtBy === null || view.now - this.mem.lastHurtAt > 0.1) return;
+    const e = view.enemies.find((x) => x.id === this.mem.lastHurtBy);
+    if (!e || e.equipped !== 'rifle') return;
+    const d = dist2D(e.pos, view.self.pos);
+    if (d < S.outrangedM || bestGun(view.self.inv, d) === 'rifle') return;
+    this.outranged = { id: e.id, t: view.now };
+  }
+
+  /** The rifle out-ranging me right now that I can't close on (not on my ground): break line of sight. Null if none. */
+  outrangedBy(c: Ctx): PlayerState | null {
+    const o = this.outranged;
+    if (!o || c.view.now - o.t > this.P.strength.outrangedSec || c.view.suddenDeath) return null;
+    const e = c.view.enemies.find((x) => x.id === o.id && x.alive);
+    return e && !this.sameGround(c.me.pos, e.pos) && bestGun(c.me.inv, dist2D(e.pos, c.me.pos)) !== 'rifle' ? e : null;
+  }
+
+  /** Out-ranged by a rifle within strength.outrangedMemSec. */
+  outrangedLately(now: number): boolean {
+    return !!this.outranged && now - this.outranged.t < this.P.strength.outrangedMemSec;
+  }
+
+  /** Rifle before bridging gear: rich enough (strength.rifleAt), or out-ranged lately with its price to spend. */
+  wantsRifle(c: Ctx): boolean {
+    if (c.me.inv.weapons.rifle) return false;
+    const cash = this.spendCash(c.me);
+    return cash >= this.P.strength.rifleAt[this.difficulty] || (this.outrangedLately(c.view.now) && cash >= WEAPONS.rifle.price);
+  }
+
+  /** Away from home carrying at least strength.richCarry, a walk home, nobody near: the trip home to bank it (more the more I carry). */
+  bankAway(c: Ctx): number {
+    const S = this.P.strength, v = S.bankAway[this.difficulty];
+    if (v <= 0 || c.view.suddenDeath || this.stormPrep(c.view) || !c.homeReach || c.me.inv.cash < S.richCarry || this.trapped(c)) return 0;
+    if (c.enemy && c.enemyDist < ENGAGE_RANGE) return 0;
+    // The more I carry, the more a death costs: up to twice the knob at 2 × richCarry.
+    return v * Math.min(2, c.me.inv.cash / S.richCarry) - dist2D(c.me.pos, c.home.vault) / 200;
+  }
+
+  /** With strength.endgameLeft or fewer players still in (me included): the seal pressure bonus, else 0. */
+  endgameSeal(c: Ctx): number {
+    const S = this.P.strength, v = S.endgameSeal[this.difficulty];
+    if (v <= 0 || c.view.suddenDeath) return 0;
+    return 1 + c.view.others.filter((o) => !o.eliminated).length <= S.endgameLeft ? v : 0;
+  }
+
+  /** Endgame, short of a seal kit for the rival's open doors and the shop sells me a plug: that trip's score (else 0). */
+  endgameKit(c: Ctx, items: ShopItem[]): number {
+    const e = this.endgameSeal(c);
+    if (!e || !c.rivalIsl || c.view.sealed[c.rivalIsl.index] || sealKit(c.me.inv) >= Math.max(1, c.openDoors.length)) return 0;
+    return items.some((i) => (KIT_PIECES as string[]).includes(i)) ? 0.55 + e : 0;
+  }
+
+  /** strength.leaderFocus when `o` leads the kills (at least 2, more than mine, nobody ahead), else 0. */
+  leaderFocus(view: BotView, o: { kills: number }): number {
+    const v = this.P.strength.leaderFocus[this.difficulty];
+    if (v <= 0 || o.kills < 2 || o.kills <= view.self.kills) return 0;
+    return view.others.every((x) => x.eliminated || x.kills <= o.kills) ? v : 0;
   }
 
   /** Extra bail-out hp line while my own bunker is sealed (a death now is final), by tier (drive.sealedCaution). */
@@ -2127,7 +2209,7 @@ export class Bot {
     const me = c.me;
     const upgrade = this.wantsVaultUpgrade(me);
     // Remote vault level: deposit from right here (on my island); an upgrade still needs the vault itself.
-    const remote = vaultSpec(me).remote && !upgrade;
+    const remote = vaultSpec(me).remote && !upgrade && c.on === c.home.index;
     const walk = remote ? IDLE : this.goTo(c.home.vault, 1.8);
     if ((!remote && dist2D(me.pos, c.home.vault) > USE_RANGE) || me.busyUntil > c.view.now) return walk;
     const cash = Math.max(Math.floor(me.inv.cash - this.bankKeep(c)), this.insuranceDue(me));

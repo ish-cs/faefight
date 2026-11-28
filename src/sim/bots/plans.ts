@@ -80,6 +80,10 @@ export type Needs = {
   build?: Partial<Record<PieceKind, number>>;
   /** Combat pieces bought right after the gun and its ammo (before bridging gear), when the cash is there. */
   combatKit?: Partial<Record<PieceKind, number>>;
+  /** The rifle right after the gun's ammo, before bridging gear (strength.rifleAt, or out-ranged by a rifle). */
+  rifle?: boolean;
+  /** Keep a hotbar slot free for the rifle until I have one. */
+  rifleSlot?: boolean;
 };
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
@@ -119,8 +123,13 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
   // Short of heals with none slotted (and the cash for one): the last free slot is kept for a medkit.
   const healShort = cash >= MEDKIT.price && inv.medkits + (inv.potions.healPotion ?? 0) < (needs.medkits ?? 0) && !p.hotbar.includes('medkit') && !p.hotbar.includes('healPotion');
+  // Hard/PRO keep a slot for the rifle until they have one (needs.rifleSlot): spoils arrive with a full hotbar otherwise.
+  const rifleSlot = !!needs.rifleSlot && !inv.weapons.rifle;
+  const free = p.hotbar.filter((x) => x === null).length;
   const room = (k: HotbarItem) => countOf(inv, k) > 0 ||
-    (canAdd(p.hotbar, k) && (!healShort || k === 'medkit' || k === 'grapple' || p.hotbar.filter((x) => x === null).length >= 2));
+    (canAdd(p.hotbar, k) && free >= 1 + (healShort && k !== 'medkit' && k !== 'grapple' ? 1 : 0) + (rifleSlot && k !== 'rifle' ? 1 : 0));
+  // Out-ranged (or rich enough): the rifle before anything but the gun's ammo; never saved up for.
+  if (needs.rifle && !inv.weapons.rifle && room('rifle') && cash >= WEAPONS.rifle.price) return 'rifle';
   // A ramp in the pocket for fights (skilled players): cheap, never saved up for.
   for (const [k, n] of Object.entries(needs.combatKit ?? {}) as [PieceKind, number][])
     if ((inv.pieces[k] ?? 0) < n && room(k) && cash >= PIECES[k].price) return k;
