@@ -190,4 +190,4 @@ export function adsFov(baseFov: number, kind: WeaponKind, ads: number): number {
 }
 
 /** Recoil kick in view (camera punch) for `since` s after a shot: snappier, larger for big guns. */
-export const PUNCH_SCALE: Record<WeaponKind, number> = { fists: 0, pistol: 1, smg: 0.55, shotgun: 2.2, rifle: 0.9, rocket: 2.8 };
+export const PUNCH_SCALE: Record<WeaponKind, number> = { fists: 0, pistol: 1, smg: 0.55, shotgun: 2.2, rifle: 0.9, rocket: 2.8, sniper: 2.4 };

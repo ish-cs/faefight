@@ -224,6 +224,19 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .hud .scope::before, .hud .scope::after { content: ""; position: absolute; top: 50%; left: 50%; background: rgba(10, 10, 10, 0.85); }
 .hud .scope::before { width: 66vmin; height: 1px; transform: translate(-50%, -50%); }
 .hud .scope::after { width: 1px; height: 66vmin; transform: translate(-50%, -50%); }
+/* Sniper scope: tighter lens with a darker rim and a faint lens tint, duplex reticle (thick outer posts, fine centre
+   hairs from the base ::before/::after), mil-dots on the inner hairs. */
+.hud .scope.sniper { background: radial-gradient(circle at 50% 50%, rgba(140, 170, 160, 0.05) 0, rgba(20, 30, 30, 0.12) 27vmin, rgba(0, 0, 0, 0.8) 29.5vmin, #020304 31vmin); }
+.hud .scope.sniper::before { width: 24vmin; }
+.hud .scope.sniper::after { height: 24vmin; }
+.hud .scope .dots { display: none; }
+.hud .scope.sniper .dots { display: block; position: absolute; top: 50%; left: 50%; width: 60vmin; height: 60vmin; transform: translate(-50%, -50%);
+  background:
+    linear-gradient(90deg, #000 0 18vmin, transparent 18vmin 42vmin, #000 42vmin) center / 100% 4px no-repeat,
+    linear-gradient(180deg, #000 0 18vmin, transparent 18vmin 42vmin, #000 42vmin) center / 4px 100% no-repeat; }
+.hud .scope.sniper .dots::before, .hud .scope.sniper .dots::after { content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.hud .scope.sniper .dots::before { width: 21vmin; height: 5px; background: radial-gradient(circle, #000 0 1.7px, transparent 2.2px) center / 3vmin 5px repeat-x; }
+.hud .scope.sniper .dots::after { width: 5px; height: 21vmin; background: radial-gradient(circle, #000 0 1.7px, transparent 2.2px) center / 5px 3vmin repeat-y; }
 .hud .center-msg { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); font-size: 26px; font-weight: 700; padding: 12px 22px; background: var(--glass-strong); border-radius: 12px; display: none; }
 .hud .center-msg.small { top: auto; bottom: 110px; transform: translateX(-50%); font-size: 14px; font-weight: 500; padding: 6px 12px; }
 .hud .damage-flash { position: absolute; inset: 0; box-shadow: inset 0 0 120px rgba(255, 0, 0, 0); }

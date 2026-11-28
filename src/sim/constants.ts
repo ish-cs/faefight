@@ -113,7 +113,19 @@ export const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     spread: { base: 0.6, ads: 0.2, perShot: 0, max: 0, recover: 1, move: 1.5, sprint: 3, air: 4 },
     recoil: { up: 3.5, upGrow: 0, side: 0.6, sideBias: 0 }, adsZoom: 1.5, adsMove: 0.65,
   },
+  sniper: {
+    // Bolt-action (2026-11-27, "add sniper gun to game"): one aimed shot every 1.33 s. Body 85 (a second hit or any
+    // follow-up kills), head x2 = 170 (kills from full health, and through a small shield). Falls off only past 90 m
+    // and keeps 85% beyond 180 m. Hipfire is a guess (7 deg); scoped 0.03 deg standing still. Scope 3.5x, slow walk.
+    // Counterplay: scope glint toward whoever it points at (client), loud crack + tracer, $650, 5-round mags, thin ammo.
+    price: 650, dmg: 85, pellets: 1, rps: 0.75, mag: 5, reloadSec: 3.0, reloadEmptySec: 3.6, chamber: true, range: 250,
+    falloff: { start: 90, end: 180, minMult: 0.85 },
+    spread: { base: 7, ads: 0.03, perShot: 5, max: 8, recover: 6, move: 3, sprint: 8, air: 10 },
+    recoil: { up: 4.5, upGrow: 0, side: 0.8, sideBias: 0.2 }, adsZoom: 3.5, adsMove: 0.45,
+  },
 };
+/** Sniper ammo is scarce: 2 spare mags on buy (others: SPARE_MAGS_ON_BUY), 1 mag per ammo box at a higher price. */
+export const SNIPER_AMMO = { spareMags: 2, boxMags: 1, boxPrice: 40 };
 export const SPARE_MAGS_ON_BUY = 3;
 /** Ammo box: `mags` magazines for the gun in hand; rockets come `rockets` per box at `rocketPrice`. */
 export const AMMO_BOX = { price: 20, mags: 2, rocketPrice: 75, rockets: 1 };

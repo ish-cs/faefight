@@ -33,6 +33,7 @@ import { ChatUi } from './chatUi';
 import { loadGameModules, preloadGame } from './gameModules';
 import { InputAccumulator } from './inputAccum';
 import { InputController } from './input';
+import { ScopeSway } from './scopeSway';
 import { ACTIONS, activeKeymap, bindingLabel, isAction, type Action } from './keymap';
 import { loadingScreen as loadingOverlay } from './loading';
 import { LobbyUi, MapPicker } from './lobbyUi';
@@ -1730,7 +1731,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   /** Crosshair gap from the spread cone, reload ring progress, rifle scope. */
   const gunHud = (me: Snapshot['players'][number] | undefined, own = true) => {
-    if (!me?.alive || me.equipped === 'fists') return { spreadPx: 4, reload: null, scoped: false };
+    if (!me?.alive || me.equipped === 'fists') return { spreadPx: 4, reload: null, scoped: false, sniperScope: false };
     const now = simNow();
     const ads = own ? fpv.adsK > 0.5 : me.ads;
     const deg = spreadDeg(me.equipped, { ads, bloom: me.bloom, lastShotAt: me.lastShotAt }, now,
@@ -1738,7 +1739,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const cam = renderer.camera;
     const px = (Math.tan((deg * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (canvas.clientHeight / 2);
     const c = reloadClock(me, now);
-    return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: me.equipped === 'rifle' && (own ? fpv.adsK > 0.9 : me.ads && spectator.firstPerson) };
+    const scopeGun = me.equipped === 'rifle' || me.equipped === 'sniper';
+    return { spreadPx: px, reload: c ? c.elapsed / c.duration : null, scoped: scopeGun && (own ? fpv.adsK > 0.9 : me.ads && spectator.firstPerson), sniperScope: me.equipped === 'sniper' };
   };
 
   // Client shot prediction (shotPredict.ts); predictShot is defined with the frame loop.
@@ -2068,6 +2070,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let unsent: MoveCmd[] = [];
   let sentTail: MoveCmd[] = []; // last commands already sent (input redundancy)
   const predicted = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };
+  const scopeSway = new ScopeSway();
   let lastRendered: { x: number; y: number; z: number } | null = null;
   const eyeY = new VerticalSmoother();
   const viewFeet = new THREE.Vector3();
@@ -2222,7 +2225,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       // (A spectator keeps following: the free-fly / follow camera just waits for the replay.)
       renderer.setReplay({ snap: kc.snap, motion: kc.motion });
       renderer.replayEvents(kc.events);
-      renderer.characters.hiddenId = -1;
+      renderer.characters.hiddenId = kc.scope ? killcam.killer : -1; // through their scope: not inside their head
       renderer.setGhost(null);
       aim = null;
       const cam = renderer.camera;
@@ -2278,6 +2281,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     adsWas = adsWant;
     fpv.setAds(adsWant, dt);
     input.lookScale = me && me.equipped !== 'fists' ? 1 / (1 + (WEAPONS[me.equipped].adsZoom - 1) * fpv.adsK) : 1;
+    // Sniper scope sway (scopeSway.ts): less standing still.
+    const swayV = predicting ? predicted.vel : me?.vel;
+    scopeSway.step(dt, !!me && adsWant && me.equipped === 'sniper' && fpv.adsK > 0.9, swayV ? Math.hypot(swayV.x, swayV.z) : 0);
+    if (scopeSway.dYaw !== 0 || scopeSway.dPitch !== 0) input.nudge(scopeSway.dYaw, scopeSway.dPitch);
     probe.lap(S.camera);
     if (me && !spectating && renderer.playerPos(humanId, feet)) {
       lastRendered = { x: feet.x, y: feet.y, z: feet.z };

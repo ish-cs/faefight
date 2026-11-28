@@ -51,7 +51,7 @@ export type FeatureInput = {
 };
 
 export function gunClass(guns: readonly string[]): number {
-  if (guns.includes('rifle')) return 3;
+  if (guns.includes('rifle') || guns.includes('sniper')) return 3;
   if (guns.some((g) => g === 'smg' || g === 'shotgun' || g === 'rocket')) return 2;
   return guns.includes('pistol') ? 1 : 0;
 }
@@ -135,4 +135,4 @@ export function goalBiasFor(m: UserProxyModel): (goal: string, view: BotView) =>
 }
 
 /** Used by the labeller and tests: which guns a summary row's `equipped` value counts as. */
-export const GUNS: readonly WeaponKind[] = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'];
+export const GUNS: readonly WeaponKind[] = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket', 'sniper'];

@@ -89,7 +89,7 @@ export function distToCylinder(p: Vec3, base: Vec3, r: number, h: number): numbe
   return Math.hypot(radial, p.y - y);
 }
 
-const GUN_ORDER: GunKind[] = ['rifle', 'smg', 'shotgun', 'pistol', 'rocket'];
+const GUN_ORDER: GunKind[] = ['rifle', 'smg', 'shotgun', 'pistol', 'rocket', 'sniper'];
 
 /** The gun a crate's ammo drop is for: the one in hand, else the first owned in GUN_ORDER; null if none. */
 export function ammoGunFor(p: Pick<PlayerState, 'equipped' | 'inv'> | null): GunKind | null {
