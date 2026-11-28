@@ -2,10 +2,14 @@ import { describe, expect, test } from 'vitest';
 import { Bot } from '../../src/sim/bots/bot';
 import { DEFAULT_BOT_PARAMS, STRENGTH, withParams } from '../../src/sim/bots/params';
 import { nextPurchase, type Needs } from '../../src/sim/bots/plans';
+import { WEAPONS } from '../../src/sim/constants';
+import { eyePos } from '../../src/sim/combat';
+import * as dm from '../../src/sim/dmath';
 import { Match } from '../../src/sim/match';
 import { mulberry32 } from '../../src/sim/rng';
 import { newPlayer } from '../../src/sim/player';
-import type { Difficulty, Snapshot } from '../../src/sim/types';
+import { NO_INPUT, type Difficulty, type PlayerInput, type PlayerState, type Snapshot } from '../../src/sim/types';
+import { dist2D, v3 as vec3, yawOf } from '../../src/sim/vec';
 
 // Strength vs a strong human (user replay 8a2134): rifle at range, bank before risky trips, endgame seal pressure,
 // focus on the kill leader. Unit checks on the knobs (Ctx stubs: only what each helper reads), then a short series.
@@ -118,29 +122,79 @@ describe('strength.endgameSeal / leaderFocus', () => {
 });
 
 describe('strength in play', () => {
-  // Main: Hard/PRO bought a rifle only with a Sniper personality (range > 0.75); the SMG was the end of the line.
-  test('with rifleAt on, Hard/PRO pick up a rifle by 5:00 in most games (rifle slot kept free)', async () => {
-    const diffs: Difficulty[] = ['pro', 'hard', 'medium', 'easy'];
-    const lines: string[] = [];
-    let armed = 0, seats = 0;
-    for (const seed of [1, 2, 3]) {
-      const rifleAt: (number | null)[] = diffs.map(() => null);
-      const m = await Match.create(
-        { players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed },
-        { makeBot: (id, d, rng) => new Bot(id, d, rng, undefined, ON) as never },
-      );
-      let snap: Snapshot = m.tick(new Map());
-      for (let i = 0; i < 5 * 60 * 30 && snap.winner === null; i++) {
-        snap = m.tick(new Map());
-        for (const p of snap.players) if (p.inv.weapons.rifle && rifleAt[p.id - 1] === null) rifleAt[p.id - 1] = Math.round(snap.time);
-      }
-      m.dispose();
-      lines.push(`seed ${seed}: first rifle (s) ${JSON.stringify(rifleAt)}`);
-      seats += 2; armed += (rifleAt[0] !== null ? 1 : 0) + (rifleAt[1] !== null ? 1 : 0);
+  // strength.outranged (on by default for Hard/PRO), played out in one fixed setup, no seed lottery. A scripted human
+  // rifleman (id 2) on the next island taps at a bot (id 1, SMG + pistol) ~68 m away across the water, past SMG range,
+  // one aimed shot a second while it can see it. The bot breaks off (disengage), sprints away to the lee of its bunker
+  // and is out of sight in ~4.4 s (main 979bb0c8); handed a rifle's price, it buys one ~10-15 s later. With the knob
+  // off (control) it walks on toward the shore and the shop and keeps its cash for other things.
+  // Replaces "rifleAt on: Hard/PRO hold a rifle by 5:00 in 2/3 of seats over seeds 1-3", which measured seed luck
+  // (4/6 on main, 7/16 over seeds 1-8) for a knob that is off by default.
+  const BOT_X = -44, SHOOTER_X = 26, HITS = 4;
+  async function outrangedRun(d: Difficulty, P: typeof DEFAULT_BOT_PARAMS = DEFAULT_BOT_PARAMS) {
+    let bot: Bot | null = null;
+    const m = await Match.create({ players: [{ name: '', isBot: true, difficulty: d }, { name: 'rifle', isBot: false }], seed: 5 },
+      { makeBot: (id, dd, rng) => (bot = new Bot(id, dd, rng, undefined, P)) });
+    const sees = (m as unknown as { botView(p: PlayerState): { enemies: PlayerState[] } });
+    const players = (m as unknown as { s: { players: Map<number, PlayerState> } }).s.players;
+    const me = players.get(1)!, rifleman = players.get(2)!;
+    let snap: Snapshot = m.tick(new Map());
+    m.debugTeleport(1, vec3(BOT_X, m.map[0].groundY + 0.05, 0));
+    m.debugTeleport(2, vec3(SHOOTER_X, m.map[1].groundY + 0.05, 0));
+    m.debugGive(1, { weapons: { smg: { mag: WEAPONS.smg.mag, spare: 60 } } });
+    m.debugSetGenerator(0, 0);
+    m.debugGive(2, { weapons: { rifle: { mag: WEAPONS.rifle.mag, spare: 50 } } });
+    const inSight = () => sees.botView(rifleman).enemies.some((e) => e.id === 1);
+    const aim = (fire: boolean): Map<number, PlayerInput> => {
+      const eye = eyePos(rifleman), chest = vec3(me.pos.x, me.pos.y + 1.2, me.pos.z);
+      const dx = chest.x - eye.x, dz = chest.z - eye.z;
+      return new Map([[2, { ...NO_INPUT, slot: 'rifle', ads: true, fire, yaw: yawOf({ x: dx, z: dz }), pitch: dm.atan2(chest.y - eye.y, Math.hypot(dx, dz)) }]]);
+    };
+    for (let i = 0; i < 15; i++) snap = m.tick(aim(false)); // land, draw the rifle, settle the sights
+    const seenAtStart = inSight(), dist0 = dist2D(me.pos, rifleman.pos);
+    // Phase 1: one aimed tap a second while the bot is in sight, HITS hits at most (it lives): until it is out of sight.
+    let hits = 0, firstHit = -1, hidden = -1, distHidden = -1, disengaged = false, hp = me.hp + me.shield;
+    for (let i = 0; i < 12 * 30 && hidden < 0; i++) {
+      snap = m.tick(aim(hits < HITS && i % 30 === 0 && inSight()));
+      const now = me.hp + me.shield;
+      if (now < hp) { hits++; if (firstHit < 0) firstHit = snap.time; }
+      hp = now;
+      if (firstHit >= 0 && bot!.currentGoal === 'disengage') disengaged = true;
+      if (firstHit >= 0 && !inSight()) { hidden = snap.time; distHidden = dist2D(me.pos, rifleman.pos); }
     }
-    console.log(lines.join('\n'));
-    expect(armed, lines.join('; ')).toBeGreaterThanOrEqual(Math.ceil(seats * 2 / 3));
-  }, 600_000);
+    // Phase 2: hold fire; give the bot a rifle's price and let it shop (outranged lately: the rifle is first, and urgent).
+    m.debugGive(1, { cash: WEAPONS.rifle.price + 50 });
+    let rifleAt = -1;
+    const t2 = snap.time;
+    for (let i = 0; i < 45 * 30 && rifleAt < 0; i++) {
+      snap = m.tick(aim(false));
+      if (me.inv.weapons.rifle) rifleAt = snap.time - t2;
+    }
+    const r = { seenAtStart, dist0, distHidden, hits, alive: me.alive, disengaged, hideSec: hidden < 0 ? -1 : hidden - firstHit, rifleAt };
+    m.dispose();
+    return r;
+  }
+  for (const d of ['hard', 'pro'] as Difficulty[]) {
+    test(`${d}: hit by a rifle from across the water past SMG range → out of its sight in seconds; with the cash → buys a rifle`, async () => {
+      const r = await outrangedRun(d);
+      console.log(d, JSON.stringify(r));
+      expect(r.seenAtStart).toBe(true);
+      expect(r.dist0).toBeGreaterThan(WEAPONS.smg.range);
+      expect(r.hits).toBeGreaterThan(0);
+      expect(r.alive).toBe(true);
+      expect(r.disengaged).toBe(true);
+      expect(r.hideSec).toBeGreaterThanOrEqual(0);
+      expect(r.hideSec).toBeLessThan(6);
+      expect(r.distHidden).toBeGreaterThan(r.dist0 + 5); // away from the shooter (behind its bunker), not up to the shore
+      expect(r.rifleAt).toBeGreaterThanOrEqual(0);
+      expect(r.rifleAt).toBeLessThan(30);
+    }, 60_000);
+  }
+  test('control: with strength.outranged off the same bot keeps its cash for other things (no rifle)', async () => {
+    const r = await outrangedRun('pro', withParams({ 'strength.outranged.pro': 0 }));
+    console.log('control', JSON.stringify(r));
+    expect(r.hits).toBeGreaterThan(0);
+    expect(r.rifleAt).toBe(-1);
+  }, 60_000);
 });
 
 describe('belief.ts: per-enemy beliefs from the view only', () => {
