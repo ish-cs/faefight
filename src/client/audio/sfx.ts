@@ -550,6 +550,21 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       noise(k, out, t, { type: 'bandpass', freq: 3000, dur: 0.25, peak: 0.3, attack: 0.01 });
       return noise(k, out, t, { type: 'lowpass', freq: 1500 * p, freqEnd: 400, dur: 0.5, peak: 0.8, attack: 0.01 });
     case 'explosion': return explosion(k, out, t, cue);
+    case 'smokePop': // the canister's pop, a short whoosh, then the long hiss of the smoke pouring out
+      noise(k, out, t, { type: 'bandpass', freq: 900 * p, q: 1.2, dur: 0.05, peak: 0.6 });
+      tone(k, out, t, { f0: 160 * p, f1: 70, dur: 0.1, peak: 0.4 });
+      noise(k, out, t + 0.03, { type: 'lowpass', freq: 700 * p, freqEnd: 250, dur: 1.4, peak: 0.35, attack: 0.15 });
+      return 0.05 + noise(k, out, t + 0.05, { type: 'bandpass', freq: 3800 * p, freqEnd: 2200, q: 0.8, dur: 2.4, peak: 0.4, attack: 0.08 });
+    case 'flashPop':
+      if (cue.kind === 'far') { // across the map: a dull bang
+        tone(k, out, t, { f0: 75 * p, f1: 35, dur: 0.3, peak: 0.7 });
+        return noise(k, out, t, { type: 'lowpass', freq: 1300 * p, freqEnd: 200, dur: 0.6, peak: 0.9, attack: 0.003 });
+      }
+      // close: a sharp crack (much brighter than a grenade), the body of the bang, a metallic ring
+      noise(k, out, t, { type: 'highpass', freq: 2500, dur: 0.04, peak: 1.0, attack: 0.0005 });
+      noise(k, out, t, { type: 'lowpass', freq: 6000 * p, freqEnd: 400, dur: 0.4, peak: 1.0, attack: 0.001 });
+      tone(k, out, t, { f0: 110 * p, f1: 40, dur: 0.25, peak: 0.9, attack: 0.001 });
+      return Math.max(0.45, partials(k, out, t + 0.01, 2400 * p, 0.3, [[1, 1, 0.3], [2.3, 0.5, 0.2]]) + 0.01);
     case 'hazard': return hazardSound(k, out, t, cue);
     case 'placed': return placed(k, out, t, cue);
     case 'destroyed': return destroyed(k, out, t, cue);

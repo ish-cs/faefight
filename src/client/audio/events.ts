@@ -32,7 +32,9 @@ export type SoundId =
   /** An island beacon shutting down (its owner is out of the game). */
   | 'beaconDown'
   /** Sudden death: a concrete doorway barrier slamming down (world/barriers.ts plays it as each bunker's slabs land). */
-  | 'barrierSlam';
+  | 'barrierSlam'
+  /** A smoke grenade popping (pop + long hiss); a flashbang going off (engine.ts: map-wide, 2D with a floor when far; kind 'far'). */
+  | 'smokePop' | 'flashPop';
 
 export type Cue = {
   sound: SoundId;
@@ -271,6 +273,12 @@ export class SoundDirector {
           if (own || at) out.push({ sound: 'dry', kind: String(d.weapon), pos: own ? null : at, gain: own ? 0.7 : 0.5, own });
           break;
         }
+        case 'smoke':
+          if (d.pos) out.push({ sound: 'smokePop', pos: d.pos as Vec3, gain: 1 });
+          break;
+        case 'flash':
+          if (d.pos) out.push({ sound: 'flashPop', pos: d.pos as Vec3, gain: 1.5 });
+          break;
         case 'explosion':
           out.push({ sound: 'explosion', kind: String(d.kind), pos: d.pos as Vec3, gain: d.kind === 'barrel' || d.kind === 'propane' ? 1.6 : 1.4 });
           break;

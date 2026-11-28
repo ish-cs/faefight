@@ -222,6 +222,12 @@ export class Commentator {
         }
         break;
       }
+      case 'flash': {
+        // a flashbang that properly blinds two or more (the sim's hit list: [player id, strength])
+        const n = Array.isArray(d.hit) ? (d.hit as [number, number][]).filter(([, k]) => k >= 0.5).length : 0;
+        if (n >= 2 && typeof d.by === 'number' && this.ready('flash', 20)) this.say('flashBlind', { a: this.name(d.by), n }, 1);
+        break;
+      }
       case 'suddenDeath': this.say('suddenDeath', {}, 3); break;
       case 'lightning':
         if (this.ready('storm', 30)) this.say('storm', { n: s.players.filter((p) => p.alive).length }, 0);
