@@ -1766,7 +1766,10 @@ export class Bot {
         // in sudden death likewise.
         if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
         const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + this.sealedCaution(c);
-        if (hp < low) return 1.15 + (low - hp);
+        // Low hp backs me off from someone who can reach me (or just did), not from a pistol 80 m across the water
+        // (ffa8-hard seed 11: a Hard bot swung between this and its generator for 63 s, never collecting it).
+        const reach = view.now - this.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
+        if (hp < low && reach) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
           (c.enemyDist < Math.min(ENGAGE_RANGE, WEAPONS[c.enemy.equipped].range) || view.now - this.mem.lastHurtAt < 1.5);

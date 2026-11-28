@@ -199,7 +199,8 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     case 'disengage': {
       if (!c.enemy && now - I.mem.lastHurtAt > 1.5) return zero('not under fire');
       const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + I.sealedCaution(c);
-      if (hp < low) {
+      const reach = now - I.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
+      if (hp < low && reach) {
         return { f: [['low hp', 1.15], ['below bail line', low - hp]], why: `Down to ${Math.round(me.hp)} hp, under my bail-out line of ${Math.round(low * 100)}: backing off` };
       }
       const e = c.enemy;
