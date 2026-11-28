@@ -432,7 +432,8 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const state = rivalDown
         ? `${died !== undefined ? `died ${secs(now - died)} ago, ` : ''}respawn in ${secs(c.rival!.respawnAt! - now)}`
         : ownerAway ? 'they are away from home' : 'their doors are open';
-      return { f, why: `Sealing ${rivalName(c)}'s bunker: ${state}, I carry ${pieceWord(kit)} for ${c.openDoors.length} door${c.openDoors.length === 1 ? '' : 's'}${!c.reach ? ' (hooking over: no bridge yet)' : ''}` };
+      // The kit goes last ("…, I carry 2 walls for 2 doors"): no bridge yet reads as part of the why-now.
+      return { f, why: `Sealing ${rivalName(c)}'s bunker: ${state}${!c.reach ? ', hooking over with no bridge yet' : ''}, I carry ${pieceWord(kit)} for ${c.openDoors.length} door${c.openDoors.length === 1 ? '' : 's'}` };
     }
     case 'cut': {
       if (!gun) return zero('no gun');

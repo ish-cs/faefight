@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { GRAPPLE } from '../../src/sim/constants';
-import { crossTo, escapeFrom, hookReady, yankReason } from '../../src/sim/bots/hook';
+import { crossTo, escapeFrom, hookReady, ropeRelease, yankReason } from '../../src/sim/bots/hook';
 import { HOOK } from '../../src/sim/bots/params';
 import type { BotView } from '../../src/sim/bots/view';
 import { newPlayer } from '../../src/sim/player';
@@ -89,5 +89,17 @@ describe('bot grappling hook decisions (bots/hook.ts)', () => {
     expect(yankReason(v3_, HOOK, up, 10, 'rifle')).toMatch(/high ground/);
     up.spawnProtected = true;
     expect(yankReason(v3_, HOOK, up, 10, 'rifle')).toBeNull();
+  });
+  test('rope release: flings onto a ledge top; never into its face or past a narrow landing (botDrown seed 3)', () => {
+    // Gap 10: the far island's edge is at x 30; the hook bit its top at x 31.
+    const rope = v3(31, 2, 0);
+    const at = (y: number, vel: Vec3) => { const v = viewAt(10, v3(28, y, 0)); v.self.vel = vel; return v; };
+    expect(ropeRelease(at(2.6, v3(14, 0, 0)), HOOK, rope)).toMatch(/Letting go/);
+    // Feet 0.15 m under the lip, sinking: the capsule would hit the face and drop in the water. Ride it in.
+    expect(ropeRelease(at(1.85, v3(12, -1, 0)), HOOK, rope)).toBeNull();
+    // A 1.5 m pad: the fling touches down on it but slides off the far side.
+    const pad = at(2.15, v3(14, 0, 0));
+    pad.groundAt = (x, z) => (Math.hypot(x, z) <= 20 || Math.hypot(x - 31, z) <= 1.5 ? 2 : null);
+    expect(ropeRelease(pad, HOOK, rope)).toBeNull();
   });
 });

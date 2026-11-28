@@ -20,7 +20,7 @@ import { AIM, Aim, angleBetween, lookAt, wrapAngle, type Angles } from './aim';
 import { flankSide, fortPlan, fortShare, fumble, ghost, ownBunkerSafe, shields, slotBuilt, type Slot } from './build';
 import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { DEFAULT_BOT_PARAMS, type BotParams } from './params';
-import { crossTo, escapeFrom, hookReady, yankReason, type HookIntent } from './hook';
+import { crossTo, escapeFrom, hookReady, ropeRelease, yankReason, type HookIntent } from './hook';
 import { dropForHeal, healPlan, healStock, hpHealsHeld, type HealPlan } from './heal';
 import { Beliefs } from './belief';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
@@ -748,7 +748,13 @@ export class Bot {
     // Only jump where the arc comes down on something solid (never sideways off a deck or an island edge).
     if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     if (rope || grapple) jump = false; // a jump lets go of the rope
-    const move = dir
+    if (rope && !grapple) {
+      // Elastic rope: time the release, letting go near the anchor when the fling lands me on the ledge.
+      const why = ropeRelease(view, this.P.hook, rope);
+      if (why) { jump = true; this.hookNote = { t: now, text: why }; }
+    }
+    // On my own rope the stick stays still: back holds the reel, strafe swings me (movement.ts stepPull).
+    const move = dir && !rope
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
 

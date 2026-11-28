@@ -733,7 +733,7 @@ export class Renderer {
         if (m) target = this.ropeTo.copy(m.pos);
         else for (const q of snap.players) if (q.id === h.tgt) target = this.ropeTo.set(q.pos.x, q.pos.y, q.pos.z);
       }
-      r.add(from, h, t, target);
+      r.add(p.id, from, h, t, target);
     }
     r.end();
   }

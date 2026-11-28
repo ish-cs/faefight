@@ -256,6 +256,9 @@ export type TeamParams = {
  *   hold high ground (yankHigh m above me), or my gun wants them closer (past yankFalloff × its falloff start).
  * - yankRate: yank tries per second while one would pay (seeded rng: not every chance).
  * - keepForTravel: uses held back for crossing while my target island is out of walking reach.
+ * - releaseDist: on my own (elastic) rope, let go this close to the anchor when the fling lands me on solid ground
+ *   at its level (keeps the speed instead of the arrival stop; 0 = always ride it in). No stick input on a rope: back
+ *   would hold the reel, strafe would swing me.
  */
 export type HookParams = {
   buyAt: Record<Difficulty, number>;
@@ -264,6 +267,7 @@ export type HookParams = {
   escapeHp: number; escapeNear: number; escapeMin: number;
   yankMin: number; yankMax: number; yankHigh: number; yankFalloff: number; yankRate: number;
   keepForTravel: number;
+  releaseDist: number;
 };
 
 /**
@@ -503,7 +507,7 @@ export const HOOK: HookParams = {
   crossMax: 25.5, crossInset: 2.5,
   escapeHp: 45, escapeNear: 20, escapeMin: 12,
   yankMin: 8, yankMax: 30, yankHigh: 2.5, yankFalloff: 1.2, yankRate: 0.6,
-  keepForTravel: 1,
+  keepForTravel: 1, releaseDist: 4,
 };
 
 export const TRAP_TUNING: TrapTuning = { carry: D(0, 1, 2, 3), rich: 350, setScore: 0.45, avoidPad: 0.35, shootRange: 9 };
@@ -635,7 +639,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['hook.buyAt.*', [150, 1500]], ['hook.crossBuyAt.*', [90, 600]], ['hook.crossMax', [15, 26]], ['hook.crossInset', [1, 6]],
   ['hook.escapeHp', [0, 120]], ['hook.escapeNear', [8, 35]], ['hook.escapeMin', [6, 30]],
   ['hook.yankMin', [3, 15]], ['hook.yankMax', [15, 40]], ['hook.yankHigh', [1, 6]], ['hook.yankFalloff', [0.5, 3]],
-  ['hook.yankRate', [0, 3]], ['hook.keepForTravel', [0, 2]],
+  ['hook.yankRate', [0, 3]], ['hook.keepForTravel', [0, 2]], ['hook.releaseDist', [0, 8]],
   ['trap.carry.*', [0, 3]], ['trap.rich', [100, 1200]], ['trap.setScore', [0.1, 1]], ['trap.avoidPad', [0, 1.5]], ['trap.shootRange', [3, 20]],
   ['aim.feel.*.spring', [6, 45]], ['aim.feel.*.damping', [0.55, 1.2]], ['aim.feel.*.maxAccel', [40, 600]],
   ['aim.feel.*.driftHz', [0.5, 8]], ['aim.feel.*.holdSec', [0, 2]], ['aim.commitSec', [0, 2]], ['aim.switchRatio', [0.3, 1]],

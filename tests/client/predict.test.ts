@@ -73,6 +73,54 @@ describe('Predictor', () => {
     expect(d3(me(m.tick(new Map())).pos, m.map[0].spawn)).toBeGreaterThan(3);
   });
 
+  test('on an elastic grapple rope (reel, swing hold, strafe, jump release) prediction matches the sim', async () => {
+    const { m, pr, yaw0 } = await setup();
+    const isl = m.map[0];
+    const fy = { x: -Math.sin(isl.bunker.facingYaw), z: -Math.cos(isl.bunker.facingYaw) }, f = { x: -fy.z, z: fy.x };
+    const start = { x: isl.center.x + fy.x * 4 - f.x * 12, y: isl.center.y + 2.1, z: isl.center.z + fy.z * 4 - f.z * 12 };
+    m.debugTeleport(1, start);
+    m.debugGive(1, { grapples: 3 });
+    const wall = { x: start.x + f.x * 18, y: start.y + 4, z: start.z + f.z * 18 };
+    m.debugPlacePiece('steel', wall, Math.atan2(-f.x, -f.z));
+    let s = m.tick(new Map());
+    pr.onSnapshot(s);
+    const slot = me(s).hotbar.indexOf('grapple');
+    const yaw = Math.atan2(-(wall.x - start.x), -(wall.z - start.z));
+    const pitch = Math.atan2(wall.y + 1.5 - (start.y + 1.6), 18);
+    const q = new MoveQueue();
+    const predictedAt = new Map<number, Vec3>();
+    const inFlight: { at: number; cmds: MoveCmd[] }[] = [];
+    const snaps: { at: number; s: Snapshot }[] = [];
+    let seq = 0, maxErr = 0, compared = 0, onRope = 0, lastAt = 0, seen = false;
+    for (let tick = 0; tick < 90; tick++) {
+      const c: MoveCmd = { seq: ++seq, moveX: tick > 14 && tick < 24 ? 1 : 0, moveZ: tick > 10 && tick < 30 ? -1 : 0, yaw: yaw + tick * 1e-3, jump: tick === 34, sprint: false };
+      pr.step(c);
+      // (Steps predicted before a snapshot showed the rope bite only guess the latch tick (the host's command queue
+      // jitters); from then on the rope's own physics must replay exactly.)
+      if (seen) predictedAt.set(c.seq, { ...pr.current!.pos });
+      lastAt = Math.max(lastAt, tick + 3 + (tick % 4 === 1 ? 2 : 0));
+      inFlight.push({ at: lastAt, cmds: [c] });
+      for (const fl of inFlight.filter((x) => x.at <= tick)) q.push(fl.cmds);
+      inFlight.splice(0, inFlight.length, ...inFlight.filter((x) => x.at > tick));
+      const cmds = q.take({ moveX: 0, moveZ: 0, yaw: 0, sprint: false });
+      s = m.tick(new Map([[1, { ...NO_INPUT, yaw, pitch, select: slot, grapple: tick === 2 }]]), new Map([[1, cmds]]));
+      if (me(s).mv?.pull) onRope++;
+      snaps.push({ at: tick + 4, s });
+      for (const r of snaps.filter((x) => x.at <= tick)) {
+        pr.onSnapshot(r.s);
+        if (me(r.s).hook?.st === 1) seen = true;
+        const p = predictedAt.get(me(r.s).mv!.ack);
+        if (p) { maxErr = Math.max(maxErr, d3(p, me(r.s).pos)); compared++; }
+      }
+      snaps.splice(0, snaps.length, ...snaps.filter((r) => r.at > tick));
+    }
+    console.info(`[predict rope] ${onRope} ticks on the rope, ${compared} acks compared, max ${(maxErr * 100).toFixed(2)} cm`);
+    expect(onRope).toBeGreaterThan(10);
+    expect(compared).toBeGreaterThan(50);
+    expect(maxErr).toBeLessThan(0.1);
+    void yaw0;
+  });
+
   test('small corrections are blended out over ~100 ms', async () => {
     const { m, pr } = await setup();
     const out = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };

@@ -59,6 +59,49 @@ export function escapeFrom(view: BotView, P: HookParams, from: Vec3, nodeAt: (p:
   return best && { why: 'escape', to: best.to, node: best.node, note: `Nearly dead: hooking away (${Math.round(best.d)} m)` };
 }
 
+/** Highest lip the capsule steps up onto (physics.ts autostep 0.35 m): deeper than this under a ledge's top is its face. */
+const RELEASE_STEP = 0.35;
+/** A fling must touch down this close to the anchor (m, flat), on ground at least this far on along the flight. */
+const RELEASE_LAND = 4, RELEASE_RUNOUT = [1, 2, 3];
+
+/**
+ * On my own elastic rope (movement.ts stepPull): let go now (jump) and fling the rest of the way? Only within
+ * P.releaseDist of the anchor, moving toward it, and when the fling (my velocity, capped like any release) comes
+ * down on top of solid ground at about the anchor's level near it, with ground ahead to slide out on. Never into a
+ * ledge's face (feet under its lip: the capsule stops dead there and drops in the water) and never past a narrow
+ * landing. Null = ride it in (the arrival lands me).
+ */
+export function ropeRelease(view: BotView, P: HookParams, rope: { x: number; y: number; z: number }): string | null {
+  const me = view.self;
+  const d = dist(me.pos, rope);
+  if (P.releaseDist <= 0 || d > P.releaseDist || d < GRAPPLE.arriveDist + 0.4) return null;
+  // Sagged below the ledge (gravity on a long rope): ride it in, the rope hauls me up the face; a fling would hit it.
+  if (me.pos.y < rope.y - 0.2) return null;
+  const sp = Math.hypot(me.vel.x, me.vel.y, me.vel.z);
+  if (sp < 4 || (me.vel.x * (rope.x - me.pos.x) + me.vel.y * (rope.y - me.pos.y) + me.vel.z * (rope.z - me.pos.z)) / (sp * d) < 0.5) return null;
+  const k = Math.min(1, GRAPPLE.flingMax / sp);
+  let x = me.pos.x, y = me.pos.y, z = me.pos.z, vy = me.vel.y * k;
+  const vx = me.vel.x * k, vz = me.vel.z * k, hs = Math.hypot(vx, vz), dt = 1 / 30;
+  for (let i = 0; i < 60; i++) {
+    const py = y;
+    x += vx * dt; z += vz * dt; vy -= PLAYER.gravity * dt; y += vy * dt;
+    if (y < view.waterY) return null;
+    const g = view.groundAt(x, z);
+    if (g === null) continue;
+    if (py < g - RELEASE_STEP) return null; // into the side of it
+    if (y > g || vy >= 0) continue;
+    if (g < rope.y - 1.5 || dist2D(v3(x, g, z), rope) > RELEASE_LAND) return null;
+    const r = PLAYER.radius;
+    if ([[r, 0], [-r, 0], [0, r], [0, -r]].filter(([ox, oz]) => view.groundAt(x + ox, z + oz) !== null).length < 3) return null;
+    if (hs > 0.1) for (const a of RELEASE_RUNOUT) {
+      const h = view.groundAt(x + vx / hs * a, z + vz / hs * a);
+      if (h === null || h < g - 1) return null; // the slide after touchdown runs off the edge
+    }
+    return `Letting go of the rope ${d.toFixed(1)} m out: flinging onto the ledge`;
+  }
+  return null;
+}
+
 /** Is yanking this enemy worth it now (and why)? `gun`: what I'd fight them with. */
 export function yankReason(view: BotView, P: HookParams, e: PlayerState, d: number, gun: WeaponKind): string | null {
   const me = view.self;

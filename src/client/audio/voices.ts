@@ -45,7 +45,7 @@ export function muffleCutoff(hp: number, alive = true): number {
  * potions are only heard this close (fair: nobody hears the whole map). Unlisted sounds (shots,
  * explosions) carry to MAX_DISTANCE.
  */
-export const HEARING: Readonly<Record<string, number>> = { footstep: 32, land: 36, reload: 24, dry: 20, drink: 22, placed: 48, smokePop: 45, grappleFire: 30, grappleAttach: 30, grappleReel: 30, grappleRelease: 30 };
+export const HEARING: Readonly<Record<string, number>> = { footstep: 32, land: 36, reload: 24, dry: 20, drink: 22, placed: 48, smokePop: 45, grappleFire: 30, grappleAttach: 30, grappleReel: 30, grappleRelease: 30, grappleSnap: 40, grappleCreak: 24 };
 
 /** Whether a positional cue at distance `d` is within its hearing cap. Your own sounds always play. */
 export function withinHearing(sound: string, d: number, own = false): boolean {
