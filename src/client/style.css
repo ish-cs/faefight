@@ -401,6 +401,9 @@ canvas.game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 
 /* Damage numbers over players you hit, and red arcs pointing at whoever hit you. */
 .damage-fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 5; }
+/* screenFx.ts: smoke fog over the 3D view (under the HUD), flashbang white-out over the HUD (opacity set per frame) */
+.smoke-fog { position: absolute; inset: 0; pointer-events: none; display: none; opacity: 0; background: rgb(175, 175, 178); }
+.flash-white { position: fixed; inset: 0; pointer-events: none; display: none; opacity: 0; background: #fff; z-index: 8; }
 .dmg-number {
   position: absolute; left: 0; top: 0; font: 800 22px 'Helvetica Neue', system-ui, sans-serif;
   color: #ffd84a; text-shadow: 0 2px 0 rgba(0,0,0,.55), 0 0 8px rgba(0,0,0,.35); white-space: nowrap; will-change: transform, opacity;

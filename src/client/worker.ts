@@ -274,7 +274,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
           }
         }
         else if (msg.cmd === 'place') match.debugPlacePiece(msg.kind, { x: msg.x, y: groundYFor(msg.x, msg.z) + msg.up, z: msg.z }, msg.rotY, msg.owner);
-        else if (msg.cmd === 'explode') match.debugExplode(msg.kind, { x: msg.x, y: groundYFor(msg.x, msg.z) + msg.up, z: msg.z }, humanId);
+        else if (msg.cmd === 'explode') match.debugExplode(msg.kind, { x: msg.x, y: groundYFor(msg.x, msg.z) + msg.up, z: msg.z }, msg.owner ?? humanId);
         // Debug-only (e2e) seal/generator setups: not recorded (see above).
         else if (msg.cmd === 'plugDoor') match.debugPlugDoor(humanIsland, msg.door, msg.owner);
         else if (msg.cmd === 'removePiece') match.debugRemovePiece(msg.id);
