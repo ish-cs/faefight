@@ -12,7 +12,7 @@ import type { PlayerState, Vec3 } from '../../sim/types';
  */
 const POOL = 8;
 /** On-screen size (fraction of the view height) at a faint and at a full glint. */
-const SIZE_MIN = 0.04, SIZE_MAX = 0.13;
+const SIZE_MIN = 0.055, SIZE_MAX = 0.13;
 /** Below this the glint isn't drawn. */
 const MIN_K = 0.04;
 
@@ -24,10 +24,10 @@ function glintTex(): THREE.CanvasTexture {
   c.width = c.height = 64;
   const g = c.getContext('2d')!;
   const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.18, 'rgba(255,250,235,0.85)'); r.addColorStop(0.5, 'rgba(255,240,210,0.15)'); r.addColorStop(1, 'rgba(255,240,210,0)');
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.24, 'rgba(255,250,235,0.9)'); r.addColorStop(0.5, 'rgba(255,240,210,0.15)'); r.addColorStop(1, 'rgba(255,240,210,0)');
   g.fillStyle = r; g.fillRect(0, 0, 64, 64);
   g.globalCompositeOperation = 'lighter';
-  for (const [w, h] of [[64, 3], [3, 64]]) {
+  for (const [w, h] of [[64, 5], [5, 64]]) {
     const l = g.createLinearGradient(32 - w / 2, 32 - h / 2, 32 + w / 2, 32 + h / 2);
     l.addColorStop(0, 'rgba(255,255,255,0)'); l.addColorStop(0.5, 'rgba(255,255,255,0.9)'); l.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = l; g.fillRect(32 - w / 2, 32 - h / 2, w, h);
