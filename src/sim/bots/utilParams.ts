@@ -23,6 +23,11 @@ export type UtilParams = {
   flashMin: number; flashMax: number;
   /** Seconds since a sighting that still counts as "just ducked out" / "around". */
   seenSec: number;
+  /**
+   * Charged grenade lobs (bot.ts chargedThrow): the least steepness (pitch, rad) a lob must come down at. Grenades go
+   * off on first contact, so a steeper lob drops behind cover / onto a plug instead of clipping what's in front.
+   */
+  lobPitch: Record<Difficulty, number>;
   /** Least time between two utility throws (s), and how long a roll holds before it's rolled again. */
   gapSec: number; rollSec: number;
 };
@@ -32,7 +37,7 @@ const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ 
 export const UTIL: UtilParams = {
   carrySmoke: D(0, 1, 1, 2), carryFlash: D(0, 1, 1, 1), buyAt: D(300, 180, 140, 120),
   smokeRetreat: D(0.35, 0.6, 0.85, 1), smokeCross: D(0.15, 0.4, 0.7, 0.9), flashPush: D(0, 0.4, 0.7, 0.9),
-  avoidSmoke: D(0, 0.5, 1, 1), blindBack: D(0.5, 0.8, 1, 1),
+  avoidSmoke: D(0, 0.5, 1, 1), blindBack: D(0.5, 0.8, 1, 1), lobPitch: D(0.7, 0.85, 0.95, 1.05),
   retreatM: 16, flashMin: 6, flashMax: 18, seenSec: 3, gapSec: 4, rollSec: 3,
 };
 
@@ -40,7 +45,7 @@ export const UTIL: UtilParams = {
 export const UTIL_RANGES: [string, [number, number]][] = [
   ['util.carrySmoke.*', [0, 3]], ['util.carryFlash.*', [0, 3]], ['util.buyAt.*', [100, 1500]],
   ['util.smokeRetreat.*', [0, 1]], ['util.smokeCross.*', [0, 1]], ['util.flashPush.*', [0, 1]],
-  ['util.avoidSmoke.*', [0, 1]], ['util.blindBack.*', [0, 1]],
+  ['util.avoidSmoke.*', [0, 1]], ['util.blindBack.*', [0, 1]], ['util.lobPitch.*', [0.4, 1.3]],
   ['util.retreatM', [6, 30]], ['util.flashMin', [3, 10]], ['util.flashMax', [10, 25]], ['util.seenSec', [0.5, 8]],
   ['util.gapSec', [1, 15]], ['util.rollSec', [1, 8]],
 ];

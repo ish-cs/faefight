@@ -1,6 +1,6 @@
 import * as dm from '../dmath';
-import { AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, MEDKIT, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
-import { eyePos } from '../combat';
+import { THROW, AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, MEDKIT, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
+import { eyePos, throwSpeed } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
 import type { DockDef, Doorway, IslandLayout } from '../map';
@@ -378,7 +378,7 @@ export class Bot {
   /** Low on stamina: walk (save it for escapes) until it's back up. */
   private winded = false;
   private lastScores: { goal: string; score: number }[] = [];
-  private nadePlan: { yaw: number; pitch: number; until: number } | null = null;
+  private nadePlan: { yaw: number; pitch: number; power: number; until: number } | null = null;
   /** The enemy my gun is on (target hysteresis, see aimTarget) and since when; where I last saw them. */
   private aimId: number | null = null;
   private aimSince = 0;
@@ -583,6 +583,7 @@ export class Bot {
       return me.reloadUntil === 0 && me.busyUntil <= now && range <= WEAPONS[w].range * 0.95 && (w === 'fists' || !!ammo && ammo.mag > 0);
     };
     let throwGrenade = false;
+    let throwPower: number | undefined;
     // Grappling hook (hook.ts): get away, cross over, or yank an enemy; on my own rope, look where it pulls.
     const hook = this.hookPlan(ctx, best);
     const rope = me.mv?.pull && !me.mv.pull.yank ? me.mv.pull : null;
@@ -611,10 +612,13 @@ export class Bot {
       look = hand(want, TURN_RATE * 1.2);
       fire = me.equipped === 'rocket' && angleBetween(look, want) < 0.035 && gunReady(dist2D(me.pos, dock.at));
     } else if (dock) {
-      const a = throwAngles(eye, dock.at, false);
+      const a = chargedThrow(eye, dock.at, false, this.P.util.lobPitch[this.difficulty]);
       if (a) {
         look = hand(a, TURN_RATE * 1.2);
-        if (angleBetween(look, a) < 0.03 && me.busyUntil <= now) { throwGrenade = true; this.lastNadeAt = now; this.dockPlan = null; }
+        if (angleBetween(look, a) < 0.03 && me.busyUntil <= now) {
+          throwGrenade = true; throwPower = a.power; this.lastNadeAt = now; this.dockPlan = null;
+          this.utilNote = { t: now, text: `grenade onto the deck under them (charge ${Math.round(a.power * 100)}%)` };
+        }
       } else { this.dockPlan = null; look = hand(cur, TURN_RATE); } // no throw arc: hold the view, re-plan next tick
     } else if (barrel) {
       // Set the barrel next to them off: aim at its middle like any other shot.
@@ -628,6 +632,7 @@ export class Bot {
       look = hand(utilAim, TURN_RATE * 1.5);
       if (angleBetween(look, utilAim) < 0.04 && me.busyUntil <= now) {
         throwUtil = utilPlan.kind;
+        throwPower = utilAim.power;
         this.utilLastAt = now;
         this.utilNote = { t: now, text: utilPlan.why };
       }
@@ -656,6 +661,8 @@ export class Bot {
       look = hand(nade, TURN_RATE);
       if (angleBetween(look, nade) < 0.03 && me.busyUntil <= now) {
         throwGrenade = true;
+        throwPower = nade.power;
+        this.utilNote = { t: now, text: `grenade lobbed after them (charge ${Math.round(nade.power * 100)}%, goes off on landing)` };
         this.lastNadeAt = now;
         this.nadePlan = null;
       }
@@ -787,7 +794,7 @@ export class Bot {
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach || this.healHideAt !== null) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload: reload && !useMedkit && !drink, interact, slot: useMedkit || drink ? null : slot, select, useMedkit, drink,
       build: useMedkit || drink ? null : act.build ?? null, shop: act.shop && !useMedkit && !drink ? { buy: act.shop } : null,
-      vault: this.withLoadout(me, act.vault), placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}), ...(throwUtil && !useMedkit && !drink ? { throwUtil } : {}),
+      vault: this.withLoadout(me, act.vault), placeCharge: !!act.placeCharge, throwGrenade, ...((throwGrenade || throwUtil) && throwPower !== undefined ? { throwPower } : {}), ...(act.trap ? { trap: act.trap } : {}), ...(throwUtil && !useMedkit && !drink ? { throwUtil } : {}),
       ...(grapple ? { grapple: true, build: null, shop: null } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
@@ -2637,7 +2644,7 @@ export class Bot {
    * Yaw/pitch for a grenade at a rival who just ducked out of sight (lobbed high over their cover), or at one
    * holed up in their bunker while I stand at an open doorway (thrown flat through it). Null if there's no such throw.
    */
-  private grenadePlan(c: Ctx): Angles | null {
+  private grenadePlan(c: Ctx): (Angles & { power: number }) | null {
     const { view, me } = c;
     const now = view.now;
     if (me.inv.grenades <= 0 || now - this.lastNadeAt < NADE_GAP || view.suddenDeath && c.on < 0) { this.nadePlan = null; return null; }
@@ -2662,12 +2669,12 @@ export class Bot {
         if (!door) continue;
         low = true;
       } else if (age > NADE_SEEN_SEC || age < 0.3 || d < NADE_MIN || d > NADE_MAX) continue;
-      const a = throwAngles(eye, v3(s.pos.x, s.pos.y + 0.3, s.pos.z), low);
+      const a = chargedThrow(eye, v3(s.pos.x, s.pos.y + 0.3, s.pos.z), low, this.P.util.lobPitch[this.difficulty]);
       if (!a) continue;
       // Thrown by hand: as accurate as this player's aim.
       const cone = AIM[this.difficulty].coneRad * (low ? 0.5 : 1);
       const r = this.rng() * cone, th = this.rng() * 2 * Math.PI;
-      this.nadePlan = { yaw: a.yaw + dm.cos(th) * r, pitch: a.pitch + dm.sin(th) * r, until: now + 1.2 };
+      this.nadePlan = { yaw: a.yaw + dm.cos(th) * r, pitch: a.pitch + dm.sin(th) * r, power: a.power, until: now + 1.2 };
       return this.nadePlan;
     }
     return null;
@@ -3746,32 +3753,56 @@ export class Bot {
 const flat = (p: Vec3): Vec3 => v3(p.x, 0, p.z);
 
 /**
- * Aim for a grenade to land at `to` (same launch as combat.throwGrenade: throwSpeed along the aim plus 3 m/s up,
- * gravity integrated per tick). `low`: flattest arc (through a doorway), else the high lob that drops in behind cover
- * when one lands within the fuse.
- * Null when out of range or the flight would outlast the fuse.
+ * Aim for a grenade to land at `to` (same launch as combat.throwGrenade: `speed` along the aim plus THROW.up m/s,
+ * gravity integrated per tick). `low`: flattest arc (through a doorway), else the high lob that drops in behind cover.
+ * Null when out of range or the flight would outlast the fallback fuse.
  */
-export function throwAngles(eye: Vec3, to: Vec3, low: boolean): Angles | null {
+export function throwAngles(eye: Vec3, to: Vec3, low: boolean, speed = GRENADE.throwSpeed): Angles | null {
   const d = dist2D(eye, to), dy = to.y - eye.y;
   const yaw = lookAt(eye, to).yaw;
   const heightAt = (pitch: number) => {
-    const vx = GRENADE.throwSpeed * dm.cos(pitch), vy = GRENADE.throwSpeed * dm.sin(pitch) + 3;
+    const vx = speed * dm.cos(pitch), vy = speed * dm.sin(pitch) + THROW.up;
     const tt = d / vx;
     return { y: vy * tt - (PLAYER.gravity * tt * (tt + DT)) / 2, t: tt, falling: vy - PLAYER.gravity * tt < 0 };
   };
   // Scan the arc up from flat (low) or down from steep (high) for where it first comes down through the target.
-  // No grenade explodes in the air, so a lob that would outlast the fuse falls back to the flatter arc
-  // (it may clip the cover instead, still well inside the blast radius).
+  // A lob that would outlast the fuse falls back to the flatter arc.
   let prevBelow = false;
   for (let i = 0; i <= 200; i++) {
     const pitch = low ? -0.6 + i * 0.01 : 1.38 - i * 0.01;
     const h = heightAt(pitch);
     if (h.y >= dy && prevBelow) {
-      if (h.t <= GRENADE.fuseSec - 0.1 && (low || h.falling)) return { yaw, pitch };
-      return low ? null : throwAngles(eye, to, true);
+      if (h.t <= THROW.fuseSec - 0.1 && (low || h.falling)) return { yaw, pitch };
+      return low ? null : throwAngles(eye, to, true, speed);
     }
     prevBelow = h.y < dy;
   }
   return null;
+}
+
+/** Charge (0..1) that throws at the kind's legacy speed. */
+export const legacyPower = (speed: number) => (speed - THROW.minSpeed) / (THROW.maxSpeed - THROW.minSpeed);
+
+/**
+ * A charged grenade throw at `to`. Grenades go off where they first touch, so a lob that clips the cover in front of
+ * the target is wasted: take the least charge (in 5% steps) whose high lob comes down at least `lobPitch` steep, so
+ * it drops in behind cover / onto a plug; past full charge, the steepest lob there is. Flat throws (`low`, through a
+ * doorway) use the legacy speed. Null when no charge reaches.
+ */
+export function chargedThrow(eye: Vec3, to: Vec3, low: boolean, lobPitch: number): (Angles & { power: number }) | null {
+  if (low) {
+    const power = legacyPower(GRENADE.throwSpeed);
+    const a = throwAngles(eye, to, true, throwSpeed('grenade', power));
+    return a && { ...a, power };
+  }
+  let best: (Angles & { power: number }) | null = null;
+  for (let i = 0; i <= 20; i++) {
+    const power = i / 20;
+    const a = throwAngles(eye, to, false, throwSpeed('grenade', power));
+    if (!a) continue;
+    if (a.pitch >= lobPitch) return { ...a, power };
+    best = { ...a, power };
+  }
+  return best;
 }
 const laneOff = (l: Lane, p: Vec3) => Math.abs((p.x - l.origin.x) * l.dir.z - (p.z - l.origin.z) * l.dir.x);

@@ -20,7 +20,7 @@ export class InputAccumulator {
     if (input.fire) { p.fire = true; if (input.viewT !== undefined) p.viewT = input.viewT; }
     if (input.reload) p.reload = true;
     if (input.interact) p.interact = true;
-    if (input.throwGrenade) p.throwGrenade = true;
+    if (input.throwGrenade) { p.throwGrenade = true; if (input.throwPower !== undefined) p.throwPower = input.throwPower; }
     if (input.placeCharge) p.placeCharge = true;
     if (input.slot) p.slot = input.slot;
     if (input.build) p.build = input.build;
@@ -32,11 +32,11 @@ export class InputAccumulator {
     if (input.drink) p.drink = true;
     if (input.grapple) { p.grapple = true; if (input.viewT !== undefined) p.viewT = input.viewT; }
     if (input.trap) p.trap = input.trap;
-    if (input.throwUtil) p.throwUtil = input.throwUtil;
+    if (input.throwUtil) { p.throwUtil = input.throwUtil; if (input.throwPower !== undefined) p.throwPower = input.throwPower; }
   }
 
   take(): PlayerInput {
-    const { trap: _held, throwUtil: _util, ...held } = this.held; // one-shot: only from pending
+    const { trap: _held, throwUtil: _util, throwPower: _power, ...held } = this.held; // one-shot: only from pending
     const input: PlayerInput = {
       ...held, reload: false, interact: false, throwGrenade: false, placeCharge: false,
       slot: null, build: null, shop: null, vault: null, drop: null, moveSlot: null, useMedkit: false, drink: false, grapple: false, ...this.pending,
