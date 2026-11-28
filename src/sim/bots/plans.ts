@@ -80,6 +80,10 @@ export type Needs = {
   build?: Partial<Record<PieceKind, number>>;
   /** Combat pieces bought right after the gun and its ammo (before bridging gear), when the cash is there. */
   combatKit?: Partial<Record<PieceKind, number>>;
+  /** The rifle right after the gun's ammo, before bridging gear (strength.rifleAt, or out-ranged by a rifle). */
+  rifle?: boolean;
+  /** Keep a hotbar slot free for the rifle until I have one. */
+  rifleSlot?: boolean;
 };
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
@@ -88,6 +92,8 @@ export type ShopStyle = {
   upgradeFirst: boolean;
   /** Go straight for the rifle (skip the SMG). */
   longGun: boolean;
+  /** Skip the SMG, but don't save up for the rifle either (strength.longGun: needs.rifle buys it once affordable). */
+  noSmg?: boolean;
   /** Add a shotgun for close quarters. */
   closeGun: boolean;
   /** Prefer metal plugs even when it means fewer spare dollars. */
@@ -114,13 +120,18 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (needs.charge && inv.charges === 0) return cash >= CHARGE.price ? 'charge' : null;
   const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= ammoPrice(p.equipped)) return 'ammo';
-  const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
+  const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg || style.noSmg ? null : 'smg';
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
   // Short of heals with none slotted (and the cash for one): the last free slot is kept for a medkit.
   const healShort = cash >= MEDKIT.price && inv.medkits + (inv.potions.healPotion ?? 0) < (needs.medkits ?? 0) && !p.hotbar.includes('medkit') && !p.hotbar.includes('healPotion');
+  // Hard/PRO keep a slot for the rifle until they have one (needs.rifleSlot): spoils arrive with a full hotbar otherwise.
+  const rifleSlot = !!needs.rifleSlot && !inv.weapons.rifle;
+  const free = p.hotbar.filter((x) => x === null).length;
   const room = (k: HotbarItem) => countOf(inv, k) > 0 ||
-    (canAdd(p.hotbar, k) && (!healShort || k === 'medkit' || k === 'grapple' || p.hotbar.filter((x) => x === null).length >= 2));
+    (canAdd(p.hotbar, k) && free >= 1 + (healShort && k !== 'medkit' && k !== 'grapple' ? 1 : 0) + (rifleSlot && k !== 'rifle' ? 1 : 0));
+  // Out-ranged (or rich enough): the rifle before anything but the gun's ammo; never saved up for.
+  if (needs.rifle && !inv.weapons.rifle && room('rifle') && cash >= WEAPONS.rifle.price) return 'rifle';
   // A ramp in the pocket for fights (skilled players): cheap, never saved up for.
   for (const [k, n] of Object.entries(needs.combatKit ?? {}) as [PieceKind, number][])
     if ((inv.pieces[k] ?? 0) < n && room(k) && cash >= PIECES[k].price) return k;
@@ -150,7 +161,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
-  if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && room('smg') && cash >= WEAPONS.smg.price) return 'smg';
+  if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && !style.noSmg && room('smg') && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && room('rifle') && cash >= WEAPONS.rifle.price) return 'rifle';
   if (needs.grapple && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if (needs.rocket && !inv.weapons.rocket && canAdd(p.hotbar, 'rocket') && cash >= WEAPONS.rocket.price + 200) return 'rocket';

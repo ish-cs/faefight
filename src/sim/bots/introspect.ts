@@ -116,7 +116,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; kitlessAttack(c: Ctx): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null;
   stormPrep(view: BotView): boolean; sealingSoon(view: BotView): boolean; leaveBeforeBarriers(c: Ctx): boolean; rivalShutIn(c: Ctx): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
@@ -202,6 +202,10 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const e = c.enemy;
       const outgunned = !gun && !!e && e.equipped !== 'fists' && c.enemyDist > 4 &&
         (c.enemyDist < Math.min(25, WEAPONS[e.equipped].range) || now - I.mem.lastHurtAt < 1.5);
+      const or = I.outrangedBy(c), orS = or ? I.P.strength.outranged[I.difficulty] : 0;
+      if (or && (!outgunned || orS > 0.95 + 0.2 * t.caution)) {
+        return { f: [['out-ranged by a rifle', orS]], why: `@${or.id}'s rifle out-ranges my guns from ${m(dist2D(or.pos, me.pos))} across the water: breaking line of sight` };
+      }
       if (!outgunned) return zero('not outmatched');
       return { f: [['outgunned', 0.95], ['caution', 0.2 * t.caution]], why: `Unarmed against @${e!.id}'s ${e!.equipped} at ${m(c.enemyDist)}: getting out of range` };
     }
@@ -277,7 +281,12 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       };
     }
     case 'bank': {
-      if (c.on !== home.index) return zero('not home');
+      if (c.on !== home.index) {
+        const b = I.bankAway(c);
+        if (b <= 0) return zero('not home');
+        const v = I.P.strength.bankAway[I.difficulty] * Math.min(2, me.inv.cash / I.P.strength.richCarry);
+        return { f: [['rich away from home', v], ['walk', b - v]], why: `Carrying $${Math.round(me.inv.cash)} away from home (it drops if I die): walking home to bank it` };
+      }
       if (view.suddenDeath) return zero('sudden death');
       if (I.stormPrep(view)) return zero('storm coming: no time for the vault');
       const sc = me.inv.pieces.scaffold ?? 0, need = I.scaffoldsNeeded(c);
@@ -327,9 +336,11 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const list = shopList(plan.items);
       if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return { f: [['at the shop', 0.9]], why: `At the shop: buying ${list}` };
       const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv));
-      const v = urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0;
+      const v0 = urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0;
+      const rifle = plan.items[0] === 'rifle' && I.outrangedLately(now) ? 0.7 : 0, eg = I.endgameKit(c, plan.items);
+      const v = Math.max(v0, rifle, eg);
       if (!v) return zero('saving up');
-      const f: [string, number][] = [[urgent ? 'urgent buy' : 'kit affordable', v]];
+      const f: [string, number][] = [[v === v0 ? (urgent ? 'urgent buy' : 'kit affordable') : v === rifle ? 'out-ranged: rifle' : 'endgame seal kit', v]];
       if (away) f.push(['away', -away]);
       return { f, why: `Off to buy ${list} ($${Math.round(plan.spent)})${urgent ? `: I need ${plan.items.includes('pistol') ? 'a gun' : plan.items.includes('charge') ? 'a charge' : 'ammo'}` : ''}` };
     }
@@ -408,6 +419,8 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const ownerAway = !!seen && seen.island !== c.rival!.island;
       const f: [string, number][] = [[kit >= c.openDoors.length ? 'full kit' : 'partial kit', kit >= c.openDoors.length ? 0.6 : 0.3]];
       f.push(['seals win', I.P.drive.sealBonus]);
+      const eg = I.endgameSeal(c);
+      if (eg) f.push(['endgame', eg]);
       if (I.inWindow(c)) f.push(['respawn window', I.P.drive.windowPush]);
       if (rivalDown) f.push(['rival dead', 0.5], ['opportunism', 0.3 * t.opportunism]);
       if (near) f.push(['near bunker', 0.1]);
@@ -562,7 +575,7 @@ export class BrainProbe {
       this.why = this.explained.get(chosen)?.why ?? '';
       // Rivals as chooseTarget weighs them (without its decision noise).
       const facts = I.rivalFacts(c.view);
-      this.rivals = facts.map((f) => [f.id, r2(rivalScore(f, I.t, I.P.drive.sealAwayTarget, { perK: I.P.drive.spoilsTarget[I.difficulty], trapped: I.P.drive.finishTrapped }) + I.teamFocus(c.view, f.id))] as [number, number]).sort((a, b) => b[1] - a[1]);
+      this.rivals = facts.map((f) => [f.id, r2(rivalScore(f, I.t, I.P.drive.sealAwayTarget, { perK: I.P.drive.spoilsTarget[I.difficulty], trapped: I.P.drive.finishTrapped }) + I.teamFocus(c.view, f.id) + I.leaderFocusId(c.view, f.id))] as [number, number]).sort((a, b) => b[1] - a[1]);
       const tf = facts.find((f) => f.id === I.targetId);
       this.target = tf ? { id: tf.id, why: targetWhy(tf, now, I.mem.seen.get(tf.id)?.t ?? null) } : c.rival ? { id: c.rival.id, why: 'nearest rival (no pick yet)' } : null;
       if (c.homeReach && !c.view.suddenDeath) {
