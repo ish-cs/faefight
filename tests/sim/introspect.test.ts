@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Bot, type Goal } from '../../src/sim/bots/bot';
-import { BRAIN_DIGEST_BUDGET, digestBytes, type BrainDigest, type BrainProbe } from '../../src/sim/bots/introspect';
+import { BRAIN_DIGEST_BUDGET, digestBytes, sealWhy, type BrainDigest, type BrainProbe } from '../../src/sim/bots/introspect';
 import { TICK_HZ } from '../../src/sim/constants';
 import { Match } from '../../src/sim/match';
 import type { Difficulty, Snapshot } from '../../src/sim/types';
@@ -18,6 +18,9 @@ function fingerprint(s: Snapshot): string {
     pieces: s.pieces.map((p) => [p.id, p.kind, p.pos, p.hp]),
   });
 }
+
+/** Seal reason shape: "Sealing @3's bunker: <why now>, I carry 2 walls for 2 doors". */
+const SEAL_WHY = /^Sealing (@\d+|my rival)'s bunker: [a-z].+, I carry \d+ walls? for \d+ doors?$/;
 
 type Run = { fp: string[]; digests: BrainDigest[]; bots: Map<number, Bot> };
 
@@ -104,10 +107,28 @@ describe('bot brain introspection', () => {
     expect(d.log.length).toBeLessThanOrEqual(10);
     for (let i = 1; i < d.log.length; i++) expect(d.log[i - 1][0]).toBeGreaterThanOrEqual(d.log[i][0]);
     for (const [, from, to, why] of d.log) { expect(from).not.toBe(to); expect(why.length).toBeGreaterThan(5); }
-    // Seal reasons name the rival, why now, and the kit: "Sealing @3's bunker: … I carry 2 walls for 2 doors".
-    const seal = r.digests.find((x) => x.goal === 'seal' && x.why.startsWith('Sealing'));
-    if (seal) expect(seal.why).toMatch(/^Sealing @\d+'s bunker: .+, I carry \d+ walls? for \d+ doors?$/);
+    // Every seal reason in a real match has the one shape (each variant is pinned in the test below).
+    for (const x of r.digests) if (x.goal === 'seal' && x.why.startsWith('Sealing')) expect(x.why).toMatch(SEAL_WHY);
   }, 120_000);
+
+  test('seal reasons: every variant names the rival, why now, and the kit last, in plain English', () => {
+    // Seed 9 above only ever showed one or two of these; the "(hooking over…)" tail used to break the shape.
+    const base = { rival: '@3', kit: 2, doors: 2, hooking: false, away: false };
+    const cases: [Parameters<typeof sealWhy>[0], string][] = [
+      [base, "Sealing @3's bunker: their doors are open, I carry 2 walls for 2 doors"],
+      [{ ...base, away: true }, "Sealing @3's bunker: they are away from home, I carry 2 walls for 2 doors"],
+      [{ ...base, respawnIn: 7.6 }, "Sealing @3's bunker: they respawn in 8 s, I carry 2 walls for 2 doors"],
+      [{ ...base, respawnIn: 8, diedAgo: 2.2 }, "Sealing @3's bunker: they died 2 s ago and respawn in 8 s, I carry 2 walls for 2 doors"],
+      [{ ...base, hooking: true }, "Sealing @3's bunker: their doors are open, hooking over with no bridge yet, I carry 2 walls for 2 doors"],
+      [{ ...base, rival: '@12', hooking: true, respawnIn: 8, diedAgo: 2, kit: 4, doors: 3 },
+        "Sealing @12's bunker: they died 2 s ago and respawn in 8 s, hooking over with no bridge yet, I carry 4 walls for 3 doors"],
+      [{ ...base, rival: 'my rival', kit: 1, doors: 1 }, "Sealing my rival's bunker: their doors are open, I carry 1 wall for 1 door"],
+    ];
+    for (const [o, want] of cases) {
+      expect(sealWhy(o)).toBe(want);
+      expect(sealWhy(o)).toMatch(SEAL_WHY);
+    }
+  });
 
   test('digests stay within the network budget (8 bots, whole match)', async () => {
     const r = await run(['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], 21, 240, true);
