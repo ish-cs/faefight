@@ -73,6 +73,8 @@ export function stackRequest(kind: HotbarItem, n: number, from: Inventory): Part
   if (kind === 'charge') return { charges: n };
   if (kind === 'medkit') return { medkits: n };
   if (kind === 'trap') return { traps: n };
+  if (kind === 'smoke') return { smokes: n };
+  if (kind === 'flash') return { flashes: n };
   if (kind === 'grapple') return { grapples: from.grapples ?? 0 };
   if (kind in PIECE_MAX) return { pieces: { [kind]: n } };
   return { potions: { [kind]: n } };
@@ -185,7 +187,7 @@ export function itemUnits(inv: Inventory): number {
 function requestUnits(req: Partial<Inventory>): number {
   const pieces = Object.values(req.pieces ?? {}).reduce<number>((a, n) => a + (n ?? 0), 0);
   const potions = Object.values(req.potions ?? {}).reduce<number>((a, n) => a + (n ?? 0), 0);
-  return pieces + potions + (req.grenades ?? 0) + (req.charges ?? 0) + (req.medkits ?? 0) + (req.traps ?? 0) +
+  return pieces + potions + (req.grenades ?? 0) + (req.charges ?? 0) + (req.medkits ?? 0) + (req.traps ?? 0) + (req.smokes ?? 0) + (req.flashes ?? 0) +
     (req.grapples ? 1 : 0) + Object.keys(req.weapons ?? {}).length;
 }
 
