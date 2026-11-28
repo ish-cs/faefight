@@ -23,7 +23,9 @@ export const MACRO_GOALS: Record<Macro, readonly string[]> = {
   shop: ['shop'], push: ['bridge', 'attack'], fortify: ['fortify', 'trap'], center: ['contest'], hold: ['collect', 'guard', 'defend'],
 };
 
-export const FEATURES = ['hpS', 'cash', 'gun', 'enemyDist', 'where', 'ownSealed', 'sealedRivals', 'left', 'tMin', 'hurt'] as const;
+/** Appended features keep older models' indices valid (a model never splits on an index it was not fit with). */
+export const FEATURES = ['hpS', 'cash', 'gun', 'enemyDist', 'where', 'ownSealed', 'sealedRivals', 'left', 'tMin', 'hurt',
+  'openBunkerDist', 'deadOpenBunkerDist', 'vaultDist'] as const;
 /** Nearest-enemy distance cap (m): about sight range. */
 export const ENEMY_CAP = 120;
 /** Centre island: within this of the centroid of the player islands and on none of them. */
@@ -42,6 +44,8 @@ export type FeatureInput = {
   sealed: readonly (boolean | number)[];
   /** Islands of the rivals still in the game (not eliminated). */
   rivalIslands: readonly number[];
+  /** Islands of the rivals dead right now (respawning, not eliminated). */
+  deadRivalIslands: readonly number[];
   now: number;
   hurtRecently: boolean;
 };
@@ -64,9 +68,19 @@ export function whereOf(map: readonly IslandLayout[], island: number, p: { x: nu
 export function features(i: FeatureInput): number[] {
   let d = ENEMY_CAP;
   for (const e of i.enemies) d = Math.min(d, Math.hypot(e.x - i.pos.x, e.z - i.pos.z));
+  // Seal chances: nearest unsealed rival bunker, and nearest one whose owner is dead (nobody home to stop a seal).
+  let open = ENEMY_CAP, deadOpen = ENEMY_CAP, vault = ENEMY_CAP;
+  for (const isl of i.map) {
+    const dd = Math.min(ENEMY_CAP, Math.hypot(isl.bunker.center.x - i.pos.x, isl.bunker.center.z - i.pos.z));
+    if (isl.index === i.island) { vault = Math.min(ENEMY_CAP, Math.hypot(isl.vault.x - i.pos.x, isl.vault.z - i.pos.z)); continue; }
+    if (!i.rivalIslands.includes(isl.index) || i.sealed[isl.index]) continue;
+    open = Math.min(open, dd);
+    if (i.deadRivalIslands.includes(isl.index)) deadOpen = Math.min(deadOpen, dd);
+  }
   return [
     i.hp + i.shield, i.cash, gunClass(i.guns), Math.round(d), whereOf(i.map, i.island, i.pos), i.sealed[i.island] ? 1 : 0,
     i.rivalIslands.filter((r) => !!i.sealed[r]).length, i.rivalIslands.length, i.now / 60, i.hurtRecently ? 1 : 0,
+    Math.round(open), Math.round(deadOpen), Math.round(vault),
   ];
 }
 
@@ -75,7 +89,8 @@ export function featuresFromView(view: BotView): number[] {
   return features({
     hp: me.hp, shield: me.shield, cash: me.inv.cash, guns: Object.keys(me.inv.weapons), pos: me.pos, island: me.island,
     enemies: view.enemies.filter((e) => e.alive).map((e) => e.pos), map: view.map, sealed: view.sealed,
-    rivalIslands: view.others.filter((o) => !o.eliminated).map((o) => o.island), now: view.now,
+    rivalIslands: view.others.filter((o) => !o.eliminated).map((o) => o.island),
+    deadRivalIslands: view.others.filter((o) => !o.eliminated && !o.alive).map((o) => o.island), now: view.now,
     hurtRecently: view.hurt.some((h) => h.by !== null && h.by !== me.id && view.now - h.t <= 5),
   });
 }

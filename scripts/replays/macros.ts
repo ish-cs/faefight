@@ -94,11 +94,12 @@ export function labelReplay(file: string, r: Replay, opts: { humansOnly?: boolea
       const pos = { x: num(a, C.x), z: num(a, C.z) }, posB = { x: num(b, C.x), z: num(b, C.z) };
       const enemiesAt = (j: number) => S[j].p.filter((o) => Number(o[C.id]) !== pl.id && num(o, C.alive) === 1 && !num(o, C.elim)).map((o) => ({ x: num(o, C.x), z: num(o, C.z) }));
       const rivalIslands = S[k].p.filter((o) => Number(o[C.id]) !== pl.id && !num(o, C.elim)).map((o) => islandOf.get(Number(o[C.id]))!).filter((i) => i !== undefined);
+      const deadRivalIslands = S[k].p.filter((o) => Number(o[C.id]) !== pl.id && !num(o, C.elim) && num(o, C.alive) === 0).map((o) => islandOf.get(Number(o[C.id]))!).filter((i) => i !== undefined);
       const t0 = S[k].tick, t1 = S[k + WINDOW_SEC].tick;
       const hurt = byTick(t0 - WINDOW_SEC * TICK_HZ, t0).some(([, type, d]) => type === 'hit' && d.target === pl.id && d.by !== null && d.by !== pl.id);
       const x = features({
         hp: num(a, C.hp), shield: num(a, C.shield), cash: num(a, C.cash), guns: [...owned[k]], pos, island: pl.island,
-        enemies: enemiesAt(k), map, sealed: S[k].sealed, rivalIslands, now: S[k].t, hurtRecently: hurt,
+        enemies: enemiesAt(k), map, sealed: S[k].sealed, rivalIslands, deadRivalIslands, now: S[k].t, hurtRecently: hurt,
       });
       const ev = byTick(t0, t1);
       const mine = (key: string) => ev.filter(([, , d]) => d[key] === pl.id);
