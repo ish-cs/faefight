@@ -3,7 +3,7 @@ import { Bot, inStormShopGrace, throwAngles } from '../../src/sim/bots/bot';
 import { angleBetween, lookAt } from '../../src/sim/bots/aim';
 import { insideBunker, lane, laneAt } from '../../src/sim/bots/nav';
 import { plugSpot } from '../../src/sim/bots/plans';
-import { aimDir, eyePos } from '../../src/sim/combat';
+import { aimDir, eyePos, throwSpeed } from '../../src/sim/combat';
 import { buy, vaultTransfer } from '../../src/sim/economy';
 import { syncFromInventory } from '../../src/sim/hotbar';
 import { DEFAULT_BOT_PARAMS, withParams, type BotParams } from '../../src/sim/bots/params';
@@ -413,8 +413,13 @@ describe('game sense', () => {
     expect(log.nades.length).toBe(1);
     const toEnemy = lookAt(eyePos(self), enemy.pos);
     expect(Math.abs(Math.atan2(Math.sin(log.nades[0].yaw - toEnemy.yaw), Math.cos(log.nades[0].yaw - toEnemy.yaw)))).toBeLessThan(0.15);
-    const a = throwAngles(eyePos(self), enemy.pos, false)!;
+    // A charged lob (impact detonation): steep enough to drop in behind the wall, at the charge it chose.
+    const power = log.nades[0].throwPower!;
+    expect(power).toBeGreaterThanOrEqual(0);
+    expect(power).toBeLessThanOrEqual(1);
+    const a = throwAngles(eyePos(self), enemy.pos, false, throwSpeed('grenade', power))!;
     expect(Math.abs(log.nades[0].pitch - a.pitch)).toBeLessThan(0.1);
+    expect(log.nades[0].pitch).toBeGreaterThan(0.8);
   });
 
   test('throwAngles lands the grenade where it was aimed (same physics as the sim)', () => {

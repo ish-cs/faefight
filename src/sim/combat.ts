@@ -1,7 +1,7 @@
 import { isAlly } from './teams';
 import * as dm from './dmath';
 import {
-  CHARGE, DT, FLASH, GRENADE, SMOKE, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
+  CHARGE, DT, FLASH, GRENADE, SMOKE, THROW, MAP, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
 } from './constants';
 import { damagePiece } from './building';
 import { stressFromDamage } from './movement';
@@ -253,26 +253,109 @@ function launchRocket(ctx: CombatCtx, p: PlayerState, dir: Vec3, now: number): M
   return [];
 }
 
-export function throwGrenade(ctx: CombatCtx, p: PlayerState, now: number): void {
-  if (!p.alive || p.inv.grenades <= 0) return;
-  p.inv.grenades -= 1;
-  const dir = aimDir(p.yaw, p.pitch);
-  const vel = add(scale(dir, GRENADE.throwSpeed), v3(0, 3, 0));
-  const start = add(eyePos(p), add(scale(right(p.yaw), 0.3), scale(forward(p.yaw), 0.3)));
-  ctx.explosives.push({ id: ctx.nextId(), kind: 'grenade', owner: p.id, pos: start, vel, explodeAt: now + GRENADE.fuseSec });
+/** Launch speed (m/s) for a throw charged to `power` (0 = tap .. 1 = full, clamped); no charge = the kind's legacy speed. */
+export function throwSpeed(kind: 'grenade' | UtilityKind, power: number | undefined): number {
+  if (power === undefined || !Number.isFinite(power)) return kind === 'grenade' ? GRENADE.throwSpeed : kind === 'smoke' ? SMOKE.throwSpeed : FLASH.throwSpeed;
+  const k = Math.max(0, Math.min(1, power));
+  return THROW.minSpeed + (THROW.maxSpeed - THROW.minSpeed) * k;
 }
 
-/** Throw a smoke grenade / flashbang: same arc as a grenade (thrown a little softer / harder), its own fuse. */
-export function throwUtility(ctx: CombatCtx, p: PlayerState, kind: UtilityKind, now: number): void {
+/** Where a throw leaves the hand and how fast: from beside the eye, `speed` along the aim plus THROW.up. Writes into pos/vel. */
+function launch(p: Thrower, speed: number, pos: Vec3, vel: Vec3): void {
+  const dir = aimDir(p.yaw, p.pitch);
+  const eye = v3(p.pos.x, p.pos.y + PLAYER.eyeHeight, p.pos.z); // eyePos, for anything with a pos
+  const start = add(eye, add(scale(right(p.yaw), 0.3), scale(forward(p.yaw), 0.3)));
+  pos.x = start.x; pos.y = start.y; pos.z = start.z;
+  vel.x = dir.x * speed; vel.y = dir.y * speed + THROW.up; vel.z = dir.z * speed;
+}
+
+export function throwGrenade(ctx: CombatCtx, p: PlayerState, now: number, power?: number): void {
+  if (!p.alive || p.inv.grenades <= 0) return;
+  p.inv.grenades -= 1;
+  const pos = v3(), vel = v3();
+  launch(p, throwSpeed('grenade', power), pos, vel);
+  ctx.explosives.push({ id: ctx.nextId(), kind: 'grenade', owner: p.id, pos, vel, explodeAt: now + THROW.fuseSec });
+}
+
+/** Throw a smoke grenade / flashbang: same charged throw and impact rule as a grenade. */
+export function throwUtility(ctx: CombatCtx, p: PlayerState, kind: UtilityKind, now: number, power?: number): void {
   const n = utilCount(p.inv, kind);
   if (!p.alive || n <= 0) return;
   setUtil(p.inv, kind, n - 1);
-  const C = kind === 'smoke' ? SMOKE : FLASH;
-  const dir = aimDir(p.yaw, p.pitch);
-  const vel = add(scale(dir, C.throwSpeed), v3(0, 3, 0));
-  const start = add(eyePos(p), add(scale(right(p.yaw), 0.3), scale(forward(p.yaw), 0.3)));
-  ctx.explosives.push({ id: ctx.nextId(), kind, owner: p.id, pos: start, vel, explodeAt: now + C.fuseSec });
+  const pos = v3(), vel = v3();
+  launch(p, throwSpeed(kind, power), pos, vel);
+  ctx.explosives.push({ id: ctx.nextId(), kind, owner: p.id, pos, vel, explodeAt: now + THROW.fuseSec });
 }
+
+/** Who throws: where they stand and look (a PlayerState, or the client's own predicted view). */
+export type Thrower = Pick<PlayerState, 'id' | 'pos' | 'yaw' | 'pitch'>;
+/** What a thrown body needs from the world (the sim's Physics, or the client's predictor world). */
+export type ThrowWorld = Pick<Physics, 'raycast' | 'surfaceBelow'>;
+const _tdir = v3();
+
+/**
+ * One tick of a thrown grenade / smoke / flash: gravity, then the first surface in its path (anything solid but the
+ * thrower, or the sea). Mutates pos/vel in place (no allocations of its own); true on contact, where it stops.
+ * The client's throw preview runs this same function, so the drawn arc is the sim's path.
+ */
+export function stepThrown(world: ThrowWorld, pos: Vec3, vel: Vec3, owner: number): boolean {
+  vel.y -= PLAYER.gravity * DT;
+  const sx = vel.x * DT, sy = vel.y * DT, sz = vel.z * DT;
+  const stepLen = Math.hypot(sx, sy, sz);
+  if (stepLen > 0) {
+    const inv = 1 / stepLen;
+    _tdir.x = sx * inv; _tdir.y = sy * inv; _tdir.z = sz * inv;
+    const wall = world.raycast(pos, _tdir, stepLen, owner);
+    if (wall) {
+      const k = Math.max(0, wall.dist - 0.1) * inv;
+      pos.x += sx * k; pos.y += sy * k; pos.z += sz * k;
+      vel.x = 0; vel.y = 0; vel.z = 0;
+      return true;
+    }
+  }
+  const nx = pos.x + sx, ny = pos.y + sy, nz = pos.z + sz;
+  const floor = world.surfaceBelow(nx, pos.y + 0.05, nz, pos.y - ny + 0.1);
+  if (floor !== null && ny <= floor) {
+    pos.x = nx; pos.y = floor + 0.05; pos.z = nz;
+    vel.x = 0; vel.y = 0; vel.z = 0;
+    return true;
+  }
+  if (ny <= MAP.waterY) {
+    // Into the sea: goes off at the surface, where it went in.
+    const k = sy < 0 ? Math.min(1, Math.max(0, (pos.y - MAP.waterY) / -sy)) : 1;
+    pos.x += sx * k; pos.y = MAP.waterY; pos.z += sz * k;
+    vel.x = 0; vel.y = 0; vel.z = 0;
+    return true;
+  }
+  pos.x = nx; pos.y = ny; pos.z = nz;
+  return false;
+}
+
+/**
+ * The path a throw from `p` charged to `power` would take (same launch + stepThrown as the sim, up to THROW.fuseSec).
+ * Writes the points (x,y,z per tick, starting at the hand) into `out` (stops when it is full); `end` is where it goes
+ * off and `hit` whether that is a contact (else the fuse runs out mid-air). Reuses one result object: copy what you keep.
+ */
+export function predictThrow(world: ThrowWorld, p: Thrower, kind: 'grenade' | UtilityKind, power: number | undefined, out: Float32Array):
+  { count: number; end: Vec3; hit: boolean } {
+  const r = _pred;
+  launch(p, throwSpeed(kind, power), r.end, _pvel);
+  const maxPts = Math.floor(out.length / 3);
+  let n = 0;
+  const put = () => { if (n < maxPts) { out[n * 3] = r.end.x; out[n * 3 + 1] = r.end.y; out[n * 3 + 2] = r.end.z; n++; } };
+  put();
+  r.hit = false;
+  const ticks = Math.round(THROW.fuseSec * TICK_HZ);
+  for (let i = 0; i < ticks; i++) {
+    const hit = stepThrown(world, r.end, _pvel, p.id);
+    put();
+    if (hit) { r.hit = true; break; }
+  }
+  r.count = n;
+  return r;
+}
+const _pred = { count: 0, end: v3(), hit: false };
+const _pvel = v3();
 
 export function placeCharge(ctx: CombatCtx, p: PlayerState, now: number): void {
   if (!p.alive || p.inv.charges <= 0) return;
@@ -386,30 +469,14 @@ function flyRocket(ctx: CombatCtx, e: Explosive, now: number) {
   e.pos = add(e.pos, step);
 }
 
-/** Moves thrown grenades (simple gravity + stop on first surface) and rockets, and detonates anything due. */
+/** Moves thrown grenades (gravity; they go off on first contact) and rockets, and detonates anything due. */
 export function tickExplosives(ctx: CombatCtx, now: number): MatchEvent[] {
   const out: MatchEvent[] = [];
   for (const e of ctx.explosives) {
     if (e.kind === 'rocket') { flyRocket(ctx, e, now); continue; }
     if ((e.kind !== 'grenade' && e.kind !== 'smoke' && e.kind !== 'flash') || (e.vel.x === 0 && e.vel.y === 0 && e.vel.z === 0)) continue;
-    e.vel.y -= PLAYER.gravity * DT;
-    const step = scale(e.vel, DT);
-    const stepLen = Math.hypot(step.x, step.y, step.z);
-    const wall = stepLen > 0 ? ctx.physics.raycast(e.pos, scale(step, 1 / stepLen), stepLen, e.owner) : null;
-    if (wall) {
-      // Hit something on the way: stop just short of it (no bounce).
-      e.pos = add(e.pos, scale(step, Math.max(0, wall.dist - 0.1) / stepLen));
-      e.vel = v3();
-      continue;
-    }
-    const next = add(e.pos, step);
-    const floor = ctx.physics.surfaceBelow(next.x, e.pos.y + 0.05, next.z, e.pos.y - next.y + 0.1);
-    if (floor !== null && next.y <= floor) {
-      e.pos = v3(next.x, floor + 0.05, next.z);
-      e.vel = v3();
-    } else {
-      e.pos = next;
-    }
+    // Impact rule: frag, smoke and flash all go off on first contact (THROW).
+    if (stepThrown(ctx.physics, e.pos, e.vel, e.owner)) e.explodeAt = now;
   }
   const due = ctx.explosives.filter((e) => now >= e.explodeAt);
   ctx.explosives.splice(0, ctx.explosives.length, ...ctx.explosives.filter((e) => now < e.explodeAt));

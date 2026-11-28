@@ -1,5 +1,6 @@
 import * as dm from '../dmath';
-import { DT, FLASH, PLAYER, SMOKE } from '../constants';
+import { DT, FLASH, PLAYER, SMOKE, THROW } from '../constants';
+import { throwSpeed } from '../combat';
 import { hash01 } from '../gunplay';
 import type { Difficulty, PlayerState, UtilityKind, Vec3 } from '../types';
 import { inSmoke, isBlind } from '../utility';
@@ -73,20 +74,21 @@ export function planUtility(s: UtilSituation): UtilThrow | null {
 }
 
 /**
- * Aim for a smoke/flash to come down at `to` (combat.throwUtility: throwSpeed along the aim plus 3 m/s up, gravity per
- * tick). Flattest arc that gets there (a flash goes off where it is when the fuse runs out; a smoke pops where it lands).
+ * Aim for a smoke/flash to come down at `to` (combat.throwUtility, charged to the kind's legacy speed: that along the
+ * aim plus THROW.up m/s, gravity per tick). Flattest arc that gets there; both go off where they first land.
  */
-export function utilAngles(eye: Vec3, to: Vec3, kind: UtilityKind): Angles | null {
-  const speed = kind === 'smoke' ? SMOKE.throwSpeed : FLASH.throwSpeed;
+export function utilAngles(eye: Vec3, to: Vec3, kind: UtilityKind): (Angles & { power: number }) | null {
+  const power = ((kind === 'smoke' ? SMOKE.throwSpeed : FLASH.throwSpeed) - THROW.minSpeed) / (THROW.maxSpeed - THROW.minSpeed);
+  const speed = throwSpeed(kind, power);
   const d = dist2D(eye, to), dy = to.y - eye.y;
   const yaw = lookAt(eye, to).yaw;
   let prevBelow = false;
   for (let i = 0; i <= 200; i++) {
     const pitch = -1.0 + i * 0.012;
-    const vx = speed * dm.cos(pitch), vy = speed * dm.sin(pitch) + 3;
+    const vx = speed * dm.cos(pitch), vy = speed * dm.sin(pitch) + THROW.up;
     const t = d / vx;
     const y = vy * t - (PLAYER.gravity * t * (t + DT)) / 2;
-    if (y >= dy && prevBelow) return { yaw, pitch };
+    if (y >= dy && prevBelow) return { yaw, pitch, power };
     prevBelow = y < dy;
   }
   return null;

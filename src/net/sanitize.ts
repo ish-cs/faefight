@@ -149,6 +149,7 @@ export function sanitizeInput(x: unknown): PlayerInput | null {
     ...(typeof x.viewT === 'number' && Number.isFinite(x.viewT) ? { viewT: x.viewT } : {}),
     ...(x.trap != null && trapReq(x.trap) ? { trap: trapReq(x.trap) } : {}),
     ...(x.throwUtil === 'smoke' || x.throwUtil === 'flash' ? { throwUtil: x.throwUtil } : {}),
+    ...(typeof x.throwPower === 'number' && Number.isFinite(x.throwPower) ? { throwPower: clamp(x.throwPower, 0, 1) } : {}),
   };
 }
 

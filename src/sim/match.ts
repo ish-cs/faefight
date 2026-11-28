@@ -737,8 +737,8 @@ export class Match implements MatchApi {
       this.rewindT = this.rewindTime(p, input, now);
       try { this.events.push(...tryFire(this.ctx, p, now)); } finally { this.rewindT = null; }
     }
-    if (input.throwGrenade) throwGrenade(this.ctx, p, now);
-    if (input.throwUtil) throwUtility(this.ctx, p, input.throwUtil, now);
+    if (input.throwGrenade) throwGrenade(this.ctx, p, now, input.throwPower);
+    if (input.throwUtil) throwUtility(this.ctx, p, input.throwUtil, now, input.throwPower);
     if (input.placeCharge) placeCharge(this.ctx, p, now);
     if (input.trap) this.events.push(...this.traps.place(this.physics, p, input.trap, now, () => this.s.nextId++));
     if (input.useMedkit) startMedkit(p, now);

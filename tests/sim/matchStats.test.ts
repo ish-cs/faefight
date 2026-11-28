@@ -66,7 +66,8 @@ describe('Match stats in snapshots', () => {
     m.debugGive(1, { grenades: 1 });
     let hit: MatchEvent | undefined;
     // Throw straight down at our feet: both are inside the blast.
-    m.tick(inputs(1, { throwGrenade: true, pitch: -1.3 }));
+    // (It goes off on hitting the floor, so the blast can land in the throw's own tick.)
+    hit = m.tick(inputs(1, { throwGrenade: true, pitch: -1.3 })).events.find((e) => e.type === 'hit');
     for (let i = 0; i < 120 && !hit; i++) hit = m.tick(new Map()).events.find((e) => e.type === 'hit');
     expect(hit?.data.weapon).toBe('grenade');
   });

@@ -106,6 +106,11 @@ export type PlayerInput = {
   trap?: TrapRequest;
   /** Throw a smoke grenade / flashbang (one-shot, like throwGrenade; absent = none, so old replays decode unchanged). */
   throwUtil?: UtilityKind;
+  /**
+   * How long the throw was charged, 0 (tap) .. 1 (THROW.chargeSec or more), for throwGrenade / throwUtil this tick
+   * (combat.throwSpeed). Absent = the kind's legacy speed (old replays, scripted inputs).
+   */
+  throwPower?: number;
 };
 
 export type PlayerState = {
