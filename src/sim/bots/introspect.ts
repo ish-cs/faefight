@@ -445,6 +445,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const near = c.on === c.rivalIsl.index && dist2D(me.pos, c.rivalIsl.bunker.center) < 15;
       const seen = c.rival && c.rival.alive ? I.mem.recent(c.rival.id, now, 20) : null;
       const ownerAway = !!seen && seen.island !== c.rival!.island;
+      // Standing on their island with nobody home (not seen here lately): same term as the score (bot.ts 'seal').
+      const empty = c.on === c.rivalIsl.index && !!c.rival && c.rival.alive && !ownerAway &&
+        I.mem.recent(c.rival.id, now, I.P.drive.emptyHomeSec)?.island !== c.rival.island;
       const f: [string, number][] = [[kit >= c.openDoors.length ? 'full kit' : 'partial kit', kit >= c.openDoors.length ? 0.6 : 0.3]];
       f.push(['seals win', I.P.drive.sealBonus]);
       const eg = I.endgameSeal(c);
@@ -452,7 +455,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (I.inWindow(c)) f.push(['respawn window', I.P.drive.windowPush]);
       if (rivalDown) f.push(['rival dead', 0.5], ['opportunism', 0.3 * t.opportunism]);
       if (near) f.push(['near bunker', 0.1]);
-      if (ownerAway) f.push(['owner away', 0.2 * t.opportunism]);
+      if (ownerAway || empty) f.push([ownerAway ? 'owner away' : 'nobody home', I.P.drive.sealAway + 0.2 * t.opportunism]);
       const died = c.rival ? I.mem.diedAt.get(c.rival.id) : undefined;
       return { f, why: sealWhy({
         rival: rivalName(c), kit, doors: c.openDoors.length, hooking: !c.reach, away: ownerAway,

@@ -3673,6 +3673,10 @@ export class Bot {
   /** Back off from whoever is hurting me: home to the bunker if that isn't toward them, else straight away. */
   private doDisengage(c: Ctx): Act {
     const me = c.me, now = c.view.now;
+    // Backed out of their gun range at home with no walk over to me: low hp no longer counts (lowHpFarOff), so
+    // rescore now instead of running on to the next rescore (botFarFoeCollect: walking off at full speed with eyes
+    // on the path, the old rescore lag carried a low-hp bot 2 m past a pistol's range).
+    if (this.lowHpFarOff(c)) this.nextScoreAt = Math.min(this.nextScoreAt, now);
     // Who I'm getting away from: whoever is in sight, else whoever hurt me last. Kept a moment (FLEE_KEEP_SEC) unless
     // someone much closer turns up: a far enemy blinking in and out of sight past a corner would otherwise swing
     // "away" (and the spot behind the bunker) round and back every few ticks.
