@@ -65,6 +65,8 @@ export type BrainDigest = {
   heal?: string;
   /** Smoke / flash (utilityPlan.ts): its last throw or reaction (a few seconds), else what it carries; absent when none. */
   util?: string;
+  /** Where it's looking and why (gaze.ts): the path, a glance, or eyes on an enemy it engages. */
+  gaze?: string;
   /** Weapon it wants in hand and why ("rocket: reload it between fights"); absent when dead or not yet decided. */
   weapon?: string;
   /** Route ahead: [x, y, z] points from its feet. */
@@ -131,6 +133,7 @@ type Internals = {
   healNote: { t: number; text: string } | null; healWant: number;
   utilNote: { t: number; text: string } | null;
   weaponIntent: { want: string; why: string } | null;
+  gaze: { note(): string };
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
@@ -766,6 +769,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     ...hookLine(I, me, now),
     ...healLine(I, me, now),
     ...utilLine(I, me, now),
+    ...(me?.alive ? { gaze: I.gaze.note() } : {}),
     ...(me?.alive && I.weaponIntent ? { weapon: I.weaponIntent.why } : {}),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
