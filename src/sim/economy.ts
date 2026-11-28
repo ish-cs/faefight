@@ -1,4 +1,4 @@
-import { AMMO_BOX, CHARGE, FLASH, SMOKE, TRAP, GENERATOR_LEVELS, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, LOCK_PRICE_MULT, MEDKIT, PIECES, PLAYER, POTIONS, SPARE_MAGS_ON_BUY, WEAPONS } from './constants';
+import { AMMO_BOX, CHARGE, FLASH, SMOKE, TRAP, GENERATOR_LEVELS, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, LOCK_PRICE_MULT, MEDKIT, PIECES, PLAYER, POTIONS, SPARE_MAGS_ON_BUY, SNIPER_AMMO, WEAPONS } from './constants';
 import { addKind, canAdd, countOf, isHotbarItem, isPotionItem, isUtilItem, removeIfEmpty, setGrapples, syncFromInventory } from './hotbar';
 import { setUtil, utilCount, utilMax } from './utility';
 import { SHOP_LABEL, shopFor, soldAt, type ShopKind } from './potions';
@@ -42,7 +42,7 @@ export function collect(player: PlayerState, gen: { stored: number }): number {
   return amount;
 }
 
-const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
+const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket', 'sniper'] as const;
 const isGun = (k: string): k is (typeof GUNS)[number] => (GUNS as readonly string[]).includes(k);
 const isPiece = (k: string): k is PieceKind => k in PIECES;
 
@@ -53,12 +53,12 @@ export function ammoTarget(player: PlayerState): Exclude<WeaponKind, 'fists'> | 
 
 /** Ammo box price for that gun (rockets cost more than a box of rounds). */
 export function ammoPrice(gun: WeaponKind | undefined): number {
-  return gun === 'rocket' ? AMMO_BOX.rocketPrice : AMMO_BOX.price;
+  return gun === 'rocket' ? AMMO_BOX.rocketPrice : gun === 'sniper' ? SNIPER_AMMO.boxPrice : AMMO_BOX.price;
 }
 
 /** Rounds one ammo box adds for that gun. */
 export function ammoPerBox(gun: Exclude<WeaponKind, 'fists'>): number {
-  return gun === 'rocket' ? AMMO_BOX.rockets : WEAPONS[gun].mag * AMMO_BOX.mags;
+  return gun === 'rocket' ? AMMO_BOX.rockets : WEAPONS[gun].mag * (gun === 'sniper' ? SNIPER_AMMO.boxMags : AMMO_BOX.mags);
 }
 
 /** The gun a `lock:<gun>` shop item locks, or null for any other item. */
@@ -113,7 +113,7 @@ export function buy(player: PlayerState, action: ShopAction, genLevels?: number[
   if (isGun(item)) {
     if (inv.weapons[item]) return fail(`already own ${item}`);
     const mag = WEAPONS[item].mag;
-    inv.weapons[item] = { mag, spare: mag * SPARE_MAGS_ON_BUY };
+    inv.weapons[item] = { mag, spare: mag * (item === 'sniper' ? SNIPER_AMMO.spareMags : SPARE_MAGS_ON_BUY) };
   } else if (isPiece(item)) {
     inv.pieces[item] = (inv.pieces[item] ?? 0) + 1;
   } else if (item === 'ammo') {

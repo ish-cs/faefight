@@ -109,6 +109,8 @@ const GUNS: Record<string, GunSpec> = {
   smg: { crack: [3000, 0.035, 0.75], body: [1400, 1.4, 0.07, 0.55], thump: [200, 80, 0.06, 0.6], tail: [1100, 0.18, 0.08] },
   shotgun: { crack: [1800, 0.07, 1.0], body: [700, 0.8, 0.3, 0.9], thump: [110, 35, 0.35, 1.2], tail: [600, 0.9, 0.25] },
   rifle: { crack: [4000, 0.03, 1.1], body: [1800, 1.5, 0.1, 0.6], thump: [140, 45, 0.18, 0.9], tail: [800, 1.0, 0.2] },
+  // Sniper: a supersonic whip-crack, a deep boom and a long rolling tail (loud and distinct: counterplay).
+  sniper: { crack: [5200, 0.025, 1.5], body: [1300, 1.1, 0.16, 0.9], thump: [95, 32, 0.32, 1.35], tail: [520, 2.2, 0.32] },
 };
 
 /** Rocket launch: a hard pop, then the motor's rushing whoosh as it leaves. */
@@ -124,7 +126,7 @@ function rocketLaunch(k: Kit, out: AudioNode, t: number, cue: Cue): number {
 function handling(k: Kit, out: AudioNode, t: number, cue: Cue): number {
   const [weapon, beat] = (cue.kind ?? 'pistol:magIn').split(':');
   const p = jitter(k.rnd(), 0.06);
-  const heavy = weapon === 'rifle' ? 0.85 : weapon === 'smg' ? 1 : weapon === 'pistol' ? 1.25 : 1;
+  const heavy = weapon === 'sniper' ? 0.7 : weapon === 'rifle' ? 0.85 : weapon === 'smg' ? 1 : weapon === 'pistol' ? 1.25 : 1;
   switch (beat) {
     case 'release': // mag catch
       noise(k, out, t, { type: 'highpass', freq: 4200 * p, dur: 0.012, peak: 0.6 });

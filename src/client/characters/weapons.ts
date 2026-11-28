@@ -28,7 +28,7 @@ const tube = (r: number, z0: number, z1: number, x: number, y: number, furn = fa
 const LENS = 0x1b2a44, STEEL = 0x55585c, DARK = 0x0d0e10;
 /** Base colours of the meshes (parts without their own tint take these). */
 const METAL = 0x1c1e21, SHELL = 0xa32a1e;
-const FURN: Record<Exclude<WeaponKind, 'fists'>, number> = { pistol: 0x15161a, smg: 0x23252a, shotgun: 0x6b3d1e, rifle: 0x7a431c, rocket: 0x4f5a2c };
+const FURN: Record<Exclude<WeaponKind, 'fists'>, number> = { pistol: 0x15161a, smg: 0x23252a, shotgun: 0x6b3d1e, rifle: 0x7a431c, rocket: 0x4f5a2c, sniper: 0x5e6248 };
 
 /** Picatinny rail along Z on top of y: base strip + cross ridges. */
 const rail = (y: number, z0: number, z1: number, w = 0.022): Part[] => {
@@ -135,6 +135,39 @@ const SPECS: Record<Exclude<WeaponKind, 'fists'>, Spec> = {
       box(0.044, 0.09, 0.018, 0, 0.022, 0.39, 0.15, false, DARK), // butt pad
       box(0.008, 0.035, 0.01, 0, 0.13, -0.6), // front sight
       ...scope(0.145, -0.06),
+    ],
+  },
+  sniper: {
+    // Bolt-action long rifle: long fluted barrel with a can-shaped brake, a big 56 mm scope on high rings, bolt handle
+    // on the right, short 5-round box mag, olive-drab stock with a cheek riser and a folded bipod. Clearly longer
+    // and slimmer than the assault rifle, with no handguard vents or carry rail.
+    muzzle: [0, 0.08, -1.08],
+    eject: [0.03, 0.09, -0.04],
+    magAt: [0, -0.02, -0.1],
+    mag: () => [box(0.03, 0.07, 0.07, 0, -0.02, -0.1, 0.1), box(0.032, 0.008, 0.074, 0, -0.058, -0.104, 0.1, false, DARK)],
+    parts: () => [
+      tube(0.022, 0.08, -0.26, 0, 0.075, false, 14), // round receiver
+      box(0.014, 0.012, 0.06, 0.022, 0.085, -0.04, 0, false, DARK), // ejection port
+      tube(0.006, 0.05, 0.12, 0.045, 0.08, false, 8, STEEL), box(0.012, 0.012, 0.012, 0.075, 0.08, 0.05, 0, false, DARK), // bolt handle + knob
+      tube(0.0115, -0.26, -0.98, 0, 0.08, false, 12, STEEL), // long barrel
+      ...[0, 1, 2].map((k) => box(0.026, 0.004, 0.2, 0, 0.08 + (k - 1) * 0.008, -0.55, 0, false, DARK)), // flutes
+      tube(0.02, -0.98, -1.08, 0, 0.08, false, 10), // brake
+      box(0.042, 0.01, 0.05, 0, 0.08, -1.03, 0, false, DARK), // brake ports
+      box(0.05, 0.05, 0.34, 0, 0.045, -0.36, 0, true), // forend
+      box(0.032, 0.1, 0.042, 0, -0.005, 0.03, -0.3, true), // grip
+      box(0.006, 0.022, 0.05, 0, 0.022, -0.03, 0), box(0.004, 0.016, 0.006, 0, 0.025, -0.025, 0.3), // guard + trigger
+      box(0.046, 0.08, 0.34, 0, 0.035, 0.26, 0.08, true), // stock
+      box(0.04, 0.03, 0.16, 0, 0.1, 0.22, 0.05, true), // cheek riser
+      box(0.05, 0.1, 0.02, 0, 0.015, 0.43, 0.08, false, DARK), // butt pad
+      box(0.01, 0.012, 0.22, 0.018, 0.02, -0.46, 0.05, false, DARK), box(0.01, 0.012, 0.22, -0.018, 0.02, -0.46, 0.05, false, DARK), // folded bipod
+      ...rail(0.1, -0.22, 0.08),
+      box(0.032, 0.03, 0.014, 0, 0.115, -0.15), box(0.032, 0.03, 0.014, 0, 0.115, 0.03), // high rings
+      tube(0.016, -0.22, 0.1, 0, 0.15, false, 14), // scope tube
+      tube(0.017, -0.33, -0.22, 0, 0.15, false, 16, undefined, 0.03), // objective bell (56 mm)
+      tube(0.019, 0.1, 0.16, 0, 0.15, false, 14, undefined, 0.016), // eyepiece
+      tube(0.028, -0.334, -0.33, 0, 0.15, false, 16, LENS),
+      tube(0.0175, 0.16, 0.163, 0, 0.15, false, 14, LENS),
+      box(0.018, 0.024, 0.018, 0, 0.176, -0.06), box(0.022, 0.018, 0.018, 0.024, 0.15, -0.06), // turrets
     ],
   },
   rocket: {

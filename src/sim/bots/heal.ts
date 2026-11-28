@@ -117,7 +117,7 @@ export type KeepWeights = HealParams['keep'];
  */
 export function dropForHeal(p: PlayerState, H: HealParams, needed: ReadonlySet<HotbarItem>): number | null {
   if (p.hotbar.includes(null)) return null;
-  const otherGun = (['smg', 'rifle', 'shotgun'] as const).some((g) => { const a = p.inv.weapons[g]; return !!a && a.mag + a.spare > 0; });
+  const otherGun = (['smg', 'rifle', 'shotgun', 'sniper'] as const).some((g) => { const a = p.inv.weapons[g]; return !!a && a.mag + a.spare > 0; });
   let best: number | null = null, bestKeep = H.slotValue;
   for (const [i, k] of p.hotbar.entries()) {
     if (!k || needed.has(k)) continue;

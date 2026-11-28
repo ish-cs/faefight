@@ -215,7 +215,7 @@ function recapCard(r: Recap): HTMLElement {
 }
 
 const WEAPON_NAME: Record<string, string> = {
-  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket', grenade: 'Grenade', charge: 'Breach charge',
+  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', sniper: 'Sniper', rocket: 'Rocket', grenade: 'Grenade', charge: 'Breach charge',
   barrel: 'Fuel barrel', propane: 'Propane tank', trap: 'Spike trap',
 };
 const ITEM_NAME: Record<string, string> = {

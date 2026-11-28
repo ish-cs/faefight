@@ -11,6 +11,8 @@ export const ICONS: Record<IconKind, string> = {
   smg: svg('<path d="M1.5 7.5H17V9h4.5v4H16l-.6 1.2h-1.6l-.9 5.3H9.9l.9-5.3H7.2L5.4 18H2.4l1.7-5H1.5z" fill="currentColor"/><rect x="11.3" y="13" width="2.6" height="7" rx=".8" fill="currentColor"/>'),
   shotgun: svg('<path d="M.8 8.5h22.4v3H12.5V13H7.3l-3.6 5H.8L3 13H.8z" fill="currentColor"/><rect x="13.2" y="11.2" width="7" height="3" rx="1.2" fill="currentColor"/>'),
   rifle: svg('<path d="M.8 10.2h22.4v3h-9l-.8 1.6h-1.6L10.5 20H7.4l.9-5.2H6.2l-3.4 4H.6L2 14.5 .8 13z" fill="currentColor"/><rect x="6.5" y="5.6" width="8" height="2.8" rx="1.4" fill="currentColor"/><path d="M8.5 8.4v1.8M12.5 8.4v1.8" stroke="currentColor" stroke-width="1.6"/>'),
+  // Sniper: long thin barrel, big scope on two rings, bolt knob, thumbhole stock.
+  sniper: svg('<path d="M.5 11h23v1.6H13l-.6 1.4h-1.5l-1 5.4H7.5l.6-4.8H5.8L2.6 18H.4l1.4-3.6L.5 12.6z" fill="currentColor"/><rect x="5" y="6" width="9.5" height="2.6" rx="1.3" fill="currentColor"/><path d="M4.4 6.2v2.2M15.2 6.2v2.2" stroke="currentColor" stroke-width="1.4"/><path d="M7.5 8.6V11M12 8.6V11" stroke="currentColor" stroke-width="1.4"/><circle cx="15.8" cy="13.6" r="1" fill="currentColor"/>'),
   ammo: svg('<g fill="currentColor"><path d="M5 9c0-2 1-4 2-5 1 1 2 3 2 5v11H5z"/><path d="M10 9c0-2 1-4 2-5 1 1 2 3 2 5v11h-4z"/><path d="M15 9c0-2 1-4 2-5 1 1 2 3 2 5v11h-4z"/></g><path d="M4.5 10h15" stroke="#0e1218" stroke-width="1"/>'),
   sandbags: svg('<g fill="currentColor"><rect x="2" y="13.5" width="6.4" height="5" rx="2.4"/><rect x="8.8" y="13.5" width="6.4" height="5" rx="2.4"/><rect x="15.6" y="13.5" width="6.4" height="5" rx="2.4"/><rect x="5.4" y="8" width="6.4" height="5" rx="2.4"/><rect x="12.2" y="8" width="6.4" height="5" rx="2.4"/></g>'),
   wood: svg(`<rect x="3" y="4" width="18" height="16" rx="1.5" ${S}/><path d="M9 4v16M15 4v16" ${S}/><path d="M3 9l18 6" ${S}/><circle cx="6" cy="6.5" r=".9" fill="currentColor"/><circle cx="18" cy="17.5" r=".9" fill="currentColor"/>`),
@@ -43,7 +45,7 @@ export const LOCK_ICON = svg('<rect x="4.5" y="10.5" width="15" height="11" rx="
 export function iconGroup(k: IconKind): 'gun' | 'piece' | 'explosive' | 'medkit' | 'potion' | 'upgrade' {
   if (k === 'genUpgrade') return 'upgrade';
   if (k === 'shieldSmall' || k === 'shieldBig' || k === 'healPotion' || k === 'speedPotion') return 'potion';
-  if (k === 'pistol' || k === 'smg' || k === 'shotgun' || k === 'rifle' || k === 'rocket' || k === 'ammo') return 'gun';
+  if (k === 'pistol' || k === 'smg' || k === 'shotgun' || k === 'rifle' || k === 'rocket' || k === 'sniper' || k === 'ammo') return 'gun';
   if (k === 'grenade' || k === 'charge' || k === 'trap' || k === 'smoke' || k === 'flash') return 'explosive';
   if (k === 'grapple') return 'upgrade';
   if (k === 'medkit') return 'medkit';

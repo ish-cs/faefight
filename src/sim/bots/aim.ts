@@ -107,7 +107,8 @@ export class Aim {
     return out;
   }
 
-  track(now: number, dt: number, eye: Vec3, point: Vec3, id: number, cur: Angles): AimResult {
+  /** `coneMult` scales the aim error (a scope steadies the hand: < 1). */
+  track(now: number, dt: number, eye: Vec3, point: Vec3, id: number, cur: Angles, coneMult = 1): AimResult {
     const fresh = id !== this.target || now - this.lastSeen > FORGET_SEC;
     if (fresh) {
       this.target = id; this.seenAt = now;
@@ -120,7 +121,7 @@ export class Aim {
     this.drift(dt);
 
     const tracked = now - this.seenAt;
-    const cone = this.p.coneRad * (1 - TIGHTEN * Math.min(1, tracked / TIGHTEN_SEC));
+    const cone = this.p.coneRad * (1 - TIGHTEN * Math.min(1, tracked / TIGHTEN_SEC)) * coneMult;
     const exact = lookAt(eye, point);
     const want = { yaw: exact.yaw + this.err.yaw * cone, pitch: exact.pitch + this.err.pitch * cone };
     const aim = this.look(cur, want, dt, this.p.maxTurn, true);

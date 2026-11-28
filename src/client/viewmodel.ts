@@ -39,11 +39,13 @@ const HOLD: Record<Exclude<WeaponKind, 'fists'>, { grip: V; left: V; elbowL: V; 
   shotgun: { grip: [0.2, -0.21, -0.52], left: [0, 0.015, -0.33], elbowL: [-0.22, -0.24, 0.0], ads: [0, -0.112, -0.62] },
   rifle: { grip: [0.2, -0.21, -0.52], left: [0, 0.02, -0.32], elbowL: [-0.22, -0.24, 0.0], ads: [0, -0.15, -0.46] },
   rocket: { grip: [0.21, -0.2, -0.36], left: [0, 0.01, -0.27], elbowL: [-0.2, -0.26, 0.05], ads: [0.07, -0.16, -0.3] },
+  sniper: { grip: [0.2, -0.2, -0.5], left: [0, 0.02, -0.36], elbowL: [-0.22, -0.24, -0.02], ads: [0, -0.155, -0.38] },
 };
 /** Recoil feel: viewmodel kick-back (m) and muzzle climb (rad) per unit of kick. */
 const VM_KICK: Record<WeaponKind, { back: number; climb: number }> = {
   fists: { back: 0, climb: 0 }, pistol: { back: 0.045, climb: 0.16 }, smg: { back: 0.025, climb: 0.06 },
   shotgun: { back: 0.09, climb: 0.22 }, rifle: { back: 0.04, climb: 0.08 }, rocket: { back: 0.12, climb: 0.12 },
+  sniper: { back: 0.1, climb: 0.1 },
 };
 
 const v3 = (a: [number, number, number]) => new THREE.Vector3(...a);
@@ -59,6 +61,7 @@ const GRIPS: Record<Exclude<WeaponKind, 'fists'>, { tilt: number; left: { center
   shotgun: { tilt: -0.35, left: { center: [0, 0.064, -0.33], axis: [0, 0, 1], radius: 0.031, palm: [-0.6, -1, 0], wrist: [-0.05, 0.0, -0.27] } },
   rifle: { tilt: -0.3, left: { center: [0, 0.074, -0.32], axis: [0, 0, 1], radius: 0.031, palm: [-0.6, -1, 0], wrist: [-0.05, 0.005, -0.26] } },
   rocket: { tilt: -0.3, left: { center: [0, 0.01, -0.27], axis: [0, -0.98, 0.2], radius: 0.019, palm: [-0.8, 0, 0.6], wrist: [-0.035, -0.07, -0.2], thumbWrap: true } },
+  sniper: { tilt: -0.3, left: { center: [0, 0.045, -0.36], axis: [0, 0, 1], radius: 0.033, palm: [-0.6, -1, 0], wrist: [-0.05, -0.02, -0.3] } },
 };
 
 type Rig = {
@@ -436,7 +439,7 @@ export class FirstPersonView {
       bob.roll * this.moveK * steady + this.dip * 0.08,
     );
     // Looking through the rifle scope: the overlay is the view; the gun would only block it.
-    const scoped = me.equipped === 'rifle' && this.adsK > 0.9 && !pose;
+    const scoped = (me.equipped === 'rifle' || me.equipped === 'sniper') && this.adsK > 0.9 && !pose;
     rig.root.visible = !scoped;
     if (scoped) return;
 

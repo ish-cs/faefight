@@ -1,4 +1,4 @@
-import { CHARGE, ECONOMY, FLASH, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, SMOKE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, TRAP, WEAPONS } from '../sim/constants';
+import { CHARGE, ECONOMY, FLASH, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, HEAD, SMOKE, LIFECYCLE, MEDKIT, PIECES, POTIONS, SHIELD_MAX, TRAP, WEAPONS } from '../sim/constants';
 import { elimView } from './elimBanner';
 import { ammoPerBox, ammoPrice, ammoTarget, generatorSpec, genUpgradePrice, isHomeOnly, lockItem, lockPrice, lockedGunOf } from '../sim/economy';
 import { grappleRange, type CenterIsland, type IslandLayout } from '../sim/map';
@@ -23,11 +23,11 @@ const ELIM_WHY: Record<string, string> = { sealed: ': bunker sealed', trapped: '
 
 const MARK_GLYPH: Record<FeedMarker, string> = { headshot: '◎', explosion: '✸', fall: '↓', water: '≈', storm: '≋', lightning: 'ϟ' };
 
-const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'] as const;
+const GUNS = ['pistol', 'smg', 'shotgun', 'rifle', 'sniper', 'rocket'] as const;
 /** Carried cash at which the HUD warns it would drop on death. */
 const CARRY_WARN = 150;
 const LABEL: Record<string, string> = {
-  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
+  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', sniper: 'Sniper rifle', rocket: 'Rocket launcher',
   sandbags: 'Sandbags', wood: 'Wood barricade', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold',
   ramp: 'Ramp', container: 'Container', ammo: 'Ammo box', grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit', trap: 'Spike trap',
   smoke: 'Smoke grenade', flash: 'Flashbang',
@@ -81,6 +81,10 @@ function detailsOf(item: ShopItem, price: number, genLevel: number, me: PlayerSt
     if (genLevel >= GENERATOR_MAX_LEVEL) return `Generator Lv${genLevel}: fully upgraded`;
     const now = generatorSpec(genLevel), next = generatorSpec(genLevel + 1);
     return `Generator Lv${genLevel} → Lv${genLevel + 1}: $${now.rate}/s → $${next.rate}/s, holds $${next.cap} · $${price}`;
+  }
+  if (item === 'sniper') {
+    const w = WEAPONS.sniper;
+    return `Sniper rifle · bolt-action, ${w.adsZoom}× scope · ${w.dmg} body / ${w.dmg * HEAD.mult} head (one-shot) · mag ${w.mag} · scoped glint gives you away · $${price}`;
   }
   if ((GUNS as readonly string[]).includes(item)) {
     const w = WEAPONS[item as WeaponKind];
@@ -138,6 +142,8 @@ export type HudContext = {
   spreadPx?: number;
   reload?: number | null;
   scoped?: boolean;
+  /** The scope is the sniper's (heavier duplex reticle with mil-dots, tighter lens). */
+  sniperScope?: boolean;
   /** Your predicted stamina (client prediction; null/absent = the snapshot's). */
   stamina?: number | null;
   /** Spectating: the player whose HUD to show instead of yours (null = yours). */
@@ -283,6 +289,7 @@ export class Hud {
     this.fpsDetail.dataset.testid = 'fps-detail';
     this.fpsDetail.style.display = 'none';
     this.scope.dataset.testid = 'scope';
+    this.scope.append(el('i', 'dots')); // sniper mil-dots (shown by .scope.sniper)
     this.stormWarn.dataset.testid = 'storm-warn';
     this.stormWarn.append(el('div', 'storm-warn-sub', 'Sudden death · get inside the ring'));
     this.allSealed.dataset.testid = 'all-sealed';
@@ -674,6 +681,7 @@ export class Hud {
     if (this.crosshair.style.getPropertyValue('--gap') !== `${gap}px`) this.crosshair.style.setProperty('--gap', `${gap}px`);
     this.crosshair.classList.toggle('scoped', !!ctx.scoped);
     this.scope.classList.toggle('on', !!ctx.scoped);
+    this.scope.classList.toggle('sniper', !!ctx.sniperScope);
     const rl = ctx.reload ?? null;
     this.reloadRing.style.display = rl === null ? 'none' : '';
     if (rl !== null) this.reloadRing.style.setProperty('--p', `${Math.round(rl * 360)}deg`);
