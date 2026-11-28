@@ -32,4 +32,27 @@ describe('low hp with a far-off enemy in sight', () => {
     expect(seen).toBeGreaterThan(30);
     expect(bad).toBe(0);
   }, 120_000);
+  // ffa8-mixed x60 (NET 44): ignoring every foe out of their gun range at home (fists 20 m off on my own island, one
+  // walking over a bridge) left low-hp bots shopping and bridging into deaths; pre-SD decisive fell 26 -> 15 of 60.
+  test('a Hard bot on low hp still backs off from a foe who can walk over to it (out of their gun range for now)', async () => {
+    const m = await Match.create({ players: [{ name: 'a', isBot: true, difficulty: 'hard' }, { name: 'b', isBot: false }], map: 'harbor', seed: 3 });
+    m.tick(new Map());
+    const home = m.def.islands[0];
+    m.debugTeleport(1, v3(home.bunker.center.x, home.groundY + 0.1, home.bunker.center.z));
+    // b on my island, 15 m from me, fists only (range 2).
+    const dx = home.center.x - home.bunker.center.x, dz = home.center.z - home.bunker.center.z, d = Math.hypot(dx, dz) || 1;
+    m.debugTeleport(2, v3(home.bunker.center.x + (dx / d) * 15, home.groundY + 0.1, home.bunker.center.z + (dz / d) * 15));
+    const pb = (m as unknown as { mustPlayer(id: number): { equipped: string; inv: { weapons: object }; hotbar: unknown[] } }).mustPlayer(2);
+    pb.inv.weapons = {}; pb.hotbar = pb.hotbar.map(() => null); pb.equipped = 'fists';
+    m.debugGive(1, { cash: 0 });
+    m.debugSetHp(1, 20);
+    let off = 0;
+    for (let i = 0; i < 30 * 5; i++) {
+      const s = m.tick(new Map());
+      if (s.players.find((x) => x.id === 2)!.equipped !== 'fists') throw new Error('b lost its fists-only setup');
+      if ((m.botBrain(1) as unknown as { currentGoal: string }).currentGoal === 'disengage') off++;
+    }
+    m.dispose();
+    expect(off).toBeGreaterThan(30);
+  }, 120_000);
 });
