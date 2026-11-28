@@ -308,7 +308,8 @@ export type GazeSkill = { firstLookSec: number; glanceRate: number; glanceSec: n
 /**
  * - engageHoldSec: keep my eyes on the enemy I engaged this long after I'd stop shooting (no flicking away mid-fight).
  * - threatSec: an enemy who hit me within this long is a threat: eyes on them (or where they were).
- * - aimedAtDeg / aimedAtM: an armed enemy within aimedAtM whose view points within aimedAtDeg of me is a threat.
+ * - aimedAtDeg / aimedAtM: an armed enemy within aimedAtM whose view points within aimedAtDeg of me is a threat (someone
+ *   lining me up gets looked back at, so a fight is a trade, not a free first kill on a bot looking down its path).
  * - resightSec / firstLookM: an enemy unseen this long gets a fresh first look when they show up again within firstLookM.
  */
 export type GazeParams = { skill: Record<Difficulty, GazeSkill>; engageHoldSec: number; threatSec: number; aimedAtDeg: number; aimedAtM: number; resightSec: number; firstLookM: number };
@@ -547,7 +548,7 @@ export const GAZE: GazeParams = {
     hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6, engageLeadM: 0 },
     pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7, engageLeadM: 0 },
   },
-  engageHoldSec: 1.2, threatSec: 2.5, aimedAtDeg: 6, aimedAtM: 35, resightSec: 10, firstLookM: 50,
+  engageHoldSec: 1.2, threatSec: 4, aimedAtDeg: 12, aimedAtM: 60, resightSec: 10, firstLookM: 50,
 };
 
 /** Easy sprays at any range (sprayRange Infinity: not tunable); better players compensate harder and burst at range. */
