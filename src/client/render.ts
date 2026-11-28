@@ -23,6 +23,7 @@ import { IslandBeacons } from './world/beacons';
 import { settings } from './settings/store';
 import { TrapLayer } from './world/traps';
 import { SmokeFx, smokeDepth } from './world/smokeFx';
+import { lightU } from './world/lightUniforms';
 import { smokeBlocks } from '../sim/utility';
 import { BarrierLayer } from './world/barriers';
 import type { WorldSurface } from './world/surfaces';
@@ -108,6 +109,8 @@ export class Renderer {
   readonly traps = new TrapLayer();
   /** Smoke grenade clouds (one instanced sprite). */
   readonly smoke = new SmokeFx();
+  /** Current ambient tone (day/night) for DOM overlays (screenFx.ts); here so main.ts needn't import three on the menu. */
+  get lightTone(): THREE.Color { return lightU.impostor.value; }
   /** How deep the camera is in smoke this frame, 0..1 (screenFx.ts fog). */
   smokeFog = 0;
   /** This frame's clouds and their time (tags behind smoke: characters.tagsHiddenBy). */
