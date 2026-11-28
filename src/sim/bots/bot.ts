@@ -616,11 +616,12 @@ export class Bot {
         view.others.some((o) => !o.eliminated && o.id !== foe.id) &&
         (myNode < 0 || this.nav.nodeAt(foe.pos) !== myNode);
     }
-    // "About to shoot": eyes go on them engageLeadM before they come into my shooting distance, so the turn is done
-    // by the time they're worth a shot.
+    // "About to shoot": eyes go on them engageLeadM before they come into my gun's range, so the turn is done by the
+    // time they're worth a shot. Not ahead of the no-scratch / no-drive-by limits: someone across the water I won't
+    // shoot isn't stared at (they get my eyes when they hit me or line me up: threat).
     const soon = foeDist - this.P.gaze.skill[this.difficulty].engageLeadM;
-    const soonOk = !(scratch && soon > WEAPONS[me.equipped].falloff.end * this.P.drive.fireRangeMult) &&
-      !(across && soon > this.P.drive.crossFire[this.difficulty]) && soon <= WEAPONS[best].range * 0.95;
+    const soonOk = !(scratch && foeDist > WEAPONS[me.equipped].falloff.end * this.P.drive.fireRangeMult) &&
+      !(across && foeDist > this.P.drive.crossFire[this.difficulty]) && soon <= WEAPONS[best].range * 0.95;
     // The brain chose to fight them (goal 'fight' on this enemy): eyes on them at once, wherever they are.
     const fighting = this.goal === 'fight' && !!foe && foe.id === enemy?.id;
     const engaged = this.gaze.engaged(now, !!foe && (this.gaze.threat(now, me, foe, this.mem.lastHurtBy, this.mem.lastHurtAt) ||
