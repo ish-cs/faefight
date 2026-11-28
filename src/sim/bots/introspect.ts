@@ -120,7 +120,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; richRifle(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; lowHpFarOff(c: Ctx): boolean; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; richRifle(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null;
   stormPrep(view: BotView): boolean; sealingSoon(view: BotView): boolean; leaveBeforeBarriers(c: Ctx): boolean; rivalShutIn(c: Ctx): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
@@ -202,7 +202,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     case 'disengage': {
       if (!c.enemy && now - I.mem.lastHurtAt > 1.5) return zero('not under fire');
       const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + I.sealedCaution(c);
-      const reach = c.on !== c.home.index || now - I.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
+      const reach = !I.lowHpFarOff(c);
       if (hp < low && reach) {
         return { f: [['low hp', 1.15], ['below bail line', low - hp]], why: `Down to ${Math.round(me.hp)} hp, under my bail-out line of ${Math.round(low * 100)}: backing off` };
       }
