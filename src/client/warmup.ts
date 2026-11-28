@@ -15,6 +15,10 @@ const NEVER_DRAWN = /^(pieceHull|proxy):/;
 const WARM_FRAMES = 3;
 const GPU_IDLE_WAIT_MS = 3000;
 
+/** The scene-pass compile in flight per renderer (main.ts frees a torn-down game's GPU only once it has settled). */
+const compiling = new WeakMap<THREE.WebGPURenderer, Promise<unknown>>();
+export const compileSettled = (gpu: THREE.WebGPURenderer): Promise<unknown> => compiling.get(gpu) ?? Promise.resolve();
+
 /**
  * Shader/pipeline warm-up behind the loading screen, once the map, avatars and first snapshot are in.
  *
@@ -127,10 +131,12 @@ export async function compileScenePass(r: Renderer, loop: Pick<WarmLoop, 'setPau
     gpu.setRenderTarget(pass.renderTarget);
     gpu.setMRT(pass.getMRT());
     if ((pass as unknown as PassCtx).contextNode) (gpu as unknown as Ctx).contextNode = (pass as unknown as PassCtx)._getContextNode(gpu);
-    await gpu.compileAsync(r.scene, r.camera, null, (e) => {
+    const p = gpu.compileAsync(r.scene, r.camera, null, (e) => {
       compiled = e.total;
       if (e.total > 0) onProgress?.(e.loaded, e.total);
     });
+    compiling.set(gpu, p.catch(() => {}));
+    await p;
   } finally {
     gpu.setRenderTarget(keep.rt);
     gpu.setMRT(keep.mrt);

@@ -316,8 +316,11 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
   yield;
   // static dressing (~50 materials, map-wide merged meshes) + island meshes as one WebGPU render bundle: recorded once per pass,
   // replayed after that (no per-object projection, sort, pipeline lookup or draw encoding). Distance-culled chunks
-  // toggle .visible, which a bundle can't follow, so they stay outside it. ?nobundle = A/B.
-  const bundle = typeof location !== 'undefined' && location.search.includes('nobundle') ? null : new THREE.BundleGroup();
+  // toggle .visible, which a bundle can't follow, so they stay outside it.
+  // HOTFIX: OFF unless ?bundle=1. A bundle keeps the bind groups it recorded, including the shadow map: a live shadow
+  // resize (frame governor / power saver) destroyed that texture and every later frame submitted it (WebGPU
+  // validation error, the whole scene pass dropped: a black world with the HUD and hands still drawn).
+  const bundle = typeof location !== 'undefined' && /[?&]bundle=1\b/.test(location.search) ? new THREE.BundleGroup() : null;
   dress.build(root, 'dressing', { chunked: true });
   if (bundle) {
     bundle.name = 'staticBundle';

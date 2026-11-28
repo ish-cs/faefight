@@ -2446,7 +2446,10 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       document.body.classList.remove('brain-x-open');
       setCine(false);
       scope.dispose(); // listeners + every element this game added (canvas, HUD, chat, overlays)
-      renderer.gpu.dispose();
+      // Dispose only once a shader compile still running (the match was left during its warm-up, e.g. a host tab in
+      // the background) has settled: disposing under it made it build pipelines against freed targets (hundreds of
+      // "Async render pipeline creation failed … depthStencil format undefined" errors on Rematch / Play again).
+      void mods.warmup.compileSettled(renderer.gpu).then(() => renderer.gpu.dispose());
       console.info('[game] torn down');
     },
   };
