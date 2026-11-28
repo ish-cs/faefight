@@ -1920,8 +1920,7 @@ export class Bot {
         if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
         // An empty gun is as good as none: restocking it is as urgent as buying one.
         // Can't walk home with no decks (mixed seed 22: off a half bridge, 322 s 'saving up'): decks get me home.
-        const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv)) ||
-          (!c.homeReach && !me.inv.pieces.scaffold && items.includes('scaffold'));
+        const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv));
         // Out-ranged by a rifle lately and the rifle is next: go get one (strength.outranged).
         const rifle = items[0] === 'rifle' && this.outrangedLately(view.now) ? RIFLE_TRIP : 0;
         // (Rich for the rifle: worth the trip from anywhere.)
