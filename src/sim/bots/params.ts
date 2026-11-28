@@ -390,7 +390,24 @@ export type StrengthParams = {
   leaderFocus: Record<Difficulty, number>;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams; strength: StrengthParams; util: UtilParams };
+/**
+ * Sniper rifle (2026-11-27). A bolt gun for long sight lines, bought only when rich; the close fight is the SMG's/pistol's.
+ * - taste: buy it only when the personality's range trait is at least this (Sniper archetype ~0.95; > 1 = never).
+ * - buyAt: cash I could spend (carried + banked) before it's bought (after the seal kit and heals, never saved up for).
+ * - longM: and only when the rival's island centre is at least this far (a long sight line to hold).
+ * - useM: draw it for a target at least this far; holding it, keep it down to useM - hystM (no flip-flop).
+ * - steadySec: scoped and on target this long before the shot (wait for a steady shot); the aim cone is scaled by
+ *   scopeAim while scoped (a scope steadies the hand); while steadying the bot stands still when nothing is chasing it.
+ * - crossShots: >= 0.5 lets it take the across-the-water shots other guns hold back (drive.crossFire).
+ * - glint: score of breaking line of sight when a rival's scope glints at me from past strength.outrangedM (before the
+ *   shot lands), via the same strength.outranged break-LOS goal; 0 = ignores glints.
+ */
+export type SniperParams = {
+  taste: Record<Difficulty, number>; buyAt: Record<Difficulty, number>; longM: number; useM: number; hystM: number;
+  steadySec: Record<Difficulty, number>; scopeAim: Record<Difficulty, number>; crossShots: Record<Difficulty, number>; glint: Record<Difficulty, number>;
+};
+
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams; strength: StrengthParams; util: UtilParams; sniper: SniperParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -556,7 +573,12 @@ export const STRENGTH: StrengthParams = {
   leaderFocus: D(0, 0, 0, 0),
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH, util: UTIL });
+export const SNIPER: SniperParams = {
+  taste: D(1.05, 0.9, 0.7, 0.6), buyAt: D(1200, 1100, 950, 900), longM: 70, useM: 40, hystM: 8,
+  steadySec: D(0.9, 0.7, 0.5, 0.35), scopeAim: D(0.8, 0.6, 0.3, 0.2), crossShots: D(0, 0, 1, 1), glint: D(0, 0, 0.8, 0.9),
+};
+
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH, util: UTIL, sniper: SNIPER });
 
 /**
  * The hand params with every strength.* knob off: bot behaviour exactly as before 2026-11-28 (same code path). The
@@ -569,6 +591,8 @@ export const PRE_STRENGTH_PARAMS: Readonly<BotParams> = Object.freeze({
     ...STRENGTH, rifleAt: D(Infinity, Infinity, Infinity, Infinity), longGun: D(0, 0, 0, 0), outranged: D(0, 0, 0, 0),
     bankAway: D(0, 0, 0, 0), endgameSeal: D(0, 0, 0, 0), leaderFocus: D(0, 0, 0, 0),
   },
+  // (No sniper then: never bought, glints ignored.)
+  sniper: { ...SNIPER, taste: D(Infinity, Infinity, Infinity, Infinity), glint: D(0, 0, 0, 0) },
 });
 
 /** Every numeric leaf as `path.to.key` → value (booleans and Infinity are left out: not tunable). */
@@ -654,6 +678,8 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['strength.outrangedMemSec', [10, 240]], ['strength.bankAway.*', [0, 1.5]], ['strength.richCarry', [200, 1500]], ['strength.endgameSeal.*', [0, 1.5]],
   ['strength.endgameLeft', [2, 4]], ['strength.leaderFocus.*', [0, 1.5]],
   ...UTIL_RANGES,
+  ['sniper.taste.*', [0.3, 1.1]], ['sniper.buyAt.*', [700, 2500]], ['sniper.longM', [30, 150]], ['sniper.useM', [25, 80]], ['sniper.hystM', [0, 20]],
+  ['sniper.steadySec.*', [0, 2]], ['sniper.scopeAim.*', [0.1, 1]], ['sniper.crossShots.*', [0, 1]], ['sniper.glint.*', [0, 1.5]],
   ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {

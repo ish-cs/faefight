@@ -259,6 +259,7 @@ export function deathKick(weapon: string | undefined, explosive: boolean): { pus
   switch (weapon) {
     case 'shotgun': return { push: 3.6, lift: 0.4 };
     case 'rifle': return { push: 3, lift: 0.2 };
+    case 'sniper': return { push: 4.2, lift: 0.3 };
     case 'fists': return { push: 2.6, lift: 0.3 };
     case 'smg': return { push: 1.8, lift: 0.1 };
     case 'pistol': return { push: 2, lift: 0.1 };

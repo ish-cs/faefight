@@ -11,7 +11,7 @@ export const HOTBAR_SIZE = 9;
 export type Hotbar = (HotbarItem | null)[];
 export type HotbarGun = Exclude<WeaponKind, 'fists'>;
 
-const GUNS: readonly HotbarGun[] = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket'];
+const GUNS: readonly HotbarGun[] = ['pistol', 'smg', 'shotgun', 'rifle', 'rocket', 'sniper'];
 const PIECE_KINDS = Object.keys(PIECES) as PieceKind[];
 export const POTION_KINDS: readonly PotionKind[] = ['shieldSmall', 'shieldBig', 'healPotion', 'speedPotion'];
 /** Order used when filling slots for kinds that arrived without a slot (e.g. debug grants). */

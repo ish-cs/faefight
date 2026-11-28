@@ -23,6 +23,7 @@ import { IslandBeacons } from './world/beacons';
 import { settings } from './settings/store';
 import { TrapLayer } from './world/traps';
 import { SmokeFx, smokeDepth } from './world/smokeFx';
+import { ScopeGlints } from './world/scopeGlint';
 import { lightU } from './world/lightUniforms';
 import { smokeBlocks } from '../sim/utility';
 import { BarrierLayer } from './world/barriers';
@@ -99,6 +100,11 @@ export class Renderer {
   /** The local player's predicted render state (predict.ts), when prediction is running. */
   private local: { pos: Vec3; vel: Vec3 } | null = null;
   private motion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  /** Sniper scope glints toward the camera (fairness: you can see who is scoped on you). */
+  readonly glints = new ScopeGlints();
+  private glintMotion: (id: number, out: Motion) => Motion | null = () => null;
+  private glintHidden: readonly number[] | undefined;
+  private glintFeet = (id: number): Vec3 | null => (this.glintHidden?.includes(id) ? null : this.glintMotion(id, this.motion)?.pos ?? null);
   private lastFrame = performance.now();
   /** Animated player avatars (src/client/characters). */
   readonly characters = new CharacterSystem(this.scene, (island) => islandColor(island));
@@ -201,6 +207,7 @@ export class Renderer {
     r.gunFx = new GunFx(r.world.pieceFx.particles, (id, which, out) =>
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
+    r.scene.add(r.glints.root);
     r.scene.add(r.traps.root);
     r.scene.add(r.smoke.sprite);
     r.dayNight = new DayNight(r.world.sky);
@@ -682,6 +689,10 @@ export class Renderer {
     }
 
     this.gunFx.update((now - this.snapArrived) / 1000);
+    if (snap) {
+      this.glintMotion = motion; this.glintHidden = snap.hidden;
+      this.glints.frame(snap.players, this.glintFeet, this.camera.position, this.characters.hiddenId >= 0 ? this.characters.hiddenId : this.replay ? -1 : this.humanId);
+    }
     if (snap) this.drawRopes(snap, motion);
     let nf = 0;
     if (snap) for (const p of snap.players) {

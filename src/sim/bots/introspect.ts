@@ -118,7 +118,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedScore(c: Ctx): number; glintNote: { t: number; id: number } | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null;
   stormPrep(view: BotView): boolean; sealingSoon(view: BotView): boolean; leaveBeforeBarriers(c: Ctx): boolean; rivalShutIn(c: Ctx): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
@@ -151,7 +151,7 @@ const secs = (x: number) => `${Math.max(0, Math.round(x))} s`;
 const m = (x: number) => `${Math.round(x)} m`;
 const rivalName = (c: Ctx) => (c.rival ? `@${c.rival.id}` : 'my rival');
 const gunName = (w: WeaponKind) => (w === 'fists' ? 'bare fists' : w);
-const best = (inv: Inventory): WeaponKind => (['rifle', 'smg', 'shotgun', 'pistol', 'rocket'] as WeaponKind[]).find((g) => inv.weapons[g]) ?? 'fists';
+const best = (inv: Inventory): WeaponKind => (['sniper', 'rifle', 'smg', 'shotgun', 'pistol', 'rocket'] as WeaponKind[]).find((g) => inv.weapons[g]) ?? 'fists';
 const pieceWord = (n: number, kind = 'wall') => `${n} ${kind}${n === 1 ? '' : 's'}`;
 
 type Explained = { f: [string, number][]; why: string; gate?: string };
@@ -205,9 +205,13 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const e = c.enemy;
       const outgunned = !gun && !!e && e.equipped !== 'fists' && c.enemyDist > 4 &&
         (c.enemyDist < Math.min(25, WEAPONS[e.equipped].range) || now - I.mem.lastHurtAt < 1.5);
-      const or = I.outrangedBy(c), orS = or ? I.P.strength.outranged[I.difficulty] : 0;
+      const or = I.outrangedBy(c), orS = or ? I.outrangedScore(c) : 0;
       if (or && (!outgunned || orS > 0.95 + 0.2 * t.caution)) {
-        return { f: [['out-ranged by a rifle', orS]], why: `@${or.id}'s rifle out-ranges my guns from ${m(dist2D(or.pos, me.pos))} across the water: breaking line of sight` };
+        const glint = I.glintNote?.id === or.id && now - I.glintNote.t < I.P.strength.outrangedSec;
+        const gun = or.equipped === 'sniper' ? 'sniper' : 'rifle';
+        return glint
+          ? { f: [['scope glint', orS]], why: `@${or.id}'s scope glinted at me from ${m(dist2D(or.pos, me.pos))}: breaking line of sight before the shot` }
+          : { f: [[`out-ranged by a ${gun}`, orS]], why: `@${or.id}'s ${gun} out-ranges my guns from ${m(dist2D(or.pos, me.pos))} across the water: breaking line of sight` };
       }
       if (!outgunned) return zero('not outmatched');
       return { f: [['outgunned', 0.95], ['caution', 0.2 * t.caution]], why: `Unarmed against @${e!.id}'s ${e!.equipped} at ${m(c.enemyDist)}: getting out of range` };

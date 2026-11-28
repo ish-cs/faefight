@@ -26,6 +26,7 @@ const SHELL_RED = 0xa32a1e;
 const MUZZLE: Record<WeaponKind, { smoke: number; light: number; sparks: number }> = {
   fists: { smoke: 0, light: 0, sparks: 0 }, pistol: { smoke: 2, light: 1, sparks: 3 }, smg: { smoke: 1, light: 0.8, sparks: 2 },
   shotgun: { smoke: 5, light: 1.6, sparks: 8 }, rifle: { smoke: 2, light: 1.2, sparks: 4 }, rocket: { smoke: 14, light: 2.2, sparks: 14 },
+  sniper: { smoke: 6, light: 1.8, sparks: 6 },
 };
 
 type Tracer = { mesh: THREE.Mesh; mat: THREE.MeshBasicNodeMaterial; from: THREE.Vector3; dir: THREE.Vector3; len: number; born: number; live: boolean };
@@ -174,10 +175,12 @@ export class GunFx {
       const s = rr(1.6, 2.6);
       const shotgun = weapon === 'shotgun';
       this.casings.spawn(eject.x, eject.y, eject.z, (rx / rl) * s + rr(-0.3, 0.3) - dir.x * 0.4, rr(1.6, 2.6), (rz / rl) * s + rr(-0.3, 0.3) - dir.z * 0.4,
-        shotgun ? 0.06 : weapon === 'rifle' ? 0.045 : 0.028, shotgun ? 0.011 : 0.0055, shotgun ? SHELL_RED : BRASS, from.y - 1.6);
+        shotgun ? 0.06 : weapon === 'sniper' ? 0.06 : weapon === 'rifle' ? 0.045 : 0.028, shotgun ? 0.011 : weapon === 'sniper' ? 0.0065 : 0.0055, shotgun ? SHELL_RED : BRASS, from.y - 1.6);
     }
     if (weapon === 'rocket') return;
-    this.tracer(muzzle, to, by === myId);
+    // The sniper's tracer is brighter and fatter: you see where that shot came from.
+    const sn = weapon === 'sniper';
+    this.tracer(muzzle, to, by === myId, sn ? 1.8 : 1, sn ? 0.045 : 0.022);
     for (const p of (d.tos as Vec3[] | undefined) ?? []) this.tracer(muzzle, p, by === myId, 0.5);
   }
 
@@ -201,7 +204,7 @@ export class GunFx {
     this.beamMat.opacity = Math.min(1, k);
   }
 
-  private tracer(from: THREE.Vector3, to: Vec3, mine: boolean, k = 1) {
+  private tracer(from: THREE.Vector3, to: Vec3, mine: boolean, k = 1, w = 0.022) {
     const t = this.tracers.find((x) => !x.live) ?? this.tracers.reduce((a, b) => (a.born < b.born ? a : b));
     t.from.copy(from);
     t.dir.set(to.x - from.x, to.y - from.y, to.z - from.z);
@@ -212,7 +215,7 @@ export class GunFx {
     t.live = true;
     t.mesh.visible = true;
     t.mat.color.setHex(mine ? 0xfff2a8 : 0xffb070).multiplyScalar(UNLIT_BOOST * k);
-    t.mesh.scale.set(0.022, 0.022, 1);
+    t.mesh.scale.set(w, w, 1);
   }
 
   private onHit(d: Record<string, unknown>) {

@@ -449,7 +449,7 @@ export class VaultPanel {
 
 /** Short item names, the same on the hotbar, the vault and its tips. */
 export const ITEM_NAMES: Record<HotbarItem, string> = {
-  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket',
+  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket', sniper: 'Sniper',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Metal', steel: 'Steel', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
   grenade: 'Grenade', charge: 'Charge', medkit: 'Medkit', trap: 'Trap', smoke: 'Smoke', flash: 'Flash',
   shieldSmall: 'Shield S', shieldBig: 'Shield L', healPotion: 'Heal', speedPotion: 'Speed', grapple: 'Hook',

@@ -1,3 +1,4 @@
+import { WEAPONS } from '../../sim/constants';
 import type { MatchEvent, Snapshot, Vec3 } from '../../sim/types';
 import type { Motion } from '../characters/avatar';
 import { islandColor } from '../colors';
@@ -49,7 +50,12 @@ export type KillcamFrame = {
   /** Playback crossed the killing shot this frame (play the impact). */
   impact: boolean;
   headshot: boolean;
+  /** Sniper kill: the slow beat is seen through the killer's scope (camera at their eye, scope zoom, overlay); hide the killer. */
+  scope: boolean;
 };
+
+/** Sniper kills: from this much slow-motion on, the camera cuts to the killer's scope (and back out after). */
+const SCOPE_SLOW = 0.55;
 
 /** Input in the first this-many seconds doesn't skip (the click / key you were pressing as you died). */
 export const SKIP_GRACE = 0.3;
@@ -65,7 +71,7 @@ const CAM_MAX_SPEED = 16, SIDE_HOLD = 0.35;
 const ZOOM_IN = 0.14;
 
 const WEAPON_NAME: Record<string, string> = {
-  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket', grenade: 'Grenade', charge: 'Breach charge',
+  fists: 'Fists', pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', sniper: 'Sniper', rocket: 'Rocket', grenade: 'Grenade', charge: 'Breach charge',
   barrel: 'Fuel barrel', propane: 'Propane tank',
 };
 const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
@@ -101,6 +107,8 @@ export function fadeAt(real: number, total: number): number {
 type Play = {
   plan: KillcamPlan; killer: number; victim: number; shot: KillShot;
   t: number; real: number; startMs: number; lastNow: number; lastT: number; first: boolean;
+  /** The kill was a sniper shot (KillcamInfo.weapon): show the scoped beat. */
+  sniper: boolean;
 };
 
 export class Killcam {
@@ -111,6 +119,9 @@ export class Killcam {
   private fadeEl = el('div', 'qol-killcam-fade');
   private card = el('div', 'kc-card');
   private fill = el('div', 'kc-fill');
+  private scopeEl = el('div', 'kc-scope');
+  private scopeEye: Vec3 = { x: 0, y: 0, z: 0 };
+  private scopeLook: Vec3 = { x: 0, y: 0, z: 0 };
   private sample: PlayerSample = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 };
   private vSample: PlayerSample = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 };
   private bracket: { a: Snapshot; b: Snapshot; u: number; i: number } | null = null;
@@ -148,9 +159,10 @@ export class Killcam {
     this.fadeEl.style.opacity = '0';
     this.out = {
       snap: null as unknown as Snapshot, motion: this.motion, events: [], cam: { x: 0, y: 0, z: 0 }, look: this.lookPos, zoom: 1, slow: 0, rate: 1,
-      beam: null, impact: false, headshot: false,
+      beam: null, impact: false, headshot: false, scope: false,
     };
-    hudRoot.append(this.frameEl, this.root, this.fadeEl);
+    this.scopeEl.style.display = 'none';
+    hudRoot.append(this.frameEl, this.scopeEl, this.root, this.fadeEl);
   }
 
   /** Every snapshot as it arrives (newest state, before any HUD delay). */
@@ -173,7 +185,7 @@ export class Killcam {
       console.info(`[killcam] skipped: ${this.last.reason}`);
       return false;
     }
-    this.play = { plan, killer, victim, shot, t: plan.from, real: 0, startMs: nowMs, lastNow: nowMs, lastT: plan.from, first: true };
+    this.play = { plan, killer, victim, shot, t: plan.from, real: 0, startMs: nowMs, lastNow: nowMs, lastT: plan.from, first: true, sniper: info.weapon === 'sniper' };
     this.last = { started: true, reason: 'playing', plan };
     this.stats = { frames: 0, blocked: 0, maxStep: 0, slowFrames: 0, clampMax: 0, sideSwitches: 0, slowReal: 0, cuts: 0 };
     this.held = 0;
@@ -251,6 +263,8 @@ export class Killcam {
     this.last = { ...this.last, reason };
     this.root.style.display = 'none';
     this.frameEl.style.display = 'none';
+    this.scopeEl.style.display = 'none';
+    this.out.scope = false;
     // Fade to the live view (from black when it ran to the end).
     this.fadeEl.classList.add('out');
     this.shownFade = -1;
@@ -330,6 +344,8 @@ export class Killcam {
     // so no frame is drawn from inside a prop and it never jumps. (It used to be pulled in front of anything between
     // it and the killer after the smoothing, without feeding that back: a pole crossing the view for a frame popped
     // the camera in front of it and back out.) The solver's target already keeps clear of what blocks the view.
+    // (Coming out of the scope beat: the camera resumes from its own path, no sweep from the killer's eye.)
+    if (o.scope) { o.cam.x = this.camPos.x; o.cam.y = this.camPos.y; o.cam.z = this.camPos.z; o.look = this.lookPos; }
     const prevX = o.cam.x, prevY = o.cam.y, prevZ = o.cam.z;
     if (!p.first) {
       const wx = this.camPos.x, wy = this.camPos.y, wz = this.camPos.z;
@@ -360,6 +376,17 @@ export class Killcam {
     o.slow = slow;
     o.rate = rate;
     const sh = p.shot;
+    // Sniper kill: the slow beat through the killer's scope (a clean cut in and out; the shot line is the eye → impact).
+    o.scope = p.sniper && slow >= SCOPE_SLOW && !!sh.from && !!sh.to;
+    if (o.scope) {
+      const e = this.scopeEye, l = this.scopeLook;
+      e.x = sh.from!.x; e.y = sh.from!.y; e.z = sh.from!.z;
+      l.x = sh.to!.x; l.y = sh.to!.y; l.z = sh.to!.z;
+      o.cam.x = e.x; o.cam.y = e.y; o.cam.z = e.z;
+      o.look = l;
+      o.zoom = 1 / WEAPONS.sniper.adsZoom;
+    }
+    if ((this.scopeEl.style.display === 'none') === o.scope) this.scopeEl.style.display = o.scope ? '' : 'none';
     if (sh.from && sh.to && p.t >= sh.t - 0.02 && p.t <= p.plan.killT + SLOW_OUT + 0.3) {
       const bm = this.beam;
       bm.from.x = sh.from.x; bm.from.y = sh.from.y; bm.from.z = sh.from.z;
