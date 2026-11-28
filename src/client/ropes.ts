@@ -6,6 +6,8 @@ import type { HookState } from '../sim/types';
 const SEGS = 16, MAX_ROPES = 8, PRONGS = 3;
 const CABLE_W = 0.022, PRONG_W = 0.035, PRONG_LEN = 0.2;
 /** Twang when the rope bites or snaps taut: transverse amplitude (m per m of rope, capped), frequency (Hz), decay (1/s). */
+/** Hand height over the feet the sim's rope length is measured from (m). */
+const HAND_UP = PLAYER.height * 0.7;
 const TWANG_AMP = 0.05, TWANG_MAX = 0.5, TWANG_HZ = 7, TWANG_DECAY = 5;
 
 /** Per-player rope look state (reused: one object per player id for the match). */
@@ -76,7 +78,9 @@ export class Ropes {
     if (!look) { look = { st: -1, taut: false, twangAt: -1e9, twangAmp: 0 }; this.looks.set(id, look); }
     const latched = h.st === 1 || h.st === 2;
     // Rest length: the sim's (feet to anchor) for st 1; a yank is always hauling (taut).
-    const rest = h.st === 1 && h.len !== undefined ? h.len : latched ? out * 0.97 : out * 1.04;
+    // (The sim's length runs from the feet; the rope is drawn from the hand, about HAND_UP higher.)
+    const feetOut = h.st === 1 ? Math.hypot(end.x - from.x, end.y - (from.y - HAND_UP), end.z - from.z) : out;
+    const rest = h.st === 1 && h.len !== undefined ? h.len - (feetOut - out) : latched ? out * 0.97 : out * 1.04;
     const taut = latched && out >= rest;
     if (latched && (look.st !== h.st || (taut && !look.taut))) {
       // Bit, or snapped taut from slack: twang.

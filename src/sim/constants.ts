@@ -145,7 +145,7 @@ export const GRAPPLE = {
   price: 90, uses: 3, range: 26, gapMargin: 8, tipSpeed: 160,
   pullSec: 4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.25,
   /** The elastic rope (movement.ts stepPull): see the comment above. */
-  reelSpeed: 26, ropeK: 80, ropeDamp: 6, tensionMax: 140, ropeMaxSpeed: 30, ropeMinLen: 0.5, swingSteer: 6, flingMax: 18,
+  reelSpeed: 26, ropeK: 80, ropeDamp: 6, tensionMax: 140, ropeMaxSpeed: 30, ropeMinLen: 0.5, swingSteer: 6, flingMax: 15,
   yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
   cooldownSec: 0.5, missCooldownSec: 0.2, minDist: 2.5, yankCreditSec: 5,
 };
