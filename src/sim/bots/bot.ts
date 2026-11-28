@@ -3650,7 +3650,9 @@ export class Bot {
     if (c.homeReach) {
       // On a rival's island with them sealed in (camping their door): their counter, when nearer than mine, is safe to
       // use (botStrength seed 3: a PRO with $600 camped 15 m from it, its own shop 120 m off, and had no rifle).
-      const isl = c.on >= 0 && c.on !== c.home.index && c.view.sealed[c.on] ? c.view.map[c.on] : null;
+      // (Not in the storm: the dash for the ring decides where decks come from; replay 02ce1c Ash.)
+      const isl = !c.view.storm && c.on >= 0 && c.on !== c.home.index && c.view.sealed[c.on] &&
+        c.view.others.some((o) => o.island === c.on && !o.eliminated) ? c.view.map[c.on] : null;
       return isl && dist2D(isl.shop, c.me.pos) < dist2D(c.home.shop, c.me.pos) ? isl.shop : c.home.shop;
     }
     const starts = this.nav.standNodes(c.me.pos);
