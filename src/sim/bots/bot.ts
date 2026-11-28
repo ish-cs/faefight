@@ -1805,11 +1805,11 @@ export class Bot {
         // in sudden death likewise.
         if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
         const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + this.sealedCaution(c);
-        // At home, low hp backs me off only from someone who can reach me (or just did), not from a pistol 80 m across
-        // the water (ffa8-hard seed 11: a Hard bot swung between this and its generator for 63 s, never collecting it).
-        // Away from home it still sends me back (botStrength seed 3: a PRO on 9 hp kept bridging and spent its rifle
-        // money on decks instead of going home to collect).
-        const reach = c.on !== c.home.index || view.now - this.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
+        // Low hp backs me off, except at home from a foe out of gun range with no walk over to me (ffa8-hard seed 11:
+        // a Hard bot swung between this and its generator for 63 s over a pistol 80 m across the water). Any foe who
+        // can walk over still counts: ignoring those at home cost the low-hp bot its life (ffa8-mixed x60: pre-SD
+        // decisive 15/60 vs 24/60 with the old line).
+        const reach = !this.lowHpFarOff(c);
         if (hp < low && reach) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
@@ -2096,6 +2096,14 @@ export class Bot {
     const S = this.P.strength, v = S.endgameSeal[this.difficulty];
     if (v <= 0 || c.view.suddenDeath) return 0;
     return 1 + c.view.others.filter((o) => !o.eliminated).length <= S.endgameLeft ? v : 0;
+  }
+
+  /** At home, an enemy out of their gun range on another island with no finished bridge to mine, not hurting me: low hp needn't back off from them. */
+  lowHpFarOff(c: Ctx): boolean {
+    const e = c.enemy;
+    if (c.on !== c.home.index || !e || c.view.now - this.mem.lastHurtAt < 1.5 || c.enemyDist < WEAPONS[e.equipped].range) return false;
+    const node = this.nav.nodeAt(e.pos);
+    return node >= 0 && node !== c.on && this.nav.hop(node, c.on) === null;
   }
 
   /**
