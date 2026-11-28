@@ -1134,7 +1134,6 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     renderer.blur.play = st.video.motionBlur;
     renderer.blur.spectate = st.video.motionBlurSpectate;
     renderer.blur.saver = power.saver; // the power saver forces motion blur off
-    renderer.world.powerSaver = power.saver;
   };
   applyBlur(settings.get());
   const applySettings = (st: ReturnType<typeof settings.get>) => {
@@ -1156,7 +1155,6 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   /** saver on/off: live knobs only (no recompile), so it may switch mid-match */
   const applyPower = () => {
     renderer.blur.saver = power.saver;
-    renderer.world.powerSaver = power.saver; // static render bundle on every preset while saving (world/index.ts)
     governor.enabled = settings.get().video.dynamicResolution || power.saver;
     applyGovernor();
     console.info(`[power] ${power.saver ? 'saver' : 'full'} (${power.reason})`);

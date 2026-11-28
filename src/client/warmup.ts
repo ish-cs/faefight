@@ -87,8 +87,6 @@ export async function warmUp(r: Renderer, loop: WarmLoop, fpv: Viewmodel, onStep
     // hidden again, but the LOD cache says it's shown: re-apply (else the own avatar starts invisible).
     r.characters.relod();
     r.npcs.relod();
-    // render bundles recorded during the forced-visible warm frames: record them again with the real visibility
-    r.scene.traverse((o) => { if ((o as THREE.BundleGroup).isBundleGroup) (o as THREE.BundleGroup).needsUpdate = true; });
   }
   await loop.frames(1);
   onStep(0.9, 'Warming up the GPU');

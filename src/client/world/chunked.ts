@@ -1,5 +1,4 @@
 import * as THREE from 'three/webgpu';
-import { installBatchCull } from './batchCull';
 import { type ImpostorAtlas, impostorQuad, impostors } from './impostor';
 import { lods, type LodTarget, lodScale, simplifyGeometry, SMALL_CASTER_LAYER, TINY_CASTER_LAYER } from './lod';
 import { batchIndirectIndex, cameraPosition, float, int, ivec2, positionLocal, smoothstep, texture, textureLoad } from 'three/tsl';
@@ -133,7 +132,6 @@ export class ChunkedInstances implements LodTarget {
     this.batches = this.levelParts.map((parts, li) => (parts ?? []).map((p) => {
       const g = p.geometry;
       const m = new THREE.BatchedMesh(n, g.getAttribute('position').count, g.index ? g.index.count : 0, p.material);
-      installBatchCull(m);
       m.addGeometry(g);
       if (this.fade && li === 0) m.material = batchedShrink(p.material, this.fade, m, 0.85); // per-instance shrink-out
       m.castShadow = !!p.cast;

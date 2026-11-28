@@ -1,5 +1,4 @@
 import * as THREE from 'three/webgpu';
-import { installBatchCull } from './batchCull';
 import type { MapDef } from '../../sim/map';
 import type { MatchEvent, PieceState, Vec3 } from '../../sim/types';
 import { DEBRIS_KINDS, DEBRIS_SPEC, type DebrisKind, placeDebris } from './debrisPlace';
@@ -98,7 +97,6 @@ export class Debris {
       const batch = (name: string, material: THREE.Material, entries: { geo: THREE.BufferGeometry; ids: number[]; tint: boolean }[], shadow = false) => {
         if (!entries.length) return;
         const m = new THREE.BatchedMesh(entries.reduce((n, e) => n + e.ids.length, 0), entries.reduce((n, e) => n + e.geo.getAttribute('position').count, 0), 0, material);
-        installBatchCull(m);
         m.name = name;
         m.castShadow = shadow;
         m.receiveShadow = !shadow;
