@@ -1855,7 +1855,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     mapBuilding = false;
     for (const s of heldSnaps.splice(0)) onSnapshot(s);
   }
+  /** ?debug=1: the last few explosions / smoke / flash pops (e2e reads them). */
+  const debugBooms: { type: string; kind?: unknown; pos: unknown; by: unknown; t: number }[] = [];
   function onSnapshot(s: Snapshot) {
+    if (DEBUG) for (const e of s.events) if (e.type === 'explosion' || e.type === 'smoke' || e.type === 'flash') {
+      debugBooms.push({ type: e.type, kind: e.data.kind, pos: e.data.pos, by: e.data.by, t: e.t });
+      if (debugBooms.length > 20) debugBooms.shift();
+    }
     // Newest state goes straight to prediction and interpolation; events/HUD may be delayed.
     // A predicted piece this snapshot shows the host refused leaves the local world first, so prediction
     // replays without it (we fall where the host has us fall, instead of standing on it for a second).
@@ -1970,6 +1976,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       loot: () => renderer.lootView.info(),
       /** Smoke clouds / puffs drawn, camera depth in smoke, and the fog + flash overlays as shown (screenFx.ts). */
       smokeFlash: () => ({ ...renderer.smoke.info(), depth: renderer.smokeFog, ...screenFx.info() }),
+      /** Throw preview (charge 0..1 or -1, arc shown, landing point, dots drawn). */
+      booms: () => debugBooms,
+      throwArc: () => ({ charge: input.chargePower(), kind: input.chargeKind, shown: renderer.throwArc.shown, ...renderer.throwArc.end, dots: renderer.throwArc.dotCount }),
       audio: () => audio.stats(),
       commentary: () => commentary.commentator.log,
       commentaryVoice: () => ({ state: commentary.neuralState, neural: commentary.tts.neuralActive, synthMs: commentary.tts.neural?.synthMs ?? [] }),
@@ -2051,6 +2060,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   // ---- frame loop ----
   const feet = new THREE.Vector3();
   const aimDir = new THREE.Vector3();
+  /** Who throws, for the throw preview (reused every frame). */
+  const thrower = { id: 0, pos: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 };
   const specMotion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
   /** Watched player's view, lightly smoothed (spectator camera only; our own camera never goes through it). */
   const specLook = new LookSmoother();
@@ -2363,6 +2374,16 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       Object.assign(sample, moveForAim(sample.moveX, sample.moveZ, camYaw, sample.yaw));
     }
     if (sample.fire && me?.alive && !spectating) predictShot(sample.yaw, sample.pitch);
+    // Throw preview: charging a grenade / smoke / flash shows the sim's own predicted arc and where it goes off,
+    // from the angles actually sent (aimed at the crosshair point above).
+    const charge = input.chargePower();
+    const throwShown = charge >= 0 && !!input.chargeKind && !!me?.alive && !spectating && !!predictor;
+    if (throwShown) {
+      thrower.id = humanId; thrower.pos.x = feet.x; thrower.pos.y = feet.y; thrower.pos.z = feet.z;
+      thrower.yaw = sample.yaw; thrower.pitch = Math.max(-1.4, Math.min(1.4, sample.pitch)); // the sim clamps (match.ts MAX_PITCH)
+      renderer.throwArc.update(predictor!.world, thrower, input.chargeKind!, charge);
+    } else renderer.throwArc.hide();
+    hud.setThrowCharge(throwShown ? charge : -1);
     probe.lap(S.build);
     // Lag compensation: tell the host which moment of everyone else we were looking at when we fired.
     const viewT = renderer.renderTime;

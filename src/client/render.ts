@@ -22,6 +22,7 @@ import { StormFx } from './world/storm';
 import { IslandBeacons } from './world/beacons';
 import { settings } from './settings/store';
 import { TrapLayer } from './world/traps';
+import { ThrowArc } from './world/throwArc';
 import { SmokeFx, smokeDepth } from './world/smokeFx';
 import { lightU } from './world/lightUniforms';
 import { smokeBlocks } from '../sim/utility';
@@ -107,6 +108,8 @@ export class Renderer {
   private potionSellers = new PotionSellers(this.scene);
   /** Spike traps (world/traps.ts) and their placement ghost. */
   readonly traps = new TrapLayer();
+  /** Throw preview while a grenade / smoke / flash is charged (world/throwArc.ts). */
+  readonly throwArc = new ThrowArc();
   /** Smoke grenade clouds (one instanced sprite). */
   readonly smoke = new SmokeFx();
   /** Current ambient tone (day/night) for DOM overlays (screenFx.ts); here so main.ts needn't import three on the menu. */
@@ -202,6 +205,7 @@ export class Renderer {
       (id === r.humanId ? r.localGunPoint?.(which, out) ?? null : null) ?? r.characters.gunPoint(id, which, out));
     r.scene.add(r.gunFx.root);
     r.scene.add(r.traps.root);
+    r.scene.add(r.throwArc.root);
     r.scene.add(r.smoke.sprite);
     r.dayNight = new DayNight(r.world.sky);
     r.storm = new StormFx(r.world.sky, r.gpu, r.scene);
@@ -515,6 +519,7 @@ export class Renderer {
     for (const o of lootWarmObjects()) add(o);
     add(new THREE.Mesh(this.ghostLinkGeo, this.ghostMat));
     add(stall());
+    for (const o of this.throwArc.warmObjects()) add(o);
     g.traverse((o) => { o.frustumCulled = false; });
     return g;
   }
