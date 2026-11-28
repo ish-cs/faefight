@@ -1224,7 +1224,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let map: IslandLayout[] = [];
   /** This map's hook reach (grappleRange), for the grapple aim marker. */
   let hookRange = 0;
-  const grappleMarker = new GrappleMarker();
+  const grappleMarker = new GrappleMarker(new THREE.Vector3());
   const seenTmp = new THREE.Vector3();
   const seenAt = (q: PlayerState) => (renderer.playerPos(q.id, seenTmp) ? seenTmp : q.pos);
   let mapDef: MapDef | null = null;

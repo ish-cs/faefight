@@ -1,4 +1,4 @@
-import * as THREE from 'three/webgpu';
+import type * as THREE from 'three/webgpu';
 import { aimDir } from '../sim/combat';
 import { PLAYER } from '../sim/constants';
 import { grappleAim, physicsAimWorld, type AimTarget, type AimWorld } from '../sim/grappleAim';
@@ -15,13 +15,13 @@ import type { PlayerState, Vec3 } from '../sim/types';
  */
 export class GrappleMarker {
   private readonly el: HTMLDivElement;
-  private readonly v = new THREE.Vector3();
   private readonly eye: Vec3 = { x: 0, y: 0, z: 0 };
   private shown = '';
   private world: AimWorld | null = null;
   private physics: Physics | null = null;
 
-  constructor(parent: HTMLElement = document.body) {
+  /** `v`: a scratch vector (three.js comes in lazily: no static import here, or the phone card would pull it in). */
+  constructor(private readonly v: THREE.Vector3, parent: HTMLElement = document.body) {
     this.el = document.createElement('div');
     this.el.className = 'grapple-marker';
     this.el.innerHTML =
