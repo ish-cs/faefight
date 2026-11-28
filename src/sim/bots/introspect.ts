@@ -130,6 +130,7 @@ type Internals = {
   hookNote: { t: number; text: string } | null;
   healNote: { t: number; text: string } | null; healWant: number;
   utilNote: { t: number; text: string } | null;
+  slitNote: { t: number; text: string } | null;
   weaponIntent: { want: string; why: string } | null;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
@@ -642,6 +643,10 @@ function planSteps(goal: Goal, I: Internals, p: BrainProbe, view: BotView): { st
   const moving = !!a?.dir;
   const two = (walk: string, then: string) => ({ steps: [walk, then], at: moving ? 0 : 1 });
   const rv = I.targetId !== null ? `@${I.targetId}` : 'my rival';
+  // Firing slits (slit.ts): lining up on / shooting through one this tick.
+  const slit = I.slitNote && view.now - I.slitNote.t < 0.5 ? I.slitNote.text : null;
+  if (slit && goal === 'defend') return { steps: ['Get to the plugged doorway', slit[0].toUpperCase() + slit.slice(1), 'Clear the plug', 'Walk out'], at: 1 };
+  if (slit) return { steps: ['Take a line through a firing slit', slit[0].toUpperCase() + slit.slice(1), 'Re-plug or shoot them on breakout'], at: moving ? 0 : 1 };
   switch (goal) {
     case 'collect': return two('Walk to my generator', `Collect $${Math.round(view.generators[view.self.island] ?? 0)}`);
     case 'bank': return two('Walk to my vault', 'Deposit spare cash');

@@ -33,6 +33,7 @@ import {
 } from './plans';
 import type { AllyStatus, BotView, OtherStatus } from './view';
 import { planUtility, utilAngles, utilReact, type UtilSituation } from './utilityPlan';
+import { chestOf, slitLines } from './slit';
 import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, type ScoreRow } from './introspect';
 
 export type Goal =
@@ -113,6 +114,10 @@ const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
 /** An enemy farther than this doesn't pull my gun off what my goal is shooting at (a plug, a wall). */
 const SHOOT_AT_OVER_FOE_M = 25;
+/** Lining up on a firing slit: the line through it is narrow, stand within this of the spot (slit.ts). */
+const SLIT_ARRIVE = 0.2;
+/** Inside a trapped rival's bunker, working on a plug: about this far in from its doorway (breakPlug). */
+const PLUG_WORK_IN = 1.6;
 /**
  * Explosive props. PRO bots sometimes shoot a barrel standing next to an enemy instead of the enemy (a
  * roll every BARREL_ROLL_SEC while such a shot is on, so it's a choice, not a reflex); everyone keeps out of
@@ -364,6 +369,13 @@ export class Bot {
   /** Last heal decision (spectators), heals wanted (stock target), slots dropped to fit a heal (not looted back). */
   private healNote: { t: number; text: string } | null = null;
   private healWant = 0;
+  /**
+   * Firing slits (slit.ts): this trap's roll on the rival I'm sieging (drive.slitShoot) and the slit I'm working; my
+   * own trap's roll on shooting out (drive.slitOut, keyed by its breakout deadline); the last one (spectators).
+   */
+  private slitPlan: { id: number; on: boolean; slit: number } | null = null;
+  private slitOutRoll: { until: number; on: boolean } | null = null;
+  private slitNote: { t: number; text: string } | null = null;
   /** Last rifle hit that out-ranged my guns (strength.outranged): who and when. */
   private outranged: { id: number; t: number } | null = null;
   /** Per-enemy beliefs (belief.ts): their gun and range against me, damage to me, kills. */
@@ -593,7 +605,8 @@ export class Bot {
     const utilPlan = planUtility(util);
     const utilAim = utilPlan ? utilAngles(eye, utilPlan.at, utilPlan.kind) : null;
     let throwUtil: UtilityKind | undefined;
-    if (act.shootAt && act.shootFirst && me.breakoutUntil !== null) {
+    const slitOut = this.slitOutShot(ctx, foe);
+    if (act.shootAt && act.shootFirst && me.breakoutUntil !== null && !slitOut) {
       // Countdown running: the plug in my way beats everything else (no hook, barrel or pier tricks first).
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
@@ -620,7 +633,7 @@ export class Bot {
       // Set the barrel next to them off: aim at its middle like any other shot.
       look = hand(lookAt(eye, barrel), TURN_RATE * 1.2);
       fire = angleBetween(look, lookAt(eye, barrel)) < 0.04 && gunReady(dist2D(me.pos, barrel));
-    } else if (act.shootAt && act.shootFirst) {
+    } else if (act.shootAt && act.shootFirst && !slitOut) {
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
     } else if (utilPlan && utilAim) {
@@ -2403,6 +2416,8 @@ export class Bot {
       const door = b.doorways.reduce((a, d) => (hp(d) < hp(a) ? d : a));
       const layer = this.reinforce(c, door, hp(door));
       if (layer) return layer;
+      const slit = this.slitSiege(c);
+      if (slit) return slit;
       const spot = add(door.center, scale(forward(door.yaw), this.P.drive.siegeDist));
       const walk = this.goTo(spot, 1.2);
       return walk.dir ? walk : { dir: null, face: v3(door.center.x, door.center.y + CHEST, door.center.z) };
@@ -2471,6 +2486,56 @@ export class Bot {
     if (now - (this.mem.diedAt.get(c.rival.id) ?? -Infinity) < this.P.drive.siegeAfterDeath) return true;
     const s = this.mem.recent(c.rival.id, now, 10);
     return !!s && s.island === c.rivalIsl.index;
+  }
+
+  /**
+   * My rival is trapped in their sealed bunker (breakout clock running) and I'm on their island: stand where my line
+   * on them threads a firing slit (slit.ts) and shoot them through it, close by their plugged doors (a breakout
+   * comes out right next to me). Their spot: in sight, else last seen inside, else working on the softest plug.
+   * Rolled once per trap (drive.slitShoot: Easy never thinks of it). Null: not now, keep camping the door.
+   */
+  private slitSiege(c: Ctx): Act | null {
+    const r = c.rival, isl = c.rivalIsl, D = this.P.drive;
+    if (!r?.trapped) { this.slitPlan = null; return null; }
+    if (!isl || !r.alive || c.on !== isl.index || c.view.suddenDeath || !c.view.sealed[isl.index] || !ownsGun(c.me.inv)) return null;
+    if (this.slitPlan?.id !== r.id) this.slitPlan = { id: r.id, on: this.rng() < D.slitShoot[this.difficulty], slit: -1 };
+    if (!this.slitPlan.on) return null;
+    const b = isl.bunker, now = c.view.now;
+    const seen = c.view.enemies.find((e) => e.id === r.id)?.pos ?? this.mem.recent(r.id, now, 3)?.pos;
+    let t = seen && insideBunker(b, seen) ? seen : null;
+    if (!t) {
+      const hp = (d: Doorway) => doorPieces(c.view.pieces, d).reduce((n, p) => n + p.hp, 0);
+      const door = b.doorways.reduce((a, d) => (hp(d) < hp(a) ? d : a));
+      t = add(door.center, scale(forward(door.yaw), -PLUG_WORK_IN));
+    }
+    const at = v3(t.x, b.center.y, t.z);
+    const plan = this.slitPlan;
+    const lines = slitLines(b, at, D.slitMaxAngle).filter((l) => {
+      const g = c.view.groundAt(l.stand.x, l.stand.z);
+      return g !== null && Math.abs(g - b.center.y) < 0.3 && dist2D(l.stand, c.me.pos) <= D.slitSearchM;
+    });
+    if (!lines.length) return null;
+    // The slit I'm on while it still has a line on them (no hopping between two near-equal ones), else the squarest.
+    const line = lines.find((l) => l.slit === plan.slit) ?? lines[0];
+    plan.slit = line.slit;
+    this.slitNote = { t: now, text: `shooting through the window slit at @${r.id}` };
+    const face = chestOf(at);
+    const walk = this.goTo(line.stand, SLIT_ARRIVE);
+    return walk.dir ? { ...walk, face } : { dir: null, face };
+  }
+
+  /**
+   * Trapped myself (breakout clock running) with the sieger in sight through a slit: shoot it out of the slit while
+   * more than drive.slitOutReserve seconds are left (rolled once per trap, drive.slitOut), then back to the plug.
+   */
+  private slitOutShot(c: Ctx, foe: PlayerState | null): boolean {
+    const me = c.me, until = me.breakoutUntil;
+    if (until === null) { this.slitOutRoll = null; return false; }
+    if (!foe || until - c.view.now <= this.P.drive.slitOutReserve || insideBunker(c.home.bunker, foe.pos)) return false;
+    if (this.slitOutRoll?.until !== until) this.slitOutRoll = { until, on: this.rng() < this.P.drive.slitOut[this.difficulty] };
+    if (!this.slitOutRoll.on) return false;
+    this.slitNote = { t: c.view.now, text: `shooting out through the slit at @${foe.id}` };
+    return true;
   }
 
   /** Pieces in my own doorways, softest-to-clear first. */
@@ -2891,6 +2956,11 @@ export class Bot {
     }
     if (!e) { this.fightFoe = null; return IDLE; }
     if (e === c.enemy) this.fightFoe = { id: e.id, e };
+    // Them trapped in their sealed bunker: shoot through a window slit, not strafe at a concrete wall.
+    if (c.rival?.id === e.id && c.rival.trapped) {
+      const slit = this.slitSiege(c);
+      if (slit) { this.moveSrc = 'fight:slit'; return slit; }
+    }
     const enemyDist = dist2D(e.pos, me.pos);
     if (now >= this.strafeFlipAt) {
       this.strafeSign = this.rng() < 0.5 ? -1 : 1;

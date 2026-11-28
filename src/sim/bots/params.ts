@@ -127,6 +127,21 @@ export type DriveParams = {
    * (they can shoot out through the slits). By skill (0 = unaware: chase them like anyone else).
    */
   shutInRange: Record<Difficulty, number>;
+  /**
+   * Firing slits (slit.ts): a rival trapped in their sealed bunker can be shot through the window slits. Odds that I
+   * take a slit angle on them this trap (rolled once per rival per trap; 0 = just wait at the door). By skill.
+   */
+  slitShoot: Record<Difficulty, number>;
+  /** Only walk to a slit angle this many metres away or nearer (else keep camping the door). */
+  slitSearchM: number;
+  /** Widest line through a slit I'll shoot along, radians off square on (the 0.3 m wall eats the rest). */
+  slitMaxAngle: number;
+  /**
+   * Trapped myself with the sieger in sight through a slit: odds (per trap) I shoot it out of the slit instead of
+   * working on the plug, while more than slitOutReserve seconds are left on the breakout clock. By skill.
+   */
+  slitOut: Record<Difficulty, number>;
+  slitOutReserve: number;
 };
 
 /**
@@ -453,6 +468,12 @@ export const DRIVE: DriveParams = {
   stormLead: D(0, 8, 12, 15),
   barrierLead: D(0, 12, 20, 25),
   shutInRange: D(0, 14, 10, 8),
+  // User replay 8e57e4: a Hard sealed the user three times and only ever hit them after they broke out at the door.
+  slitShoot: D(0, 0.5, 1, 1),
+  slitSearchM: 14,
+  slitMaxAngle: 0.8,
+  slitOut: D(0, 0, 1, 1),
+  slitOutReserve: 4,
 };
 
 export const BUILD_SKILL: Record<Difficulty, BuildSkill> = {
@@ -616,6 +637,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['drive.sealBonus', [0, 1.2]], ['drive.sealedHunt', [0, 1.5]], ['drive.sealedHome.*', [0, 1.2]], ['drive.sealedCaution.*', [0, 0.5]], ['drive.sealedFocus', [1, 3]], ['drive.kitlessAttack.*', [0, 0.8]], ['drive.hardKit.*', [0, 4]], ['drive.reinforceHp.*', [0, 1000]],
   ['drive.spoilsTarget.*', [0, 1.5]], ['drive.finishTrapped', [0, 2]],
   ['drive.dockShot.*', [0, 1]], ['drive.dockDefend', [0, 0.8]], ['drive.dockMinRange', [4.5, 12]], ['drive.dockRollSec', [0.3, 4]], ['drive.stormLead.*', [0, 40]], ['drive.barrierLead.*', [0, 60]], ['drive.shutInRange.*', [0, 40]],
+  ['drive.slitShoot.*', [0, 1]], ['drive.slitSearchM', [4, 30]], ['drive.slitMaxAngle', [0.3, 1]], ['drive.slitOut.*', [0, 1]], ['drive.slitOutReserve', [0, 9]],
   ['buildSkill.*.coverChance', [0, 1]], ['buildSkill.*.coverDelay', [0.1, 2]], ['buildSkill.*.gap', [0, 2]],
   ['buildSkill.*.misplace', [0, 0.5]], ['buildSkill.*.fort', [0, 1]], ['buildSkill.*.peekHide', [0.3, 3]],
   ['buildSkill.*.peekOut', [0.3, 3]], ['buildSkill.*.pieceSec', [0.25, 2]], ['buildSkill.*.ramp', [0, 1]],
