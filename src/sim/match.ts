@@ -18,6 +18,7 @@ import { DoorwayTracker } from './seal';
 import { bountyOf, newElimLedger, resolveEliminations, type ElimLedger } from './elimination';
 import { potionShopsAt, speedMult, startDrink, tickPotions } from './potions';
 import { clearGrapple, fireGrapple, tickGrapple, type GrappleCtx } from './grapple';
+import { grappleAim } from './grappleAim';
 import type { MatchApi, MatchSetup } from './matchApi';
 import { Physics, type RayHit } from './physics';
 import { PropSim } from './props';
@@ -216,6 +217,9 @@ export class Match implements MatchApi {
         const d = sub(b, a), l = Math.hypot(d.x, d.y, d.z);
         return l < 1e-6 || physics.raycastStatic(a, norm(d), l, false) === null;
       },
+      down: (x, y, z, maxDrop) => physics.probeDown(x, y, z, maxDrop, undefined, true),
+      // Lock-on sees players where the shooter saw them (lag compensation, as the cast does).
+      seen: (q) => (this.rewindT === null ? q.pos : this.history.at(this.rewindT, q.id, v3())),
     };
   }
 
@@ -976,8 +980,9 @@ export class Match implements MatchApi {
       },
       hookRange: this.hookRange,
       castHook: (dir) => {
-        const h = this.physics.raycast(eye, dir, this.hookRange, self.id, false);
-        return h ? { point: h.point, dist: h.dist, player: h.hit.type === 'player' ? h.hit.id : null } : null;
+        // The same aim rule a human's hook uses (grappleAim.ts: lock-on, ledge tops, just over the edge).
+        const h = grappleAim(this.grappleCtx, self, eye, dir, this.s.players.values(), now);
+        return h ? { point: h.point, dist: h.dist, player: h.kind === 'player' ? h.id : null } : null;
       },
       waterY: this.s.waterY,
       suddenDeath: this.s.suddenDeath,

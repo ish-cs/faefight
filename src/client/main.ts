@@ -9,11 +9,12 @@ import { normalizeCode } from '../net/code';
 import { pickTransport } from '../net/index';
 import { snapPlacement, validatePlacement, type Placement } from '../sim/building';
 import { BuildAim, CLIENT_REACH, type AimOutcome } from './buildAim';
+import { GrappleMarker } from './grappleMarker';
 import { trapAim, validateTrap } from '../sim/traps';
 import { DT, HEAD, LIFECYCLE, PLAYER, TICK_HZ, TRAP, WEAPONS } from '../sim/constants';
 import { spreadDeg } from '../sim/gunplay';
 import type { MoveCmd } from '../sim/movement';
-import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
+import { grappleRange, MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import { soloBotCount } from '../sim/teams';
 import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type PlayerState, type ShopItem, type Snapshot } from '../sim/types';
@@ -1221,6 +1222,9 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   let adsWas = false;
 
   let map: IslandLayout[] = [];
+  /** This map's hook reach (grappleRange), for the grapple aim marker. */
+  let hookRange = 0;
+  const grappleMarker = new GrappleMarker();
   let mapDef: MapDef | null = null;
   let humanId = 0;
   /** No player of our own this match (spectating host, or handed to a bot via /spectate). */
@@ -1830,6 +1834,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   function mapReady(def: MapDef, id: number, island: number) {
     mapDef = def;
     map = def.islands;
+    hookRange = grappleRange(map);
     if (practice) renderer.dayNight.setCycle(null); // the range has no sudden death: always day
     loading.progress('map', 1, `Building ${def.name}`);
     maybeWarm();
@@ -2363,6 +2368,12 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       Object.assign(sample, moveForAim(sample.moveX, sample.moveZ, camYaw, sample.yaw));
     }
     if (sample.fire && me?.alive && !spectating) predictShot(sample.yaw, sample.pitch);
+    // Grapple aim marker: where the hook would bite with this frame's aim (the sim's own rule, grappleAim.ts).
+    const hookHeld = !spectating && !!me?.alive && me.hotbar[input.selected] === 'grapple' && (me.inv.grapples ?? 0) > 0 && (!me.hook || me.hook.st === 3) && !me.mv?.pull;
+    if (hookHeld && predictor && lastRendered) {
+      const st = latest ?? snap!, t = simNow();
+      grappleMarker.update(predictor.world, hookRange, st.waterY, me!, lastRendered, sample.yaw, sample.pitch, st.players, t, t >= (me!.hookReadyAt ?? 0), renderer.camera);
+    } else grappleMarker.hide();
     probe.lap(S.build);
     // Lag compensation: tell the host which moment of everyone else we were looking at when we fired.
     const viewT = renderer.renderTime;

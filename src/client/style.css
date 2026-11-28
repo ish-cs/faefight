@@ -671,3 +671,13 @@ body.cinematic .spectate-banner, body.cinematic .click-hint { display: none !imp
   position: fixed; right: 16px; bottom: 16px; padding: 6px 10px; border-radius: 6px; background: rgba(4, 11, 17, 0.72);
   font-family: var(--ff-body, inherit); font-size: var(--fs-xs, 12px); color: var(--c-text-dim, #cfc9bf); pointer-events: none; z-index: 40;
 }
+
+/* Grapple aim marker (grappleMarker.ts): red X where the hook bites, ring on a player lock, caret on a ledge top. */
+.grapple-marker { position: fixed; left: 0; top: 0; pointer-events: none; z-index: 5; will-change: transform; }
+.grapple-marker svg { display: block; overflow: visible; filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.85)); }
+.grapple-marker path, .grapple-marker circle { fill: none; stroke: #ff3b3b; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.grapple-marker .gm-ring, .grapple-marker .gm-up { display: none; }
+.grapple-marker.player .gm-ring { display: inline; }
+.grapple-marker.player .gm-x path { stroke-width: 2; }
+.grapple-marker.ledge .gm-up { display: inline; }
+.grapple-marker.cool { opacity: 0.35; }

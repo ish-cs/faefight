@@ -2,7 +2,7 @@ import { GRAPPLE, PLAYER } from './constants';
 import { aimDir, eyePos } from './combat';
 import { removeIfEmpty, setGrapples } from './hotbar';
 import { capFling } from './movement';
-import type { RayHit } from './physics';
+import { grappleAim, type AimWorld } from './grappleAim';
 import type { MatchEvent, PieceState, PlayerState, Vec3 } from './types';
 import { isAlly } from './teams';
 import { add, dist, scale, v3 } from './vec';
@@ -18,16 +18,10 @@ import { add, dist, scale, v3 } from './vec';
  * target at the moment it latches (no pulling through walls), and never takes a spawn-protected player or one
  * trapped in a sealed bunker. Hooking a player ends the owner's own spawn protection, like firing.
  */
-export type GrappleCtx = {
+/** `range`: this map's hook reach (map.ts grappleRange); cast / clear / down / seen: see AimWorld (grappleAim.ts). */
+export type GrappleCtx = AimWorld & {
   players: Map<number, PlayerState>;
   pieces: Map<number, PieceState>;
-  waterY: number;
-  /** This map's hook reach (map.ts grappleRange). */
-  range: number;
-  /** The hook's ray from the eye: first world / piece / player hit, blocked by firing slits. */
-  cast(origin: Vec3, dir: Vec3, maxDist: number, shooter: number): RayHit | null;
-  /** True when nothing solid (players aside) sits between a and b. */
-  clear(a: Vec3, b: Vec3): boolean;
 };
 
 const ev = (t: number, data: Record<string, unknown>): MatchEvent => ({ t, type: 'grapple', data });
@@ -48,19 +42,20 @@ export function fireGrapple(ctx: GrappleCtx, p: PlayerState, now: number): Match
   if (p.hotbar[p.selected] !== 'grapple' || (p.inv.grapples ?? 0) <= 0) return [];
   if (now < (p.hookReadyAt ?? 0) || now < p.busyUntil || p.mv?.pull) return [];
   const eye = eyePos(p), dir = aimDir(p.yaw, p.pitch);
-  const hit = ctx.cast(eye, dir, ctx.range, p.id);
-  const ok = hit !== null && hit.dist >= GRAPPLE.minDist && hit.point.y > ctx.waterY + 0.05;
-  const d = hit ? hit.dist : ctx.range;
-  const pt = hit ? hit.point : add(eye, scale(dir, ctx.range));
-  if (!ok) {
+  // Where it bites: the shared aim rule (lock-on, ledge tops, just-over-the-edge), as the client's marker shows it.
+  const aim = grappleAim(ctx, p, eye, dir, ctx.players.values(), now);
+  if (!aim) {
     // Out and straight back.
+    const raw = ctx.cast(eye, dir, ctx.range, p.id);
+    const d = raw ? raw.dist : ctx.range, pt = raw ? raw.point : add(eye, scale(dir, ctx.range));
     p.hook = { st: 3, x: pt.x, y: pt.y, z: pt.z, t0: now, at: now + (2 * d) / GRAPPLE.tipSpeed };
     p.hookReadyAt = Math.max(p.hook.at, now + GRAPPLE.missCooldownSec);
     return [ev(now, { by: p.id, phase: 'fire' })];
   }
-  p.hook = { st: 0, x: pt.x, y: pt.y, z: pt.z, t0: now, at: now + d / GRAPPLE.tipSpeed };
-  if (hit.hit.type === 'player') p.hook.tgt = hit.hit.id;
-  else if (hit.hit.type === 'piece') p.hook.pc = hit.hit.id;
+  const pt = aim.point;
+  p.hook = { st: 0, x: pt.x, y: pt.y, z: pt.z, t0: now, at: now + aim.dist / GRAPPLE.tipSpeed };
+  if (aim.kind === 'player') p.hook.tgt = aim.id;
+  else if (aim.pc !== undefined) p.hook.pc = aim.pc;
   return [ev(now, { by: p.id, phase: 'fire' })];
 }
 
