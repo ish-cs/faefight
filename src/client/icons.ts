@@ -26,6 +26,9 @@ export const ICONS: Record<IconKind, string> = {
   trap: svg('<rect x="2.5" y="16" width="19" height="4" rx="1" fill="currentColor"/><path d="M4 16l1.5-8L7 16M9 16l1.5-10L12 16M14 16l1.5-10L17 16M19 16l1-7 1 7" fill="currentColor"/>'),
   medkit: svg('<rect x="3" y="6" width="18" height="14" rx="3" fill="currentColor"/><path d="M9 6V4h6v2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 9.5v7M8.5 13h7" stroke="#0e1218" stroke-width="2.6"/>'),
   grapple: svg('<path d="M12 3v9" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="3.2" r="1.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 12c0 5 -6 6 -7.5 1.5M12 12c0 5 6 6 7.5 1.5M12 12v8.5" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/><path d="M4.5 13.5 3.2 11.4M19.5 13.5l1.3-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'),
+  // Smoke: a canister with a puff rising off it. Flash: a canister with a starburst.
+  smoke: svg('<rect x="8" y="11" width="8" height="10" rx="1.6" fill="currentColor"/><rect x="9.5" y="9" width="5" height="2.2" rx=".6" fill="currentColor"/><path d="M8 15h8" stroke="#0e1218" stroke-width="1" opacity=".45"/><circle cx="9" cy="5.5" r="2.4" fill="currentColor" opacity=".55"/><circle cx="13.5" cy="4.3" r="2.8" fill="currentColor" opacity=".7"/><circle cx="17" cy="7" r="2" fill="currentColor" opacity=".45"/>'),
+  flash: svg('<rect x="8.5" y="12" width="7" height="9" rx="1.6" fill="currentColor"/><rect x="10" y="10" width="4" height="2.2" rx=".6" fill="currentColor"/><path d="M12 1.5v4M5.2 4.2l2.6 3M18.8 4.2l-2.6 3M3 10h3.4M17.6 10H21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'),
   // Potions carry their own colours (blue shields, red heal, yellow speed) instead of currentColor.
   shieldSmall: svg('<path d="M10 3h4v4.2l3.6 5.4A5.8 5.8 0 0 1 12 21a5.8 5.8 0 0 1-5.6-8.4L10 7.2z" fill="#4aa8ff"/><rect x="9.3" y="2" width="5.4" height="2.2" rx=".8" fill="#cfe6ff"/><path d="M8 14.5h8" stroke="#0e1218" stroke-width="1" opacity=".35"/><circle cx="10.2" cy="16" r="1.1" fill="#e6f3ff" opacity=".8"/>'),
   shieldBig: svg('<path d="M8.5 2.5h7v3.2c3 1.2 5 4 5 7.3v5.5A3 3 0 0 1 17.5 21.5h-11a3 3 0 0 1-3-3V13c0-3.3 2-6.1 5-7.3z" fill="#2f86f0"/><rect x="7.8" y="1.6" width="8.4" height="2.4" rx=".8" fill="#cfe6ff"/><path d="M12 9.2 15.6 10.6v3c0 2.4-1.6 4-3.6 4.8-2-.8-3.6-2.4-3.6-4.8v-3z" fill="#e6f3ff"/>'),
@@ -41,7 +44,7 @@ export function iconGroup(k: IconKind): 'gun' | 'piece' | 'explosive' | 'medkit'
   if (k === 'genUpgrade') return 'upgrade';
   if (k === 'shieldSmall' || k === 'shieldBig' || k === 'healPotion' || k === 'speedPotion') return 'potion';
   if (k === 'pistol' || k === 'smg' || k === 'shotgun' || k === 'rifle' || k === 'rocket' || k === 'ammo') return 'gun';
-  if (k === 'grenade' || k === 'charge' || k === 'trap') return 'explosive';
+  if (k === 'grenade' || k === 'charge' || k === 'trap' || k === 'smoke' || k === 'flash') return 'explosive';
   if (k === 'grapple') return 'upgrade';
   if (k === 'medkit') return 'medkit';
   return 'piece';

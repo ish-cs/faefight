@@ -1,22 +1,25 @@
 import { isAlly } from './teams';
 import * as dm from './dmath';
 import {
-  CHARGE, DT, GRENADE, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
+  CHARGE, DT, FLASH, GRENADE, SMOKE, PIECES, PLAYER, ROCKET, SHOTGUN_ADS_SPREAD_DEG, SHOTGUN_SPREAD_DEG, TICK_HZ, WEAPONS,
 } from './constants';
 import { damagePiece } from './building';
 import { stressFromDamage } from './movement';
 import { bloomAfterShot, coneOffset, DEG, hash01, magCap, nextBurst, recoilKick, reloadTime, shellsLoadedBy, shotDamage, spreadDeg } from './gunplay';
 import type { Physics, RayHit } from './physics';
-import type { MatchEvent, PieceState, PlayerState, Projectile, Vec3 } from './types';
+import type { MatchEvent, PieceState, PlayerState, Projectile, SmokeCloud, UtilityKind, Vec3 } from './types';
+import { popFlash, popSmoke, setUtil, utilCount } from './utility';
 import { add, dist, forward, norm, right, rotateY, scale, sub, v3 } from './vec';
 
-export type Explosive = { id: number; kind: 'grenade' | 'charge' | 'rocket'; owner: number; pos: Vec3; vel: Vec3; explodeAt: number };
+export type Explosive = { id: number; kind: 'grenade' | 'charge' | 'rocket' | UtilityKind; owner: number; pos: Vec3; vel: Vec3; explodeAt: number };
 
 export type CombatCtx = {
   physics: Physics;
   players: Map<number, PlayerState>;
   pieces: Map<number, PieceState>;
   explosives: Explosive[];
+  /** Smoke clouds hanging now (utility.ts); absent = smoke grenades just pop with nothing left behind (tests). */
+  smokes?: SmokeCloud[];
   nextId(): number;
   /** `by`: the player whose damage broke it (kill credit for whoever stood on it), null/absent for none. */
   onPieceDestroyed(id: number, by?: number | null): void;
@@ -259,6 +262,18 @@ export function throwGrenade(ctx: CombatCtx, p: PlayerState, now: number): void 
   ctx.explosives.push({ id: ctx.nextId(), kind: 'grenade', owner: p.id, pos: start, vel, explodeAt: now + GRENADE.fuseSec });
 }
 
+/** Throw a smoke grenade / flashbang: same arc as a grenade (thrown a little softer / harder), its own fuse. */
+export function throwUtility(ctx: CombatCtx, p: PlayerState, kind: UtilityKind, now: number): void {
+  const n = utilCount(p.inv, kind);
+  if (!p.alive || n <= 0) return;
+  setUtil(p.inv, kind, n - 1);
+  const C = kind === 'smoke' ? SMOKE : FLASH;
+  const dir = aimDir(p.yaw, p.pitch);
+  const vel = add(scale(dir, C.throwSpeed), v3(0, 3, 0));
+  const start = add(eyePos(p), add(scale(right(p.yaw), 0.3), scale(forward(p.yaw), 0.3)));
+  ctx.explosives.push({ id: ctx.nextId(), kind, owner: p.id, pos: start, vel, explodeAt: now + C.fuseSec });
+}
+
 export function placeCharge(ctx: CombatCtx, p: PlayerState, now: number): void {
   if (!p.alive || p.inv.charges <= 0) return;
   const eye = eyePos(p);
@@ -324,6 +339,9 @@ function rocketBlast(ctx: CombatCtx, e: Explosive, now: number, out: MatchEvent[
 }
 
 function explode(ctx: CombatCtx, e: Explosive, now: number): MatchEvent[] {
+  // Smoke / flash: no blast (and no 'explosion' event, so nothing reacts to them as one).
+  if (e.kind === 'smoke') return ctx.smokes ? [popSmoke(ctx.smokes, e.id, e.owner, e.pos, now)] : [];
+  if (e.kind === 'flash') return [popFlash(ctx.physics, ctx.players.values(), e.owner, e.pos, now)];
   const out: MatchEvent[] = [ev(now, 'explosion', { kind: e.kind, pos: e.pos, by: e.owner })];
   if (e.kind === 'rocket') {
     rocketBlast(ctx, e, now, out);
@@ -373,7 +391,7 @@ export function tickExplosives(ctx: CombatCtx, now: number): MatchEvent[] {
   const out: MatchEvent[] = [];
   for (const e of ctx.explosives) {
     if (e.kind === 'rocket') { flyRocket(ctx, e, now); continue; }
-    if (e.kind !== 'grenade' || (e.vel.x === 0 && e.vel.y === 0 && e.vel.z === 0)) continue;
+    if ((e.kind !== 'grenade' && e.kind !== 'smoke' && e.kind !== 'flash') || (e.vel.x === 0 && e.vel.y === 0 && e.vel.z === 0)) continue;
     e.vel.y -= PLAYER.gravity * DT;
     const step = scale(e.vel, DT);
     const stepLen = Math.hypot(step.x, step.y, step.z);

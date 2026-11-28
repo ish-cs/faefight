@@ -273,6 +273,7 @@ export class InputController {
     }
     if (this.buildMode) { this.fireHeld = true; this.hooks.place(); return; } // held = drag-build
     if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
+    if (this.held === 'smoke' || this.held === 'flash') { this.oneShot.throwUtil = this.held; return; }
     if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }
     if (this.held === 'trap') { if (this.trapReq) { this.oneShot.trap = this.trapReq; this.onTrapPlaced?.(); } return; }
     if (this.held === 'medkit') { this.oneShot.useMedkit = true; return; }
