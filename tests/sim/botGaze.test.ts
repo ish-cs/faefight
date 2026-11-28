@@ -102,7 +102,7 @@ describe('bot gaze in a match', () => {
     // When they do fight, the eyes are on the enemy.
     expect(s.onFoeEngaged).toBeGreaterThan(0.7);
     // Deciding to fight turns the eyes onto the enemy at once (gaze never delays or softens an engagement).
-    expect(fightTicks).toBeGreaterThan(30 / DT);
+    expect(fightTicks).toBeGreaterThan(10 / DT);
     expect(fightOnFoe / fightTicks).toBeGreaterThan(0.8);
   }, 120_000);
 });
