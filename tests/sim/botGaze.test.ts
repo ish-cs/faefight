@@ -83,8 +83,9 @@ describe('bot gaze in a match', () => {
       for (const p of snap.players) {
         const inp = out.get(p.id);
         const foes = snap.players.filter((q) => q.id !== p.id && q.alive);
-        if (p.alive && inp && bots.get(p.id)?.currentGoal === 'fight' && foes.length) {
-          const near = foes.reduce((a, q) => (Math.hypot(q.pos.x - p.pos.x, q.pos.z - p.pos.z) < Math.hypot(a.pos.x - p.pos.x, a.pos.z - p.pos.z) ? q : a));
+        const near = foes.length ? foes.reduce((a, q) => (Math.hypot(q.pos.x - p.pos.x, q.pos.z - p.pos.z) < Math.hypot(a.pos.x - p.pos.x, a.pos.z - p.pos.z) ? q : a)) : null;
+        // (Not at arm's reach: a fist fight circles at 1-2 m, where "within 20° of their centre" says nothing about the eyes.)
+        if (p.alive && inp && bots.get(p.id)?.currentGoal === 'fight' && near && Math.hypot(near.pos.x - p.pos.x, near.pos.z - p.pos.z) >= 2.5) {
           fightTicks++;
           if (Math.abs(wrapAngle(yawOf({ x: near.pos.x - p.pos.x, z: near.pos.z - p.pos.z }) - p.yaw)) < 20 * DEG) fightOnFoe++;
         }
