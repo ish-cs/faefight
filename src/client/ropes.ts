@@ -3,13 +3,21 @@ import { GRAPPLE, PLAYER } from '../sim/constants';
 import type { HookState } from '../sim/types';
 
 /** Segments per rope (sag curve), ropes drawn at once (one per player), claw prongs per hook. */
-const SEGS = 12, MAX_ROPES = 8, PRONGS = 3;
+const SEGS = 16, MAX_ROPES = 8, PRONGS = 3;
 const CABLE_W = 0.022, PRONG_W = 0.035, PRONG_LEN = 0.2;
+/** Twang when the rope bites or snaps taut: transverse amplitude (m per m of rope, capped), frequency (Hz), decay (1/s). */
+const TWANG_AMP = 0.05, TWANG_MAX = 0.5, TWANG_HZ = 7, TWANG_DECAY = 5;
+
+/** Per-player rope look state (reused: one object per player id for the match). */
+type RopeLook = { st: number; taut: boolean; twangAt: number; twangAmp: number };
 
 /**
  * Grappling hook ropes: every rope and claw in the match as thin boxes in ONE instanced mesh (one draw call; nothing
- * drawn and no work at all while no hook is out). A rope sags while it flies and pulls nearly straight once it
- * latches. Positions are worked out from the snapshot's HookState and the time (sim seconds) each frame.
+ * drawn and no work at all while no hook is out). The rope reads as an elastic string: it whips out sagging while it
+ * flies; latched (st 1) it hangs in a sag (parabola of the same length as the rope's rest length HookState.len) while
+ * slack, and goes straight and thinner (same volume) when stretched past it; biting or snapping taut sets off a
+ * damped twang. Positions are worked out from the snapshot's HookState and the time (sim seconds) each frame; no
+ * per-frame allocations.
  */
 export class Ropes {
   readonly mesh: THREE.InstancedMesh;
@@ -23,7 +31,15 @@ export class Ropes {
   private readonly tip = new THREE.Vector3();
   private readonly u = new THREE.Vector3();
   private readonly w = new THREE.Vector3();
+  private readonly side = new THREE.Vector3();
   private static readonly Z = new THREE.Vector3(0, 0, 1);
+  private readonly looks = new Map<number, RopeLook>();
+  /** Per-rope shape for point(): sag depth (m), twang amplitude (m) and phase, whip (flying). */
+  private sag = 0;
+  private wob = 0;
+  private wobPhase = 0;
+  private whip = 0;
+  private whipT = 0;
 
   constructor(scene: THREE.Scene) {
     const geo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);
@@ -40,10 +56,10 @@ export class Ropes {
   begin() { this.n = 0; }
 
   /**
-   * One player's rope from their hand `from` for hook `h` at sim time `t`. `target`: the yanked player's feet
+   * Player `id`'s rope from their hand `from` for hook `h` at sim time `t`. `target`: the yanked player's feet
    * (st 2). Returns false when nothing is drawn (cap reached).
    */
-  add(from: THREE.Vector3, h: HookState, t: number, target: THREE.Vector3 | null): boolean {
+  add(id: number, from: THREE.Vector3, h: HookState, t: number, target: THREE.Vector3 | null): boolean {
     if (this.n + SEGS + PRONGS + 1 > this.mesh.instanceMatrix.count) return false;
     const end = this.tip;
     if (h.st === 2 && target) end.set(target.x, target.y + PLAYER.height * 0.6, target.z);
@@ -56,12 +72,39 @@ export class Ropes {
     else if (h.st === 3) out = Math.max(0, Math.min(full, (t - h.t0) * GRAPPLE.tipSpeed, (h.at - t) * GRAPPLE.tipSpeed));
     if (out < 0.05) return true;
     end.sub(from).multiplyScalar(out / full).add(from);
+    let look = this.looks.get(id);
+    if (!look) { look = { st: -1, taut: false, twangAt: -1e9, twangAmp: 0 }; this.looks.set(id, look); }
     const latched = h.st === 1 || h.st === 2;
-    const sag = (latched ? 0.012 : 0.07) * out;
+    // Rest length: the sim's (feet to anchor) for st 1; a yank is always hauling (taut).
+    const rest = h.st === 1 && h.len !== undefined ? h.len : latched ? out * 0.97 : out * 1.04;
+    const taut = latched && out >= rest;
+    if (latched && (look.st !== h.st || (taut && !look.taut))) {
+      // Bit, or snapped taut from slack: twang.
+      look.twangAt = t;
+      look.twangAmp = Math.min(TWANG_MAX, TWANG_AMP * out);
+    }
+    look.st = h.st; look.taut = taut;
+    let width = CABLE_W;
+    if (!latched) this.sag = 0.07 * out;
+    else if (!taut) this.sag = Math.min(0.5 * rest, Math.sqrt((3 * out * (rest - out)) / 8)) + 0.004 * out; // slack: hangs
+    else {
+      this.sag = 0.004 * out;
+      width = CABLE_W * Math.max(0.6, Math.sqrt(rest / out)); // stretched: thinner
+    }
+    const age = t - look.twangAt;
+    this.wob = latched && age >= 0 ? look.twangAmp * Math.exp(-TWANG_DECAY * age) : 0;
+    this.wobPhase = Math.sin(age * TWANG_HZ * Math.PI * 2);
+    if (taut && h.st === 1) this.wob += 0.01 * Math.min(3, out - rest); // a stretched rope hums a little
+    this.whip = latched ? 0 : 0.12 * Math.min(1, out / 6);
+    this.whipT = t * 40;
+    // Sideways for the wobble: horizontal, across the rope.
+    this.side.subVectors(end, from).cross(this.u.set(0, 1, 0));
+    if (this.side.lengthSq() < 1e-6) this.side.set(1, 0, 0);
+    this.side.normalize();
     for (let i = 0; i < SEGS; i++) {
-      this.point(from, end, i / SEGS, sag, this.p0);
-      this.point(from, end, (i + 1) / SEGS, sag, this.p1);
-      this.seg(this.p0, this.p1, CABLE_W);
+      this.point(from, end, i / SEGS, this.p0);
+      this.point(from, end, (i + 1) / SEGS, this.p1);
+      this.seg(this.p0, this.p1, width);
     }
     // The claw: a shank and three prongs bent back from the tip.
     this.d.subVectors(end, from).normalize();
@@ -78,15 +121,22 @@ export class Ropes {
     return true;
   }
 
+  /** Forget a player's rope look (they left). */
+  drop(id: number) { this.looks.delete(id); }
+
   end() {
     this.mesh.count = this.n;
     this.mesh.visible = this.n > 0;
     if (this.n > 0) this.mesh.instanceMatrix.needsUpdate = true;
   }
 
-  private point(a: THREE.Vector3, b: THREE.Vector3, k: number, sag: number, out: THREE.Vector3) {
+  private point(a: THREE.Vector3, b: THREE.Vector3, k: number, out: THREE.Vector3) {
     out.lerpVectors(a, b, k);
-    out.y -= sag * 4 * k * (1 - k);
+    const bell = 4 * k * (1 - k);
+    out.y -= this.sag * bell;
+    // Twang: the first string mode (fixed at both ends); whip: a wave running out along a flying rope.
+    const across = this.wob * Math.sin(Math.PI * k) * this.wobPhase + this.whip * bell * Math.sin(k * 9 - this.whipT);
+    if (across !== 0) out.addScaledVector(this.side, across);
   }
 
   private seg(a: THREE.Vector3, b: THREE.Vector3, width: number) {

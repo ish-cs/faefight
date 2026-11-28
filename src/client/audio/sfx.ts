@@ -487,6 +487,13 @@ export function playRecipe(k: Kit, out: AudioNode, t: number, cue: Cue, d: numbe
       }
       return len;
     }
+    case 'grappleSnap': // the rope parts: a sharp crack, a twanging recoil and the loose end whipping away
+      noise(k, out, t, { type: 'highpass', freq: 2500, dur: 0.025, peak: 0.9, attack: 0.0005 });
+      tone(k, out, t, { type: 'triangle', f0: 520 * p, f1: 140, dur: 0.22, peak: 0.45, attack: 0.002 });
+      return 0.03 + noise(k, out, t + 0.03, { type: 'bandpass', freq: 2200 * p, freqEnd: 500, q: 1.5, dur: 0.3, peak: 0.3, attack: 0.01 });
+    case 'grappleCreak': // a loaded rope: a low fibrous groan with a few strand ticks
+      for (let i = 0; i < 3; i++) noise(k, out, t + i * 0.07 + 0.02, { type: 'bandpass', freq: 1900 * p, q: 4, dur: 0.012, peak: 0.18 });
+      return noise(k, out, t, { type: 'bandpass', freq: 320 * p, freqEnd: 260, q: 6, dur: 0.35, peak: 0.35, attack: 0.05 });
     case 'grappleRelease': // latch clack + a short whoosh
       noise(k, out, t, { type: 'bandpass', freq: 1400 * p, q: 2, dur: 0.04, peak: 0.6 });
       return noise(k, out, t + 0.02, { type: 'bandpass', freq: 600 * p, freqEnd: 1600, q: 0.8, dur: 0.25, peak: 0.2, attack: 0.04 }) + 0.02;
