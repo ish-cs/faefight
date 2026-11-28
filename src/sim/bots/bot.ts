@@ -114,6 +114,8 @@ const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
 /** An enemy farther than this doesn't pull my gun off what my goal is shooting at (a plug, a wall). */
 const SHOOT_AT_OVER_FOE_M = 25;
+/** Gaze: the engage lead (gaze.skill.*.engageLeadM) applies while my walk heads within this of the enemy. */
+const LEAD_WALK_RAD = Math.PI / 3;
 /**
  * Explosive props. PRO bots sometimes shoot a barrel standing next to an enemy instead of the enemy (a
  * roll every BARREL_ROLL_SEC while such a shot is on, so it's a choice, not a reflex); everyone keeps out of
@@ -619,9 +621,13 @@ export class Bot {
     // "About to shoot": eyes go on them engageLeadM before they come into my gun's range, so the turn is done by the
     // time they're worth a shot. Not ahead of the no-scratch / no-drive-by limits: someone across the water I won't
     // shoot isn't stared at (they get my eyes when they hit me or line me up: threat).
-    const soon = foeDist - this.P.gaze.skill[this.difficulty].engageLeadM;
+    // Only while my walk heads their way (or I'm standing): walking past or away, the path keeps my eyes until they
+    // are in range (no strafing along with the eyes fixed on someone I can't hit yet).
+    const reach = WEAPONS[best].range * 0.95;
+    const toward = !act.dir || !foe || Math.abs(wrapAngle(yawOf(act.dir) - yawOf(sub(foe.pos, me.pos)))) <= LEAD_WALK_RAD;
     const soonOk = !(scratch && foeDist > WEAPONS[me.equipped].falloff.end * this.P.drive.fireRangeMult) &&
-      !(across && foeDist > this.P.drive.crossFire[this.difficulty]) && soon <= WEAPONS[best].range * 0.95;
+      !(across && foeDist > this.P.drive.crossFire[this.difficulty]) &&
+      (foeDist <= reach || (toward && foeDist - this.P.gaze.skill[this.difficulty].engageLeadM <= reach));
     // The brain chose to fight them (goal 'fight' on this enemy): eyes on them at once, wherever they are.
     const fighting = this.goal === 'fight' && !!foe && foe.id === enemy?.id;
     const engaged = this.gaze.engaged(now, !!foe && (this.gaze.threat(now, me, foe, this.mem.lastHurtBy, this.mem.lastHurtAt) ||
