@@ -592,20 +592,22 @@ export const STRENGTH: StrengthParams = {
   leaderFocus: D(0, 0, 0, 0),
 };
 
+// PRO only by default: on Hard too, the 1v1 PRO > Hard step fell to 70-90% (main 100%) and Hard sat at home up to
+// 114 s in mixed ×60 (tests/fixtures/discipline-ab/hard-too.json turns Hard on for A/B).
 export const DISCIPLINE: DisciplineParams = {
-  homeFirst: D(0, 0, 1, 1),
+  homeFirst: D(0, 0, 0, 1),
   debtCap: 0.4,
   debtDefend: 0.95,
-  chargeShop: D(0, 0, 1.1, 1.1),
+  chargeShop: D(0, 0, 0, 1.1),
   bankTripAt: 500,
-  bankRisk: D(0, 0, 0.9, 0.9),
+  bankRisk: D(0, 0, 0, 0.9),
   sticky: D(0.1, 0.1, 0.1, 0.1),
-  commitSec: D(0, 0, 2, 2),
+  commitSec: D(0, 0, 0, 2),
   commitBonus: 0.25,
-  sealAbortSec: D(0, 0, 20, 20),
-  bridgeShort: D(Infinity, Infinity, 2, 2),
-  cheapKit: D(0, 0, 1, 1),
-  kitShop: D(0, 0, 0.95, 0.95),
+  sealAbortSec: D(0, 0, 0, 20),
+  bridgeShort: D(Infinity, Infinity, Infinity, 2),
+  cheapKit: D(0, 0, 0, 1),
+  kitShop: D(0, 0, 0, 0.95),
 };
 
 export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH, discipline: DISCIPLINE });
