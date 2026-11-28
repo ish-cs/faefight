@@ -16,7 +16,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro', 'ffa4-pro', 'proxy-1v1-hard', 'proxy-1v1-pro', 'proxy-ffa8-hard'] as const;
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro', 'ffa4-pro', 'proxy-1v1-hard', 'proxy-1v1-pro', 'proxy-ffa8-hard', 'ffa8-pro1'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
@@ -53,6 +53,8 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
     case 'ffa3-pro': return { diffs: Array(3).fill('pro'), maxSec: SD + 180 };
     case 'ffa4-pro': return { diffs: Array(4).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
+    // One PRO among 7 Hard (the PRO match analysis setup), the PRO in seat (seed - 1) % 8.
+    case 'ffa8-pro1': return { diffs: Array.from({ length: 8 }, (_, i) => (i === (seed - 1) % 8 ? 'pro' : 'hard')), maxSec: SD + 180 };
     case 'ffa8-mixed': return { diffs: ['pro', 'hard', 'medium', 'easy', 'pro', 'hard', 'medium', 'easy'], maxSec: SD + 180 };
     case 'ffa8-pro-arch': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard-arch': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };

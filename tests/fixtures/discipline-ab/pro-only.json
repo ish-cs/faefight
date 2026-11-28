@@ -1,0 +1,13 @@
+{
+ "params": {
+  "discipline.homeFirst.hard": 0,
+  "discipline.chargeShop.hard": 0,
+  "discipline.bankRisk.hard": 0,
+  "discipline.sticky.hard": 0.1,
+  "discipline.commitSec.hard": 0,
+  "discipline.sealAbortSec.hard": 0,
+  "discipline.bridgeShort.hard": 99,
+  "discipline.cheapKit.hard": 0,
+  "discipline.kitShop.hard": 0
+ }
+}
