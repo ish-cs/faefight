@@ -48,9 +48,14 @@ const CONTEST_AT = 150;
 /** How often a bot reconsiders what to do, and how long it hesitates after changing plans (human thinking time). */
 const RESCORE_SEC: Record<Difficulty, number> = { easy: 1.6, medium: 1.0, hard: 0.5, pro: 0.3 };
 const HESITATE_SEC: Record<Difficulty, number> = { easy: 1.2, medium: 0.6, hard: 0.15, pro: 0.05 };
-const STICKY = 0.1;
 /** Going back to the goal I left less than this ago skips the thinking pause; goal misjudgements last about this. */
 const FLIP_BACK_SEC = 5, NOISE_HOLD_SEC = 3;
+/** Off the seal goal this long and the next seal is a new attempt (discipline.sealAbortSec). */
+const SEAL_TRY_GAP_SEC = 10;
+/** Commitment (discipline.commitSec) holds only this long after the last hit taken. */
+const COMMIT_CALM_SEC = 1.5;
+/** Getting this much nearer home counts as progress on a doorway debt (discipline.debtSec). */
+const DEBT_NEARER_M = 3;
 /** Misjudgement in goal/target scores (decision mistakes). */
 const NOISE: Record<Difficulty, number> = { easy: 0.3, medium: 0.15, hard: 0.08, pro: 0.03 };
 const BUY_GAP: Record<Difficulty, number> = { easy: 3, medium: 1.5, hard: 0.6, pro: 0.35 };
@@ -341,6 +346,11 @@ export class Bot {
    * scores are then exactly as without it (adding 0 never changes a float).
    */
   goalBias: ((goal: Goal, view: BotView) => number) | null = null;
+  /** Current seal attempt (discipline.sealAbortSec): rival, their open doors and my nearest distance at the last progress. */
+  private sealTry: { rival: number; doors: number; near: number; at: number; last: number } | null = null;
+  /** Doorway debt clock (discipline.debtSec): last progress (a plug gone, or nearer home), plugs and distance then. */
+  private debtClock: { since: number; plugs: number; near: number } | null = null;
+  private debtPauseUntil = -Infinity;
   private targetBan = new Map<number, number>();
   private lastNadeAt = -Infinity;
   /** Smoke / flash (utilityPlan.ts): last throw, and the last utility decision for the brain panel. */
@@ -537,6 +547,7 @@ export class Bot {
       this.nextScoreAt = now + RESCORE_SEC[this.difficulty] * (0.75 + 0.5 * this.rng());
     }
     this.watchdog(now, me);
+    this.sealWatch(ctx, now);
     if (this.retreat && now >= this.retreat.until) this.retreat = null;
     // Still deciding what to do next: stand and look around (fighting back still happens below).
     const thinking = now < this.hesitateUntil && !ctx.enemy && this.goal !== 'disengage' && this.goal !== 'storm';
@@ -1475,7 +1486,9 @@ export class Bot {
       // A full seal kit whenever there's someone to seal: their doors get reopened, the next rival has three.
       kit: c.rival ? Math.max(c.openDoors.length, MAP_DOORS) : 0,
       // A hard plug in my own doorway: only a charge gets through.
-      charge: this.blockers(c).some((p) => isHard(p.kind)),
+      // (discipline.chargeShop: also any plug nothing I carry gets through, e.g. sealed out gunless behind wood.)
+      charge: this.blockers(c).some((p) => isHard(p.kind)) ||
+        (this.P.discipline.chargeShop[this.difficulty] > 0 && this.blockers(c).length > 0 && !this.blockers(c).some((p) => this.canClear(c, p))),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
       smokes: total >= this.P.util.buyAt[this.difficulty] ? this.P.util.carrySmoke[this.difficulty] : 0,
       flashes: total >= this.P.util.buyAt[this.difficulty] ? this.P.util.carryFlash[this.difficulty] : 0,
@@ -1485,6 +1498,7 @@ export class Bot {
       traps: total >= this.P.trap.rich && !c.danger ? Math.max(0, this.P.trap.carry[this.difficulty] - this.myTraps(c.view).length) : 0,
       steel: skilled && total >= this.P.drive.steelRich,
       hardKit: this.P.drive.hardKit[this.difficulty],
+      cheapKit: this.P.discipline.cheapKit[this.difficulty] > 0,
       // A hook instead of buying a bridge's worth of scaffolds (one already carried: bridge it as before).
       grapple: c.bridgeTo !== null && (c.me.inv.pieces.scaffold ?? 0) < this.scaffoldsNeeded(c) && total >= this.P.hook.crossBuyAt[this.difficulty] ? 'cross'
         : total >= this.P.hook.buyAt[this.difficulty] ? 'rich' : undefined,
@@ -1796,13 +1810,19 @@ export class Bot {
         // No walk home: nothing to do at the plug from here (replay a.faereplay: it stood 10.7 min "shooting" its
         // own plug from the far island); getting home (bridge, hook) or hunting comes first.
         if (view.sealed[home.index] && !c.homeReach) return 0;
-        if (view.sealed[home.index]) return (can ? 0.85 + (this.sealedHomeCalm(c) ? this.P.drive.sealedHome[this.difficulty] : 0) : 0.1) + 0.1 * t.caution;
+        // Nothing I carry gets through, but I can pay for a charge: defend walks to the shop for it (discipline.chargeShop;
+        // the PRO match: it scored 0 here and lived ~5 min with a plugged doorway, $6k in its pocket next to its shop).
+        const buy = !can && c.homeReach ? this.chargeTrip(c) : 0;
+        if (view.sealed[home.index]) return (can ? 0.85 + (this.sealedHomeCalm(c) ? this.P.drive.sealedHome[this.difficulty] : 0) : Math.max(0.1, buy)) + 0.1 * t.caution;
         // One plugged doorway is most of a seal: clear it before going out. Out of ammo with the money for a box
         // (vault too): fetch it first, punching sandbags out one by one takes a minute (ffa8-mixed seed 18: 61 s).
         // (Cash waiting in my generator counts: collect it, then buy.)
         const restock = !ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) &&
           me.inv.cash + me.vault.cash + view.generators[home.index] >= AMMO_BOX.price;
-        return c.homeReach && can ? (restock ? 0.5 : 0.7 + 0.15 * t.caution) : 0;
+        if (buy > 0) return buy;
+        // A plugged doorway is a debt (discipline.homeFirst): cleared before any offence, so at least debtDefend.
+        const floor = this.homeDebt(c) ? this.P.discipline.debtDefend : 0;
+        return c.homeReach && can ? Math.max(restock ? 0.5 : 0.7 + 0.15 * t.caution, floor) : 0;
       }
       case 'heal': {
         // Health comes back slowly out of combat: low and away from home, go back and recover.
@@ -1837,8 +1857,11 @@ export class Bot {
       case 'bank': {
         // Storm coming: getting to the center beats a trip to the vault (the shop takes vault cash anyway).
         // Away from home with a lot on me (it drops if I die): the walk home to bank it.
-        if (c.on !== home.index) return this.bankAway(c);
+        if (c.on !== home.index) return Math.max(this.bankAway(c), this.bankRisk(c));
         if (view.suddenDeath || this.stormPrep(view)) return 0;
+        // Rich (discipline.bankTripAt): bank before anything risky.
+        const risk = this.bankRisk(c);
+        if (risk > 0) return risk;
         // Death insurance: before heading out, leave enough in the vault to rebuy a gun after a death.
         const leavingSoon = c.reach || ((me.inv.pieces.scaffold ?? 0) > 0 && (me.inv.pieces.scaffold ?? 0) >= this.scaffoldsNeeded(c));
         if (leavingSoon && this.insuranceDue(me) > 0 && !(c.enemy && c.enemyDist < 8)) return 0.8;
@@ -1889,7 +1912,7 @@ export class Bot {
         const urgent = items.includes('pistol') || items.includes('charge') || (items[0] === 'ammo' && !ownsGun(me.inv));
         // Out-ranged by a rifle lately and the rifle is next: go get one (strength.outranged).
         const rifle = items[0] === 'rifle' && this.outrangedLately(view.now) ? RIFLE_TRIP : 0;
-        return Math.max(urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0, rifle, this.endgameKit(c, items)) - away;
+        return Math.max(urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0, rifle, this.endgameKit(c, items), this.campKit(c, items)) - away;
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
@@ -1901,6 +1924,9 @@ export class Bot {
         // Already out over the water laying it: lay what I carry before turning back (a walk home and out again
         // costs more than the decks; with fast placing a trip often ends a deck or two short).
         const outOnIt = this.goal === 'bridge' && c.on !== home.index;
+        // Well short of the decks for the gap with the shop able to sell them: buy first (discipline.bridgeShort; the
+        // PRO match bridged with 1 of 10 decks and flip-flopped bridge/shop).
+        if (!outOnIt && this.shortDecks(c, have, need)) return 0;
         return 0.45 + 0.15 * t.aggression + (have >= need || outOnIt ? 0.1 : 0) + (toRival ? 0 : 0.05 * t.greed + (this.stormPrep(view) ? 0.45 : 0));
       }
       case 'contest': {
@@ -2079,6 +2105,70 @@ export class Bot {
     return c.view.sealed[c.home.index] && !c.view.suddenDeath ? this.P.drive.sealedCaution[this.difficulty] : 0;
   }
 
+  /**
+   * A plug in my own doorway that I can clear, or buy the charge for, with a walk home and nobody on top of me
+   * (discipline.homeFirst): offence waits until it's gone. 'sealed' when every doorway is shut.
+   */
+  homeDebt(c: Ctx): 'sealed' | 'plugged' | null {
+    return c.view.now < this.debtPauseUntil ? null : this.rawDebt(c);
+  }
+
+  private rawDebt(c: Ctx): 'sealed' | 'plugged' | null {
+    if (this.P.discipline.homeFirst[this.difficulty] <= 0 || c.view.suddenDeath || !c.homeReach || !this.sealedHomeCalm(c)) return null;
+    const bl = this.blockers(c);
+    if (!bl.length || !(bl.some((p) => this.canClear(c, p)) || this.chargeTrip(c) > 0)) return null;
+    return c.view.sealed[c.home.index] ? 'sealed' : 'plugged';
+  }
+
+  /**
+   * Time box on the doorway debt (discipline.debtSec): clear, then go. A debt with no progress (no plug gone, no
+   * nearer home) for debtSec lifts the cap for as long again, so a plug I can't get through doesn't pin me home.
+   */
+  private tickDebt(c: Ctx): void {
+    const lim = this.P.discipline.debtSec[this.difficulty], now = c.view.now;
+    if (!(lim < Infinity) || now < this.debtPauseUntil) return;
+    if (!this.rawDebt(c)) { this.debtClock = null; return; }
+    const plugs = this.blockers(c).length, near = dist2D(c.me.pos, c.home.bunker.center);
+    const k = this.debtClock;
+    if (!k || plugs < k.plugs || near < k.near - DEBT_NEARER_M) this.debtClock = { since: now, plugs, near: Math.min(near, k?.near ?? near) };
+    else if (now - k.since > lim) { this.debtPauseUntil = now + lim; this.debtClock = null; }
+    else k.plugs = plugs;
+  }
+
+  /** discipline.chargeShop when a charge is what the shop would sell me next (a plug I can't otherwise clear), else 0. */
+  chargeTrip(c: Ctx): number {
+    const v = this.P.discipline.chargeShop[this.difficulty];
+    if (v <= 0 || c.me.inv.charges > 0 || this.buyBlocked('charge') || !this.shopSpot(c)) return 0;
+    return this.plan(c).items.includes('charge') ? v : 0;
+  }
+
+  /**
+   * Bank before risk (discipline.bankRisk): carrying discipline.bankTripAt or more, on my island, or from anywhere
+   * while my own bunker is plugged or sealed. Not with an enemy close, the storm coming, or no walk home.
+   */
+  bankRisk(c: Ctx): number {
+    const D = this.P.discipline, v = D.bankRisk[this.difficulty];
+    if (v <= 0 || c.view.suddenDeath || this.stormPrep(c.view) || !c.homeReach || this.trapped(c) || c.me.inv.cash < D.bankTripAt) return 0;
+    if (c.enemy && c.enemyDist < 8) return 0;
+    if (c.on === c.home.index) return v;
+    return c.view.sealed[c.home.index] || this.blockers(c).length > 0 ? v - dist2D(c.me.pos, c.home.vault) / 400 : 0;
+  }
+
+  /** Seal kit while camping a rival's respawn window without one (discipline.kitShop): the next camp ends in a seal. */
+  campKit(c: Ctx, items: ShopItem[]): number {
+    const v = this.P.discipline.kitShop[this.difficulty];
+    if (v <= 0 || !c.rival || !c.rivalIsl || c.view.sealed[c.rivalIsl.index] || c.view.suddenDeath) return 0;
+    if (!(this.inWindow(c) || (!c.rival.alive && c.rival.respawnAt !== null))) return 0;
+    if (sealKit(c.me.inv) >= Math.max(c.openDoors.length, 1)) return 0;
+    return items.some((i) => (KIT_PIECES as string[]).includes(i)) ? v : 0;
+  }
+
+  /** Short of decks by more than discipline.bridgeShort, with the shop selling them and a shop trip scoring. */
+  shortDecks(c: Ctx, have: number, need: number): boolean {
+    if (need - have <= this.P.discipline.bridgeShort[this.difficulty]) return false;
+    return this.plan(c).items.includes('scaffold') && this.score('shop', c) > 0;
+  }
+
   /** My bunker is sealed and no enemy is close enough to punish me for turning to clear it. */
   private sealedHomeCalm(c: Ctx): boolean {
     return !c.enemy || c.enemyDist > SEALED_HOME_CLEAR;
@@ -2115,20 +2205,48 @@ export class Bot {
     // Nothing scores: wait at my generator (or go at my rival); in the storm, stay in the ring (doStorm holds inside it).
     let best: Goal = c.view.storm ? 'storm' : (c.homeReach || !c.reach) && !(c.reach && this.difficulty !== 'easy' && this.offensive(c)) ? 'collect' : 'attack', bestScore = -Infinity;
     const scored: { goal: string; score: number }[] = [];
+    const D = this.P.discipline, now = c.view.now;
+    // My own doorway plugged (discipline.homeFirst): offence is capped below clearing it.
+    this.tickDebt(c);
+    const debt = this.homeDebt(c);
+    // Camping a dead rival's respawn window: the kill (or the seal on them) ends their game, so it isn't capped.
+    const camp = debt !== null && this.inWindow(c);
+    // One pass, scoring and noise interleaved as before (score() can draw from the rng: fortSlots), so with every
+    // discipline knob off the decisions are bit-identical to the old brain.
+    let survival = false;
     for (const g of GOALS) {
-      if ((this.goalBan.get(g) ?? -Infinity) > c.view.now && !this.stormPrepGoal(g)) continue; // banned for a while (goal watchdog)
+      if ((this.goalBan.get(g) ?? -Infinity) > now && !this.stormPrepGoal(g)) continue; // banned for a while (goal watchdog)
       const raw = this.score(g, c);
-      const base = this.teamDrive(g, c, this.drive(g, c, raw));
-      if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
-      const noise = this.goalNoise(g, c.view.now), sticky = g === this.goal ? STICKY : 0;
+      const driven = this.teamDrive(g, c, this.drive(g, c, raw));
+      const base = debt && this.offence(g, c) && !(camp && (g === 'attack' || g === 'seal')) ? Math.min(driven, D.debtCap) : driven;
+      const rule = base !== driven ? (debt === 'sealed' ? 'my bunker is sealed: clear it first' : 'my doorway is plugged: clear it first') : undefined;
+      if ((g === 'disengage' || g === 'storm' || g === 'cover') && base > 0) survival = true;
+      if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, driven, base, noise: 0, sticky: 0, score: base, rule }); continue; }
+      const noise = this.goalNoise(g, now), sticky = g === this.goal ? D.sticky[this.difficulty] : 0;
       const s = base + noise + sticky + (this.goalBias ? this.goalBias(g, c.view) : 0);
-      rows?.push({ goal: g, raw, base, noise, sticky, score: s });
+      rows?.push({ goal: g, raw, driven, base, noise, sticky, score: s, rule });
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
+    }
+    // Commitment (discipline.commitSec): a goal just switched to holds a while, out of combat only (an enemy in sight
+    // or a hit just now: reactions such as cover stay instant), and never against running, the storm or cover.
+    const calm = !c.enemy && now - this.mem.lastHurtAt > COMMIT_CALM_SEC;
+    const cur = scored.find((x) => x.goal === this.goal);
+    if (cur && !survival && calm && now - this.switchAt < D.commitSec[this.difficulty] && D.commitBonus > 0) {
+      cur.score += D.commitBonus;
+      const row = rows?.find((r) => r.goal === this.goal);
+      if (row) { row.sticky += D.commitBonus; row.score += D.commitBonus; }
+      if (cur.score > bestScore) { bestScore = cur.score; best = cur.goal as Goal; }
     }
     this.lastScores = scored.sort((a, b) => b.score - a.score).slice(0, 4);
     if (rows) this.probe!.decided(c, rows, best);
     return best;
+  }
+
+  /** Goals that take me out at a rival (capped while my own doorway is plugged: discipline.homeFirst). */
+  private offence(g: Goal, c: Ctx): boolean {
+    if (g === 'seal' || g === 'attack' || g === 'raid' || g === 'contest') return true;
+    return g === 'bridge' && c.bridgeTo !== null && c.bridgeTo !== this.nav.centerNode && !this.allyIsland(c.view, c.bridgeTo);
   }
 
   /** On an offensive plan: gun in hand and either the money for a few walls or enough time gone by. */
@@ -2187,7 +2305,7 @@ export class Bot {
       case 'cut': return this.crossing(c) ? s : s * 0.4;
       // Banking with danger near is protecting the money (a death drops it all); idle banking waits.
       // Buying the vault level isn't idle banking (halved, it never beat the shop next door before a seal run).
-      case 'bank': return this.insuranceDue(me) > 0 || c.danger || this.wantsVaultUpgrade(me) ? s : s * 0.5;
+      case 'bank': return this.insuranceDue(me) > 0 || c.danger || this.wantsVaultUpgrade(me) || this.bankRisk(c) > 0 ? s : s * 0.5;
       case 'loot': return s * 0.6;
     }
     return s;
@@ -2491,6 +2609,8 @@ export class Bot {
     }
     const all = this.blockers(c);
     const target = all.find((p) => this.canClear(c, p));
+    // Nothing I carry clears it: buy the charge that does (discipline.chargeShop), then come back and blast it.
+    if (!target && this.chargeTrip(c) > 0) return this.doShop(c);
     if (!target) { this.nextScoreAt = c.view.now; return IDLE; }
     const door = b.doorways.find((d) => doorPieces(c.view.pieces, d).includes(target));
     if (!door) throw new Error(`Bot ${this.id}: blocker ${target.id} matches no doorway`);
@@ -3702,6 +3822,30 @@ export class Bot {
    * work from here, e.g. a route the map says exists but I can't walk: drop it (and the rival it was aimed at) for
    * a while and think again, like a player giving up on a dead end.
    */
+  /**
+   * discipline.sealAbortSec: a seal attempt that neither closes one of their doorways nor gets me nearer their bunker
+   * (by drive.stallDist) for this long is given up for drive.stallBanSec (the PRO match: re-tried a seal for minutes
+   * while its own bunker was plugged). Short detours (a fight, a heal) don't end the attempt.
+   */
+  private sealWatch(c: Ctx, now: number) {
+    const lim = this.P.discipline.sealAbortSec[this.difficulty];
+    if (lim <= 0 || this.goal !== 'seal' || !c.rival || !c.rivalIsl) {
+      if (this.sealTry && now - this.sealTry.last > SEAL_TRY_GAP_SEC) this.sealTry = null;
+      return;
+    }
+    const doors = c.openDoors.length, d = dist2D(c.me.pos, c.rivalIsl.bunker.center);
+    const t = this.sealTry;
+    if (!t || t.rival !== c.rival.id || doors < t.doors || d < t.near - this.P.drive.stallDist) {
+      this.sealTry = { rival: c.rival.id, doors, near: d, at: now, last: now };
+      return;
+    }
+    t.last = now;
+    if (now - t.at < lim) return;
+    this.goalBan.set('seal', now + this.P.drive.stallBanSec);
+    this.sealTry = null;
+    this.nextScoreAt = now;
+  }
+
   private watchdog(now: number, me: PlayerState) {
     const limit = !STALLABLE.has(this.goal) ? undefined : this.P.drive.stallSec * (this.goal === 'attack' ? 1.5 : 1);
     // Getting set for the storm (decks to the center, buying them) is never given up; any other goal still is
