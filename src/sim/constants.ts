@@ -126,6 +126,19 @@ export const HEAD = { y: 1.62, r: 0.18, mult: 2 };
 export const BURST_RESET_SEC = 0.2;
 
 export const GRENADE = { price: 100, dmg: 100, radius: 4, fuseSec: 2.5, throwSpeed: 14 };
+/**
+ * Smoke grenade (sim/utility.ts): thrown like a grenade, pops after `fuseSec`, then a cloud blooms over `bloomSec`
+ * to `radius` (m, horizontal) and `height` (m above the ground), lasts `lifeSec`, thinning over the last `thinSec`.
+ * A sight line is blocked once the smoke it crosses (chord length × density, summed over clouds) reaches `blockM`.
+ * At most `maxClouds` at once on the map (the oldest goes). `maxCarry`: stack limit.
+ */
+export const SMOKE = { price: 60, maxCarry: 3, fuseSec: 1.2, throwSpeed: 13, radius: 6.5, height: 4, bloomSec: 1.5, lifeSec: 15, thinSec: 3, blockM: 2.5, maxClouds: 6 };
+/**
+ * Flashbang (sim/utility.ts): pops after `fuseSec` (mid-air too). Anyone but the thrower within `range` (m) with a clear
+ * line to it is blinded with strength k = facing × distance (full inside `fullRange`, facing it within ~45°, a little
+ * when looking away): white for `holdSec`×k, then fading over `fadeSec`×k. Below `minK` nothing happens.
+ */
+export const FLASH = { price: 50, maxCarry: 3, fuseSec: 1.5, throwSpeed: 15, range: 15, fullRange: 4, holdSec: 2.5, fadeSec: 1.5, minK: 0.08 };
 export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
 /**
  * Grappling hook (sim/grapple.ts, movement.ts). One buy = `uses` hooks; a use is spent only when the hook

@@ -21,7 +21,7 @@ function steps(): { icon: keyof typeof ICON; title: string; text: string }[] {
   const e = bindingLabel(activeKeymap(), 'interact');
   return [
     { icon: 'goal', title: 'The goal', text: 'Seal every enemy bunker, then eliminate them. Last one standing wins.' },
-    { icon: 'cash', title: 'Cash and shop', text: `Press ${e} to collect cash at your generator, then spend it at the shop.` },
+    { icon: 'cash', title: 'Cash and shop', text: `Press ${e} to collect cash at your generator. The shop sells guns, smoke to hide in and flashbangs.` },
     { icon: 'bridge', title: 'Cross over', text: 'Lay scaffolds toward an enemy island; a grappling hook only spans the last gap.' },
     { icon: 'rocket', title: 'Rocket jump', text: `Fire a rocket at your feet to launch high: ${ROCKET.selfDmgMax} damage at most, soft landing.` },
     { icon: 'seal', title: 'Seal their bunker', text: 'Plug all 3 doorways of their bunker while they are dead or outside it.' },

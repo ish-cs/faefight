@@ -38,6 +38,8 @@ type CameraLike = { matrixWorld: { elements: ArrayLike<number> } };
 export type AudioStats = { state: string; played: number; dropped: number; active: number; bySound: Record<string, number>; music: Mood | 'none' };
 
 /** Game-bus level while the commentator speaks (about -4.4 dB): a slight dip, not a mute. */
+/** Flashbang bangs past this distance (m) play 2D (engine.ts play). */
+const FLASH_NEAR = 30;
 export const VOICE_DUCK = 0.6;
 
 export class AudioSystem {
@@ -404,11 +406,42 @@ export class AudioSystem {
     this.muffle.frequency.setTargetAtTime(this.cutoff(), ctx.currentTime, 0.06);
   }
   private kcSlow = 0;
-  /** World low-pass: low health muffles it; the killcam's slow motion muffles it further. */
+  /** World low-pass: low health muffles it; the killcam's slow motion and a flashbang's blindness muffle it further. */
   private cutoff(): number {
     const env = this.director.env;
-    return Math.min(muffleCutoff(env.hp, env.alive), 20000 * Math.pow(600 / 20000, this.kcSlow));
+    return Math.min(muffleCutoff(env.hp, env.alive), 20000 * Math.pow(600 / 20000, this.kcSlow), 20000 * Math.pow(350 / 20000, this.flashK));
   }
+
+  /**
+   * Per frame: how blinded the viewed player is (flashAlpha 0..1). The world goes dull (low-pass down to ~350 Hz)
+   * and a ~3.7 kHz tinnitus whine plays over it, both fading with the flash. Writes only on change (1/50 steps).
+   */
+  flashed(a: number) {
+    const ctx = this.ctx;
+    const q = Math.round(Math.min(1, Math.max(0, a)) * 50) / 50;
+    if (!ctx || ctx.state !== 'running' || q === this.flashK) return;
+    this.flashK = q;
+    const now = ctx.currentTime;
+    if (q > 0 && !this.ring) {
+      const osc = ctx.createOscillator();
+      osc.frequency.value = 3700;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      osc.connect(g).connect(this.master);
+      osc.start(now);
+      this.ring = { osc, g };
+    }
+    const r = this.ring;
+    if (r) r.g.gain.setTargetAtTime(0.05 * this.effects * q * q, now, 0.08);
+    if (q === 0 && r) {
+      this.ring = null;
+      r.osc.stop(now + 0.6);
+      r.osc.onended = () => { r.osc.disconnect(); r.g.disconnect(); };
+    }
+    this.muffle.frequency.setTargetAtTime(this.cutoff(), now, 0.08);
+  }
+  private flashK = 0;
+  private ring: { osc: OscillatorNode; g: GainNode } | null = null;
 
   /** Killcam: the killing shot lands (2D: a heavy impact, plus the headshot ping). */
   killcamImpact(headshot: boolean) {
@@ -547,6 +580,15 @@ export class AudioSystem {
       const td = dist(cue.pos, this.listener);
       delay = Math.min(4, td / 343);
       cue = { ...cue, pos: null, gain: cue.gain * Math.max(0.25, Math.min(1, 40 / (td + 10))), kind: td < 45 ? 'near' : 'far' };
+    }
+    if (cue.sound === 'flashPop' && cue.pos) {
+      // Heard map-wide: positional (full and directional) close by; past FLASH_NEAR a 2D bang at the same inverse
+      // falloff the panner would give (REF_DISTANCE/d) but never below 0.1, arriving at the speed of sound.
+      const fd = dist(cue.pos, this.listener);
+      if (fd > FLASH_NEAR) {
+        delay = Math.min(1.5, fd / 343);
+        cue = { ...cue, pos: null, gain: cue.gain * Math.max(0.1, REF_DISTANCE / fd), kind: 'far' };
+      }
     }
     const d = cue.pos ? dist(cue.pos, this.listener) : 0;
     if (cue.pos && !withinHearing(cue.sound, d, cue.own)) return; // past its hearing cap: not a voice at all
