@@ -24,6 +24,7 @@ https://polyhaven.com/license.
 | `textures/asphalt/` | [Asphalt 02](https://polyhaven.com/a/asphalt_02) | Rob Tuytel | 1k | harbor yard paving |
 | `textures/gravel/` | [Gravel Floor 02](https://polyhaven.com/a/gravel_floor_02) | Dimitrios Savva, Jenelle van Heerden | 1k | gravel patches / paths |
 | `textures/steel_plate/` | [Metal Plate 02](https://polyhaven.com/a/metal_plate_02) | Rob Tuytel | 1k | steel plate, vault |
+| `textures/apron/` | [Brushed Concrete](https://polyhaven.com/a/brushed_concrete) | Dimitrios Savva, Dario Barresi | 2k (normal 2k, ARM 1k; JPEG only) | island slab / harbour centre apron |
 
 ## Baked shipping container (original, CC0)
 

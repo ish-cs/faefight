@@ -61,10 +61,12 @@ const NIGHT_LIFT = 0.25;
  * deep blue dome). `sky` / `ground` = sRGB hue multipliers of the dome / the sunlit-quay bounce.
  */
 const ENV_KEYS = [
-  { p: 0.45, elev: 38, az: 58, sky: 0xffffff, ground: 0xffffff, sat: 0.5 }, // late morning (CLEAR's own key)
-  { p: 0.68, elev: 10, az: 47, sky: 0xffffff, ground: 0xffc8a0, sat: 0.6 }, // golden hour
-  { p: 0.86, elev: -2, az: 40, sky: 0xffffff, ground: 0xc89a98, sat: 0.6 }, // dusk afterglow
-  { p: 0.97, elev: 40, az: 238, sky: 0x8aa0e0, ground: 0x5a6c96, sat: 0.35 }, // night: moonlit sky
+  { p: 0.45, elev: 38, az: 58, sky: 0xffffff, ground: 0xffffff, sat: 0.5, mie: 0.002 }, // late morning (CLEAR's own key)
+  { p: 0.68, elev: 10, az: 47, sky: 0xffffff, ground: 0xffc8a0, sat: 0.6, mie: 0.002 }, // golden hour
+  { p: 0.86, elev: -2, az: 40, sky: 0xffffff, ground: 0xc89a98, sat: 0.6, mie: 0.002 }, // dusk afterglow
+  // night: moonlit sky. No Mie glow: the sky model's forward-scattering halo is a SUN's; around the moon it became a
+  // hot spot that the ÷level normalisation (×3) turned into a white specular blaze on slab and bunker
+  { p: 0.97, elev: 40, az: 238, sky: 0x8aa0e0, ground: 0x5a6c96, sat: 0.35, mie: 0 },
 ] as const;
 /** Weight of key i+1 over key i inside segment i at `phase` (segment = index of the last key at or before it). */
 export function envBlend(phase: number): { seg: number; w: number } {
@@ -249,6 +251,7 @@ export class Lighting {
     sky.showSunDisc.value = 0;
     sky.turbidity.value = 9;
     sky.rayleigh.value = 0.9;
+    sky.mieCoefficient.value = k.mie;
     sky.sunPosition.value.setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - k.elev), THREE.MathUtils.degToRad(k.az));
     const st = new THREE.Color(k.sky);
     const mat = sky.material as THREE.NodeMaterial;
@@ -268,31 +271,33 @@ export class Lighting {
   /**
    * Mean radiance of each key's environment (8 px cube render + async readback, at load): the probes are blended at
    * noon's brightness, how bright the ambient is stays scene.environmentIntensity (look.env). Until this resolves
-   * every key counts as noon's level (the match starts at noon).
+   * every key counts as noon's level (the match starts at noon). All four cubes render synchronously, here, before
+   * the first await: rendered between awaits they raced the loading screen's async compiles and came out with no
+   * colour output (empty WGSL OutputType, every later key read back the previous key's texels).
    */
   private async measureEnvLevels(scenes: THREE.Scene[]) {
-    const rt = new THREE.CubeRenderTarget(8, { type: THREE.HalfFloatType });
+    const rts = scenes.map(() => new THREE.CubeRenderTarget(8, { type: THREE.HalfFloatType }));
     try {
-      const cam = new THREE.CubeCamera(0.1, 100, rt);
-      const lv: number[] = [];
-      for (const sc of scenes) {
-        cam.update(this.gpu, sc);
-        let sum = 0, n = 0;
+      scenes.forEach((sc, i) => new THREE.CubeCamera(0.1, 100, rts[i]).update(this.gpu, sc));
+      const lv: number[] = [], hot: number[] = [];
+      for (const rt of rts) {
+        let sum = 0, n = 0, mx = 0;
         for (let f = 0; f < 6; f++) {
           const px = await this.gpu.readRenderTargetPixelsAsync(rt, 0, 0, 8, 8, 0, f) as Uint16Array | Float32Array;
           const v = px instanceof Uint16Array ? (i: number) => fromHalf(px[i]) : (i: number) => px[i];
-          for (let i = 0; i + 2 < px.length; i += 4) { sum += 0.2126 * v(i) + 0.7152 * v(i + 1) + 0.0722 * v(i + 2); n++; }
+          for (let i = 0; i + 2 < px.length; i += 4) { const y = 0.2126 * v(i) + 0.7152 * v(i + 1) + 0.0722 * v(i + 2); sum += y; n++; if (y > mx) mx = y; }
         }
         lv.push(n ? sum / n : 0);
+        hot.push(n && sum ? mx / (sum / n) : 0);
       }
       if (!lv.every((x) => x > 1e-5 && Number.isFinite(x))) throw new Error(`bad levels ${lv.join(',')}`);
       this.envLevel = lv.map((x) => x / lv[0]);
-      console.info(`[world/lighting] env probe levels (÷ noon): ${this.envLevel.map((x) => x.toFixed(3)).join(' ')}`);
+      console.info(`[world/lighting] env probe levels (÷ noon): ${this.envLevel.map((x) => x.toFixed(3)).join(' ')}; peak ÷ mean ${hot.map((x) => x.toFixed(1)).join(' ')}`);
       this.applyEnvGains();
     } catch (err) {
       console.warn('[world/lighting] env probe levels not measured: probes blend unnormalised', err);
     } finally {
-      rt.dispose();
+      for (const rt of rts) rt.dispose();
     }
   }
 
@@ -308,7 +313,8 @@ export class Lighting {
       const src = this.envKeys[seg + s].texture, dst = this.envSlots[s].texture;
       const mips = Math.min(src.mipmaps.length, dst.mipmaps.length);
       for (let l = 0; l < mips; l++) {
-        const size = (src.image as { width: number }).width >> l;
+        // a cube texture's `image` is its six faces (no width): the size comes from the PMREM mip chain
+        const size = src.mipmaps[l].width;
         this.gpu.copyTextureToTexture(src, dst, new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(size, size, 6)), null, l, l);
       }
     }
