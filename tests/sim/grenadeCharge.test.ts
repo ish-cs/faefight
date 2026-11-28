@@ -219,3 +219,21 @@ describe('determinism / replay (match level)', () => {
     runner.dispose();
   });
 });
+
+describe('bots: lob safety (impact frags)', () => {
+  test('a lob whose first contact is my own cover in front of me is not thrown', async () => {
+    const { chargedThrow, lobClear } = await import('../../src/sim/bots/bot');
+    const eye = v3(0, 1.6, 0), to = v3(12, 0.3, 0);
+    const a = chargedThrow(eye, to, false, 1.0)!;
+    expect(a).not.toBeNull();
+    const speed = throwSpeed('grenade', a.power);
+    expect(lobClear(eye, a, speed, [], [], 5)).toBe(true);
+    // A metal wall 0.8 m in front, taller than the throw climbs there; and a container overhead-ish.
+    const wall: PieceState = { id: 1, kind: 'metal', owner: 1, pos: v3(0.8, 0, 0), rotY: Math.PI / 2, hp: 400 };
+    const flat = chargedThrow(eye, to, true, 1.0)!;
+    expect(lobClear(eye, flat, throwSpeed('grenade', flat.power), [wall], [], 5)).toBe(false);
+    // Far cover (past the safe radius) doesn't block the throw.
+    const far: PieceState = { ...wall, id: 2, pos: v3(8, 0, 0) };
+    expect(lobClear(eye, flat, throwSpeed('grenade', flat.power), [far], [], 5)).toBe(true);
+  });
+});

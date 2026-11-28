@@ -183,3 +183,39 @@ describe('bots use smoke and flash in real games', () => {
     expect(flashGames).toBeGreaterThanOrEqual(2);
   }, 900_000);
 });
+
+describe('bots: utility discipline (charged/impact grenades)', () => {
+  const me = () => { const p = newPlayer(1, 'b', true, 0, v3(0, 0, 0), 0); p.inv.smokes = 3; p.inv.flashes = 3; return p; };
+  const sit = (p: PlayerState, extra: Partial<UtilSituation> = {}): UtilSituation => {
+    const foe = newPlayer(2, 'e', false, 1, v3(10, 0, 0), 0);
+    const view = { now: 100, self: p, enemies: [foe], map: [], others: [], pieces: [] } as unknown as BotView;
+    return {
+      view, me: p, difficulty: 'pro', P: DEFAULT_BOT_PARAMS.util, goal: 'disengage', enemy: foe, enemyDist: 10,
+      target: { id: 2, pos: foe.pos, t: 100 }, rivalBunker: null, retreating: true, lastAt: -Infinity, lastHurtAt: 99.5, ...extra,
+    };
+  };
+
+  test('tunable: the caps and the sea-smoke chance are in the trainer search box', () => {
+    for (const k of ['util.capN', 'util.capSec', 'util.seaSmoke.pro', 'util.nadeSafeM']) expect(PARAM_RANGES[k], k).toBeDefined();
+  });
+
+  test('per-fight cap: no more smoke/flash once capN went out within capSec', () => {
+    const P = DEFAULT_BOT_PARAMS.util;
+    const recent = Array.from({ length: P.capN }, (_, i) => 100 - P.gapSec - 1 - i);
+    expect(planUtility(sit(me(), { throwTimes: recent }))).toBeNull();
+    // Old throws (outside the window) don't count.
+    expect(planUtility(sit(me(), { throwTimes: recent.map((t) => t - P.capSec) }))?.kind).toBe('smoke');
+  });
+
+  test('a crossing smoke is not wasted on open water (seaSmoke 0); onto a deck it still goes', () => {
+    const p = me();
+    p.pos = v3(500, 1, 500); // out over the sea, far off any island
+    const base = sit(p, { goal: 'bridge', retreating: false, enemy: null, target: { id: 2, pos: v3(520, 1, 500), t: 100 } });
+    const P = { ...base.P, smokeCross: { ...base.P.smokeCross, pro: 1 }, flashPush: { ...base.P.flashPush, pro: 0 } };
+    expect(planUtility({ ...base, P })).toBeNull();
+    expect(planUtility({ ...base, P: { ...P, seaSmoke: { ...P.seaSmoke, pro: 1 } } })?.why).toMatch(/crossing/);
+    // A scaffold under the landing spot: a deck, smoke it.
+    const deck = { id: 9, kind: 'scaffold', owner: 1, pos: v3(506, 0.8, 500), rotY: 0, hp: 160 };
+    expect(planUtility({ ...base, P, view: { ...base.view, pieces: [deck] } as BotView })?.why).toMatch(/crossing/);
+  });
+});

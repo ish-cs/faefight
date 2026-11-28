@@ -28,6 +28,21 @@ export type UtilParams = {
    * off on first contact, so a steeper lob drops behind cover / onto a plug instead of clipping what's in front.
    */
   lobPitch: Record<Difficulty, number>;
+  /**
+   * Per-fight cap (utilityPlan.ts): at most `capN` smoke/flash throws within any `capSec` window. Smoke and flash go
+   * off on first contact, so every cloud counts; without a cap long fights fill with clouds and stall.
+   */
+  capN: number; capSec: number;
+  /**
+   * Chance to smoke a crossing when the cloud would land on open water (no island, deck or piece under it): a cloud
+   * on the sea covers no footing and blinds my own push, so the default keeps the smoke for the deck.
+   */
+  seaSmoke: Record<Difficulty, number>;
+  /**
+   * Frag lobs (bot.ts lobClear): no throw whose path touches anything (my own cover, a wall, the ground) within this
+   * far (m) of me: an impact frag goes off there, inside its own blast radius.
+   */
+  nadeSafeM: number;
   /** Least time between two utility throws (s), and how long a roll holds before it's rolled again. */
   gapSec: number; rollSec: number;
 };
@@ -39,6 +54,7 @@ export const UTIL: UtilParams = {
   smokeRetreat: D(0.35, 0.6, 0.85, 1), smokeCross: D(0.15, 0.4, 0.7, 0.9), flashPush: D(0, 0.4, 0.7, 0.9),
   avoidSmoke: D(0, 0.5, 1, 1), blindBack: D(0.5, 0.8, 1, 1), lobPitch: D(0.7, 0.85, 0.95, 1.05),
   retreatM: 16, flashMin: 6, flashMax: 18, seenSec: 3, gapSec: 4, rollSec: 3,
+  capN: 2, capSec: 30, seaSmoke: D(0, 0, 0, 0), nadeSafeM: 5,
 };
 
 /** Search boxes for the ES trainer (params.ts RANGE_RULES). */
@@ -48,5 +64,6 @@ export const UTIL_RANGES: [string, [number, number]][] = [
   ['util.avoidSmoke.*', [0, 1]], ['util.blindBack.*', [0, 1]], ['util.lobPitch.*', [0.4, 1.3]],
   ['util.retreatM', [6, 30]], ['util.flashMin', [3, 10]], ['util.flashMax', [10, 25]], ['util.seenSec', [0.5, 8]],
   ['util.gapSec', [1, 15]], ['util.rollSec', [1, 8]],
+  ['util.capN', [1, 6]], ['util.capSec', [5, 60]], ['util.seaSmoke.*', [0, 1]], ['util.nadeSafeM', [3, 8]],
 ];
 
