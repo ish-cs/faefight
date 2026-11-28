@@ -256,9 +256,9 @@ export type TeamParams = {
  *   hold high ground (yankHigh m above me), or my gun wants them closer (past yankFalloff × its falloff start).
  * - yankRate: yank tries per second while one would pay (seeded rng: not every chance).
  * - keepForTravel: uses held back for crossing while my target island is out of walking reach.
- * - releaseDist: on my own (elastic) rope, let go this close to the anchor when the fling lands me on solid ground
- *   at its level (keeps the speed instead of the arrival stop; 0 = always ride it in). No stick input on a rope: back
- *   would hold the reel, strafe would swing me.
+ * - releaseDist: on my own rope, let go this close to the anchor when the fling lands me on solid ground at its level
+ *   (keeps the speed instead of the arrival stop; 0 = always ride it in). No stick input on a rope: strafe would nudge
+ *   the pull sideways.
  */
 export type HookParams = {
   buyAt: Record<Difficulty, number>;

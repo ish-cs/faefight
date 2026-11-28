@@ -65,7 +65,7 @@ const RELEASE_STEP = 0.35;
 const RELEASE_LAND = 4, RELEASE_RUNOUT = [1, 2, 3];
 
 /**
- * On my own elastic rope (movement.ts stepPull): let go now (jump) and fling the rest of the way? Only within
+ * On my own rope (movement.ts stepPull): let go now (jump) and fling the rest of the way? Only within
  * P.releaseDist of the anchor, moving toward it, and when the fling (my velocity, capped like any release) comes
  * down on top of solid ground at about the anchor's level near it, with ground ahead to slide out on. Never into a
  * ledge's face (feet under its lip: the capsule stops dead there and drops in the water) and never past a narrow

@@ -749,11 +749,11 @@ export class Bot {
     if (jump && !this.nav.safeJump(dir, !!act.sprint)) jump = false;
     if (rope || grapple) jump = false; // a jump lets go of the rope
     if (rope && !grapple) {
-      // Elastic rope: time the release, letting go near the anchor when the fling lands me on the ledge.
+      // On the rope: time the release, letting go near the anchor when the fling lands me on the ledge.
       const why = ropeRelease(view, this.P.hook, rope);
       if (why) { jump = true; this.hookNote = { t: now, text: why }; }
     }
-    // On my own rope the stick stays still: back holds the reel, strafe swings me (movement.ts stepPull).
+    // On my own rope the stick stays still: strafe would nudge the pull sideways (movement.ts stepPull).
     const move = dir && !rope
       ? { moveX: dir.x * right(look.yaw).x + dir.z * right(look.yaw).z, moveZ: dir.x * forward(look.yaw).x + dir.z * forward(look.yaw).z }
       : { moveX: 0, moveZ: 0 };
