@@ -34,6 +34,7 @@ import {
 import type { AllyStatus, BotView, OtherStatus } from './view';
 import { planUtility, utilAngles, utilReact, type UtilSituation } from './utilityPlan';
 import { chestOf, slitLines } from './slit';
+import { Gaze } from './gaze';
 import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, type ScoreRow } from './introspect';
 
 export type Goal =
@@ -374,6 +375,8 @@ export class Bot {
   /** This fight's rolls (coverFirst, reloadWeight), since when I've been breaking line of sight to heal. */
   private healRoll = { cover: true, reload: true };
   private healRng: () => number;
+  /** Where I look when not shooting (gaze.ts). */
+  private gaze: Gaze;
   private healHideAt: number | null = null;
   /** How I'd break line of sight to heal right now (cover close by or a wall to throw), or null: none at hand. */
   private healHideAct: Act | null = null;
@@ -463,6 +466,8 @@ export class Bot {
     this.aim = new Aim({ ...AIM[difficulty], recoilComp: P.gunSkill[difficulty].recoilComp }, mulberry32(aimSeed), P.aim.feel[difficulty]);
     // Heal habits roll on their own stream too (like the aim hand): healing never shifts the match's other rolls.
     this.healRng = mulberry32((base ^ Math.imul(id, 0x85ebca6b) ^ 0x3c6ef372) >>> 0);
+    // The calm view's glances and drift: its own stream as well (looking around never shifts other rolls).
+    this.gaze = new Gaze(P.gaze.skill[difficulty], P.gaze, mulberry32((base ^ Math.imul(id, 0xc2b2ae35) ^ 0x510e527f) >>> 0));
     this.wallsOnBridge = rng() < Math.min(1, 0.3 + t.builder);
     this.centerMinded = 0.6 * t.greed + 0.4 * t.opportunism > 0.55;
   }
@@ -506,7 +511,7 @@ export class Bot {
     // Match doesn't call dead bots: a gap of more than a couple of ticks means I just respawned (new body, new
     // facing). Start the aim hand fresh instead of whipping it over the whole gap or "compensating" toward my old aim.
     const skipped = !Number.isNaN(this.lastNow) && now - this.lastNow > 2.5 * DT;
-    if (skipped) { this.aim.reset(); this.aimId = null; this.aimLost = null; }
+    if (skipped) { this.aim.reset(); this.gaze.reset(); this.aimId = null; this.aimLost = null; }
     const dt = Number.isNaN(this.lastNow) || skipped ? DT : Math.max(0, now - this.lastNow);
     this.lastNow = now;
     this.mem.update(view);
@@ -515,6 +520,7 @@ export class Bot {
     if (!me.alive) {
       this.moveDir = null;
       this.aim.reset();
+      this.gaze.reset();
       this.aimId = null;
       this.aimLost = null;
       this.stuckRef = null;
@@ -628,6 +634,37 @@ export class Bot {
     const utilAim = utilPlan ? utilAngles(eye, utilPlan.at, utilPlan.kind) : null;
     let throwUtil: UtilityKind | undefined;
     const slitOut = this.slitOutShot(ctx, foe);
+    // Gaze (gaze.ts): eyes on an enemy only to engage them: I'd shoot them now (in range, worth the shot), they're a
+    // threat (hit me lately, or aiming at me), or I'm about to yank them. Otherwise I look where I'm going.
+    const foeDist = foe ? dist2D(foe.pos, me.pos) : Infinity;
+    const hittingMe = !!foe && this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3;
+    let scratch = false, across = false;
+    if (foe) {
+      // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
+      // unless they're the one shooting at me.
+      scratch = this.difficulty !== 'easy' && foeDist > WEAPONS[me.equipped].falloff.end * this.P.drive.fireRangeMult && !hittingMe;
+      // Not on my island and far: no drive-by shots across the water (close in and fight instead), unless they're on me
+      // or they're the last rival standing (nobody else to give my position away to: a duel is won on first damage).
+      // Islands by nav node, so the center island counts as one (islandAt says -1 there, like water).
+      const myNode = this.nav.nodeAt(me.pos);
+      // (The sniper is for exactly those shots: sniper.crossShots.)
+      across = foeDist > this.P.drive.crossFire[this.difficulty] && !hittingMe &&
+        !(me.equipped === 'sniper' && this.P.sniper.crossShots[this.difficulty] >= 0.5) &&
+        view.others.some((o) => !o.eliminated && o.id !== foe.id) &&
+        (myNode < 0 || this.nav.nodeAt(foe.pos) !== myNode);
+    }
+    // "About to shoot": eyes go on them engageLeadM before they come into my gun's range, so the turn is done by the
+    // time they're worth a shot. Not ahead of the no-scratch / no-drive-by limits: someone across the water I won't
+    // shoot isn't stared at (they get my eyes when they hit me or line me up: threat).
+    const soon = foeDist - this.P.gaze.skill[this.difficulty].engageLeadM;
+    const soonOk = !(scratch && foeDist > WEAPONS[me.equipped].falloff.end * this.P.drive.fireRangeMult) &&
+      !(across && foeDist > this.P.drive.crossFire[this.difficulty]) && soon <= WEAPONS[best].range * 0.95;
+    // The brain chose to fight them (goal 'fight' on this enemy), or to shoot out through my slit: eyes on them at once.
+    const fighting = this.goal === 'fight' && !!foe && foe.id === enemy?.id;
+    const engaged = this.gaze.engaged(now, !!foe && (this.gaze.threat(now, me, foe, this.mem.lastHurtBy, this.mem.lastHurtAt) ||
+      (hook?.why === 'yank' && hook.target === foe.id) || soonOk || fighting || slitOut));
+    // Not engaging someone in sight: no eyes on them, but I know they're there (their sighting clock keeps running).
+    if (foe && !engaged) this.aim.notice(now, foe.id);
     if (act.shootAt && act.shootFirst && me.breakoutUntil !== null && !slitOut) {
       // Countdown running: the plug in my way beats everything else (no hook, barrel or pier tricks first).
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
@@ -666,7 +703,7 @@ export class Bot {
         this.utilLastAt = now;
         this.utilNote = { t: now, text: utilPlan.why };
       }
-    } else if (foe && !((act.shootAt || act.lookFirst) && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
+    } else if (foe && engaged && !((act.shootAt || act.lookFirst) && foeDist > SHOOT_AT_OVER_FOE_M)) {
       // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
       // Only a head showing over a crate: aim for that (the body behind it would only put holes in the crate).
       const aimY = view.peeking?.includes(foe.id) ? HEAD.y : CHEST;
@@ -674,21 +711,6 @@ export class Bot {
       const scoped = me.equipped === 'sniper' && me.ads;
       const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, aimY, 0)), foe.id, cur, scoped ? this.P.sniper.scopeAim[this.difficulty] : 1);
       look = r;
-      const foeDist = dist2D(foe.pos, me.pos);
-      // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
-      // unless they're the one shooting at me.
-      const w = WEAPONS[me.equipped];
-      const hittingMe = this.mem.lastHurtBy === foe.id && now - this.mem.lastHurtAt < 3;
-      const scratch = this.difficulty !== 'easy' && foeDist > w.falloff.end * this.P.drive.fireRangeMult && !hittingMe;
-      // Not on my island and far: no drive-by shots across the water (close in and fight instead), unless they're on me
-      // or they're the last rival standing (nobody else to give my position away to: a duel is won on first damage).
-      // Islands by nav node, so the center island counts as one (islandAt says -1 there, like water).
-      const myNode = this.nav.nodeAt(me.pos);
-      // (The sniper is for exactly those shots: sniper.crossShots.)
-      const across = foeDist > this.P.drive.crossFire[this.difficulty] && !hittingMe &&
-        !(me.equipped === 'sniper' && this.P.sniper.crossShots[this.difficulty] >= 0.5) &&
-        view.others.some((o) => !o.eliminated && o.id !== foe.id) &&
-        (myNode < 0 || this.nav.nodeAt(foe.pos) !== myNode);
       fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !across && !this.burstRest(now, me, foeDist);
       // Sniper: scoped in, then on target for sniper.steadySec before the shot (a steady shot, not a hip flick).
       if (me.equipped === 'sniper') {
@@ -714,14 +736,19 @@ export class Bot {
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
     } else if (act.face) {
       look = hand(lookAt(eye, act.face), TURN_RATE);
-    } else if (this.aimLost && !act.build) {
+    } else if (this.aimLost && engaged && !act.build) {
       // Just lost sight of who I was shooting at: keep my eyes on where they were a moment (walking still works:
       // movement is relative to the view), instead of whipping round to the walk direction and back.
       look = hand(lookAt(eye, this.aimLost.at), this.aim.maxTurn);
-    } else if (act.dir) {
-      look = hand({ yaw: yawOf(act.dir), pitch: 0 }, TURN_RATE);
     } else {
-      look = hand(cur, TURN_RATE); // nothing to look at: the hand comes to rest
+      // Calm: look where I'm going, with glances (a newcomer, a known enemy, where a shot came from, around).
+      const G = this.P.gaze;
+      const by = this.mem.lastHurtBy;
+      const hurtNew = by !== null && now - this.mem.lastHurtAt < G.threatSec && (!foe || by !== foe.id || !engaged);
+      const hurtFrom = hurtNew ? (view.enemies.find((e) => e.id === by)?.pos ?? this.mem.seen.get(by!)?.pos ?? null) : null;
+      const known = this.aimLost?.at ?? (this.aimAt && this.aimId !== null ? this.aimAt : null);
+      const want = this.gaze.calm(now, dt, eye, cur, act.dir, view.enemies, known, hurtFrom && add(hurtFrom, v3(0, CHEST, 0)));
+      look = hand(want, this.P.gaze.skill[this.difficulty].turnRate);
     }
 
     if (me.equipped !== 'sniper' || !foe) this.steadySince = null;
@@ -753,7 +780,7 @@ export class Bot {
     if (react) { dir = react.dir; this.moveSrc = 'utility'; if (now - (this.utilNote?.t ?? -Infinity) > 1) this.utilNote = { t: now, text: react.note }; }
     if (now < this.unstickUntil) {
       // Step aside; stuck again at the same spot, back off further each time (around whatever is in the way).
-      dir = this.unstickDir ?? scale(right(look.yaw), this.unstickSide);
+      dir = this.unstickDir ?? scale(right(act.dir ? yawOf(act.dir) : look.yaw), this.unstickSide); // aside of the way I was going (the view may be glancing elsewhere)
       jump = true;
       this.moveSrc = 'unstick';
     }
@@ -3766,6 +3793,10 @@ export class Bot {
   /** Back off from whoever is hurting me: home to the bunker if that isn't toward them, else straight away. */
   private doDisengage(c: Ctx): Act {
     const me = c.me, now = c.view.now;
+    // Backed out of their gun range at home with no walk over to me: low hp no longer counts (lowHpFarOff), so
+    // rescore now instead of running on to the next rescore (botFarFoeCollect: walking off at full speed with eyes
+    // on the path, the old rescore lag carried a low-hp bot 2 m past a pistol's range).
+    if (this.lowHpFarOff(c)) this.nextScoreAt = Math.min(this.nextScoreAt, now);
     // Who I'm getting away from: whoever is in sight, else whoever hurt me last. Kept a moment (FLEE_KEEP_SEC) unless
     // someone much closer turns up: a far enemy blinking in and out of sight past a corner would otherwise swing
     // "away" (and the spot behind the bunker) round and back every few ticks.

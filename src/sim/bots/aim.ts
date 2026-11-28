@@ -107,10 +107,12 @@ export class Aim {
     return out;
   }
 
-  /** `coneMult` scales the aim error (a scope steadies the hand: < 1). */
-  track(now: number, dt: number, eye: Vec3, point: Vec3, id: number, cur: Angles, coneMult = 1): AimResult {
-    const fresh = id !== this.target || now - this.lastSeen > FORGET_SEC;
-    if (fresh) {
+  /**
+   * Keep the sighting clock of enemy `id` running without looking at them (gaze.ts: in sight, not engaged): the
+   * reaction to someone I've been watching from the corner of my eye is already done; re-engaging costs the turn.
+   */
+  notice(now: number, id: number) {
+    if (id !== this.target || now - this.lastSeen > FORGET_SEC) {
       this.target = id; this.seenAt = now;
       // A new sighting starts somewhere in the cone, then drifts from there.
       const a = this.rng() * 2 * Math.PI, r = Math.sqrt(this.rng());
@@ -118,6 +120,11 @@ export class Aim {
       this.noise = { ...this.err };
     }
     this.lastSeen = now;
+  }
+
+  /** `coneMult` scales the aim error (a scope steadies the hand: < 1). */
+  track(now: number, dt: number, eye: Vec3, point: Vec3, id: number, cur: Angles, coneMult = 1): AimResult {
+    this.notice(now, id);
     this.drift(dt);
 
     const tracked = now - this.seenAt;

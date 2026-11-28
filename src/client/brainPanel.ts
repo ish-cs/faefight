@@ -197,8 +197,9 @@ export class BrainInspector {
     const heal = d.heal ? el('div', 'bx-build', `Healing: ${this.text(d.heal)}`) : null;
     const util = d.util ? el('div', 'bx-build', `Smoke / flash: ${this.text(d.util)}`) : null;
     const stranded = d.stranded ? el('div', 'bx-build', `Stranded: ${this.text(d.stranded)}`) : null;
+    const gaze = d.gaze ? el('div', 'bx-dim', `Looking: ${d.gaze}`) : null;
     const path = d.path.length > 1 ? el('div', 'bx-dim', `Route: ${d.path.length - 1} waypoint${d.path.length > 2 ? 's' : ''} ahead`) : null;
-    return this.section('Plans', 'plans', ol, shop, build, hook, weapon, heal, util, stranded, path);
+    return this.section('Plans', 'plans', ol, shop, build, hook, weapon, heal, util, stranded, gaze, path);
   }
 
   private state(d: BrainDigest) {

@@ -71,6 +71,8 @@ export type BrainDigest = {
   heal?: string;
   /** Smoke / flash (utilityPlan.ts): its last throw or reaction (a few seconds), else what it carries; absent when none. */
   util?: string;
+  /** Where it's looking and why (gaze.ts): the path, a glance, or eyes on an enemy it engages. */
+  gaze?: string;
   /** Weapon it wants in hand and why ("rocket: reload it between fights"); absent when dead or not yet decided. */
   weapon?: string;
   /** Route ahead: [x, y, z] points from its feet. */
@@ -139,6 +141,7 @@ type Internals = {
   utilNote: { t: number; text: string } | null;
   slitNote: { t: number; text: string } | null;
   weaponIntent: { want: string; why: string } | null;
+  gaze: { note(): string };
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
 const inside = (b: Bot) => b as unknown as Internals;
@@ -463,6 +466,9 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const near = c.on === c.rivalIsl.index && dist2D(me.pos, c.rivalIsl.bunker.center) < 15;
       const seen = c.rival && c.rival.alive ? I.mem.recent(c.rival.id, now, 20) : null;
       const ownerAway = !!seen && seen.island !== c.rival!.island;
+      // Standing on their island with nobody home (not seen here lately): same term as the score (bot.ts 'seal').
+      const empty = c.on === c.rivalIsl.index && !!c.rival && c.rival.alive && !ownerAway &&
+        I.mem.recent(c.rival.id, now, I.P.drive.emptyHomeSec)?.island !== c.rival.island;
       const f: [string, number][] = [[kit >= c.openDoors.length ? 'full kit' : 'partial kit', kit >= c.openDoors.length ? 0.6 : 0.3]];
       f.push(['seals win', I.P.drive.sealBonus]);
       const eg = I.endgameSeal(c);
@@ -470,7 +476,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (I.inWindow(c)) f.push(['respawn window', I.P.drive.windowPush]);
       if (rivalDown) f.push(['rival dead', 0.5], ['opportunism', 0.3 * t.opportunism]);
       if (near) f.push(['near bunker', 0.1]);
-      if (ownerAway) f.push(['owner away', 0.2 * t.opportunism]);
+      if (ownerAway || empty) f.push([ownerAway ? 'owner away' : 'nobody home', I.P.drive.sealAway + 0.2 * t.opportunism]);
       const died = c.rival ? I.mem.diedAt.get(c.rival.id) : undefined;
       return { f, why: sealWhy({
         rival: rivalName(c), kit, doors: c.openDoors.length, hooking: !c.reach, away: ownerAway,
@@ -816,6 +822,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     ...(me?.alive && I.strandedSince !== null ? { stranded: `Cut off from home ${Math.round(now - I.strandedSince)} s: swims home at ${I.P.drive.strandedSec} s unless a hook or a seller gets me there` } : {}),
     ...healLine(I, me, now),
     ...utilLine(I, me, now),
+    ...(me?.alive ? { gaze: I.gaze.note() } : {}),
     ...(me?.alive && I.weaponIntent ? { weapon: I.weaponIntent.why } : {}),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
