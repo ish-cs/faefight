@@ -406,7 +406,8 @@ export type StrengthParams = {
  * - sealAbortSec: a seal attempt that neither closes a doorway nor gets nearer the bunker for this long is dropped
  *   (goal ban of drive.stallBanSec).
  * - bridgeShort: short of decks for the gap by more than this, buy them first instead of laying a partial bridge
- *   (seen: bridging with 1 of 10 decks, then a trip back for the rest).
+ *   (seen: bridging with 1 of 10 decks, then a trip back for the rest). 5, not 2: at 2 the PRO saved for decks and
+ *   skipped the rifle (botStrength rifleAt test 1/6 seats).
  * - cheapKit: short of a full kit and the cash doesn't cover it in metal, buy wood plugs (hardKit never blocks a
  *   seal). kitShop: shop score for a seal kit while camping a rival's respawn window without one.
  */
@@ -605,7 +606,7 @@ export const DISCIPLINE: DisciplineParams = {
   commitSec: D(0, 0, 0, 2),
   commitBonus: 0.25,
   sealAbortSec: D(0, 0, 0, 20),
-  bridgeShort: D(Infinity, Infinity, Infinity, 2),
+  bridgeShort: D(Infinity, Infinity, Infinity, 5),
   cheapKit: D(0, 0, 0, 1),
   kitShop: D(0, 0, 0, 0.95),
 };

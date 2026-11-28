@@ -5,7 +5,7 @@
   "discipline.bankRisk.hard": 0.9,
   "discipline.commitSec.hard": 2,
   "discipline.sealAbortSec.hard": 20,
-  "discipline.bridgeShort.hard": 2,
+  "discipline.bridgeShort.hard": 5,
   "discipline.cheapKit.hard": 1,
   "discipline.kitShop.hard": 0.95
  }
