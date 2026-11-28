@@ -1489,6 +1489,7 @@ export class Bot {
     const skilled = this.difficulty === 'hard' || this.difficulty === 'pro';
     const wooden = this.difficulty !== 'easy' && total >= TORCH_RICH &&
       c.view.pieces.some((p) => p.owner !== c.me.id && p.owner > 0 && isFlammable(p.kind) && this.woodNear(c.view.pieces, p) >= 3);
+    const sniperNext = this.sniperTaste(c) && (this.P.strength.rifleAt[this.difficulty] >= 1e6 || hasAmmo(c.me.inv, 'rifle'));
     return {
       rocket: wooden,
       // Bridging to the center before the storm: spares for decks that get shot out under me (one trip, not five).
@@ -1515,8 +1516,11 @@ export class Bot {
       rifle: this.wantsRifle(c),
       // rifleAt past any real cash (Infinity, or a finite 1e9 from a params file) = no early rifle: no slot kept either.
       rifleSlot: this.P.strength.rifleAt[this.difficulty] < 1e6,
-      sniper: this.sniperTaste(c) && total >= this.P.sniper.buyAt[this.difficulty],
-      sniperSlot: this.sniperTaste(c),
+      // With the early rifle on (rifleAt), the sniper is the second long gun: only once the rifle is in hand and loaded
+      // (its cash and kept slot go to the rifle first; a dry rifle is a gun to restock, not a reason for another).
+      sniper: sniperNext && total >= this.P.sniper.buyAt[this.difficulty],
+      // The slot is kept only once its price is within reach: kept from the start, it cost smokes/flashes in every game.
+      sniperSlot: sniperNext && total >= WEAPONS.sniper.price,
     };
   }
 
