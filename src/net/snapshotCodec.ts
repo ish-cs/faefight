@@ -14,9 +14,9 @@ import type { BotBrainInfo, MatchEvent, PieceState, PlayerState, Snapshot, Vec3 
  */
 type Private = 'inv' | 'vault' | 'loadout' | 'vaultLevel' | 'hotbar' | 'locked' | 'bloom' | 'lastShotAt' | 'burst' | 'reloadUntil' | 'reloadSec' | 'reloadMag' | 'ads' | 'stamina';
 export type NetPlayer = Omit<PlayerState, Private> & Partial<Pick<PlayerState, Private>>;
-/** A live projectile on the wire: [id, kind (0 grenade, 1 charge, 2 rocket), x, y, z, vx, vy, vz]. */
+/** A live projectile on the wire: [id, kind (0 grenade, 1 charge, 2 rocket, 3 smoke, 4 flash), x, y, z, vx, vy, vz]. */
 export type NetProjectile = [number, number, number, number, number, number, number, number];
-const PROJ_KINDS = ['grenade', 'charge', 'rocket'] as const;
+const PROJ_KINDS = ['grenade', 'charge', 'rocket', 'smoke', 'flash'] as const;
 /** A displaced gameplay prop on the wire: position in cm, quaternion in 1/1000 (delta-encoded per id by wire.ts). */
 export type NetProp = PropPose;
 /** A ground fire on the wire: [id, kind (0 grass, 1 crate, 2 palm), x, y, z]. */
@@ -81,6 +81,8 @@ export class SnapshotEncoder {
       const p = rv(e.pos), v = r1v(e.vel);
       return [e.id, PROJ_KINDS.indexOf(e.kind), p.x, p.y, p.z, v.x, v.y, v.z];
     });
+    // Smoke clouds (public): cm / ms grid, unchanged between updates so the binary wire sends nothing for them.
+    if (s.smokes?.length) out.smokes = s.smokes.map((c) => ({ id: c.id, owner: c.owner, pos: rv(c.pos), t0: r3(c.t0) }));
     // Ground fires: tiny list, only while something burns.
     delete (out as Partial<Snapshot>).fires;
     if (s.fires?.length) out.fire = s.fires.map((f): NetFire => { const p = rv(f.pos); return [f.id, FIRE_KINDS.indexOf(f.kind), p.x, p.y, p.z]; });
@@ -112,6 +114,8 @@ export class SnapshotEncoder {
     if (p.emote) out.emote = { id: p.emote.id, at: r3(p.emote.at) };
     if (p.quip) out.quip = { id: p.quip.id, at: r3(p.quip.at) };
     // The rope everyone draws: cm / ms grid. Its cooldown is the owner's business.
+    // Flash start on the ms grid, strength to 1/1000 (the sim rounds k already).
+    if (p.blind) out.blind = { at: r3(p.blind.at), k: p.blind.k };
     if (p.hook) out.hook = { ...p.hook, x: r2(p.hook.x), y: r2(p.hook.y), z: r2(p.hook.z), t0: r3(p.hook.t0), at: r3(p.hook.at) };
     if (!own && !followed) delete (out as Partial<PlayerState>).hookReadyAt;
     delete (out as Partial<PlayerState>).yankedBy; // host bookkeeping (kill credit)

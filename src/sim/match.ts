@@ -1,6 +1,6 @@
 import { buyAt, collect, isHomeOnly, mergeInventory, emptyInventory, grantStartPistol, startMedkit, tickGenerator, tickHealing, vaultTransfer } from './economy';
 import { damagePiece, snapPlacement, validatePlacement, type Placement } from './building';
-import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
+import { applyPlayerDamage, placeCharge, projectiles, throwGrenade, throwUtility, tickExplosives, tickReload, tryFire, tryReload, eyePos, type CombatCtx, type Explosive } from './combat';
 import { BUILD, DT, ECONOMY, TICK_HZ, VAULT_INTEREST_SEC, GRAPPLE, LIFECYCLE, MAP, PIECES, PLAYER, SHIELD_MAX, SEAL, STORM } from './constants';
 import { equippedFor, isGunItem, swapSlots, syncFromInventory, takeOut, validSlot } from './hotbar';
 import { payInterest, sanitizeLoadout, upgradeVault, vaultMove, vaultSpec } from './vault';
@@ -34,7 +34,8 @@ import type { AllyStatus, BotView, FeedLine, HurtEvent, ShotSeen, TeamSighting }
 import { Bot } from './bots/bot';
 import { Banter } from './bots/banter';
 import { QUIP_SHOW_SEC, WheelLimiter, emoteEnd, isEmoteId, isQuipId, isWheelId, type WheelId } from './emotes';
-import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PieceState, PlayerInput, PlayerState, PotionShop, Snapshot, Vec3, WeaponKind } from './types';
+import type { BotBrainInfo, BuildRequest, Difficulty, Inventory, MatchEvent, PieceKind, PieceState, PlayerInput, PlayerState, PotionShop, SmokeCloud, Snapshot, Vec3, WeaponKind } from './types';
+import { isBlind, smokeBlocks, tickBlind, tickSmokes } from './utility';
 import { NO_INPUT } from './types';
 import { clampSettings, resolveColors, type GameSettings } from './settings';
 import { TEAM_COLORS, isAlly, islandOrder, resolveTeams, sealBlocker } from './teams';
@@ -59,6 +60,8 @@ export class Match implements MatchApi {
   private tickNo = 0;
   private events: MatchEvent[] = [];
   private explosives: Explosive[] = [];
+  /** Smoke clouds hanging now (utility.ts). */
+  private smokes: SmokeCloud[] = [];
   /** End-screen totals (damage, seals, pieces, cash, longest life). */
   private stats = new MatchStats();
 
@@ -224,6 +227,7 @@ export class Match implements MatchApi {
       players: this.s.players,
       pieces: this.s.pieces,
       explosives: this.explosives,
+      smokes: this.smokes,
       nextId: () => this.s.nextId++,
       onPieceDestroyed: (id, by) => {
         const pc = this.s.pieces.get(id);
@@ -346,12 +350,14 @@ export class Match implements MatchApi {
       let input = bot ? bot.think(this.botView(p)) : this.practice?.isDummy(p.id) ? this.practice.inputFor(p, now) : inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
       // Bots only emote once the match is decided (Banter): then one stands still for it unless it wants to
       // shoot (which ends the emote, as for anyone). Mid-match bot play is never changed by emotes.
-      if (bot && p.emote && this.s.winner !== null && !input.fire) input = { ...input, moveX: 0, moveZ: 0, jump: false, sprint: false, build: null, throwGrenade: false, placeCharge: false };
+      if (bot && p.emote && this.s.winner !== null && !input.fire) input = { ...input, moveX: 0, moveZ: 0, jump: false, sprint: false, build: null, throwGrenade: false, throwUtil: undefined, placeCharge: false };
       if (p.emote && emoteEnd(p, input, cmds, now)) delete p.emote;
       this.applyInput(p, input, now, cmds);
     }
 
     this.events.push(...tickExplosives(this.ctx, now));
+    tickSmokes(this.smokes, now);
+    tickBlind(this.s.players.values(), now);
     this.events.push(...this.hazards.onExplosions(this.hazardHost, this.events, now));
     this.events.push(...this.hazards.tick(this.hazardHost, now));
     this.events.push(...this.traps.onExplosions(this.events, now));
@@ -723,7 +729,7 @@ export class Match implements MatchApi {
     }
     if (input.reload) tryReload(p, now);
     // Attacking ends spawn protection at once.
-    if ((input.fire || input.throwGrenade || input.placeCharge) && (p.spawnProtected || p.invulnUntil > now)) {
+    if ((input.fire || input.throwGrenade || input.throwUtil || input.placeCharge) && (p.spawnProtected || p.invulnUntil > now)) {
       p.invulnUntil = Math.min(p.invulnUntil, now);
       p.spawnProtected = false;
     }
@@ -732,6 +738,7 @@ export class Match implements MatchApi {
       try { this.events.push(...tryFire(this.ctx, p, now)); } finally { this.rewindT = null; }
     }
     if (input.throwGrenade) throwGrenade(this.ctx, p, now);
+    if (input.throwUtil) throwUtility(this.ctx, p, input.throwUtil, now);
     if (input.placeCharge) placeCharge(this.ctx, p, now);
     if (input.trap) this.events.push(...this.traps.place(this.physics, p, input.trap, now, () => this.s.nextId++));
     if (input.useMedkit) startMedkit(p, now);
@@ -912,12 +919,17 @@ export class Match implements MatchApi {
     const eye = eyePos(self);
     const enemies: PlayerState[] = [];
     let peeking: number[] | undefined;
+    const now = this.s.time, smokes = this.smokes;
+    // Flashbanged: nobody to see (utility.ts isBlind).
+    const blind = isBlind(self, now);
     for (const o of this.s.players.values()) {
-      if (o.id === self.id || !o.alive || isAlly(o, self)) continue;
+      if (blind || o.id === self.id || !o.alive || isAlly(o, self)) continue;
       const chest = v3(o.pos.x, o.pos.y + 1.2, o.pos.z);
       const d = dist(eye, chest);
       if (d > SIGHT_RANGE) continue;
       const hit = this.physics.raycast(eye, norm(sub(chest, eye)), d + 0.5, self.id, true); // sight passes firing slits
+      // Smoke between us hides them (head and body alike).
+      if (smokes.length && smokeBlocks(smokes, eye, chest, now)) continue;
       if (hit?.hit.type === 'player' && hit.hit.id === o.id) { enemies.push(o); continue; }
       // Body behind a crate or a drum: the head above it is still in plain sight (and the one thing to shoot at).
       if (hit?.hit.type !== 'prop') continue;
@@ -951,11 +963,14 @@ export class Match implements MatchApi {
       })),
       ...(this.props ? { props: () => this.props!.footprints() } : {}),
       ...(peeking ? { peeking } : {}),
+      ...(smokes.length ? { smokes: smokes.map((c) => ({ ...c, pos: clone(c.pos) })) } : {}),
+      ...(blind ? { blind: true } : {}),
       docks: this.docks.standing(),
       clearShot: (to) => {
         const d = dist(eye, to);
         const dir = norm(sub(to, eye));
         if (this.physics.raycast(eye, dir, d, self.id, true)) return false;
+        if (smokes.length && smokeBlocks(smokes, eye, to, now)) return false;
         const hz = this.hazards.ray(eye, dir, d + 0.5);
         return !hz || dist(add3(eye, dir, hz.dist), to) < 1;
       },
@@ -1022,6 +1037,7 @@ export class Match implements MatchApi {
       ...(this.docks.hurt.length ? { dockHurt: this.docks.hurt } : {}),
       ...(hz ? { hz } : {}),
       ...(traps ? { traps } : {}),
+      ...(this.smokes.length ? { smokes: this.smokes } : {}),
       genLevels: this.s.genLevels,
       sealed: this.sealed,
       waterY: this.s.waterY,

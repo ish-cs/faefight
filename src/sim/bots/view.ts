@@ -1,6 +1,6 @@
 import type { CenterIsland, DockDef, IslandLayout, StaticBox } from '../map';
 import type { Placement } from '../building';
-import type { PieceKind, PieceState, PlayerState, StormSnap, TrapNet, TrapRequest, Vec3 } from '../types';
+import type { PieceKind, PieceState, PlayerState, SmokeCloud, StormSnap, TrapNet, TrapRequest, Vec3 } from '../types';
 import type { TrapPlacement } from '../traps';
 
 /** Public status of every other player (what a human would know from the HUD). */
@@ -39,6 +39,10 @@ export type FeedLine = { t: number; killer: number | null; victim: number };
  */
 export type BotView = {
   now: number;
+  /** Smoke clouds hanging now (public: anyone sees them; utility.ts). Absent when none. */
+  smokes?: SmokeCloud[];
+  /** I'm flashbanged right now (utility.ts isBlind): `enemies` is empty, I can't make anyone out. */
+  blind?: true;
   self: PlayerState;
   enemies: PlayerState[];
   /** Every other player not on my team (free-for-all: everyone else). */

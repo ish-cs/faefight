@@ -62,7 +62,8 @@ export type Settings = {
   gameplay: { crosshair: Crosshair; crosshairColor: string; damageNumbers: boolean; cameraMode: CameraMode; genAlertPct: GenAlertPct;
     /** Screen shake + hit-stop strength, 0 (off) .. 1 (full). Accessibility. */ screenShake: number;
     /** First-person camera bob while walking / sprinting. */ cameraBob: boolean;
-    /** Light beams in each living player's colour over their bunker (world/beacons.ts). */ islandBeacons: boolean };
+    /** Light beams in each living player's colour over their bunker (world/beacons.ts). */ islandBeacons: boolean;
+    /** Flashbangs dim the screen grey instead of pure white (screenFx.ts). Accessibility. */ reducedFlash: boolean };
   /** One-time things: the How to play card shows by itself until it has been seen once. */
   onboarding: { howToSeen: boolean };
 };
@@ -80,7 +81,7 @@ export function defaultSettings(): Settings {
     controls: { sensitivity: 1, invertY: false, keys: sanitizeKeymap(null), aimMode: 'hold', ctrlAim: ctrlAimDefault(platformNav()) },
     video: { quality: 'high', fovThird: 70, fovFirst: 75, showFps: true, perfDetail: false, resolutionScale: 1, frameCap: 0, dynamicResolution: true, competitive: false, motionBlur: 'off', motionBlurSpectate: 'auto', power: 'auto' },
     audio: { master: 0.8, effects: 1, ui: 0.8, ambience: 1, music: 0.4, musicOn: true, muted: false, commentaryOn: true, commentary: 0.9, captions: true, commentarySpectate: false, voicePbp: '', voiceColour: '', voiceEngine: 'browser', neuralPbp: '', neuralColour: '' },
-    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true, islandBeacons: true },
+    gameplay: { crosshair: 'cross', crosshairColor: '#ffffff', damageNumbers: true, cameraMode: 'third', genAlertPct: 100, screenShake: 1, cameraBob: true, islandBeacons: true, reducedFlash: false },
     onboarding: { howToSeen: false },
   };
 }
@@ -156,6 +157,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       screenShake: num(g.screenShake, 0, 1, d.gameplay.screenShake),
       cameraBob: bool(g.cameraBob, d.gameplay.cameraBob),
       islandBeacons: bool(g.islandBeacons, d.gameplay.islandBeacons),
+      reducedFlash: bool(g.reducedFlash, d.gameplay.reducedFlash),
     },
     onboarding: { howToSeen: bool(o.howToSeen, d.onboarding.howToSeen) },
   };

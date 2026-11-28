@@ -38,6 +38,7 @@ export const KEY_VARS = {
   storm: ['n'],
   heal: ['a', 'n'],
   rocketHit: ['a', 'b'],
+  flashBlind: ['a', 'n'],
   leader: ['a', 'n'],
   win: ['a'],
   recap: ['a', 'b', 'n', 'g'],
@@ -347,6 +348,14 @@ export const LINES: Record<LineKey, readonly string[]> = {
     "Direct hit on {b}! That rocket from {a} hurt!",
     "{a} fires a rocket and {b} is reeling!",
     "Big damage! {a}'s rocket blasts {b}!",
+  ],
+  flashBlind: [
+    "Flashbang from {a}! {n} players can't see a thing!",
+    "{a} pops a flash and {n} of them are blinded!",
+    "White-out! {a}'s flashbang catches {n} players!",
+    "Great flash by {a}, {n} players looking right at it!",
+    "{a} with the flashbang, and {n} are stumbling around blind!",
+    "Eyes up and they pay for it! {a} flashes {n} players!",
   ],
   leader: [
     "{a} takes the lead with {n} kills!",

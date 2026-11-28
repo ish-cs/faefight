@@ -188,6 +188,15 @@ describe('SoundDirector: events → cues', () => {
     expect(d.env.storm).toBe(true);
   });
 
+  it('smoke grenade and flashbang pops are positional cues at the pop point', () => {
+    const d = director();
+    const ps = [player(ME, at(0))];
+    const c = d.update(snap(1, ps, [['smoke', { id: 9, pos: at(4), by: BOT }], ['flash', { pos: at(6), by: BOT, hit: [[ME, 1]] }]]));
+    expect(sounds(c)).toEqual(['smokePop', 'flashPop']);
+    expect(c[0].pos).toEqual(at(4));
+    expect(c[1].pos).toEqual(at(6));
+  });
+
   it('explosion, placed (by piece kind), destroyed (position from previous snapshot)', () => {
     const d = director();
     const ps = [player(ME, at(0))];
