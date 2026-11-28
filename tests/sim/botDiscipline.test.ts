@@ -157,7 +157,9 @@ describe('3. bank before risk', () => {
     expect(bank(DEFAULT_BOT_PARAMS)).toBeGreaterThan(0.6);
   });
   test('rich on my island: banks before heading out, unhalved by the push', () => {
-    const v = view(me('home', { cash: 1500, pieces: { metal: 3, scaffold: 10 } }), bridge(HOME, RIVAL), [false, false, false, false], OTHERS);
+    const self = me('home', { cash: 1500, pieces: { metal: 3, scaffold: 10 } });
+    self.vault.cash = 300; // rebuy insurance already banked (its own 0.8 trip isn't what's tested)
+    const v = view(self, bridge(HOME, RIVAL), [false, false, false, false], OTHERS);
     const bank = (P: BotParams) => debugBrain(decide(v, P).bot).scores.find((r) => r[0] === 'bank')?.[2] ?? 0;
     expect(bank(PRE_DISCIPLINE_PARAMS)).toBeLessThan(0.6);
     expect(bank(DEFAULT_BOT_PARAMS)).toBeCloseTo(DISCIPLINE.bankRisk.pro);
