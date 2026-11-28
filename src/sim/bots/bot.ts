@@ -50,6 +50,8 @@ const HESITATE_SEC: Record<Difficulty, number> = { easy: 1.2, medium: 0.6, hard:
 const FLIP_BACK_SEC = 5, NOISE_HOLD_SEC = 3;
 /** Off the seal goal this long and the next seal is a new attempt (discipline.sealAbortSec). */
 const SEAL_TRY_GAP_SEC = 10;
+/** Commitment (discipline.commitSec) holds only this long after the last hit taken. */
+const COMMIT_CALM_SEC = 1.5;
 /** Misjudgement in goal/target scores (decision mistakes). */
 const NOISE: Record<Difficulty, number> = { easy: 0.3, medium: 0.15, hard: 0.08, pro: 0.03 };
 const BUY_GAP: Record<Difficulty, number> = { easy: 3, medium: 1.5, hard: 0.6, pro: 0.35 };
@@ -2161,9 +2163,11 @@ export class Bot {
       const base = debt && this.offence(g, c) ? Math.min(driven, D.debtCap) : driven;
       bases.push({ g, raw, driven, base });
     }
-    // Commitment (discipline.commitSec): a goal just switched to holds a while, unless running or the storm calls.
-    const survival = bases.some((b) => (b.g === 'disengage' || b.g === 'storm') && b.base > 0);
-    const committed = !survival && now - this.switchAt < D.commitSec[this.difficulty];
+    // Commitment (discipline.commitSec): a goal just switched to holds a while, out of combat only (an enemy in sight
+    // or a hit just now: reactions such as cover stay instant), and never against running or the storm.
+    const survival = bases.some((b) => (b.g === 'disengage' || b.g === 'storm' || b.g === 'cover') && b.base > 0);
+    const calm = !c.enemy && now - this.mem.lastHurtAt > COMMIT_CALM_SEC;
+    const committed = !survival && calm && now - this.switchAt < D.commitSec[this.difficulty];
     for (const { g, raw, driven, base } of bases) {
       const rule = base !== driven ? (debt === 'sealed' ? 'my bunker is sealed: clear it first' : 'my doorway is plugged: clear it first') : undefined;
       if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, driven, base, noise: 0, sticky: 0, score: base, rule }); continue; }

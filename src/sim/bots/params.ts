@@ -402,7 +402,7 @@ export type StrengthParams = {
  *   end of the cash). The ungated walk home to bank is strength.bankAway.
  * - sticky: score bonus for the goal I'm on (was STICKY 0.1 for everyone); commitSec / commitBonus: for this long
  *   after a switch the new goal gets commitBonus on top (fight/defend/heal and bridge/shop were re-chosen every
- *   tick), except while disengage or storm scores.
+ *   tick), out of combat only (no enemy in sight, no hit in the last 1.5 s) and never against disengage / storm / cover.
  * - sealAbortSec: a seal attempt that neither closes a doorway nor gets nearer the bunker for this long is dropped
  *   (goal ban of drive.stallBanSec).
  * - bridgeShort: short of decks for the gap by more than this, buy them first instead of laying a partial bridge
@@ -599,7 +599,7 @@ export const DISCIPLINE: DisciplineParams = {
   chargeShop: D(0, 0, 1.1, 1.1),
   bankTripAt: 500,
   bankRisk: D(0, 0, 0.9, 0.9),
-  sticky: D(0.1, 0.1, 0.15, 0.15),
+  sticky: D(0.1, 0.1, 0.1, 0.1),
   commitSec: D(0, 0, 2, 2),
   commitBonus: 0.25,
   sealAbortSec: D(0, 0, 20, 20),
