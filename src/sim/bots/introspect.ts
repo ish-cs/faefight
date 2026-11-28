@@ -8,7 +8,7 @@
  *
  * Player references inside text are written `@<id>` and turned into names by the client.
  */
-import { AMMO_BOX, CHARGE, GRAPPLE, GRENADE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, FLASH, GRAPPLE, GRENADE, SMOKE, MEDKIT, PIECES, POTIONS, TRAP, WEAPONS } from '../constants';
 import type { Doorway, IslandLayout } from '../map';
 import type { Difficulty, Inventory, Loadout, PieceKind, PieceState, PlayerState, ShopItem, Vec3, WeaponKind } from '../types';
 import { dist2D } from '../vec';
@@ -63,6 +63,8 @@ export type BrainDigest = {
   hook?: string;
   /** Healing intent (heal.ts): the last heal decision (a few seconds), else heals carried vs the stock it wants. */
   heal?: string;
+  /** Smoke / flash (utilityPlan.ts): its last throw or reaction (a few seconds), else what it carries; absent when none. */
+  util?: string;
   /** Weapon it wants in hand and why ("rocket: reload it between fights"); absent when dead or not yet decided. */
   weapon?: string;
   /** Route ahead: [x, y, z] points from its feet. */
@@ -127,6 +129,7 @@ type Internals = {
   sieging(c: Ctx): boolean; nearestCrate(c: Ctx): { pos: Vec3; center: Vec3 } | null;
   hookNote: { t: number; text: string } | null;
   healNote: { t: number; text: string } | null; healWant: number;
+  utilNote: { t: number; text: string } | null;
   weaponIntent: { want: string; why: string } | null;
   P: BotParams; inWindow(c: Ctx): boolean; respawnWindow: { id: number; left: number } | null;
 };
@@ -630,7 +633,7 @@ function invValue(inv: Inventory): number {
   for (const [k, a] of Object.entries(inv.weapons)) if (k !== 'fists') v += (WEAPONS[k as WeaponKind]?.price ?? 0) + (a && a.spare > 0 ? AMMO_BOX.price * Math.min(1, a.spare / 30) : 0);
   for (const [k, n] of Object.entries(inv.pieces)) v += (PIECES[k as PieceKind]?.price ?? 0) * (n ?? 0);
   for (const [k, n] of Object.entries(inv.potions ?? {})) v += (POTIONS[k as keyof typeof POTIONS]?.price ?? 0) * (n ?? 0);
-  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price + inv.traps * TRAP.price + ((inv.grapples ?? 0) * GRAPPLE.price) / GRAPPLE.uses);
+  return Math.round(v + inv.grenades * GRENADE.price + inv.charges * CHARGE.price + inv.medkits * MEDKIT.price + inv.traps * TRAP.price + ((inv.grapples ?? 0) * GRAPPLE.price) / GRAPPLE.uses + (inv.smokes ?? 0) * SMOKE.price + (inv.flashes ?? 0) * FLASH.price);
 }
 
 /** Steps of the current goal, and which one it's on (from what it did this tick). */
@@ -762,6 +765,7 @@ export function debugBrain(bot: Bot): BrainDigest {
     shop: p.shop, build: p.build(now),
     ...hookLine(I, me, now),
     ...healLine(I, me, now),
+    ...utilLine(I, me, now),
     ...(me?.alive && I.weaponIntent ? { weapon: I.weaponIntent.why } : {}),
     path: me ? pathOf(I, p, me) : [],
     aim: docking ? [r1(dock!.at.x), r1(dock!.at.y), r1(dock!.at.z)] : aimPt ? [r1(aimPt.x), r1(aimPt.y + (view!.enemies.length ? 1.2 : 0)), r1(aimPt.z)] : null, fire: p.fire,
@@ -796,6 +800,15 @@ function hookLine(I: Internals, me: PlayerState | undefined, now: number): { hoo
   if (note) return { hook: note };
   const n = me.inv.grapples ?? 0;
   return n > 0 ? { hook: `Carrying one (${n} use${n === 1 ? '' : 's'}): for crossing gaps, getting away, yanking` } : {};
+}
+
+/** The brain panel's smoke / flash line. */
+function utilLine(I: Internals, me: PlayerState | undefined, now: number): { util?: string } {
+  if (!me?.alive) return {};
+  if (I.utilNote && now - I.utilNote.t < 4) return { util: I.utilNote.text };
+  const sm = me.inv.smokes ?? 0, fl = me.inv.flashes ?? 0;
+  if (!sm && !fl) return {};
+  return { util: `Carrying ${[sm ? `${sm} smoke` : '', fl ? `${fl} flash` : ''].filter(Boolean).join(', ')}` };
 }
 
 /** The brain panel's healing line: what it's doing about health now, else what it carries. */

@@ -1,5 +1,6 @@
 import { PIECES } from '../constants';
 import type { Difficulty } from '../types';
+import { UTIL, UTIL_RANGES, type UtilParams } from './utilParams';
 
 /**
  * Tunable bot strategy (drive to win, building, the elimination pipeline), in one record so self-play training can
@@ -389,7 +390,7 @@ export type StrengthParams = {
   leaderFocus: Record<Difficulty, number>;
 };
 
-export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams; strength: StrengthParams };
+export type BotParams = { drive: DriveParams; buildSkill: Record<Difficulty, BuildSkill>; buildTuning: BuildTuning; hook: HookParams; trap: TrapTuning; aim: AimParams; gunSkill: Record<Difficulty, GunSkill>; team: TeamParams; weapon: WeaponParams; heal: HealParams; vault: VaultParams; strength: StrengthParams; util: UtilParams };
 
 export const DRIVE: DriveParams = {
   offenseAt: D(Infinity, 330, 300, 180),
@@ -555,7 +556,7 @@ export const STRENGTH: StrengthParams = {
   leaderFocus: D(0, 0, 0, 0),
 };
 
-export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH });
+export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH, util: UTIL });
 
 /**
  * The hand params with every strength.* knob off: bot behaviour exactly as before 2026-11-28 (same code path). The
@@ -652,6 +653,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['strength.rifleAt.*', [300, 1500]], ['strength.longGun.*', [0, 1]], ['strength.outranged.*', [0, 1.5]], ['strength.outrangedM', [20, 50]], ['strength.outrangedSec', [1, 6]],
   ['strength.outrangedMemSec', [10, 240]], ['strength.bankAway.*', [0, 1.5]], ['strength.richCarry', [200, 1500]], ['strength.endgameSeal.*', [0, 1.5]],
   ['strength.endgameLeft', [2, 4]], ['strength.leaderFocus.*', [0, 1.5]],
+  ...UTIL_RANGES,
   ['team.follow', [0, 2]], ['team.assistLowHp', [0, 1]], ['team.focusFire', [1, 3]], ['team.waitM', [8, 60]], ['team.waitSec', [0, 20]],
 ];
 const ruleMatch = (pattern: string, key: string) => {

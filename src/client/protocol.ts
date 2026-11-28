@@ -58,7 +58,7 @@ export type ToWorker =
   /** Perf testing: n pieces on rings around (x, z), placement rules skipped. */
   | { type: 'debug'; cmd: 'pieces'; x: number; z: number; n: number }
   | { type: 'debug'; cmd: 'place'; kind: PieceKind; x: number; z: number; rotY: number; up: number; owner: number }
-  | { type: 'debug'; cmd: 'explode'; kind: 'rocket' | 'grenade' | 'charge'; x: number; z: number; up: number };
+  | { type: 'debug'; cmd: 'explode'; kind: 'rocket' | 'grenade' | 'charge' | 'smoke' | 'flash'; x: number; z: number; up: number; owner?: number };
 
 /** worker → main thread */
 export type FromWorker =

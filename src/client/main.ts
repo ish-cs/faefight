@@ -16,7 +16,9 @@ import type { MoveCmd } from '../sim/movement';
 import { MAP_NAMES, MAP_TEMPLATES, resolveMapChoice, type IslandLayout, type MapChoice, type MapDef, type MapTemplate } from '../sim/map';
 import { soloBotCount } from '../sim/teams';
 import type { MatchSetup } from '../sim/matchApi';
-import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type ShopItem, type Snapshot } from '../sim/types';
+import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type PlayerState, type ShopItem, type Snapshot } from '../sim/types';
+import { flashAlpha } from '../sim/utility';
+import { ScreenFx } from './screenFx';
 import { BuildPredictor } from './buildPredict';
 import type { BrainDigest } from '../sim/bots/introspect';
 import { adoptSpawnLook, moveForAim } from './aim';
@@ -199,8 +201,8 @@ type Backend = {
     pieces(x: number, z: number, n: number): void;
     /** Place one piece (rules skipped) on the ground at (x, z) + `up` m, owned by `owner` (default: nobody). */
     place(kind: PieceKind, x: number, z: number, rotY: number, up?: number, owner?: number): void;
-    /** Detonate a rocket / grenade / charge at (x, ground + up, z). */
-    explode(kind: 'rocket' | 'grenade' | 'charge', x: number, z: number, up?: number): void;
+    /** Detonate a rocket / grenade / charge, or pop a smoke / flash, at (x, ground + up, z), thrown by `owner` (default: me). */
+    explode(kind: 'rocket' | 'grenade' | 'charge' | 'smoke' | 'flash', x: number, z: number, up?: number, owner?: number): void;
     plugDoor(door: number, owner: number): void; removePiece(id: number): void; genStored(stored: number): void;
   };
 };
@@ -318,7 +320,7 @@ function workerBackend(setupFor: (w: Worker) => { setup: MatchSetup; humanId: nu
       strike: (x, z) => send({ type: 'debug', cmd: 'strike', x, z }),
       pieces: (x, z, n) => send({ type: 'debug', cmd: 'pieces', x, z, n }),
       place: (kind, x, z, rotY, up = 0, owner = 0) => send({ type: 'debug', cmd: 'place', kind, x, z, rotY, up, owner }),
-      explode: (kind, x, z, up = 0) => send({ type: 'debug', cmd: 'explode', kind, x, z, up }),
+      explode: (kind, x, z, up = 0, owner) => send({ type: 'debug', cmd: 'explode', kind, x, z, up, owner }),
       plugDoor: (door, owner) => send({ type: 'debug', cmd: 'plugDoor', door, owner }),
       removePiece: (id) => send({ type: 'debug', cmd: 'removePiece', id }),
       genStored: (stored) => send({ type: 'debug', cmd: 'genStored', stored }),
@@ -1272,6 +1274,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
 
   const fxPos = new THREE.Vector3();
   const damageFx = new DamageFx(app);
+  const screenFx = new ScreenFx(app, canvas);
   const sealAnnouncer = new SealAnnouncer(app, (k) => {
     const intensity = settings.get().gameplay.screenShake; // Settings → Screen shake (0 = off)
     if (intensity <= 0) return;
@@ -1965,6 +1968,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       scoreboard: () => scoreboard.visible,
       /** Loot on the ground as drawn: label lines, label shown, model count. */
       loot: () => renderer.lootView.info(),
+      /** Smoke clouds / puffs drawn, camera depth in smoke, and the fog + flash overlays as shown (screenFx.ts). */
+      smokeFlash: () => ({ ...renderer.smoke.info(), depth: renderer.smokeFog, ...screenFx.info() }),
       audio: () => audio.stats(),
       commentary: () => commentary.commentator.log,
       commentaryVoice: () => ({ state: commentary.neuralState, neural: commentary.tts.neuralActive, synthMs: commentary.tts.neural?.synthMs ?? [] }),
@@ -2389,6 +2394,13 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
       qol.frame(input.yaw, me?.alive && !spectating ? { x: feet.x, z: feet.z } : { x: cp.x, z: cp.z }, snap);
       damageFx.frame(renderer.camera, input.yaw, me?.alive ? feet : null, (id) => renderer.playerPos(id, fxPos));
     }
+    // Smoke fog + flashbang white-out (and its ringing ears) for whoever's eyes we see through; not over the killcam's
+    // replay camera, which isn't anyone's eyes.
+    let blind: PlayerState['blind'];
+    if (snap && !kc) { const vid = spectator.following ?? humanId; for (const p of snap.players) if (p.id === vid) { blind = p.blind; break; } }
+    const flashA = flashAlpha(blind, simNow());
+    screenFx.frame(kc ? 0 : renderer.smokeFog, flashA, blind ? blind.at : null, settings.get().gameplay.reducedFlash, renderer.lightTone);
+    audio.flashed(flashA);
     // First-person camera bob: our own (predicted) ground speed, or the spectated player's when watching from their eyes.
     let bobSpeed = -1;
     if (fpv.isActive && me && !spectating) {

@@ -365,6 +365,7 @@ export function openSettings(opts: { onClose?: () => void; tab?: Tab } = {}): { 
     slider('Screen shake', 'Explosions, damage, heavy weapons and the hit-stop on kills (0% = off)', 'set-shake', 0, 1, 0.05,
       () => g().screenShake, (x) => set((d) => { d.gameplay.screenShake = x; }), (x) => (x <= 0 ? 'Off' : `${Math.round(x * 100)}%`));
     toggle('Camera bob', 'First-person head bob while walking and sprinting', 'set-bob', () => g().cameraBob, (x) => set((d) => { d.gameplay.cameraBob = x; }));
+    toggle('Reduced flash', 'Flashbangs dim the screen grey instead of a bright white flash', 'set-reduced-flash', () => g().reducedFlash, (x) => set((d) => { d.gameplay.reducedFlash = x; }));
     resetBtn('Reset gameplay to defaults', () => settings.reset('gameplay'));
   }
 

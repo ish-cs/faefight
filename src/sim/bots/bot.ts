@@ -9,6 +9,7 @@ import { isHomeOnly } from '../economy';
 import { NO_INPUT } from '../types';
 import type {
   BuildRequest, Difficulty, HotbarItem, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
+  UtilityKind,
 } from '../types';
 import { funds } from '../economy';
 import { canAdd } from '../hotbar';
@@ -31,6 +32,7 @@ import {
   type Needs, type ShopStyle,
 } from './plans';
 import type { AllyStatus, BotView, OtherStatus } from './view';
+import { planUtility, utilAngles, utilReact, type UtilSituation } from './utilityPlan';
 import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, type ScoreRow } from './introspect';
 
 export type Goal =
@@ -341,6 +343,9 @@ export class Bot {
   goalBias: ((goal: Goal, view: BotView) => number) | null = null;
   private targetBan = new Map<number, number>();
   private lastNadeAt = -Infinity;
+  /** Smoke / flash (utilityPlan.ts): last throw, and the last utility decision for the brain panel. */
+  private utilLastAt = -Infinity;
+  utilNote: { t: number; text: string } | null = null;
   private lastTorchAt = -Infinity;
   private lastTorchSpot: Vec3 | null = null;
   /** Healing (heal.ts): hp + shield last tick, damage in the current burst and when it began, last time hurt. */
@@ -584,6 +589,10 @@ export class Bot {
     let grapple = false;
     const nade = enemy || this.goal === 'disengage' ? null : this.grenadePlan(ctx);
     const barrel = enemy && !dock ? this.barrelShot(ctx) : null;
+    const util = this.utilSituation(ctx, !!heal && (heal.act === 'hide' || heal.act === 'wait' || heal.act === 'use'));
+    const utilPlan = planUtility(util);
+    const utilAim = utilPlan ? utilAngles(eye, utilPlan.at, utilPlan.kind) : null;
+    let throwUtil: UtilityKind | undefined;
     if (act.shootAt && act.shootFirst && me.breakoutUntil !== null) {
       // Countdown running: the plug in my way beats everything else (no hook, barrel or pier tricks first).
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
@@ -614,6 +623,14 @@ export class Bot {
     } else if (act.shootAt && act.shootFirst) {
       look = hand(lookAt(eye, act.shootAt), TURN_RATE);
       fire = angleBetween(look, lookAt(eye, act.shootAt)) < 0.05 && gunReady(dist2D(me.pos, act.shootAt));
+    } else if (utilPlan && utilAim) {
+      // Smoke / flash (utilityPlan.ts): line the throw up, then let go.
+      look = hand(utilAim, TURN_RATE * 1.5);
+      if (angleBetween(look, utilAim) < 0.04 && me.busyUntil <= now) {
+        throwUtil = utilPlan.kind;
+        this.utilLastAt = now;
+        this.utilNote = { t: now, text: utilPlan.why };
+      }
     } else if (foe && !((act.shootAt || act.lookFirst) && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
       // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
       // Only a head showing over a crate: aim for that (the body behind it would only put holes in the crate).
@@ -681,6 +698,9 @@ export class Bot {
     };
     const dodge = this.dodgeBolt(me, view);
     if (dodge) { dir = dodge; act = { ...act, sprint: true }; this.moveSrc = 'dodgeBolt'; }
+    // Blinded: back off or hold; never push a fight into their smoke (utilityPlan.ts).
+    const react = dodge ? null : utilReact(util, dir);
+    if (react) { dir = react.dir; this.moveSrc = 'utility'; if (now - (this.utilNote?.t ?? -Infinity) > 1) this.utilNote = { t: now, text: react.note }; }
     if (now < this.unstickUntil) {
       // Step aside; stuck again at the same spot, back off further each time (around whatever is in the way).
       dir = this.unstickDir ?? scale(right(look.yaw), this.unstickSide);
@@ -736,7 +756,9 @@ export class Bot {
     // Using one puts the gun away (a reload in progress is lost): wait for the reload unless I'm low.
     let select: number | null = null, useMedkit = false, drink = false;
     const lowNow = me.hp + me.shield <= this.P.heal.fightHp[this.difficulty];
-    if (heal?.act === 'use' && heal.slot >= 0 && !grapple && !act.placeCharge && (me.reloadUntil === 0 || lowNow)) {
+    // (Healing in front of them: the smoke goes up first, then the medkit.)
+    const smokeFirst = utilPlan?.kind === 'smoke' && !!enemy;
+    if (heal?.act === 'use' && heal.slot >= 0 && !grapple && !act.placeCharge && !smokeFirst && (me.reloadUntil === 0 || lowNow)) {
       select = heal.slot; fire = false; throwGrenade = false;
       if (heal.item === 'medkit') useMedkit = true; else drink = true;
       this.healNote = { t: now, text: heal.why };
@@ -748,7 +770,7 @@ export class Bot {
     const interact = view.map.some((isl) => view.generators[isl.index] >= 1 && dist2D(me.pos, isl.generator) <= USE_RANGE) ||
       (!!cv && ((cv.gold >= 1 && dist2D(me.pos, cv.island.goldGen) <= USE_RANGE) || (cv.bags + cv.steel > 0 && dist2D(me.pos, cv.island.supplyGen) <= USE_RANGE)));
     if (act.shop) this.pendingBuy = { item: act.shop, cash: funds(me), at: now };
-    if (act.shop || act.build || act.vault || act.placeCharge || act.trap || fire || throwGrenade) this.lastDidAt = now;
+    if (act.shop || act.build || act.vault || act.placeCharge || act.trap || fire || throwGrenade || throwUtil) this.lastDidAt = now;
     if (act.build) {
       this.lastPieceAt = now;
     }
@@ -765,13 +787,13 @@ export class Bot {
       sprint: !!act.sprint && (!enemy || this.goal === 'disengage' || !!act.approach || this.healHideAt !== null) && (!this.winded || this.goal === 'disengage' || !!this.retreat),
       fire, reload: reload && !useMedkit && !drink, interact, slot: useMedkit || drink ? null : slot, select, useMedkit, drink,
       build: useMedkit || drink ? null : act.build ?? null, shop: act.shop && !useMedkit && !drink ? { buy: act.shop } : null,
-      vault: this.withLoadout(me, act.vault), placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}),
+      vault: this.withLoadout(me, act.vault), placeCharge: !!act.placeCharge, throwGrenade, ...(act.trap ? { trap: act.trap } : {}), ...(throwUtil && !useMedkit && !drink ? { throwUtil } : {}),
       ...(grapple ? { grapple: true, build: null, shop: null } : {}),
       // Same spread rules as players: aim down sights for anything past close range.
       ads: !!enemy && me.equipped !== 'fists' && ctx.enemyDist > 8,
     };
     // Potions: stock up at a potion seller (heal potions toward the heal stock, then shields), drink out of combat.
-    if (!act.shop && !act.build && !fire && !useMedkit && !drink && !throwGrenade && !act.placeCharge && !grapple) {
+    if (!act.shop && !act.build && !fire && !useMedkit && !drink && !throwGrenade && !throwUtil && !act.placeCharge && !grapple) {
       const atSeller = (view.potionShops ?? []).some((s) => dist2D(me.pos, s) <= USE_RANGE);
       const pot = potionAction(me, now, !!enemy, atSeller, this.healWant);
       if (pot && 'buy' in pot) out.shop = { buy: pot.buy };
@@ -1455,6 +1477,8 @@ export class Bot {
       // A hard plug in my own doorway: only a charge gets through.
       charge: this.blockers(c).some((p) => isHard(p.kind)),
       grenades: total >= NADE_RICH[this.difficulty] ? (skilled ? 2 : 1) : 0,
+      smokes: total >= this.P.util.buyAt[this.difficulty] ? this.P.util.carrySmoke[this.difficulty] : 0,
+      flashes: total >= this.P.util.buyAt[this.difficulty] ? this.P.util.carryFlash[this.difficulty] : 0,
       // Heals to carry; with the storm coming in, no new ones (the decks and getting inside the ring come first).
       medkits: (this.healWant = this.stormPrep(c.view) ? Math.min(hpHealsHeld(c.me), healStock(total, this.difficulty, this.P.heal))
         : healStock(total, this.difficulty, this.P.heal)),
@@ -2588,6 +2612,19 @@ export class Bot {
       return { dir: null, face: center, placeCharge: true, lookFirst: true };
     }
     return { dir: null, shootAt: center, shootFirst: true };
+  }
+
+  /** What utilityPlan.ts needs to know this tick (smoke / flash decisions and reactions). */
+  private utilSituation(c: Ctx, healHiding: boolean): UtilSituation {
+    const now = c.view.now;
+    const seen = this.targetId !== null ? this.mem.recent(this.targetId, now, this.P.util.seenSec) : null;
+    return {
+      view: c.view, me: c.me, difficulty: this.difficulty, P: this.P.util, goal: this.goal, enemy: c.enemy, enemyDist: c.enemyDist,
+      target: seen && this.targetId !== null ? { id: this.targetId, pos: seen.pos, t: seen.t } : null,
+      rivalBunker: c.rivalIsl?.bunker.center ?? null,
+      retreating: this.goal === 'disengage' || this.goal === 'heal' || healHiding || !!this.retreat,
+      lastAt: this.utilLastAt, lastHurtAt: this.mem.lastHurtAt,
+    };
   }
 
   /** A visible enemy out on a bridge coming toward my island. */

@@ -196,6 +196,8 @@ export function boughtItem(before: PlayerState, after: PlayerState, prevSnap: Sn
   if (a.medkits > b.medkits) return 'medkit';
   if ((a.grapples ?? 0) > (b.grapples ?? 0)) return 'grapple';
   if (a.traps > b.traps) return 'trap';
+  if ((a.smokes ?? 0) > (b.smokes ?? 0)) return 'smoke';
+  if ((a.flashes ?? 0) > (b.flashes ?? 0)) return 'flash';
   for (const g of Object.keys(a.weapons) as (keyof typeof a.weapons)[]) if ((a.weapons[g]?.spare ?? 0) > (b.weapons[g]?.spare ?? 0)) return 'ammo';
   return null;
 }

@@ -23,15 +23,20 @@ export type Inventory = {
   traps: number;
   /** Grappling hook uses left (absent = none). One hotbar slot ('grapple') holds them all. */
   grapples?: number;
+  /** Smoke grenades / flashbangs carried (sim/utility.ts); absent = none. */
+  smokes?: number;
+  flashes?: number;
 };
 
 /** Something that occupies a hotbar slot (amounts live in the inventory). */
-export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit' | PotionKind | 'trap' | 'grapple';
+export type HotbarItem = Exclude<WeaponKind, 'fists'> | PieceKind | 'grenade' | 'charge' | 'medkit' | PotionKind | 'trap' | 'grapple' | UtilityKind;
+/** Smoke grenade / flashbang (sim/utility.ts). */
+export type UtilityKind = 'smoke' | 'flash';
 
 export type GunKind = Exclude<WeaponKind, 'fists'>;
 /** `genUpgrade`: next level of your own island's generator. `lock:<gun>`: respawn with that gun from now on. */
 export type LockItem = `lock:${GunKind}`;
-export type ShopItem = PieceKind | GunKind | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind | 'genUpgrade' | LockItem | 'trap' | 'grapple';
+export type ShopItem = PieceKind | GunKind | 'ammo' | 'grenade' | 'charge' | 'medkit' | PotionKind | 'genUpgrade' | LockItem | 'trap' | 'grapple' | UtilityKind;
 export type ShopAction = { buy: ShopItem };
 /**
  * Restock loadout (sim/vault.ts): on respawn the vault refills the hotbar up to these counts (a gun or the
@@ -99,6 +104,8 @@ export type PlayerInput = {
   viewT?: number;
   /** Place a spike trap from the selected slot (one-shot; absent = none, so old replays decode unchanged). */
   trap?: TrapRequest;
+  /** Throw a smoke grenade / flashbang (one-shot, like throwGrenade; absent = none, so old replays decode unchanged). */
+  throwUtil?: UtilityKind;
 };
 
 export type PlayerState = {
@@ -193,6 +200,11 @@ export type PlayerState = {
   hookReadyAt?: number;
   /** Last quick-chat line (speech bubble for QUIP_SHOW_SEC from `at`); absent when none. */
   quip?: { id: QuipId; at: number };
+  /**
+   * Flashbanged (sim/utility.ts): since `at`, strength `k` (0..1); white for FLASH.holdSec×k, then fading over
+   * FLASH.fadeSec×k (flashAlpha). Public, so replays, killcams and spectators show it. Absent = never / worn off.
+   */
+  blind?: { at: number; k: number };
 };
 
 /**
@@ -245,11 +257,17 @@ export type MatchEventType =
    */
   | 'elimination'
   /** Sudden death sealed every bunker at once and dropped the doorway barriers (barriers.ts): data { barriers }. */
-  | 'allSealed';
+  | 'allSealed'
+  /** A smoke grenade popped: data { id, pos, by } (sim/utility.ts; the cloud itself is Snapshot.smokes). */
+  | 'smoke'
+  /** A flashbang went off: data { pos, by, hit: [player id, k][] } (sim/utility.ts). */
+  | 'flash';
 export type MatchEvent = { t: number; type: MatchEventType; data: Record<string, unknown> };
 
 /** A grenade, breach charge or rocket in the world (sent to every client so it can be drawn). */
-export type Projectile = { id: number; kind: 'grenade' | 'charge' | 'rocket'; pos: Vec3; vel: Vec3 };
+export type Projectile = { id: number; kind: 'grenade' | 'charge' | 'rocket' | UtilityKind; pos: Vec3; vel: Vec3 };
+/** A smoke cloud (sim/utility.ts): popped at `pos` (on the ground) at sim time `t0`, thrown by `owner`. */
+export type SmokeCloud = { id: number; owner: number; pos: Vec3; t0: number };
 
 export type Snapshot = {
   time: number;
@@ -272,6 +290,8 @@ export type Snapshot = {
   hz?: HazardNet[];
   /** Spike traps placed (absent when there are none). */
   traps?: TrapNet[];
+  /** Smoke clouds hanging now (absent when none). */
+  smokes?: SmokeCloud[];
   /** Ids of broken pier sections (MapDef.docks), in the order they broke; absent while every one stands. */
   docks?: number[];
   /** Ids of damaged (scorched) pier sections still standing; absent when none. */

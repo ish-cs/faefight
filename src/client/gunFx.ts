@@ -52,6 +52,10 @@ export class GunFx {
   private flameGeo = new THREE.ConeGeometry(0.06, 0.45, 8).rotateX(Math.PI / 2).translate(0, 0, 0.42);
   private grenadeGeo = new THREE.SphereGeometry(0.07, 10, 8);
   private grenadeMat = new THREE.MeshStandardNodeMaterial({ color: 0x3d4a2a, roughness: 0.7, metalness: 0.2 });
+  /** Smoke grenade / flashbang canister: one cylinder, two shared materials (smoke: grey-green, flash: dark steel). */
+  private canGeo = new THREE.CylinderGeometry(0.035, 0.035, 0.13, 10).rotateZ(Math.PI / 2);
+  private smokeCanMat = new THREE.MeshStandardNodeMaterial({ color: 0x5a6150, roughness: 0.65, metalness: 0.3 });
+  private flashCanMat = new THREE.MeshStandardNodeMaterial({ color: 0x2f3236, roughness: 0.4, metalness: 0.6 });
   private chargeGeo = new THREE.BoxGeometry(0.22, 0.12, 0.16);
   private chargeMat = new THREE.MeshStandardNodeMaterial({ color: 0x2b2d30, roughness: 0.6 });
   private ledMat = new THREE.MeshBasicNodeMaterial({ color: new THREE.Color(0xff2020).multiplyScalar(4) });
@@ -101,7 +105,7 @@ export class GunFx {
   warmUp(extra: THREE.Material[] = []) {
     const g = new THREE.Group();
     const y = -40;
-    const mats: THREE.Material[] = [this.casings.mesh.material as THREE.Material, this.tracers[0].mat, this.rocketMat, this.flameMat, this.grenadeMat, this.chargeMat, this.ledMat, ...extra];
+    const mats: THREE.Material[] = [this.casings.mesh.material as THREE.Material, this.tracers[0].mat, this.rocketMat, this.flameMat, this.grenadeMat, this.smokeCanMat, this.flashCanMat, this.chargeMat, this.ledMat, ...extra];
     mats.forEach((m, i) => {
       const mesh = new THREE.Mesh(this.grenadeGeo, m);
       mesh.position.set(i * 0.2, y, 0);
@@ -278,6 +282,8 @@ export class GunFx {
       g.add(new THREE.Mesh(this.rocketGeo, this.rocketMat), new THREE.Mesh(this.flameGeo, this.flameMat));
     } else if (kind === 'grenade') {
       g.add(new THREE.Mesh(this.grenadeGeo, this.grenadeMat));
+    } else if (kind === 'smoke' || kind === 'flash') {
+      g.add(new THREE.Mesh(this.canGeo, kind === 'smoke' ? this.smokeCanMat : this.flashCanMat));
     } else {
       const led = new THREE.Mesh(this.ledGeo, this.ledMat);
       led.position.set(0.05, 0.07, 0);
@@ -336,6 +342,13 @@ export class GunFx {
         }
         sparks.spawn(v.obj.position.x, v.obj.position.y, v.obj.position.z, -_b.x * 0.05, -_b.y * 0.05, -_b.z * 0.05, 0.06, 0.18, 0.05, 1, 0.65, 0.3, 1, 0, 0);
         (v.obj.children[1] as THREE.Mesh).scale.setScalar(0.8 + R() * 0.5);
+      } else if (v.kind === 'smoke' || v.kind === 'flash') {
+        // tumbling in flight (spin only while it moves)
+        const sp = Math.abs(p.vel.x) + Math.abs(p.vel.y) + Math.abs(p.vel.z);
+        if (sp > 0.5) { v.obj.rotation.x += dt * 9; v.obj.rotation.y += dt * 4; }
+        // the smoke canister leaks a thin wisp before it pops
+        if (v.kind === 'smoke' && R() < dt * 14)
+          dust.spawn(v.obj.position.x, v.obj.position.y + 0.05, v.obj.position.z, rr(-0.15, 0.15), rr(0.3, 0.7), rr(-0.15, 0.15), rr(0.8, 1.3), 0.08, rr(0.35, 0.6), 0.8, 0.8, 0.82, 0.35, -0.1, 1);
       } else if (v.kind === 'charge') {
         const led = v.obj.getObjectByName('led');
         if (led) led.visible = Math.floor(now / 250) % 2 === 0;

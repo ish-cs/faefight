@@ -237,6 +237,13 @@ export class Avatar {
   private shieldTag: ReturnType<typeof shieldBar> | null = null;
   private shownShield = 0;
   private bubble: ReturnType<typeof speechBubble> | null = null;
+
+  /** Name tag, shield bar and speech bubble off for this frame (the player is behind smoke: world/smokeFx.ts). */
+  hideTags() {
+    if (this.tag) this.tag.visible = false;
+    if (this.shieldTag) this.shieldTag.sprite.visible = false;
+    if (this.bubble) this.bubble.sprite.visible = false;
+  }
   private shownQuip: QuipId | null = null;
   /** Bones the emote overlay turns, and their pose as the mixer left it (unkeyed bones would accumulate turns). */
   private emoteBones = new Map<EmoteBone, THREE.Bone>();
@@ -713,6 +720,8 @@ export class Avatar {
 /** Owns every player's avatar; render.ts feeds it snapshots each frame. */
 export class CharacterSystem {
   private avatars = new Map<number, Avatar>();
+  /** Whether smoke hides a player standing at `feet` from the camera: their tags go too (they'd show through it). */
+  tagsHiddenBy: ((feet: THREE.Vector3) => boolean) | null = null;
   private assets: CharacterAssets | null = null;
   private lastNow = performance.now();
   private tmpMotion: Motion = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
@@ -852,6 +861,7 @@ export class CharacterSystem {
           return c ? reloadPose(p.equipped, c.elapsed, c.duration, c.magStart, c.beats) : null;
         })(),
       }, dt, now);
+      if (p.alive && p.id !== humanId && this.tagsHiddenBy?.(m.pos)) a.hideTags();
       if (p.id === this.hiddenId) a.group.visible = false;
     }
     if (this.avatars.size > players.length)
