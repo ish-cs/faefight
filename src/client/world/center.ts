@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { float, mix, normalMap, positionWorld, texture, uv, vec2 } from 'three/tsl';
+import { float, luminance, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2 } from 'three/tsl';
 import { CENTER } from '../../sim/constants';
 import type { MapDef } from '../../sim/map';
 import { CENTER_PROP_HALF, centerPropYaw } from '../../sim/physics';
@@ -12,17 +12,36 @@ import { centerTopTex } from './textures';
 
 type Label = (text: string, bg: string) => THREE.Sprite;
 
+/** Mean linear luminance of each set's albedo (detail = albedo luminance ÷ this ≈ 1 on average). */
+const SET_LUM: Partial<Record<PbrName, number>> = { asphalt: 0.11, apron: 0.13, concrete: 0.094 };
+
 /**
- * A disc top whose colour is a painted layout canvas (uv space) over a world-space PBR set: the canvas gives the
- * markings, the PBR set the normal/roughness grain, a world noise the macro variation.
+ * A disc top (radius `R`) whose colour is a painted layout canvas (uv space) over a world-space PBR set: the set's
+ * albedo luminance shades the canvas (aggregate, patches, trowel marks), painted markings wear through to the
+ * surrounding surface where the set is pitted, a world noise adds macro variation and the last ~1.5 m toward the quay
+ * edge stays damp.
  */
-export function paintedTopMaterial(name: string, painted: THREE.Texture, set: PbrName) {
+export function paintedTopMaterial(name: string, painted: THREE.Texture, set: PbrName, R: number) {
   const m = new THREE.MeshStandardNodeMaterial();
   m.name = name;
-  const s = pbrSample(set, positionWorld.xz.div(set === 'asphalt' ? 2.4 : 3.2), true, true);
-  m.colorNode = texture(painted, uv()).rgb.mul(mix(float(0.84), float(1.08), worldNoise(0.04)));
+  const s = pbrSample(set, positionWorld.xz.div(set === 'asphalt' ? 2.4 : 2.6), true, true);
+  const d = luminance(s.albedo).div(SET_LUM[set] ?? 0.12);
+  const canvas = texture(painted, uv()).rgb;
+  // paint = markings much brighter than the ground around them; the canvas's low mip ≈ that ground
+  const ground = texture(painted, uv()).level(float(5)).rgb;
+  const paint = smoothstep(0.08, 0.25, luminance(canvas).sub(luminance(ground)));
+  const wear = paint.mul(float(1).sub(smoothstep(0.55, 0.95, d.add(worldNoise(1.7, 'g').sub(0.5).mul(0.5)))));
+  const macro = mix(float(0.84), float(1.08), worldNoise(0.04)).mul(mix(float(0.93), float(1.04), worldNoise(0.13, 'g')));
+  const detail = d.pow(mix(float(set === 'asphalt' ? 0.55 : 0.8), float(0.3), paint));
+  let col: THREE.Node<'vec3'> = mix(canvas, ground, wear.mul(0.85)).mul(detail).mul(macro);
+  const r = uv().sub(0.5).length().mul(2 * R);
+  const damp = smoothstep(R - 1.6, R - 0.1, r).mul(worldNoise(0.45, 'g').mul(0.6).add(0.4));
+  col = col.mul(mix(float(1), float(0.74), damp));
+  m.colorNode = col;
   m.normalNode = normalMap(s.normal, vec2(1, 1));
-  m.roughnessNode = float(0.88).add(worldNoise(0.12, 'g').sub(0.5).mul(0.16));
+  let rough: THREE.Node<'float'> = float(0.88).sub(d.sub(1).mul(0.12)).add(worldNoise(0.12, 'g').sub(0.5).mul(0.16));
+  rough = mix(rough, float(0.62), paint.sub(wear).clamp(0, 1)); // road paint is smoother than the ground
+  m.roughnessNode = mix(rough, float(0.5), damp).clamp(0.05, 1);
   m.metalnessNode = float(0);
   return applyWet(m, { puddles: true });
 }
@@ -40,7 +59,7 @@ export function buildCenter(def: MapDef, root: THREE.Group, dress: StaticBatch, 
   // painted pads in island-local XZ (the center island is off the origin with 2 players)
   const stations = [c.goldGen, c.supplyGen, c.potionShop].map((p) => ({ x: p.x - c.center.x, z: p.z - c.center.z }));
 
-  const topMat = paintedTopMaterial('centerTop', centerTopTex(R, def.template, stations, CENTER.wellRadius), yard ? 'asphalt' : 'concrete');
+  const topMat = paintedTopMaterial('centerTop', centerTopTex(R, def.template, stations, CENTER.wellRadius), yard ? 'asphalt' : 'apron', R);
   const top = new THREE.Mesh(new THREE.CircleGeometry(R, 96).rotateX(-Math.PI / 2), topMat);
   top.position.set(c.center.x, g, c.center.z);
   top.receiveShadow = true;

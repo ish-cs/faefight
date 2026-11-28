@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { runSteps } from './steps';
 import { overDock } from '../../sim/docks';
-import { float, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
+import { float, luminance, max, mix, normalMap, positionWorld, smoothstep, texture, uv, vec2, vec3 } from 'three/tsl';
 import { bunkerSlitBoxes, bunkerWallBoxes, harborBackdropFrame, type IslandLayout, type MapDef, type StaticBox } from '../../sim/map';
 import { PROP_HALF } from '../../sim/physics';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -50,46 +50,73 @@ function labelSprite(text: string, bg: string): THREE.Sprite {
 }
 
 /**
- * Island slab: worn-concrete PBR in world space, blended with sand / grass-ground sets and glossy puddles by the
- * decor mask, then the painted overlay (markings, joints, stains, drains, litter) on top.
+ * Island slab: a trowelled-concrete scan (Poly Haven Brushed Concrete, repainted from its luminance) in world space
+ * with three scales of macro variation, blended with gravel / sand / grass-ground sets by the decor mask (edges broken
+ * up by noise + the scan's own relief, sand spilling into the slab's low spots), glossy puddles, then the painted
+ * overlay (markings worn through where the slab is pitted, joints, stains, drains, litter) and a damp, darker band
+ * toward the quay edge.
  */
 function islandTopMaterial(R: number) {
   // Texture budget: a WebGPU fragment stage may bind 16 textures; with the env map + up to 4 shadow cascades this
-  // stays at 10 (concrete/gravel albedo+normal, sand/grass albedo, 2 masks, overlay, noise).
+  // stays at 10 (apron/gravel/sand albedo+normal, grass albedo, masks, overlay, noise).
   const surf = islandSurface(R, ISLAND_DECOR);
   const m = new THREE.MeshStandardNodeMaterial();
   m.name = 'islandTop';
   const w = positionWorld.xz;
-  const con = pbrSample('concrete', w.div(3.2), true, true);
+  const con = pbrSample('apron', w.div(2.6), true, true);
   const grv = pbrSample('gravel', w.div(1.6), true, true);
-  const sand = pbrAlbedo('sand', w.div(2.2));
+  const snd = pbrSample('sand', w.div(2.2), true, true);
   const grass = pbrAlbedo('grass', w.div(2.6));
-  const mk = texture(surf.mask, uv());
-  const gk = smoothstep(0.15, 0.7, texture(surf.gravel, uv()).r);
-  const ov = texture(surf.overlay, uv());
-  const macro = mix(float(0.86), float(1.1), worldNoise(0.03));
-  let alb = con.albedo.mul(3.6).mul(vec3(0.98, 0.96, 0.92)).mul(macro);
+  const mk = texture(surf.masks, uv()); // r sand, g grass, b standing water, a gravel
+  const halo = texture(surf.masks, uv()).level(float(3)); // ~0.7 m/texel: a wide soft halo around the beds
+  // the scan's relief (luminance ≈ 1 on average): trowel ridges / pits drive edge breakup, paint wear, roughness
+  const conL = luminance(con.albedo).div(0.13);
+  const edgeN = worldNoise(0.8).mul(0.6).add(worldNoise(2.9, 'g').mul(0.4)).sub(0.5);
+  const gk = smoothstep(0.3, 0.6, mk.a.add(edgeN.mul(0.5)));
+  const ks = smoothstep(0.3, 0.6, mk.r.add(edgeN.mul(0.45)).add(luminance(snd.albedo).div(0.181).sub(1).mul(0.12)));
+  const kg = smoothstep(0.3, 0.6, mk.g.add(edgeN.mul(0.5)));
+  // macro: ~140 m warm/cool drift, ~33 m and ~9 m brightness (no visible repeat of the 2.6 m tile)
+  const m1 = worldNoise(0.03), m2 = worldNoise(0.11, 'g'), m3 = worldNoise(0.007);
+  // a little of the scan's own hue (brown aggregate, rust spots) over a neutral warm grey
+  const hue = con.albedo.div(luminance(con.albedo).max(1e-3)).pow(vec3(0.35, 0.35, 0.35));
+  let alb: THREE.Node<'vec3'> = vec3(0.3, 0.3, 0.295).mul(hue).mul(conL.pow(0.9)).mul(mix(float(0.84), float(1.1), m1)).mul(mix(float(0.86), float(1.07), m2));
+  alb = alb.mul(mix(vec3(1.03, 1.0, 0.95), vec3(0.97, 0.98, 1.0), m3));
+  // traffic grime: soft dark-brown patches a few metres across, darkest in the slab's pits
+  const grime = smoothstep(0.5, 0.78, worldNoise(0.21)).mul(smoothstep(1.25, 0.7, conL).mul(0.5).add(0.5));
+  alb = mix(alb, alb.mul(vec3(0.66, 0.6, 0.52)), grime.mul(0.42));
+  // sand blown into the slab's low spots near the beds
+  const spill = smoothstep(0.04, 0.35, halo.r).mul(smoothstep(1.05, 0.8, conL)).mul(float(1).sub(ks));
+  alb = mix(alb, snd.albedo.mul(1.9), spill.mul(0.7));
   alb = mix(alb, grv.albedo.mul(vec3(0.9, 0.88, 0.84)), gk);
-  alb = mix(alb, sand.mul(2.1), mk.r);
-  alb = mix(alb, grass.mul(1.25), mk.g);
+  alb = mix(alb, snd.albedo.mul(2.1), ks);
+  alb = mix(alb, grass.mul(1.25), kg);
   const wet = mk.b;
   alb = alb.mul(mix(float(1), float(0.45), wet));
-  alb = mix(alb, ov.rgb, ov.a.mul(float(1).sub(gk.mul(0.6))));
+  // overlay paint / stains: thinner where the slab is pitted (worn markings), shaded by the slab's relief
+  const ovA = ov(surf).a.mul(conL.mul(1.6).sub(0.45).clamp(0.3, 1)).mul(float(1).sub(gk.mul(0.6)));
+  alb = mix(alb, ov(surf).rgb.mul(conL.pow(0.5)), ovA);
+  // spray zone: the last ~1.5 m toward the quay edge stays damp (darker, glossier, patchy)
+  const r = uv().sub(0.5).length().mul(2 * R);
+  const damp = smoothstep(R - 1.6, R - 0.1, r).mul(worldNoise(0.45, 'g').mul(0.6).add(0.4)).add(smoothstep(0.06, 0.4, halo.b).mul(0.35)).clamp(0, 1).mul(float(1).sub(wet));
+  alb = alb.mul(mix(float(1), float(0.74), damp));
   m.colorNode = alb;
   let nrm = mix(con.normal, grv.normal, gk);
-  nrm = mix(nrm, vec3(0.5, 0.5, 1), max(mk.r.mul(0.6), mk.g.mul(0.5)));
+  nrm = mix(nrm, snd.normal, ks);
+  nrm = mix(nrm, vec3(0.5, 0.5, 1), kg.mul(0.5));
   nrm = mix(nrm, vec3(0.5, 0.5, 1), wet.mul(0.9));
   m.normalNode = normalMap(nrm, vec2(1.2, 1.2));
-  // concrete roughness: sealed/polished-by-traffic areas vs. dusty open slab
-  let rough: THREE.Node<'float'> = float(0.8).add(worldNoise(0.12, 'g').sub(0.5).mul(0.3));
-  rough = mix(rough, float(0.95), max(gk, mk.r));
-  rough = mix(rough, float(0.92), mk.g);
+  // concrete: trowel-polished ridges smoother than the pits, sealed / traffic-worn areas vs. dusty open slab
+  let rough: THREE.Node<'float'> = float(0.9).sub(conL.sub(1).mul(0.18)).add(m2.sub(0.5).mul(0.16)).sub(grime.mul(0.12));
+  rough = mix(rough, float(0.95), max(gk, max(ks, spill)));
+  rough = mix(rough, float(0.92), kg);
+  rough = mix(rough, float(0.5), damp);
   rough = mix(rough, float(0.04), smoothstep(0.35, 0.8, wet));
-  m.roughnessNode = mix(rough, float(0.7), ov.a.mul(0.6)).clamp(0.03, 1);
+  m.roughnessNode = mix(rough, float(0.7), ovA.mul(0.6)).clamp(0.03, 1);
   m.metalnessNode = float(0);
-  m.aoNode = mix(float(1), float(0.8), max(gk.mul(0.6), mk.g));
+  m.aoNode = mix(float(1), float(0.8), max(gk.mul(0.6), kg)).mul(mix(float(0.82), float(1), smoothstep(0.55, 1, conL)));
   return applyWet(m, { puddles: true });
 }
+const ov = (surf: ReturnType<typeof islandSurface>) => texture(surf.overlay, uv());
 
 export type IslandsOut = { collidables: THREE.Object3D[]; root: THREE.Group };
 
@@ -133,7 +160,7 @@ export function* buildIslandsSteps(def: MapDef, teamColors: number[], scatter?: 
   const groundY = map[0].groundY;
 
   // harbor: main's PBR slab with sand/grass/puddle decor; yard: painted asphalt (lanes + container bays) on asphalt PBR
-  const topMat = yard ? paintedTopMaterial('islandTop', yardTopTex(R, coverBays(map[0], def.statics)), 'asphalt') : islandTopMaterial(R);
+  const topMat = yard ? paintedTopMaterial('islandTop', yardTopTex(R, coverBays(map[0], def.statics)), 'asphalt', R) : islandTopMaterial(R);
   const wallMat = M.seawall;
   // baked structures (structureModel.ts): bunker visual mesh + the rim's capping beam / wall face as 16 bent modules
   // per island down to 0.6 m below the waterline; the old cylinder only continues below them. null = old visuals.

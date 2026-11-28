@@ -61,7 +61,7 @@ export class DayNight {
     const L = dayLook(p, comp, this.look);
     const s = this.sky;
     s.setSunDir(this.dir.setFromSphericalCoords(1, rad(90 - L.sunElev), rad(L.sunAz)));
-    s.lighting.setDay(L);
+    s.lighting.setDay(L, p);
     lightU.lamps.value = L.lamps;
     lightU.twilight.value = L.twilight;
     const k = L.light / BAKE.light, sunC = setSrgb(this.sunC, L.lightC);

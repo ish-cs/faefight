@@ -19,7 +19,7 @@ try {
   page.setDefaultTimeout(240_000);
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); else if (m.text().includes('env probe')) console.log(m.text()); });
   await page.addInitScript(([q, m]) => {
     try {
       localStorage.setItem('faefight.settings.v1', JSON.stringify({ v: 2, onboarding: { howToSeen: true }, video: { quality: q, dynamicResolution: false } }));
@@ -48,6 +48,8 @@ try {
   // spawn island: from the island's front edge back toward the bunker
   const a = toWorld(-6, 14), b = toWorld(0, 0);
   await look(a, Math.atan2(-(b.x - a.x), -(b.z - a.z)), -0.08, 'spawn');
+  // ground close-up: slab, gravel path, sand bed and grass verge meeting (harbor) / painted asphalt (yard), looking down
+  { const p = toWorld(-6.5, 3.5), t = toWorld(-12, 8.5); await look(p, Math.atan2(-(t.x - p.x), -(t.z - p.z)), -0.55, 'ground'); }
   // close-up container: the built-in container cover nearest the home island centre, from 4.5 m on its open side
   const def = await dbg('mapDef');
   const boxes = (def?.statics ?? []).filter((st) => st.look !== 'barrier');
@@ -83,8 +85,12 @@ try {
   const az = (45 * Math.PI) / 180;
   const sx = Math.sin(az), sz = Math.cos(az);
   await look({ x: home.center.x + sx * 10, z: home.center.z + sz * 10 }, az + Math.PI, 0.04, 'sunset');
+  // night: deep in the cycle (moonlight, lamps on), from the spawn edge back toward the bunker
+  await dbg('time', 890);
+  await page.waitForTimeout(4000);
+  await look(a, Math.atan2(-(b.x - a.x), -(b.z - a.z)), -0.08, 'night');
   if (errors.length) console.log('errors:', JSON.stringify(errors.slice(0, 5)));
-  console.log(`shots: ${out}-{spawn,container,bunker,quay,midfight,sunset}.png`);
+  console.log(`shots: ${out}-{spawn,ground,container,bunker,quay,midfight,sunset,night}.png`);
 } finally {
   await browser.close();
 }

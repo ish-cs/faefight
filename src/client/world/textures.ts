@@ -299,7 +299,22 @@ export function islandSurface(R: number, d: IslandDecor) {
       g.beginPath(); g.arc(cx, cx, (R - 0.06) * s, 0, 7); g.stroke();
     });
     if (!maskData || !gravelData) throw new Error('[world/textures] island mask not drawn');
-    return { overlay, mask, gravel, maskData: maskData as ImageData, maskSize: MS };
+    // GPU copy of both masks in one RGBA texture (one sampler binding instead of two; the slab shader is near the
+    // 16-texture limit): RGB = the mask, A = gravel. Canvas rows run top-down while a DataTexture's run bottom-up.
+    const md = (maskData as ImageData).data, gd = (gravelData as ImageData).data, px = new Uint8Array(MS * MS * 4);
+    for (let y = 0; y < MS; y++) {
+      const src = y * MS * 4, dst = (MS - 1 - y) * MS * 4;
+      for (let x = 0; x < MS * 4; x += 4) {
+        px[dst + x] = md[src + x]; px[dst + x + 1] = md[src + x + 1]; px[dst + x + 2] = md[src + x + 2]; px[dst + x + 3] = gd[src + x];
+      }
+    }
+    const masks = new THREE.DataTexture(px, MS, MS, THREE.RGBAFormat);
+    masks.wrapS = masks.wrapT = THREE.ClampToEdgeWrapping;
+    masks.magFilter = THREE.LinearFilter;
+    masks.minFilter = THREE.LinearMipmapLinearFilter;
+    masks.generateMipmaps = true;
+    masks.needsUpdate = true;
+    return { overlay, mask, gravel, masks, maskData: maskData as ImageData, maskSize: MS };
   });
 }
 

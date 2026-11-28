@@ -306,8 +306,9 @@ export class World {
     this.lastFrame = now;
     this.applyBundle();
     if (this.water) this.water.update(focus ?? this.sky.camera.position, waterY, dt);
-    // water reflections follow the weather (its own envMapIntensity ignores scene.environmentIntensity)
-    if (this.waterEnv) this.waterEnv.envMapIntensity = 0.62 * (1 - 0.65 * this.sky.lighting.weather);
+    // water reflections follow the ambient level (time of day × weather; its own envMapIntensity ignores
+    // scene.environmentIntensity): the env probes are all at noon's brightness, a dusk / night sea must not glow
+    if (this.waterEnv) this.waterEnv.envMapIntensity = 0.62 * this.sky.lighting.ambient * (1 - 0.25 * this.sky.lighting.weather);
     const t = now / 1000;
     this.debris.update(dt, focus ?? this.sky.camera.position, feet, waterY);
     if (this.critters) {
