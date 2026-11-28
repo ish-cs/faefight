@@ -5,21 +5,23 @@ import type { HookState } from '../sim/types';
 /** Segments per rope (sag curve), ropes drawn at once (one per player), claw prongs per hook. */
 const SEGS = 16, MAX_ROPES = 8, PRONGS = 3;
 const CABLE_W = 0.022, PRONG_W = 0.035, PRONG_LEN = 0.2;
-/** Twang when the rope bites or snaps taut: transverse amplitude (m per m of rope, capped), frequency (Hz), decay (1/s). */
-/** Hand height over the feet the sim's rope length is measured from (m). */
-const HAND_UP = PLAYER.height * 0.7;
-const TWANG_AMP = 0.05, TWANG_MAX = 0.5, TWANG_HZ = 7, TWANG_DECAY = 5;
+/**
+ * The elastic look, all from the time since the bite (no sim rope state, so nothing steps at the 30 Hz snapshot rate):
+ * the rope lands with BITE_SLACK of extra length per metre that is taken up at TAKE_UP /s, with one damped twang
+ * (amplitude per metre, capped; frequency; decay /s). Flying out it sags FLY_SAG per metre with a slow whip.
+ */
+const BITE_SLACK = 0.06, TAKE_UP = 14, TWANG_AMP = 0.03, TWANG_MAX = 0.3, TWANG_HZ = 6, TWANG_DECAY = 9;
+const FLY_SAG = 0.05, WHIP = 0.06, WHIP_HZ = 2.5;
 
 /** Per-player rope look state (reused: one object per player id for the match). */
-type RopeLook = { st: number; taut: boolean; twangAt: number; twangAmp: number };
+type RopeLook = { st: number; bitAt: number };
 
 /**
  * Grappling hook ropes: every rope and claw in the match as thin boxes in ONE instanced mesh (one draw call; nothing
- * drawn and no work at all while no hook is out). The rope reads as an elastic string: it whips out sagging while it
- * flies; latched (st 1) it hangs in a sag (parabola of the same length as the rope's rest length HookState.len) while
- * slack, and goes straight and thinner (same volume) when stretched past it; biting or snapping taut sets off a
- * damped twang. Positions are worked out from the snapshot's HookState and the time (sim seconds) each frame; no
- * per-frame allocations.
+ * drawn and no work at all while no hook is out). Flying out the rope sags a little with a slow whip; when it bites it
+ * lands a touch slack, snaps taut within a few frames with one small damped twang, and then stays straight while it
+ * pulls. Everything is a smooth function of the render time since the bite (exact at any frame rate; no per-frame
+ * allocations).
  */
 export class Ropes {
   readonly mesh: THREE.InstancedMesh;
@@ -36,7 +38,7 @@ export class Ropes {
   private readonly side = new THREE.Vector3();
   private static readonly Z = new THREE.Vector3(0, 0, 1);
   private readonly looks = new Map<number, RopeLook>();
-  /** Per-rope shape for point(): sag depth (m), twang amplitude (m) and phase, whip (flying). */
+  /** Per-rope shape for point(): sag depth (m), twang amplitude (m) and phase, whip (flying) amplitude and phase. */
   private sag = 0;
   private wob = 0;
   private wobPhase = 0;
@@ -75,32 +77,25 @@ export class Ropes {
     if (out < 0.05) return true;
     end.sub(from).multiplyScalar(out / full).add(from);
     let look = this.looks.get(id);
-    if (!look) { look = { st: -1, taut: false, twangAt: -1e9, twangAmp: 0 }; this.looks.set(id, look); }
+    if (!look) { look = { st: -1, bitAt: -1e9 }; this.looks.set(id, look); }
     const latched = h.st === 1 || h.st === 2;
-    // Rest length: the sim's (feet to anchor) for st 1; a yank is always hauling (taut).
-    // (The sim's length runs from the feet; the rope is drawn from the hand, about HAND_UP higher.)
-    const feetOut = h.st === 1 ? Math.hypot(end.x - from.x, end.y - (from.y - HAND_UP), end.z - from.z) : out;
-    const rest = h.st === 1 && h.len !== undefined ? h.len - (feetOut - out) : latched ? out * 0.97 : out * 1.04;
-    const taut = latched && out >= rest;
-    if (latched && (look.st !== h.st || (taut && !look.taut))) {
-      // Bit, or snapped taut from slack: twang.
-      look.twangAt = t;
-      look.twangAmp = Math.min(TWANG_MAX, TWANG_AMP * out);
+    if (latched && look.st !== h.st) look.bitAt = Math.max(h.at, t - 0.05); // bit (the snapshot can land a tick late)
+    look.st = h.st;
+    const age = Math.max(0, t - look.bitAt);
+    if (latched) {
+      // Slack taken up fast after the bite (parabola of the same length), then a straight rope.
+      const extra = BITE_SLACK * out * Math.exp(-TAKE_UP * age);
+      this.sag = Math.sqrt((3 * out * extra) / 8) + 0.004 * out;
+      this.wob = Math.min(TWANG_MAX, TWANG_AMP * out) * Math.exp(-TWANG_DECAY * age);
+      this.wobPhase = Math.sin(age * TWANG_HZ * Math.PI * 2);
+      this.whip = 0;
+    } else {
+      this.sag = FLY_SAG * out;
+      this.wob = 0;
+      this.whip = WHIP * Math.min(1, out / 6);
+      this.whipT = t * WHIP_HZ * Math.PI * 2;
     }
-    look.st = h.st; look.taut = taut;
-    let width = CABLE_W;
-    if (!latched) this.sag = 0.07 * out;
-    else if (!taut) this.sag = Math.min(0.5 * rest, Math.sqrt((3 * out * (rest - out)) / 8)) + 0.004 * out; // slack: hangs
-    else {
-      this.sag = 0.004 * out;
-      width = CABLE_W * Math.max(0.6, Math.sqrt(rest / out)); // stretched: thinner
-    }
-    const age = t - look.twangAt;
-    this.wob = latched && age >= 0 ? look.twangAmp * Math.exp(-TWANG_DECAY * age) : 0;
-    this.wobPhase = Math.sin(age * TWANG_HZ * Math.PI * 2);
-    if (taut && h.st === 1) this.wob += 0.01 * Math.min(3, out - rest); // a stretched rope hums a little
-    this.whip = latched ? 0 : 0.12 * Math.min(1, out / 6);
-    this.whipT = t * 40;
+    const width = CABLE_W;
     // Sideways for the wobble: horizontal, across the rope.
     this.side.subVectors(end, from).cross(this.u.set(0, 1, 0));
     if (this.side.lengthSq() < 1e-6) this.side.set(1, 0, 0);
@@ -139,7 +134,7 @@ export class Ropes {
     const bell = 4 * k * (1 - k);
     out.y -= this.sag * bell;
     // Twang: the first string mode (fixed at both ends); whip: a wave running out along a flying rope.
-    const across = this.wob * Math.sin(Math.PI * k) * this.wobPhase + this.whip * bell * Math.sin(k * 9 - this.whipT);
+    const across = this.wob * Math.sin(Math.PI * k) * this.wobPhase + this.whip * bell * Math.sin(k * 6 - this.whipT);
     if (across !== 0) out.addScaledVector(this.side, across);
   }
 

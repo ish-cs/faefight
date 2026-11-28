@@ -143,12 +143,15 @@ export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
 /**
  * Grappling hook (sim/grapple.ts, movement.ts). One buy = `uses` hooks; a use is spent only when the hook
  * latches. Range (m) from the eye; the hook flies at `tipSpeed` (160, was 90: a snappier throw, the user's call
- * 2026-11-27). Hooking the world ropes you to the point with an elastic rope (spring `ropeK` /s², damping `ropeDamp`
- * /s on the stretch rate, pull capped at `tensionMax` m/s², slack when shorter than its rest length) that reels in at
- * `reelSpeed` m/s; gravity always applies (you swing under the anchor), speed is capped at `ropeMaxSpeed`, strafe
- * pushes the swing (`swingSteer` m/s²) and holding back holds the length (slack still taken up at `slackTake`
- * m/s). At most `pullSec` on the rope; within
- * `arriveDist` you let go keeping `arriveKeep` of your speed plus a little `arrivePop` up, so you land on the ledge.
+ * 2026-11-27). Hooking the world pulls you straight at the point like the old hook (movement.ts stepPull), with a
+ * light elastic layer: you speed up along the rope at up to `pullAccel` m/s² to `pullSpeed`, and brake on the way in
+ * (the speed toward the point never exceeds sqrt(`arriveSpeed`² + 2·`pullBrake`·d) nor (d + `easeLead`) / `easeSec`,
+ * d = metres still to go before `arriveDist`), so a short hook eases over a few frames instead of snapping and a long
+ * one lands instead of sailing past. Sideways speed is kept and dies off at `swingDamp` /s (a mild swing), a
+ * `sagGravity` share of gravity bows the path, strafe nudges it (`swingSteer` m/s²). Blocked by a wall, the rope's
+ * `pullSec` clock runs `stallDrain`× faster, so a pull that can't get there lets go in a fraction of a second instead
+ * of pinning you. Within `arriveDist` you let go keeping `arriveKeep` of your speed: below the point you get the hop
+ * that clears it (at least `arrivePop`, at most `mantleMax` m/s up) and `arriveStep` m/s on toward it, so you land on the ledge.
  * Jump (or fire) lets go early keeping your velocity, capped at `flingMax` (the reach rule holds). Hooking a
  * player yanks them toward you at `yankSpeed` for at most `yankSec` (their own movement is off meanwhile),
  * stopping `yankStop` m short of you. `cooldownSec` after the hook comes back (a miss: `missCooldownSec`).
@@ -157,9 +160,10 @@ export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
 export const GRAPPLE = {
   /** range: the most a hook ever reaches; a map's own reach is grappleRange(islands) (≤ this). gapMargin: see there. */
   price: 90, uses: 3, range: 26, gapMargin: 8, tipSpeed: 160,
-  pullSec: 4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.25,
-  /** The elastic rope (movement.ts stepPull): see the comment above. */
-  reelSpeed: 26, ropeK: 80, ropeDamp: 6, tensionMax: 140, ropeMaxSpeed: 30, ropeMinLen: 0.5, slackTake: 8, swingSteer: 6, flingMax: 15,
+  pullSec: 2.4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.3, arriveStep: 2.5, mantleMax: 7.5,
+  /** The pull (movement.ts stepPull): see the comment above. */
+  pullSpeed: 26, pullAccel: 160, pullBrake: 65, arriveSpeed: 9, easeLead: 1.2, easeSec: 0.2,
+  swingDamp: 4, sagGravity: 0.35, swingSteer: 5, stallDrain: 8, flingMax: 12,
   yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
   cooldownSec: 0.5, missCooldownSec: 0.2, minDist: 2.5, yankCreditSec: 5,
 };

@@ -25,7 +25,7 @@ export type SoundId =
   /** Drawing a weapon (kind = WeaponKind); pushing off the ground (kind = Surface); a UI button click. */
   | 'equip' | 'jump' | 'click'
   // Hooks for round-11 features (playSfx in api.ts). kind = Surface where it says so.
-  | 'grappleFire' | 'grappleAttach' | 'grappleReel' | 'grappleRelease' | 'grappleSnap' | 'grappleCreak'
+  | 'grappleFire' | 'grappleAttach' | 'grappleReel' | 'grappleRelease' | 'grappleSnap'
   | 'spikeArm' | 'spikeTrigger'
   | 'shellCasing' | 'ragdollThud'
   | 'dockCreak' | 'dockBreak'
@@ -363,9 +363,6 @@ export class SoundDirector {
       this.reelAt.set(p.id, s.time);
       const own = p.id === this.humanId;
       out.push({ sound: 'grappleReel', pos: own ? null : { ...p.pos }, gain: own ? 0.5 : 0.45, own });
-      // Stretched well past its rest length: the rope creaks under the load.
-      const h = p.hook, stretch = h.len !== undefined ? Math.hypot(h.x - p.pos.x, h.y - p.pos.y, h.z - p.pos.z) - h.len : 0;
-      if (stretch > 0.8) out.push({ sound: 'grappleCreak', pos: own ? null : { ...p.pos }, gain: Math.min(0.6, 0.25 + stretch * 0.1), own });
     }
     // Pier planks stressed by a blast (newly scorched sections): a creak where they stand.
     for (const id of s.dockHurt ?? []) {

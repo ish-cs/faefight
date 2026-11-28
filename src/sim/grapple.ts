@@ -10,8 +10,8 @@ import { add, dist, scale, v3 } from './vec';
 /**
  * Grappling hook. Fired from the selected hotbar slot: the hook flies out along the aim (hitscan picks the
  * point, the hook takes dist / GRAPPLE.tipSpeed to get there). On the world (terrain, docks, props, pieces,
- * cranes) it ropes its owner to the point with an elastic rope that reels in (movement.ts stepPull: mv.pull; you
- * swing under gravity, and a release keeps your velocity); if the piece it bit breaks, the rope snaps ('snap'); on a player it yanks them toward the owner;
+ * cranes) it pulls its owner to the point (movement.ts stepPull: mv.pull; a
+ * release keeps your velocity, capped); if the piece it bit breaks, the rope snaps ('snap'); on a player it yanks them toward the owner;
  * water, sky or too close is a miss and the rope comes back. A use is spent only when the hook latches.
  *
  * Rules: the rope never passes firing slits; a yank needs clear line of sight from the owner's eye to the
@@ -76,11 +76,7 @@ export function tickGrapple(ctx: GrappleCtx, p: PlayerState, now: number): Match
   if (h.st === 1) {
     const broke = h.pc !== undefined && !ctx.pieces.has(h.pc);
     const pull = p.mv?.pull && !p.mv.pull.yank ? p.mv.pull : null;
-    if (pull && !broke) {
-      // Everyone draws the rope's slack / stretch from its rest length (cm, so the wire delta stays small).
-      if (pull.len !== undefined) h.len = Math.round(pull.len * 100) / 100;
-      return [];
-    }
+    if (pull && !broke) return [];
     if (broke) {
       // The piece it bit went down: the rope snaps (you fly on with what you had, capped like any release).
       const out = release(ctx, p, now);

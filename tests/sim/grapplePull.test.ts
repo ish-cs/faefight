@@ -10,7 +10,7 @@ import { stateHash } from '../../src/sim/replay/hash';
 import { Recorder } from '../../src/sim/replay/recorder';
 import { ReplayRunner } from '../../src/sim/replay/runner';
 
-// The elastic rope (movement.ts stepPull): a spring-damper with slack that reels in, under gravity.
+// The rope pull (movement.ts stepPull): a direct pull with braking, an eased short hook and a light swing.
 const DT = 1 / 30;
 const free = (m: { pos: Vec3 }) => ({ movePlayer: (d: Vec3) => ({ pos: v3(m.pos.x + d.x, m.pos.y + d.y, m.pos.z + d.z), grounded: false }) });
 const cmd = (x: Partial<MoveCmd> = {}): MoveCmd => ({ seq: 1, moveX: 0, moveZ: 0, yaw: 0, jump: false, sprint: false, ...x });
@@ -41,7 +41,7 @@ function newArrival(d: number, h: number): number {
   return Infinity;
 }
 
-describe('elastic rope physics (movement.ts)', () => {
+describe('rope pull physics (movement.ts)', () => {
   test('no slower than the old pull: fire to arrival at 8 m, 15 m, 18 m (yard reach), 26 m (max reach), level and up a ledge', () => {
     const rows: string[] = [];
     for (const h of [0, 5]) for (const d of [8, 15, 18, GRAPPLE.range]) {
@@ -52,74 +52,82 @@ describe('elastic rope physics (movement.ts)', () => {
     console.log(`[grapple arrival]\n${rows.join('\n')}`);
   });
 
-  test('pendulum: holding the length (back on the stick) you swing under the anchor and up the other side', () => {
-    // 4 m rope, let go 30° out to +x: falls through under the anchor and climbs to about the same angle on -x.
-    const A = v3(0, 10, 0), L = 4;
-    const m = bob(v3(L * Math.sin(Math.PI / 6), 10 - L * Math.cos(Math.PI / 6), 0), { x: A.x, y: A.y, z: A.z, left: 4, len: L });
-    let minX = Infinity, lowY = Infinity, passedUnder = 0;
-    for (let i = 0; i < 60 && m.mv.pull; i++) {
-      stepMove(m, cmd({ moveZ: -1 }), DT, free(m));
-      if (Math.abs(m.pos.x) < 0.3) { passedUnder++; lowY = Math.min(lowY, m.pos.y); }
-      minX = Math.min(minX, m.pos.x);
+  /** Steps of a pull from rest to `a` in free space: speed on the step before arrival, peak speed, steps taken. */
+  function run(a: Vec3, c: Partial<MoveCmd> = {}, vel = v3()) {
+    const m = bob(v3(), { x: a.x, y: a.y, z: a.z, left: GRAPPLE.pullSec }, vel);
+    let peak = 0, last = 0, steps = 0, lowest = 0;
+    for (; steps < 120 && m.mv.pull; steps++) {
+      last = Math.hypot(m.vel.x, m.vel.y, m.vel.z);
+      stepMove(m, cmd(c), DT, free(m));
+      if (m.mv.pull) peak = Math.max(peak, Math.hypot(m.vel.x, m.vel.y, m.vel.z));
+      lowest = Math.min(lowest, m.pos.y - a.y * Math.min(1, Math.hypot(m.pos.x, m.pos.z) / Math.max(1e-9, Math.hypot(a.x, a.z))));
     }
-    expect(passedUnder).toBeGreaterThan(0);
-    expect(lowY).toBeLessThan(A.y - L + 0.05); // taut at the bottom (stretched a little by the swing)
-    expect(lowY).toBeGreaterThan(A.y - L - 0.6);
-    expect(minX).toBeLessThan(-L * 0.5 * 0.8); // swung up the far side (sin 30° = 0.5 of the rope), little lost to damping
-    expect(m.mv.pull?.len).toBe(L); // held: no reel
+    return { m, peak, last, steps, lowest };
+  }
+
+  test('arrival braking: a long pull tops out at pullSpeed and comes in slow, never at full tilt', () => {
+    for (const d of [8, 15, 26]) {
+      const r = run(v3(d, 0, 0));
+      expect(r.peak, `${d} m peak`).toBeLessThanOrEqual(GRAPPLE.pullSpeed + 0.5); // + the sag's sideways bit
+      expect(r.last, `${d} m arrival speed`).toBeLessThan(GRAPPLE.arriveSpeed + 3);
+      expect(r.m.mv.pull).toBeUndefined();
+      // Let go: the arrival sheds the speed (no sailing past the point).
+      expect(Math.hypot(r.m.vel.x, r.m.vel.z)).toBeLessThan(GRAPPLE.arriveStep + GRAPPLE.arriveKeep * (GRAPPLE.arriveSpeed + 3));
+    }
   });
 
-  test('slack rope does nothing (free fall); taut, it pulls toward the anchor', () => {
-    const slack = bob(v3(0, 0, 0), { x: 3, y: 0, z: 0, left: 4, len: 6 });
-    for (let i = 0; i < 5; i++) stepMove(slack, cmd({ moveZ: -1 }), DT, free(slack));
-    expect(slack.vel.x).toBe(0);
-    expect(slack.vel.y).toBeCloseTo(-PLAYER.gravity * 5 * DT, 9);
-    const taut = bob(v3(0, 0, 0), { x: 5, y: 0, z: 0, left: 4, len: 3 });
-    stepMove(taut, cmd({ moveZ: -1 }), DT, free(taut));
-    expect(taut.vel.x).toBeGreaterThan(2);
+  test('a short hook eases in over several frames (no snap), slower at the top than a long one', () => {
+    for (const [d, minSteps, maxPeak] of [[2.6, 4, 11], [3.5, 6, 14], [5, 9, 19]] as const) {
+      const r = run(v3(d, 0, 0));
+      expect(r.steps, `${d} m steps`).toBeGreaterThanOrEqual(minSteps);
+      expect(r.peak, `${d} m peak`).toBeLessThanOrEqual(maxPeak);
+    }
   });
 
-  test('an elastic string: stretched and held, it springs back, oscillates about its static stretch and settles', () => {
-    // Hanging 1 m past an 8 m rope straight under the anchor: recoil (the winch takes up the slack), re-catch, bounce,
-    // each swing of the stretch smaller, settling at the static stretch g / k.
-    const A = v3(0, 10, 0), L = 8, still = PLAYER.gravity / GRAPPLE.ropeK;
-    const m = bob(v3(0, 10 - L - 1, 0), { x: A.x, y: A.y, z: A.z, left: 4, len: L });
-    const e: number[] = [];
-    for (let i = 0; i < 110 && m.mv.pull; i++) {
-      stepMove(m, cmd({ moveZ: -1 }), DT, free(m));
-      e.push(dist(m.pos, A) - m.mv.pull!.len!);
-    }
-    expect(e.length).toBe(110);
-    let crossings = 0;
-    for (let i = 1; i < e.length; i++) if ((e[i] - still) * (e[i - 1] - still) < 0) crossings++;
-    expect(crossings).toBeGreaterThanOrEqual(3); // it bounces, not just creeps back
-    expect(Math.min(...e.slice(0, 15))).toBeLessThan(0); // recoiled past its length (slack for a moment)
-    const env = (a: number[]) => Math.max(...a.map((x) => Math.abs(x - still)));
-    expect(env(e.slice(0, 20))).toBeGreaterThan(0.5);
-    expect(env(e.slice(-20))).toBeLessThan(env(e.slice(0, 20)) / 4); // settled
+  test('holding back on the stick no longer pins you on the rope: it still pulls you in', () => {
+    const r = run(v3(12, 3, 0), { moveZ: -1 });
+    expect(r.m.mv.pull).toBeUndefined();
+    expect(r.steps).toBeLessThan(25);
   });
 
-  test('a reeled pull starts with a springy kick: the stretch builds, then the speed tops out at the cap', () => {
-    const m = bob(v3(), { x: 26, y: 0, z: 0, left: GRAPPLE.pullSec });
-    let peakStretch = 0, peakSpeed = 0;
-    for (let i = 0; i < 40 && m.mv.pull; i++) {
-      stepMove(m, cmd(), DT, free(m));
-      if (m.mv.pull?.len !== undefined) peakStretch = Math.max(peakStretch, dist(m.pos, v3(26, 0, 0)) - m.mv.pull.len);
-      peakSpeed = Math.max(peakSpeed, Math.hypot(m.vel.x, m.vel.y, m.vel.z));
-    }
-    expect(peakStretch).toBeGreaterThan(1);
-    expect(peakSpeed).toBeLessThanOrEqual(GRAPPLE.ropeMaxSpeed + 1e-9);
-    expect(peakSpeed).toBeGreaterThan(GRAPPLE.reelSpeed);
+  test('blocked by a wall, the pull lets go within a fraction of a second instead of pinning you', () => {
+    const m = bob(v3(), { x: 10, y: 4, z: 0, left: GRAPPLE.pullSec });
+    const wall = { movePlayer: (_d: Vec3) => ({ pos: { ...m.pos }, grounded: true }) };
+    let steps = 0;
+    for (; steps < 120 && m.mv.pull; steps++) stepMove(m, cmd(), DT, wall);
+    expect(steps * DT).toBeLessThan(0.45);
+    // Sliding up a face (half the motion gets through) is progress, not a stall: the pull keeps going.
+    const s = bob(v3(), { x: 10, y: 4, z: 0, left: GRAPPLE.pullSec });
+    const slide = { movePlayer: (d: Vec3) => ({ pos: v3(s.pos.x + d.x * 0.5, s.pos.y + d.y * 0.5, s.pos.z + d.z * 0.5), grounded: false }) };
+    for (let i = 0; i < 15; i++) stepMove(s, cmd(), DT, slide);
+    expect(s.mv.pull).toBeDefined();
+  });
+
+  test('a mild swing: sideways speed carries a little and dies off; the path sags only a little under the line', () => {
+    const r = run(v3(20, 0, 0), {}, v3(0, 0, 8));
+    expect(r.m.mv.pull).toBeUndefined();
+    const side = bob(v3(), { x: 20, y: 0, z: 0, left: GRAPPLE.pullSec }, v3(0, 0, 8));
+    for (let i = 0; i < 9; i++) stepMove(side, cmd(), DT, free(side));
+    expect(side.vel.z).toBeGreaterThan(8 * 0.15); // carried, not killed outright
+    expect(side.vel.z).toBeLessThan(8 * 0.5); // but well damped within 0.3 s
+    expect(r.lowest).toBeGreaterThan(-1); // sag under the straight line < 1 m on a 20 m pull
+  });
+
+  test('arriving under a ledge-top point hops you up and on so you land on it', () => {
+    const m = bob(v3(0, 0, 0), { x: 1.2, y: 1, z: 0, left: GRAPPLE.pullSec }, v3(3, 3, 0));
+    stepMove(m, cmd(), DT, free(m));
+    expect(m.mv.pull).toBeUndefined();
+    expect((m.vel.y + PLAYER.gravity * DT) ** 2 / (2 * PLAYER.gravity)).toBeGreaterThan(1.3); // clears 1 m + margin
+    expect(m.vel.x).toBeGreaterThanOrEqual(GRAPPLE.arriveStep - 1e-9);
   });
 
   test('a jump lets go keeping the velocity (no stop), capped at GRAPPLE.flingMax', () => {
-    const slow = bob(v3(), { x: 0, y: 10, z: 0, left: 4, len: 10 }, v3(8, 0, 0));
+    const slow = bob(v3(), { x: 0, y: 10, z: 0, left: 4 }, v3(8, 0, 0));
     stepMove(slow, cmd({ jump: true }), DT, free(slow));
     expect(slow.mv.pull).toBeUndefined();
     expect(slow.vel.x).toBeCloseTo(8, 9);
-    const fast = bob(v3(), { x: 0, y: 10, z: 0, left: 4, len: 10 }, v3(25, 5, 0));
+    const fast = bob(v3(), { x: 0, y: 10, z: 0, left: 4 }, v3(25, 5, 0));
     stepMove(fast, cmd({ jump: true }), DT, free(fast));
-    // Capped, then that step's gravity: same heading, flingMax fast.
     expect(fast.vel.x).toBeCloseTo(GRAPPLE.flingMax * 25 / Math.hypot(25, 5), 9);
     expect(fast.vel.y).toBeCloseTo(GRAPPLE.flingMax * 5 / Math.hypot(25, 5) - PLAYER.gravity * DT, 9);
   });
@@ -146,7 +154,7 @@ async function onGround() {
   return { m, f, s, slot: me(s).hotbar.indexOf('grapple') };
 }
 
-describe('elastic rope in a match', () => {
+describe('rope pull in a match', () => {
   test('the rope snaps when the piece it bit is destroyed (event + you fly on)', async () => {
     const { m, f, s: s0, slot } = await onGround();
     const p0 = me(s0);
@@ -158,7 +166,6 @@ describe('elastic rope in a match', () => {
     for (let i = 0; i < 10 && me(s).hook?.st !== 1; i++) s = m.tick(inp());
     expect(me(s).hook?.st).toBe(1);
     for (let i = 0; i < 6; i++) s = m.tick(inp());
-    expect(me(s).hook?.len).toBeGreaterThan(0); // everyone sees the rope's rest length
     const speed = Math.hypot(me(s).vel.x, me(s).vel.z);
     expect(speed).toBeGreaterThan(8);
     m.debugRemovePiece(id);

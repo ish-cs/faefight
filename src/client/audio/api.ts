@@ -18,7 +18,7 @@
 //                elimination (glory sting, kind 'mine' for the eliminator's own)
 //   Round-11 hooks, ready to call:
 //     grapple    grappleFire, grappleAttach (at the hook), grappleReel (~0.6 s ratchet; repeat while reeling), grappleRelease,
-//                grappleSnap (the rope parts: its anchor piece broke), grappleCreak (a stretched rope under load)
+//                grappleSnap (the rope parts: its anchor piece broke)
 //     spike trap spikeArm, spikeTrigger
 //     shells     shellCasing (kind Surface: hard surfaces ring, soft ones barely tick)
 //     ragdolls   ragdollThud (kind Surface)

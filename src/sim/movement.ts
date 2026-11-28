@@ -68,10 +68,10 @@ export type MoveState = {
   stress: number;
   /**
    * On a grappling hook's rope (sim/grapple.ts): roped to feet target (x, y, z) for at most `left` more
-   * seconds. `len`: the rope's rest length (m; your own hook only, set on the first step from the distance then).
+   * seconds.
    * `yank`: someone else's hook dragging you (your own movement is off). Absent = free.
    */
-  pull?: { x: number; y: number; z: number; left: number; len?: number; yank?: true };
+  pull?: { x: number; y: number; z: number; left: number; yank?: true };
 };
 
 /** One fixed (1/30 s) movement step's worth of input, numbered by the client for reconciliation. */
@@ -213,13 +213,11 @@ export function capFling(vel: Vec3): void {
  * One step on a grappling rope (mv.pull). Returns false when the rope let go this step (arrived, timed out,
  * or jump pressed on your own hook) so the caller runs a normal step instead. Pulls never hurt on landing.
  *
- * Your own hook is an elastic rope (spring-damper with slack) of rest length `len`, reeled in at
- * GRAPPLE.reelSpeed (holding back on the move stick holds the length, slack taken up at GRAPPLE.slackTake: swing). Gravity always applies, so you
- * swing under the anchor; momentum is kept. Taut (stretched past `len`), the rope pulls you toward the anchor
- * with stiffness GRAPPLE.ropeK and damping GRAPPLE.ropeDamp on the stretch rate, solved implicitly along the
- * rope (stable at the 30 Hz step), capped at GRAPPLE.tensionMax; slack, it does nothing. Strafe steers the swing.
- * Speed is capped at GRAPPLE.ropeMaxSpeed (the capsule sweep stops it going through walls). A yank sets the
- * velocity outright (unchanged).
+ * Your own hook pulls you straight at the point, like the old hook, with a light elastic layer (GRAPPLE, see there):
+ * the speed along the rope eases up at pullAccel to pullSpeed and brakes on the way in (arriveSpeed/pullBrake, and
+ * easeLead/easeSec for short hooks); sideways speed carries and dies off at swingDamp, a sagGravity share of gravity
+ * bows the path and strafe nudges it. A wall in the way runs the rope's clock stallDrain× faster (no pinning). On
+ * arrival you hop onto the ledge (arriveStep on, enough up to clear the point). A yank sets the velocity outright.
  */
 function stepPull(m: Mover, cmd: MoveCmd, moving: boolean, dt: number, body: MoveBody): boolean {
   const mv = m.mv, pl = mv.pull!;
@@ -227,64 +225,68 @@ function stepPull(m: Mover, cmd: MoveCmd, moving: boolean, dt: number, body: Mov
   const dx = pl.x - m.pos.x, dy = pl.y - m.pos.y, dz = pl.z - m.pos.z;
   const d = Math.hypot(dx, dy, dz);
   const left = pl.left - dt;
-  const hold = !pl.yank && cmd.moveZ < -0.3;
-  // Reeling: the rest length shrinks at reelSpeed. Holding: it stays, but the winch still takes up slack (at
-  // slackTake), so a swing stays on a snug rope instead of a long slack fall.
-  const len0 = pl.len ?? d;
-  const len = pl.yank ? undefined : Math.max(GRAPPLE.ropeMinLen,
-    hold ? (d < len0 ? Math.max(d, len0 - GRAPPLE.slackTake * dt) : len0) : len0 - GRAPPLE.reelSpeed * dt);
   // A fresh object, never mutated in place: prediction shares it with snapshots and render-time part steps.
-  mv.pull = pl.yank ? { ...pl, left } : { ...pl, left, len };
+  mv.pull = { ...pl, left };
   if (d <= (pl.yank ? GRAPPLE.yankStop : GRAPPLE.arriveDist) || left <= EPS) {
     delete mv.pull;
     if (pl.yank) { m.vel.x *= GRAPPLE.yankKeep; m.vel.y = Math.min(m.vel.y, 0); m.vel.z *= GRAPPLE.yankKeep; }
-    else if (d <= GRAPPLE.arriveDist) {
-      // Arrived: shed most of the speed and pop up a little, so you land on the ledge instead of sailing past.
-      m.vel.x *= GRAPPLE.arriveKeep; m.vel.z *= GRAPPLE.arriveKeep;
-      m.vel.y = Math.max(m.vel.y * GRAPPLE.arriveKeep, GRAPPLE.arrivePop);
-    } else capFling(m.vel);
+    else if (d <= GRAPPLE.arriveDist) arrive(m, dx, dy, dz);
+    else capFling(m.vel);
     return false;
   }
   stepStamina(mv, false, moving, dt);
+  const nx = dx / d, ny = dy / d, nz = dz / d;
   if (pl.yank) {
-    m.vel.x = dx / d * GRAPPLE.yankSpeed;
-    m.vel.y = dy / d * GRAPPLE.yankSpeed;
-    m.vel.z = dz / d * GRAPPLE.yankSpeed;
+    m.vel.x = nx * GRAPPLE.yankSpeed;
+    m.vel.y = ny * GRAPPLE.yankSpeed;
+    m.vel.z = nz * GRAPPLE.yankSpeed;
   } else {
-    const nx = dx / d, ny = dy / d, nz = dz / d;
-    m.vel.y -= PLAYER.gravity * dt;
+    m.vel.y -= PLAYER.gravity * GRAPPLE.sagGravity * dt;
     if (Math.abs(cmd.moveX) > EPS) {
-      // Strafe pumps the swing: sideways (yaw frame) push with its along-rope part removed.
-      const rx = dm.cos(cmd.yaw) * cmd.moveX, rz = -dm.sin(cmd.yaw) * cmd.moveX;
-      const along = rx * nx + rz * nz;
-      const a = GRAPPLE.swingSteer * dt;
-      m.vel.x += (rx - along * nx) * a; m.vel.y += -along * ny * a; m.vel.z += (rz - along * nz) * a;
+      const rx = dm.cos(cmd.yaw) * cmd.moveX * GRAPPLE.swingSteer * dt, rz = -dm.sin(cmd.yaw) * cmd.moveX * GRAPPLE.swingSteer * dt;
+      m.vel.x += rx; m.vel.z += rz;
     }
-    const stretch = d - len!;
-    if (stretch > 0) {
-      // Implicit spring-damper along the rope: vr = speed toward the anchor, reel = how fast the rest length shrinks.
-      const reel = hold ? 0 : GRAPPLE.reelSpeed, k = GRAPPLE.ropeK, c = GRAPPLE.ropeDamp;
-      const vr = m.vel.x * nx + m.vel.y * ny + m.vel.z * nz;
-      const vrNew = (vr + dt * (k * stretch + (k * dt + c) * reel)) / (1 + dt * c + dt * dt * k);
-      const dv = Math.min(Math.max(0, vrNew - vr), GRAPPLE.tensionMax * dt); // a rope only pulls
-      m.vel.x += nx * dv; m.vel.y += ny * dv; m.vel.z += nz * dv;
-    }
-    const sp = Math.hypot(m.vel.x, m.vel.y, m.vel.z);
-    if (sp > GRAPPLE.ropeMaxSpeed) { const k = GRAPPLE.ropeMaxSpeed / sp; m.vel.x *= k; m.vel.y *= k; m.vel.z *= k; }
+    // Along the rope: ease toward the braking profile's speed. Across it: keep, dying off (a mild swing).
+    const togo = Math.max(0, d - GRAPPLE.arriveDist);
+    const want = Math.min(GRAPPLE.pullSpeed, Math.sqrt(GRAPPLE.arriveSpeed * GRAPPLE.arriveSpeed + 2 * GRAPPLE.pullBrake * togo),
+      (togo + GRAPPLE.easeLead) / GRAPPLE.easeSec);
+    const along = m.vel.x * nx + m.vel.y * ny + m.vel.z * nz;
+    const next = along + Math.min(GRAPPLE.pullAccel * dt, want - along);
+    const keep = dm.exp(-GRAPPLE.swingDamp * dt);
+    m.vel.x = nx * next + (m.vel.x - along * nx) * keep;
+    m.vel.y = ny * next + (m.vel.y - along * ny) * keep;
+    m.vel.z = nz * next + (m.vel.z - along * nz) * keep;
   }
   const p0 = m.pos;
   const r = body.movePlayer({ x: m.vel.x * dt, y: m.vel.y * dt, z: m.vel.z * dt });
   m.pos = r.pos;
   mv.grounded = r.grounded;
-  if (r.grounded && m.vel.y < 0) m.vel.y = 0;
   if (!pl.yank) {
-    // Whatever stopped the capsule (a cliff face, a wall) takes that part of the velocity: none stored up behind it.
+    // Whatever stopped the capsule takes that part of the velocity (none stored up behind a wall), and a pull that
+    // isn't getting closer burns its clock fast: it lets go instead of pinning you against the wall.
     const ax = (r.pos.x - p0.x) / dt, ay = (r.pos.y - p0.y) / dt, az = (r.pos.z - p0.z) / dt;
     if (Math.abs(ax) < Math.abs(m.vel.x) - 1e-6) m.vel.x = ax;
     if (Math.abs(ay) < Math.abs(m.vel.y) - 1e-6) m.vel.y = ay;
     if (Math.abs(az) < Math.abs(m.vel.z) - 1e-6) m.vel.z = az;
-  }
+    const gained = (ax * nx + ay * ny + az * nz) * dt;
+    if (gained < 0.25 * GRAPPLE.arriveSpeed * dt) mv.pull = { ...mv.pull!, left: left - (GRAPPLE.stallDrain - 1) * dt };
+  } else if (r.grounded && m.vel.y < 0) m.vel.y = 0;
   mv.airTime = r.grounded ? 0 : Math.min(AIR_CAP, mv.airTime + dt);
   mv.jumpBuf = 0;
   return true;
+}
+
+/**
+ * Arrived (within GRAPPLE.arriveDist of the point, (dx, dy, dz) away): shed most of the speed, step on toward the point
+ * and hop up enough to clear it when it's above you, so you land on the ledge instead of sailing past or dropping back.
+ */
+function arrive(m: Mover, dx: number, dy: number, dz: number): void {
+  m.vel.x *= GRAPPLE.arriveKeep; m.vel.z *= GRAPPLE.arriveKeep;
+  const h = Math.hypot(dx, dz);
+  if (h > 0.2) {
+    const on = (m.vel.x * dx + m.vel.z * dz) / h;
+    if (on < GRAPPLE.arriveStep) { m.vel.x += dx / h * (GRAPPLE.arriveStep - on); m.vel.z += dz / h * (GRAPPLE.arriveStep - on); }
+  }
+  const clear = dy > 0 ? Math.min(GRAPPLE.mantleMax, Math.sqrt(2 * PLAYER.gravity * (dy + 0.35))) : 0;
+  m.vel.y = Math.max(m.vel.y * GRAPPLE.arriveKeep, GRAPPLE.arrivePop, clear);
 }

@@ -210,10 +210,9 @@ export type PlayerState = {
 /**
  * A grappling hook in use. st: 0 flying out (reaches x,y,z at `at`), 1 latched to the world (reeling its owner
  * in), 2 latched to player `tgt` (yanking them over), 3 missed (retracting; gone at `at`). `t0`: when it was
- * fired. `pc`: the piece it hooked, if any (the rope snaps when that piece breaks). `len`: st 1 rope's rest length
- * (m, mirrored from the owner's mv.pull each tick so every client draws its slack or stretch).
+ * fired. `pc`: the piece it hooked, if any (the rope snaps when that piece breaks).
  */
-export type HookState = { st: 0 | 1 | 2 | 3; x: number; y: number; z: number; t0: number; at: number; tgt?: number; pc?: number; len?: number };
+export type HookState = { st: 0 | 1 | 2 | 3; x: number; y: number; z: number; t0: number; at: number; tgt?: number; pc?: number };
 
 /** `burning`: on fire right now (sim/fire.ts); omitted when not, so it costs nothing on the wire. */
 export type PieceState = { id: number; kind: PieceKind; owner: number; pos: Vec3; rotY: number; hp: number; burning?: true };
