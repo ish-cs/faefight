@@ -30,7 +30,7 @@ export type UtilParams = {
 const D = <T>(easy: T, medium: T, hard: T, pro: T): Record<Difficulty, T> => ({ easy, medium, hard, pro });
 
 export const UTIL: UtilParams = {
-  carrySmoke: D(1, 1, 1, 2), carryFlash: D(0, 1, 1, 1), buyAt: D(300, 180, 140, 120),
+  carrySmoke: D(0, 1, 1, 2), carryFlash: D(0, 1, 1, 1), buyAt: D(300, 180, 140, 120),
   smokeRetreat: D(0.35, 0.6, 0.85, 1), smokeCross: D(0.15, 0.4, 0.7, 0.9), flashPush: D(0, 0.4, 0.7, 0.9),
   avoidSmoke: D(0, 0.5, 1, 1), blindBack: D(0.5, 0.8, 1, 1),
   retreatM: 16, flashMin: 6, flashMax: 18, seenSec: 3, gapSec: 4, rollSec: 3,

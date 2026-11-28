@@ -146,9 +146,11 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0) && room('scaffold')) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   // Otherwise right after the decks (before the seal kit): a strong player never heads out without one.
   if (heals === 0 && (needs.medkits ?? 0) > 0 && room('medkit') && cash >= MEDKIT.price) return 'medkit';
-  // One smoke (then one flash) right after the first heal, when the decks are paid for too: cheap, never saved up for.
-  if (!inv.smokes && (needs.smokes ?? 0) > 0 && room('smoke') && cash >= SMOKE.price + PIECES.wood.price + deckCost) return 'smoke';
-  if (inv.smokes && !inv.flashes && (needs.flashes ?? 0) > 0 && room('flash') && cash >= FLASH.price + PIECES.wood.price + deckCost) return 'flash';
+  // One smoke (then one flash) right after the first heal, when the decks are paid for too: cheap, never saved up for
+  // (not while a wanted rifle is still to buy: that cash is the rifle's).
+  const rifleFirst = (!!needs.rifle || !!needs.rifleSlot) && !inv.weapons.rifle;
+  if (!rifleFirst && !inv.smokes && (needs.smokes ?? 0) > 0 && room('smoke') && cash >= SMOKE.price + PIECES.wood.price + deckCost) return 'smoke';
+  if (!rifleFirst && inv.smokes && !inv.flashes && (needs.flashes ?? 0) > 0 && room('flash') && cash >= FLASH.price + PIECES.wood.price + deckCost) return 'flash';
   if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
     // (A kind the hotbar has no room for is skipped: the shop would refuse it.)
     if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price && room('steel')) return 'steel';
@@ -162,8 +164,8 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   const hardPlugs = (inv.pieces.metal ?? 0) + (inv.pieces.steel ?? 0);
   if (needs.hardKit && hardPlugs < needs.kit && cash >= needs.hardKit * PIECES.metal.price && room('metal')) return 'metal';
   // More smoke, and a flash (bots/utilityPlan.ts), once the seal kit is in hand; never saved up for.
-  if ((inv.smokes ?? 0) < (needs.smokes ?? 0) && room('smoke') && cash >= SMOKE.price) return 'smoke';
-  if ((inv.flashes ?? 0) < (needs.flashes ?? 0) && room('flash') && cash >= FLASH.price) return 'flash';
+  if (!rifleFirst && (inv.smokes ?? 0) < (needs.smokes ?? 0) && room('smoke') && cash >= SMOKE.price) return 'smoke';
+  if (!rifleFirst && (inv.flashes ?? 0) < (needs.flashes ?? 0) && room('flash') && cash >= FLASH.price) return 'flash';
   // The rest of the heal stock right after the seal kit.
   if (heals < (needs.medkits ?? 0) && room('medkit') && cash >= MEDKIT.price) return 'medkit';
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
