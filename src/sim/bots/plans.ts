@@ -1,4 +1,4 @@
-import { AMMO_BOX, CHARGE, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, MAP, MEDKIT, PIECES, TRAP, POTIONS, SEAL, WEAPONS } from '../constants';
+import { AMMO_BOX, CHARGE, FLASH, GENERATOR_MAX_LEVEL, GRAPPLE, GRENADE, SMOKE, MAP, MEDKIT, PIECES, TRAP, POTIONS, SEAL, WEAPONS } from '../constants';
 import { ammoPrice, buy, genUpgradePrice, lockItem, lockPrice } from '../economy';
 import { canAdd, countOf } from '../hotbar';
 import { uselessReason } from '../potions';
@@ -68,6 +68,8 @@ export type Needs = {
   /** A rival's base is wooden: worth a rocket launcher to set it on fire (medium+ bots, when rich). */
   rocket?: boolean;
   scaffolds: number; kit: number; charge: boolean; grenades?: number;
+  /** Smoke grenades / flashbangs to carry (bots/utilParams.ts). */
+  smokes?: number; flashes?: number;
   /** Heals to carry (medkits + heal potions; HealParams stock). */
   medkits?: number; steel?: boolean; genLevel?: number;
   /** Metal plugs wanted in the kit (drive.hardKit): buy metal while fewer metal/steel than `kit`, at this many metal prices of cash (0 = no). */
@@ -144,6 +146,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0) && room('scaffold')) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   // Otherwise right after the decks (before the seal kit): a strong player never heads out without one.
   if (heals === 0 && (needs.medkits ?? 0) > 0 && room('medkit') && cash >= MEDKIT.price) return 'medkit';
+  // One smoke and one flash right after the first heal (cover a retreat / crossing / seal, open a push): cheap, never saved up for.
+  if (!inv.smokes && (needs.smokes ?? 0) > 0 && room('smoke') && cash >= SMOKE.price + PIECES.wood.price) return 'smoke';
+  if (!inv.flashes && (needs.flashes ?? 0) > 0 && room('flash') && cash >= FLASH.price + 2 * PIECES.wood.price) return 'flash';
   if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
     // (A kind the hotbar has no room for is skipped: the shop would refuse it.)
     if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price && room('steel')) return 'steel';
@@ -156,6 +161,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   // A kit of wood/sandbags gets shot out by the respawned owner: swap in metal plugs when the cash is there.
   const hardPlugs = (inv.pieces.metal ?? 0) + (inv.pieces.steel ?? 0);
   if (needs.hardKit && hardPlugs < needs.kit && cash >= needs.hardKit * PIECES.metal.price && room('metal')) return 'metal';
+  // More smoke, and a flash (bots/utilityPlan.ts), once the seal kit is in hand; never saved up for.
+  if ((inv.smokes ?? 0) < (needs.smokes ?? 0) && room('smoke') && cash >= SMOKE.price) return 'smoke';
+  if ((inv.flashes ?? 0) < (needs.flashes ?? 0) && room('flash') && cash >= FLASH.price) return 'flash';
   // The rest of the heal stock right after the seal kit.
   if (heals < (needs.medkits ?? 0) && room('medkit') && cash >= MEDKIT.price) return 'medkit';
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
