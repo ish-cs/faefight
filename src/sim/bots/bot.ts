@@ -1002,7 +1002,6 @@ export class Bot {
     const node = this.nav.nodeAt(me.pos);
     // Marooned on the center: hold it and farm its gold (doContest) rather than drown (botDrown: a swim home is a water
     // death nobody caused); whoever bridges over brings a fight and a way off.
-    if (node === this.nav.centerNode) return null;
     // A hook that can reach home from here has had drive.strandedSec to walk to its launch spot and fire (it used to
     // get twice as long, and one that can't reach at all held a PRO with two hooks 178 s on the center, ffa8-pro seed 5).
     const hookHome = this.hookLaunch(c.view, me, node, c.home.index, c.home.index, true) !== null;
