@@ -21,6 +21,7 @@ import { BunkerGrid, blockingPieces, breakCost, pieceToBreak } from './escape';
 import { DEFAULT_BOT_PARAMS, type BotParams } from './params';
 import { crossTo, escapeFrom, hookReady, yankReason, type HookIntent } from './hook';
 import { dropForHeal, healPlan, healStock, hpHealsHeld, type HealPlan } from './heal';
+import { Beliefs } from './belief';
 import { Memory, commitment, rivalScore, type RivalFacts, type Sighting } from './mind';
 import { Nav, insideBunker, islandAt, landEdge, lane, laneAt, laneS, type Lane } from './nav';
 import { rollPersonality, type Personality, type Traits } from './personality';
@@ -247,7 +248,7 @@ type Ctx = {
 export class Bot {
   readonly personality: Personality;
   private readonly t: Traits;
-  private readonly style: ShopStyle;
+  private style: ShopStyle;
   private goal: Goal = 'collect';
   private targetId: number | null = null;
   /** Teams: this bot is its team's home defender (one stays back while the others push). */
@@ -355,6 +356,8 @@ export class Bot {
   private healWant = 0;
   /** Last rifle hit that out-ranged my guns (strength.outranged): who and when. */
   private outranged: { id: number; t: number } | null = null;
+  /** Per-enemy beliefs (belief.ts): their gun and range against me, damage to me, kills. */
+  readonly beliefs = new Beliefs();
   private lastHealDropAt = -Infinity;
   private healDrops: { pos: Vec3; t: number }[] = [];
   private grid: { key: string; grid: BunkerGrid } | null = null;
@@ -405,21 +408,12 @@ export class Bot {
   /** `params`: tunable strategy (params.ts); the hand-tuned defaults unless a trainer passes its own. */
   constructor(
     readonly id: number, readonly difficulty: Difficulty, private readonly rng: () => number, personality?: Personality,
-    private readonly P: BotParams = DEFAULT_BOT_PARAMS,
+    private P: BotParams = DEFAULT_BOT_PARAMS,
   ) {
     this.personality = personality ?? rollPersonality(rng);
     this.t = this.personality.traits;
+    this.style = this.shopStyle();
     const t = this.t;
-    this.style = {
-      upgradeFirst: t.patience > 0.65,
-      longGun: t.range > 0.75 || P.strength.longGun[difficulty] >= 0.5,
-      closeGun: t.range < 0.3,
-      metal: t.builder > 0.6,
-      steel: t.patience > 0.75 && t.greed > 0.75,
-      coverWood: 0,
-      invest: t.patience > 0.75,
-      buildFirst: t.builder > 0.7,
-    };
     // Aim noise draws every tick while tracking: its own stream (seeded from the match rng's state without
     // drawing from it), so how a bot's hand wobbles never shifts the match's other random rolls. A plain function
     // (hand-made test rng) has no state to read: one draw seeds it.
@@ -475,6 +469,7 @@ export class Bot {
     const dt = Number.isNaN(this.lastNow) || skipped ? DT : Math.max(0, now - this.lastNow);
     this.lastNow = now;
     this.mem.update(view);
+    this.beliefs.update(view);
     this.noteOutranged(view);
     if (!me.alive) {
       this.moveDir = null;
@@ -1624,6 +1619,31 @@ export class Bot {
     return Math.max(0, me.vault.cash - this.insurance());
   }
 
+  /** Shopping taste from my personality (and strength.longGun). */
+  private shopStyle(): ShopStyle {
+    const t = this.t;
+    return {
+      upgradeFirst: t.patience > 0.65,
+      longGun: t.range > 0.75,
+      noSmg: this.P.strength.longGun[this.difficulty] >= 0.5,
+      closeGun: t.range < 0.3,
+      metal: t.builder > 0.6,
+      steel: t.patience > 0.75 && t.greed > 0.75,
+      coverWood: 0,
+      invest: t.patience > 0.75,
+      buildFirst: t.builder > 0.7,
+    };
+  }
+
+  /**
+   * Swap my strategy params mid-match (the human-proxy benchmark hands a re-run's bots new params at a mined moment).
+   * Only strategy: aim feel and gun skill stay as built.
+   */
+  retune(P: BotParams) {
+    this.P = P;
+    this.style = this.shopStyle();
+  }
+
   /** Visible intruder or rival seen on/next to my island in the last few seconds. */
   private intruder(c: Ctx): Sighting | null {
     let best: Sighting | null = null;
@@ -1988,7 +2008,10 @@ export class Bot {
   wantsRifle(c: Ctx): boolean {
     if (c.me.inv.weapons.rifle) return false;
     const cash = this.spendCash(c.me);
-    return cash >= this.P.strength.rifleAt[this.difficulty] || (this.outrangedLately(c.view.now) && cash >= WEAPONS.rifle.price);
+    const S = this.P.strength;
+    // Out-ranged lately, or someone I believe is a rifle user who hits me from range (belief.ts).
+    const outranged = this.outrangedLately(c.view.now) || (S.outranged[this.difficulty] > 0 && !!this.beliefs.rifleUser(S.outrangedM));
+    return cash >= S.rifleAt[this.difficulty] || (outranged && cash >= WEAPONS.rifle.price);
   }
 
   /** Away from home carrying at least strength.richCarry, a walk home, nobody near: the trip home to bank it (more the more I carry). */

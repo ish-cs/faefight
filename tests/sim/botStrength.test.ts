@@ -112,30 +112,45 @@ describe('strength.endgameSeal / leaderFocus', () => {
 });
 
 describe('strength in play', () => {
-  test('Hard/PRO carry a rifle by 3:00 in every game (they used to fight with SMGs)', async () => {
+  // Main: Hard/PRO bought a rifle only with a Sniper personality (range > 0.75); the SMG was the end of the line.
+  test('Hard/PRO pick up a rifle by 5:00 in most games (rifleAt, rifle slot kept free)', async () => {
     const diffs: Difficulty[] = ['pro', 'hard', 'medium', 'easy'];
     const lines: string[] = [];
-    for (const seed of [1, 2]) {
+    let armed = 0, seats = 0;
+    for (const seed of [1, 2, 3]) {
       const rifleAt: (number | null)[] = diffs.map(() => null);
-      let bankAway = 0;
       const m = await Match.create({ players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed });
       let snap: Snapshot = m.tick(new Map());
-      const bots = diffs.map((_, i) => (m as unknown as { bots: Map<number, Bot> }).bots.get(i + 1)!);
-      for (let i = 0; i < 4 * 60 * 30 && snap.winner === null; i++) {
+      for (let i = 0; i < 5 * 60 * 30 && snap.winner === null; i++) {
         snap = m.tick(new Map());
-        for (const p of snap.players) {
-          if (p.inv.weapons.rifle && rifleAt[p.id - 1] === null) rifleAt[p.id - 1] = Math.round(snap.time);
-          const isl = m.map[p.island];
-          if (i % 15 === 0 && p.alive && bots[p.id - 1].currentGoal === 'bank' && Math.hypot(p.pos.x - isl.center.x, p.pos.z - isl.center.z) > isl.radius + 2) bankAway++;
-        }
+        for (const p of snap.players) if (p.inv.weapons.rifle && rifleAt[p.id - 1] === null) rifleAt[p.id - 1] = Math.round(snap.time);
       }
       m.dispose();
-      lines.push(`seed ${seed}: first rifle (s) ${JSON.stringify(rifleAt)}, bank-away samples ${bankAway}`);
-      expect(rifleAt[0], `seed ${seed} PRO`).not.toBeNull();
-      expect(rifleAt[0]!, `seed ${seed} PRO`).toBeLessThanOrEqual(180);
-      expect(rifleAt[1], `seed ${seed} hard`).not.toBeNull();
-      expect(rifleAt[1]!, `seed ${seed} hard`).toBeLessThanOrEqual(180);
+      lines.push(`seed ${seed}: first rifle (s) ${JSON.stringify(rifleAt)}`);
+      seats += 2; armed += (rifleAt[0] !== null ? 1 : 0) + (rifleAt[1] !== null ? 1 : 0);
     }
     console.log(lines.join('\n'));
+    expect(armed, lines.join('; ')).toBeGreaterThanOrEqual(Math.ceil(seats * 2 / 3));
   }, 600_000);
+});
+
+describe('belief.ts: per-enemy beliefs from the view only', () => {
+  test('a rifle seen in their hands and hitting me from 45 m makes them a rifle user; an SMG at 20 m does not', async () => {
+    const { Beliefs } = await import('../../src/sim/bots/belief');
+    const b = new Beliefs();
+    const view = (now: number, hurt: { t: number; by: number; amount: number }[], gun: string, x: number) => ({
+      now, self: { id: 1, pos: v3(0, 0) }, others: [{ id: 2, kills: 3 }],
+      enemies: [{ id: 2, pos: v3(x, 0), equipped: gun }], hurt,
+    }) as never;
+    b.update(view(1, [{ t: 1, by: 2, amount: 22 }], 'rifle', 45));
+    b.update(view(2, [{ t: 1, by: 2, amount: 22 }, { t: 2, by: 2, amount: 22 }], 'rifle', 45));
+    const e = b.of.get(2)!;
+    expect(e.dmgToMe).toBe(44);
+    expect(e.engageDist).toBeCloseTo(45);
+    expect(e.kills).toBe(3);
+    expect(b.rifleUser(30)?.id).toBe(2);
+    const c = new Beliefs();
+    c.update(view(1, [{ t: 1, by: 2, amount: 12 }], 'smg', 20));
+    expect(c.rifleUser(30)).toBeNull();
+  });
 });

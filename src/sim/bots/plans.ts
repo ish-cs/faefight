@@ -92,6 +92,8 @@ export type ShopStyle = {
   upgradeFirst: boolean;
   /** Go straight for the rifle (skip the SMG). */
   longGun: boolean;
+  /** Skip the SMG, but don't save up for the rifle either (strength.longGun: needs.rifle buys it once affordable). */
+  noSmg?: boolean;
   /** Add a shotgun for close quarters. */
   closeGun: boolean;
   /** Prefer metal plugs even when it means fewer spare dollars. */
@@ -118,7 +120,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if (needs.charge && inv.charges === 0) return cash >= CHARGE.price ? 'charge' : null;
   const eq = p.equipped === 'fists' ? undefined : inv.weapons[p.equipped];
   if (eq && eq.mag + eq.spare < WEAPONS[p.equipped].mag && cash >= ammoPrice(p.equipped)) return 'ammo';
-  const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg ? null : 'smg';
+  const upgrade: ShopItem | null = inv.weapons.rifle ? null : style.longGun ? 'rifle' : inv.weapons.smg || style.noSmg ? null : 'smg';
   if (style.upgradeFirst && upgrade) return cash >= WEAPONS[upgrade as 'smg' | 'rifle'].price ? upgrade : null;
   // Building pieces only when there's a hotbar slot for them (a full hotbar makes the shop refuse a new kind).
   // Short of heals with none slotted (and the cash for one): the last free slot is kept for a medkit.
@@ -159,7 +161,7 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   { const b = buildPurchase(inv, needs, room); if (b) return cash >= PIECES[b].price ? b : null; }
   const genPrice = genUpgradePrice(needs.genLevel ?? GENERATOR_MAX_LEVEL);
   if (style.invest && genPrice !== null && cash >= genPrice + WEAPONS.smg.price) return 'genUpgrade';
-  if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && room('smg') && cash >= WEAPONS.smg.price) return 'smg';
+  if (!inv.weapons.smg && !inv.weapons.rifle && !style.longGun && !style.noSmg && room('smg') && cash >= WEAPONS.smg.price) return 'smg';
   if (!inv.weapons.rifle && room('rifle') && cash >= WEAPONS.rifle.price) return 'rifle';
   if (needs.grapple && !inv.grapples && room('grapple')) return cash >= GRAPPLE.price ? 'grapple' : null;
   if (needs.rocket && !inv.weapons.rocket && canAdd(p.hotbar, 'rocket') && cash >= WEAPONS.rocket.price + 200) return 'rocket';

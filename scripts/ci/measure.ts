@@ -16,17 +16,30 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro', 'ffa4-pro'] as const;
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro', 'ffa4-pro', 'proxy-1v1-hard', 'proxy-1v1-pro', 'proxy-ffa8-hard'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
 const ATTACK_GOALS = new Set(['attack', 'seal', 'bridge', 'raid', 'fight']);
 const IDLE_M = 8, THREAT_M = 30, SAMPLE_TICKS = 15, HOME_SIT_M = 6;
+const USERPROXY = 'userproxy' as Difficulty;
 /** The 1v1 skill ladder: each scenario pits the higher tier against the one below. */
 const LADDER: Partial<Record<Scenario, [Difficulty, Difficulty]>> = {
   '1v1-pro-vs-hard': ['pro', 'hard'], '1v1-hard-vs-medium': ['hard', 'medium'], '1v1-medium-vs-easy': ['medium', 'easy'],
+  'proxy-1v1-hard': ['hard', USERPROXY], 'proxy-1v1-pro': ['pro', USERPROXY],
 };
 const TIERS: Difficulty[] = ['pro', 'hard', 'medium', 'easy'];
+
+/**
+ * Human-proxy seat (bot-cognition spec §7.4 stand-in until the P0 UserProxy): a PRO bot with the Sniper preset on
+ * PRE_STRENGTH_PARAMS (the pre-2026-11-28 behaviour) where the ref has it, so it plays the same on main and on a branch.
+ * Its seat is labelled 'userproxy' in the results. proxy-1v1-*: seat 1 on odd seeds; proxy-ffa8-hard: seat (seed-1)%8.
+ */
+function proxySeat(scenario: Scenario, seed: number): number {
+  if (scenario === 'proxy-1v1-hard' || scenario === 'proxy-1v1-pro') return seed % 2 ? 0 : 1;
+  if (scenario === 'proxy-ffa8-hard') return (seed - 1) % 8;
+  return -1;
+}
 
 function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxSec: number } {
   switch (scenario) {
@@ -44,6 +57,11 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
     case 'ffa8-pro-arch': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard-arch': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
     case '1v1-pro-arch': return { diffs: ['pro', 'pro'], maxSec: 25 * 60 };
+    case 'proxy-1v1-hard': case 'proxy-1v1-pro': {
+      const d = LADDER[scenario]![0];
+      return { diffs: seed % 2 ? [USERPROXY, d] : [d, USERPROXY], maxSec: 25 * 60 };
+    }
+    case 'proxy-ffa8-hard': return { diffs: Array.from({ length: 8 }, (_, i) => (i === proxySeat(scenario, seed) ? USERPROXY : 'hard')), maxSec: SD + 180 };
   }
 }
 
@@ -176,9 +194,17 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
     for (const [k, v] of Object.entries(pers.PRESETS[a])) traits[k] = Math.min(1, Math.max(0, v + (rng() * 2 - 1) * 0.15));
     return { archetype: a, traits };
   };
+  const pSeat = proxySeat(scenario, seed);
+  const proxyParams = pSeat < 0 ? undefined : ((await import('../../src/sim/bots/params')) as unknown as { PRE_STRENGTH_PARAMS?: unknown }).PRE_STRENGTH_PARAMS;
+  const sniper = () => ({ archetype: 'Sniper', traits: { ...pers.PRESETS.Sniper } });
   const m = await Match.create(
-    { players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed },
-    { makeBot: (id, d, rng) => { const b = new BotCtor(id, d, rng, personalityFor(id - 1, rng), ...(params ? [params] : [])); brains[id - 1] = b; return b as never; } },
+    { players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d === USERPROXY ? 'pro' as Difficulty : d })), seed },
+    { makeBot: (id, d, rng) => {
+      const b = id - 1 === pSeat
+        ? new BotCtor(id, 'pro', rng, sniper(), ...(proxyParams ? [proxyParams] : []))
+        : new BotCtor(id, d, rng, personalityFor(id - 1, rng), ...(params ? [params] : []));
+      brains[id - 1] = b; return b as never;
+    } },
   );
   const seats: SeatOut[] = diffs.map((d, i) => ({
     difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
