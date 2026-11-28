@@ -9,8 +9,11 @@ import { Match } from '../../src/sim/match';
 import { newPlayer } from '../../src/sim/player';
 import type { Physics } from '../../src/sim/physics';
 import { NO_INPUT, type Difficulty, type MatchEvent, type PlayerState, type Snapshot, type Vec3 } from '../../src/sim/types';
-import { v3, yawOf } from '../../src/sim/vec';
+import { add, dist2D, forward, scale, v3, yawOf } from '../../src/sim/vec';
 import type { BotView } from '../../src/sim/bots/view';
+import { lookAt } from '../../src/sim/bots/aim';
+import { landEdge, lane, laneAt, navNodes } from '../../src/sim/bots/nav';
+import { eyePos } from '../../src/sim/combat';
 
 const physicsOf = (m: Match) => (m as unknown as { physics: Physics }).physics;
 const playerOf = (m: Match, id: number) => (m as unknown as { s: { players: Map<number, PlayerState> } }).s.players.get(id)!;
@@ -159,27 +162,97 @@ describe('bots: smoke grenades and flashbangs', () => {
   });
 });
 
-/** 4-bot mixed games: every bot type that carries them throws smokes and flashes in real games. */
+/** The two moments each one is for, scripted (deterministic, no match-long seed luck). */
+describe('bots: smoke and flash where they matter (scripted)', () => {
+  test('a PRO bot pushing a rival bunker flashes the rival who ducked inside', async () => {
+    const { m, bot } = await duel('pro', 3);
+    const isl = m.map[1], bk = isl.bunker, door = bk.doorways[0];
+    const out = forward(bk.facingYaw);
+    const botAt = add(door.center, scale(out, 11));
+    m.debugGive(1, { weapons: { rifle: { mag: WEAPONS.rifle.mag, spare: 90 } }, flashes: 1 });
+    m.debugSetTime(240);
+    stand(m, 1, v3(botAt.x, isl.groundY + 0.05, botAt.z), door.center);
+    stand(m, 2, v3(door.center.x, isl.groundY + 0.05, door.center.z), botAt); // in the doorway, in sight
+    const evs: MatchEvent[] = [];
+    let note = '';
+    for (let i = 0; i < 10 * 30 && !thrown(evs, 'flash', 1).length; i++) {
+      // After a second in the doorway the rival ducks back inside, out of sight.
+      if (i === 30) stand(m, 2, v3(bk.center.x, isl.groundY + 0.05, bk.center.z), botAt);
+      const s = m.tick(new Map());
+      evs.push(...s.events);
+      playerOf(m, 2).hp = 100;
+      const n = (bot() as unknown as { utilNote: { text: string } | null }).utilNote;
+      if (n) note = n.text;
+    }
+    const f = thrown(evs, 'flash', 1);
+    expect(f.length, `goal ${bot().currentGoal}`).toBe(1);
+    expect(dist2D(f[0].data.pos as Vec3, bk.center)).toBeLessThan(7); // at the bunker, where they went
+    expect(note).toMatch(/flash/);
+  });
+
+  test('a bot crossing a bridge under fire smokes the crossing', async () => {
+    const { m, bot } = await duel('pro', 3);
+    m.tick(new Map());
+    const nodes = navNodes(m.def.islands, m.def.center);
+    const l = lane(nodes, 0, 1);
+    const from = landEdge(nodes[0]) - 0.5, to = l.length - landEdge(nodes[1]) + 0.5;
+    for (let s = from + 2; s < to + 2; s += 4) { const c = laneAt(l, s); m.debugPlacePiece('scaffold', v3(c.x, 2, c.z), yawOf(l.dir), 1); }
+    m.debugGive(1, { weapons: { rifle: { mag: WEAPONS.rifle.mag, spare: 90 } }, smokes: 1 });
+    m.debugGive(2, { weapons: { pistol: { mag: WEAPONS.pistol.mag, spare: 90 } } });
+    m.debugSetTime(240);
+    const mid = laneAt(l, (from + to) / 2), shore = laneAt(l, l.length - landEdge(nodes[1]) + 4);
+    let snap = m.tick(new Map());
+    stand(m, 1, v3(mid.x, 2.25, mid.z), shore);
+    stand(m, 2, v3(shore.x, m.map[1].groundY + 0.05, shore.z), mid);
+    const evs: MatchEvent[] = [];
+    let note = '';
+    for (let i = 0; i < 10 * 30 && !thrown(evs, 'smoke', 1).length; i++) {
+      // The rival on the far shore takes a shot at it every second (hurts, never kills).
+      const h = snap.players[1], b = snap.players[0];
+      const aim = lookAt(eyePos(h), add(b.pos, v3(0, 1.2, 0)));
+      snap = m.tick(new Map([[2, { ...NO_INPUT, yaw: aim.yaw, pitch: aim.pitch, fire: i % 30 === 5, select: h.hotbar.indexOf('pistol') }]]));
+      evs.push(...snap.events);
+      if (playerOf(m, 1).hp < 60) playerOf(m, 1).hp = 100;
+      playerOf(m, 2).hp = 100;
+      const n = (bot() as unknown as { utilNote: { text: string } | null }).utilNote;
+      if (n) note = n.text;
+    }
+    expect(thrown(evs, 'smoke', 1).length, `goal ${bot().currentGoal}, note ${note}`).toBe(1);
+    expect(note).toMatch(/crossing/);
+  });
+});
+
+/**
+ * 4-bot games (PRO, Hard, Medium, PRO), seeds 1–16, first 8 min: the bots that carry them throw smokes and flashes in
+ * real games. Was "flash in ≥ 2 of 4 games" (seeds 1–4, main sat exactly on 2: any behaviour change tripped it).
+ * Thresholds from main (0974cc78) over seeds 1–32 (scripts: ci/seedstats-measure, tests/sim/zzSeedStats.test.ts there):
+ * per game, smoke throws 3.69 (sd 2.6), flash throws 1.44 (sd 1.3), a smoke in 91% of games, a flash in 66%.
+ * Bound = 16 × (mean − 2·sqrt(sd²/16 + sd²/32)): a fresh draw of 16 games (any behaviour change reshuffles them)
+ * falls below it ~2.3% of the time if the real rate is unchanged. Main on seeds 1–16: 66 smokes, 25 flashes,
+ * smoke in 14 games, flash in 11.
+ */
 describe('bots use smoke and flash in real games', () => {
-  test('smoke in ≥ 3 of 4 games and flash in ≥ 2 of 4 (games ≤ 12 min, 4 bots)', async () => {
-    let smokeGames = 0, flashGames = 0;
+  test('16 games (8 min, 4 bots): ≥ 35 smokes and ≥ 11 flashes thrown; a smoke in ≥ 12 games, a flash in ≥ 6', async () => {
+    let smokes = 0, flashes = 0, smokeGames = 0, flashGames = 0;
     const lines: string[] = [];
-    for (const seed of [1, 2, 3, 4]) {
+    for (let seed = 1; seed <= 16; seed++) {
       const m = await Match.create({ players: (['pro', 'hard', 'medium', 'pro'] as Difficulty[]).map((d) => ({ name: '', isBot: true, difficulty: d })), seed });
       let snap: Snapshot = m.tick(new Map());
-      let smokes = 0, flashes = 0;
-      const why = new Set<string>();
-      for (let i = 0; i < 12 * 60 * 30 && snap.winner === null; i++) {
+      let s = 0, f = 0;
+      for (let i = 0; i < 8 * 60 * 30 && snap.winner === null; i++) {
         snap = m.tick(new Map());
-        for (const e of snap.events) { if (e.type === 'smoke') smokes++; if (e.type === 'flash') flashes++; }
+        for (const e of snap.events) { if (e.type === 'smoke') s++; if (e.type === 'flash') f++; }
       }
       m.dispose();
-      if (smokes) smokeGames++;
-      if (flashes) flashGames++;
-      lines.push(`seed ${seed} (${(snap.time / 60).toFixed(1)} min): ${smokes} smokes, ${flashes} flashes ${[...why].join('; ')}`);
+      smokes += s; flashes += f;
+      if (s) smokeGames++;
+      if (f) flashGames++;
+      lines.push(`seed ${seed} (${(snap.time / 60).toFixed(1)} min): ${s} smokes, ${f} flashes`);
     }
-    console.log(lines.join('\n'));
-    expect(smokeGames).toBeGreaterThanOrEqual(3);
-    expect(flashGames).toBeGreaterThanOrEqual(2);
-  }, 900_000);
+    console.log([...lines, `total ${smokes} smokes (${smokeGames} games), ${flashes} flashes (${flashGames} games)`].join('\n'));
+    expect(smokes).toBeGreaterThanOrEqual(35);
+    expect(flashes).toBeGreaterThanOrEqual(11);
+    expect(smokeGames).toBeGreaterThanOrEqual(12);
+    expect(flashGames).toBeGreaterThanOrEqual(6);
+  }, 1_200_000);
 });

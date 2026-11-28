@@ -155,6 +155,17 @@ const gunName = (w: WeaponKind) => (w === 'fists' ? 'bare fists' : w);
 const best = (inv: Inventory): WeaponKind => (['rifle', 'smg', 'shotgun', 'pistol', 'rocket'] as WeaponKind[]).find((g) => inv.weapons[g]) ?? 'fists';
 const pieceWord = (n: number, kind = 'wall') => `${n} ${kind}${n === 1 ? '' : 's'}`;
 
+/**
+ * The seal goal's reason in the spectator brain panel. One sentence shape for every case, kit last:
+ * "Sealing @3's bunker: they died 2 s ago and respawn in 8 s, hooking over with no bridge yet, I carry 2 walls for 3 doors".
+ */
+export function sealWhy(o: { rival: string; kit: number; doors: number; hooking: boolean; away: boolean; respawnIn?: number; diedAgo?: number }): string {
+  const state = o.respawnIn !== undefined
+    ? `they ${o.diedAgo !== undefined ? `died ${secs(o.diedAgo)} ago and ` : ''}respawn in ${secs(o.respawnIn)}`
+    : o.away ? 'they are away from home' : 'their doors are open';
+  return `Sealing ${o.rival}'s bunker: ${state}${o.hooking ? ', hooking over with no bridge yet' : ''}, I carry ${pieceWord(o.kit)} for ${o.doors} door${o.doors === 1 ? '' : 's'}`;
+}
+
 type Explained = { f: [string, number][]; why: string; gate?: string };
 const zero = (gate: string, why = gate): Explained => ({ f: [], why, gate });
 
@@ -430,10 +441,10 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       if (near) f.push(['near bunker', 0.1]);
       if (ownerAway) f.push(['owner away', 0.2 * t.opportunism]);
       const died = c.rival ? I.mem.diedAt.get(c.rival.id) : undefined;
-      const state = rivalDown
-        ? `${died !== undefined ? `died ${secs(now - died)} ago, ` : ''}respawn in ${secs(c.rival!.respawnAt! - now)}`
-        : ownerAway ? 'they are away from home' : 'their doors are open';
-      return { f, why: `Sealing ${rivalName(c)}'s bunker: ${state}, I carry ${pieceWord(kit)} for ${c.openDoors.length} door${c.openDoors.length === 1 ? '' : 's'}${!c.reach ? ' (hooking over: no bridge yet)' : ''}` };
+      return { f, why: sealWhy({
+        rival: rivalName(c), kit, doors: c.openDoors.length, hooking: !c.reach, away: ownerAway,
+        respawnIn: rivalDown ? c.rival!.respawnAt! - now : undefined, diedAgo: rivalDown && died !== undefined ? now - died : undefined,
+      }) };
     }
     case 'cut': {
       if (!gun) return zero('no gun');
