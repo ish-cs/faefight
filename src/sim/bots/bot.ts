@@ -2315,7 +2315,9 @@ export class Bot {
     const D = this.P.discipline, v = D.bankRisk[this.difficulty];
     if (v <= 0 || c.view.suddenDeath || this.stormPrep(c.view) || !c.homeReach || this.trapped(c) || c.me.inv.cash < D.bankTripAt) return 0;
     if (c.enemy && c.enemyDist < 8) return 0;
-    if (c.on === c.home.index) return v;
+    // On my island: bank on the way out, not ahead of a shop trip that is due (botHeals: banking first reshuffled the
+    // trip and a refilled ramp took the slot kept for the medkit).
+    if (c.on === c.home.index) return this.score('shop', c) > 0 ? 0 : v;
     return c.view.sealed[c.home.index] || this.blockers(c).length > 0 ? v - dist2D(c.me.pos, c.home.vault) / 400 : 0;
   }
 
@@ -2628,6 +2630,12 @@ export class Bot {
       if (buy) return buy;
     }
     const stand = at(-1.1);
+    // The frontier can count decks that aren't this lane's (a crossing bridge past a gap). Nothing to stand on where it
+    // says the bridge ends, or a wall standing across the walkway before it (ffa8-mixed seed 3: a wood wall on a
+    // crossing bridge past a 1.3 m gap; a PRO pressed into it at the edge and dropped in, 6 times, once per
+    // respawn): don't walk out there, it's a stuck bridge.
+    if (c.view.groundAt(stand.x, stand.z) === null || this.walkwayBlocked(c, l, laneS(l, c.me.pos), f.s - sign * 1.1))
+      return this.bridgeStuckTick(c, key, to, toRival, mirror, at(4));
     const walk = this.goTo(stand, ARRIVE);
     if (walk.dir) return walk;
     const ahead = at(4);
@@ -2658,6 +2666,31 @@ export class Bot {
       this.bridgeStuck = null;
       return { dir: null, face: ahead, build: { kind: 'scaffold', pos, rotY, free: true } };
     }
+    return this.bridgeStuckTick(c, key, to, toRival, mirror, ahead);
+  }
+
+  /** A piece higher than a hop standing on the lane's centre line over the water, between lane positions s0 and s1. */
+  private walkwayBlocked(c: Ctx, l: Lane, s0: number, s1: number): boolean {
+    const lo = Math.min(s0, s1) + 0.5, hi = Math.max(s0, s1), y = c.me.pos.y;
+    for (const q of c.view.pieces) {
+      const sz = PIECES[q.kind];
+      if (q.pos.y + sz.h - y <= HOP_UP || q.pos.y > y + 1.8) continue;
+      const qs = laneS(l, q.pos), r = Math.max(sz.w, sz.d);
+      if (qs < lo - r || qs > hi + r || Math.abs((q.pos.x - l.origin.x) * l.dir.z - (q.pos.z - l.origin.z) * l.dir.x) > r) continue;
+      const cs = Math.cos(-q.rotY), sn = Math.sin(-q.rotY);
+      for (let s = Math.max(lo, qs - r); s <= Math.min(hi, qs + r); s += 0.25) {
+        const p = laneAt(l, s), dx = p.x - q.pos.x, dz = p.z - q.pos.z;
+        if (c.view.map.some((i) => dist2D(p, i.center) <= i.radius)) continue; // on an island: not the walkway
+        if (Math.abs(dx * cs + dz * sn) <= sz.w / 2 && Math.abs(-dx * sn + dz * cs) <= sz.d / 2) return true;
+      }
+    }
+    return false;
+  }
+
+  /** The next deck can't go down (nothing fits, or a gap where the lane says the bridge ends): give it up after a while. */
+  private bridgeStuckTick(c: Ctx, key: string, to: number, toRival: boolean, mirror: boolean, ahead: Vec3): Act {
+    const now = c.view.now;
+    const st = this.bridgeStuck?.key === key ? this.bridgeStuck : null;
     if (!st) this.bridgeStuck = { key, since: now, triedAt: now };
     else {
       st.triedAt = now;

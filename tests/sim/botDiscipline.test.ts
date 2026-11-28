@@ -177,13 +177,23 @@ describe('3. bank before risk', () => {
     expect(bank(PRE_DISCIPLINE_PARAMS)).toBe(0);
     expect(bank(DEFAULT_BOT_PARAMS)).toBeGreaterThan(0.6);
   });
-  test('rich on my island: banks before heading out, unhalved by the push', () => {
+  test('rich on my island: banks before heading out (after a due shop trip), unhalved by the push', () => {
     const self = me('home', { cash: 1500, pieces: { metal: 3, scaffold: 10 } });
     self.vault.cash = 300; // rebuy insurance already banked (its own 0.8 trip isn't what's tested)
     const v = view(self, bridge(HOME, RIVAL), [false, false, false, false], OTHERS);
     const bank = (P: BotParams) => debugBrain(decide(v, P).bot).scores.find((r) => r[0] === 'bank')?.[2] ?? 0;
     expect(bank(PRE_DISCIPLINE_PARAMS)).toBeLessThan(0.6);
-    expect(bank(DEFAULT_BOT_PARAMS)).toBeCloseTo(DISCIPLINE.bankRisk.pro);
+    // A shop trip is due here (shop > 0): it shops first, then banks on the way out (botHeals: banking ahead of the
+    // trip reshuffled it and a refilled ramp took the slot kept for the medkit).
+    const { bot } = decide(v);
+    type In = { context(v: BotView): unknown; score(g: string, c: unknown): number; bankRisk(c: unknown): number };
+    const b = bot as unknown as In, c = b.context(v);
+    expect(b.score('shop', c)).toBeGreaterThan(0);
+    expect(b.bankRisk(c)).toBe(0);
+    // Nothing to buy: banks before heading out, unhalved by the push.
+    const score = b.score.bind(b);
+    b.score = (g, cc) => (g === 'shop' ? 0 : score(g, cc));
+    expect(b.bankRisk(c)).toBeCloseTo(DISCIPLINE.bankRisk.pro);
   });
 });
 
