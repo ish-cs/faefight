@@ -102,7 +102,7 @@ const OTHERS = [status(1, RIVAL), status(2, 2, { eliminated: true }), status(3, 
 describe('discipline knobs: tunable, on for Hard/PRO, off = the old brain', () => {
   test('every knob has a search box and the defaults lie inside', () => {
     for (const k of ['homeFirst.pro', 'debtCap', 'debtDefend', 'debtSec.pro', 'chargeShop.pro', 'bankTripAt', 'bankRisk.pro', 'sticky.pro', 'commitSec.pro',
-      'commitBonus', 'sealAbortSec.pro', 'bridgeShort.pro', 'cheapKit.pro', 'kitShop.pro']) expect(PARAM_RANGES[`discipline.${k}`]).toBeDefined();
+      'commitBonus', 'sealAbortSec.pro', 'cheapKit.pro', 'kitShop.pro']) expect(PARAM_RANGES[`discipline.${k}`]).toBeDefined();
     expect(DISCIPLINE.homeFirst.easy).toBe(0);
     expect(DISCIPLINE.homeFirst.pro).toBe(1);
   });
@@ -187,18 +187,24 @@ describe('3. bank before risk', () => {
   });
 });
 
-describe('4. commitment and hysteresis', () => {
+describe('4. commitment and hysteresis (off by default since the mixed ×120 A/B; knobs kept for the trainer)', () => {
+  const ON: BotParams = { ...DEFAULT_BOT_PARAMS, discipline: { ...DISCIPLINE, commitSec: { ...DISCIPLINE.commitSec, pro: 2 }, sealAbortSec: { ...DISCIPLINE.sealAbortSec, pro: 20 }, bridgeShort: { ...DISCIPLINE.bridgeShort, pro: 5 } } };
+  test('defaults: off for every tier', () => {
+    expect(DISCIPLINE.commitSec.pro).toBe(0);
+    expect(DISCIPLINE.sealAbortSec.pro).toBe(0);
+    expect(DISCIPLINE.bridgeShort.pro).toBe(Infinity);
+  });
   type Inner = { goal: string; switchAt: number; goalBan: Map<string, number>; sealTry: unknown; sealWatch(c: unknown, now: number): void; P: BotParams };
   test('a seal attempt that closes no door and gets no nearer for sealAbortSec is dropped', () => {
-    const b = new Bot(0, 'pro', mulberry32(1), preset('Vulture')) as unknown as Inner;
+    const b = new Bot(0, 'pro', mulberry32(1), preset('Vulture'), ON) as unknown as Inner;
     b.goal = 'seal';
     const c = { rival: { id: 1 }, rivalIsl: map[RIVAL], openDoors: [{}, {}, {}], me: { pos: add(map[RIVAL].bunker.center, v3(10, 0, 0)) } };
-    for (let t = 0; t <= DISCIPLINE.sealAbortSec.pro + 0.5; t += 0.5) b.sealWatch(c, t);
-    expect(b.goalBan.get('seal')).toBeGreaterThan(DISCIPLINE.sealAbortSec.pro);
+    for (let t = 0; t <= ON.discipline.sealAbortSec.pro + 0.5; t += 0.5) b.sealWatch(c, t);
+    expect(b.goalBan.get('seal')).toBeGreaterThan(ON.discipline.sealAbortSec.pro);
     // Closing a doorway is progress: no ban.
-    const b2 = new Bot(0, 'pro', mulberry32(1), preset('Vulture')) as unknown as Inner;
+    const b2 = new Bot(0, 'pro', mulberry32(1), preset('Vulture'), ON) as unknown as Inner;
     b2.goal = 'seal';
-    for (let t = 0; t <= DISCIPLINE.sealAbortSec.pro + 0.5; t += 0.5) b2.sealWatch({ ...c, openDoors: t < 10 ? [{}, {}, {}] : [{}, {}] }, t);
+    for (let t = 0; t <= ON.discipline.sealAbortSec.pro + 0.5; t += 0.5) b2.sealWatch({ ...c, openDoors: t < 10 ? [{}, {}, {}] : [{}, {}] }, t);
     expect(b2.goalBan.get('seal')).toBeUndefined();
     // Old brain: never.
     const b3 = new Bot(0, 'pro', mulberry32(1), preset('Vulture'), PRE_DISCIPLINE_PARAMS) as unknown as Inner;
@@ -210,7 +216,8 @@ describe('4. commitment and hysteresis', () => {
     const v = () => view(me('home', { cash: 400, pieces: { metal: 3, scaffold: 1 } }), [], [false, false, false, false], OTHERS);
     const bridgeBase = (P: BotParams) => debugBrain(decide(v(), P).bot).scores.find((r) => r[0] === 'bridge')?.[2] ?? 0;
     expect(bridgeBase(PRE_DISCIPLINE_PARAMS)).toBeGreaterThan(0);
-    expect(bridgeBase(DEFAULT_BOT_PARAMS)).toBe(0);
+    expect(bridgeBase(ON)).toBe(0);
+    expect(bridgeBase(DEFAULT_BOT_PARAMS)).toBeGreaterThan(0);
   });
 });
 
