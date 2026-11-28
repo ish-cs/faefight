@@ -67,9 +67,12 @@ describe('bot gaze in a match', () => {
   test('bots mostly look where they walk when not fighting, and still track who they shoot at', async () => {
     const diffs: Difficulty[] = ['pro', 'hard', 'medium', 'easy'];
     const out = new Map<number, PlayerInput>();
+    const bots = new Map<number, Bot>();
     const m = await Match.create({ players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed: 4 }, {
-      makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); return { think: (v) => { const i = b.think(v); out.set(id, i); return i; } }; },
+      makeBot: (id, d, rng) => { const b = new Bot(id, d, rng); bots.set(id, b); return { think: (v) => { const i = b.think(v); out.set(id, i); return i; } }; },
     });
+    // Ticks where the brain is on a 'fight' goal (an enemy in sight it chose to fight), and how many with eyes on the nearest enemy.
+    let fightTicks = 0, fightOnFoe = 0;
     const tracks = new Map<number, GazeSample[]>(diffs.map((_, i) => [i + 1, []]));
     let snap = m.tick(new Map());
     for (let i = 0; i < 150 / DT && snap.winner === null; i++) {
@@ -79,6 +82,12 @@ describe('bot gaze in a match', () => {
       for (const e of snap.events) if (e.type === 'hit' && typeof e.data.by === 'number') hit.set(e.data.target as number, e.data.by);
       for (const p of snap.players) {
         const inp = out.get(p.id);
+        const foes = snap.players.filter((q) => q.id !== p.id && q.alive);
+        if (p.alive && inp && bots.get(p.id)?.currentGoal === 'fight' && foes.length) {
+          const near = foes.reduce((a, q) => (Math.hypot(q.pos.x - p.pos.x, q.pos.z - p.pos.z) < Math.hypot(a.pos.x - p.pos.x, a.pos.z - p.pos.z) ? q : a));
+          fightTicks++;
+          if (Math.abs(wrapAngle(yawOf({ x: near.pos.x - p.pos.x, z: near.pos.z - p.pos.z }) - p.yaw)) < 20 * DEG) fightOnFoe++;
+        }
         tracks.get(p.id)!.push({
           alive: p.alive && !!inp, yaw: p.yaw, fire: !!inp?.fire, hitBy: hit.get(p.id) ?? null,
           moveRel: inp && Math.hypot(inp.moveX, inp.moveZ) > 0.1 ? Math.atan2(inp.moveX, inp.moveZ) : null,
@@ -92,5 +101,8 @@ describe('bot gaze in a match', () => {
     expect(s.alignedCalm).toBeGreaterThan(0.5);
     // When they do fight, the eyes are on the enemy.
     expect(s.onFoeEngaged).toBeGreaterThan(0.7);
+    // Deciding to fight turns the eyes onto the enemy at once (gaze never delays or softens an engagement).
+    expect(fightTicks).toBeGreaterThan(30 / DT);
+    expect(fightOnFoe / fightTicks).toBeGreaterThan(0.8);
   }, 120_000);
 });

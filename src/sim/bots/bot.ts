@@ -621,8 +621,10 @@ export class Bot {
     const soon = foeDist - this.P.gaze.skill[this.difficulty].engageLeadM;
     const soonOk = !(scratch && soon > WEAPONS[me.equipped].falloff.end * this.P.drive.fireRangeMult) &&
       !(across && soon > this.P.drive.crossFire[this.difficulty]) && soon <= WEAPONS[best].range * 0.95;
+    // The brain chose to fight them (goal 'fight' on this enemy): eyes on them at once, wherever they are.
+    const fighting = this.goal === 'fight' && !!foe && foe.id === enemy?.id;
     const engaged = this.gaze.engaged(now, !!foe && (this.gaze.threat(now, me, foe, this.mem.lastHurtBy, this.mem.lastHurtAt) ||
-      (hook?.why === 'yank' && hook.target === foe.id) || soonOk));
+      (hook?.why === 'yank' && hook.target === foe.id) || soonOk || fighting));
     // Not engaging someone in sight: no eyes on them, but I know they're there (their sighting clock keeps running).
     if (foe && !engaged) this.aim.notice(now, foe.id);
     if (act.shootAt && act.shootFirst && me.breakoutUntil !== null) {
