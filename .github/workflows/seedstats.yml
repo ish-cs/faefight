@@ -1,0 +1,76 @@
+name: seedstats
+
+# Measurement only (ci/seedstats-* branches, never merged). Each line of scripts/ci/seedstats-plan.txt is one job:
+#   <label> <ref> <task:seed[,task:seed...]>
+# The job checks out <ref>, drops tests/sim/zzSeedStats.test.ts (or, for label test-*, the listed test files)
+# from this commit into it, runs vitest and uploads the SEEDSTAT lines / the vitest log.
+on:
+  push:
+    branches: ['ci/seedstats-*']
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      jobs: ${{ steps.plan.outputs.jobs }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          set -euo pipefail
+          json=$(awk 'NF>=3 {printf "{\"id\":%d,\"label\":\"%s\",\"ref\":\"%s\",\"tasks\":\"%s\"}\n", NR, $1, $2, $3}' scripts/ci/seedstats-plan.txt | jq -sc .)
+          echo "jobs=$json" >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJSON(needs.plan.outputs.jobs) }}
+    name: ${{ matrix.job.label }} ${{ matrix.job.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: tools }
+      - uses: actions/checkout@v4
+        with: { path: target, ref: '${{ matrix.job.ref }}' }
+      - uses: pnpm/action-setup@v4
+        with: { version: 9.15.9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: target/pnpm-lock.yaml
+      - name: install
+        working-directory: target
+        run: pnpm install --frozen-lockfile
+      - name: run
+        working-directory: target
+        env:
+          TASKS: ${{ matrix.job.tasks }}
+          LABEL: ${{ matrix.job.label }}
+        run: |
+          set -uo pipefail
+          mkdir -p ../out
+          if [[ "$LABEL" == test-* ]]; then
+            # TASKS = test files (from this commit) separated by ';' -> run them against the ref's src.
+            IFS=';' read -ra files <<< "$TASKS"
+            for f in "${files[@]}"; do cp "../tools/$f" "$f"; done
+            cp ../tools/tests/sim/unarmed.ts tests/sim/unarmed.ts 2>/dev/null || true
+            pnpm exec vitest run "${files[@]}" 2>&1 | tee ../out/vitest.log
+            echo "exit ${PIPESTATUS[0]}" >> ../out/vitest.log
+          else
+            cp ../tools/tests/sim/zzSeedStats.test.ts tests/sim/zzSeedStats.test.ts
+            pnpm exec vitest run tests/sim/zzSeedStats.test.ts 2>&1 | tee ../out/raw.log
+            grep -o 'SEEDSTAT .*' ../out/raw.log | sed "s/^SEEDSTAT /{\"label\":\"$LABEL\",\"d\":/; s/\$/}/" > ../out/stats.jsonl || true
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: out-${{ matrix.job.id }}
+          path: out/
