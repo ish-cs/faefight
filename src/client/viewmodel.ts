@@ -39,7 +39,8 @@ const HOLD: Record<Exclude<WeaponKind, 'fists'>, { grip: V; left: V; elbowL: V; 
   shotgun: { grip: [0.2, -0.21, -0.52], left: [0, 0.015, -0.33], elbowL: [-0.22, -0.24, 0.0], ads: [0, -0.112, -0.62] },
   rifle: { grip: [0.2, -0.21, -0.52], left: [0, 0.02, -0.32], elbowL: [-0.22, -0.24, 0.0], ads: [0, -0.15, -0.46] },
   rocket: { grip: [0.21, -0.2, -0.36], left: [0, 0.01, -0.27], elbowL: [-0.2, -0.26, 0.05], ads: [0.07, -0.16, -0.3] },
-  sniper: { grip: [0.2, -0.2, -0.5], left: [0, 0.02, -0.36], elbowL: [-0.22, -0.24, -0.02], ads: [0, -0.155, -0.38] },
+  // Held further out and lower than the rifle: the long gun and its big scope otherwise fill the lower-right quarter.
+  sniper: { grip: [0.22, -0.235, -0.62], left: [0, 0.02, -0.36], elbowL: [-0.22, -0.24, -0.02], ads: [0, -0.155, -0.38] },
 };
 /** Recoil feel: viewmodel kick-back (m) and muzzle climb (rad) per unit of kick. */
 const VM_KICK: Record<WeaponKind, { back: number; climb: number }> = {

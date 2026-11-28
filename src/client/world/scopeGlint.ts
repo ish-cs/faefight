@@ -12,7 +12,7 @@ import type { PlayerState, Vec3 } from '../../sim/types';
  */
 const POOL = 8;
 /** On-screen size (fraction of the view height) at a faint and at a full glint. */
-const SIZE_MIN = 0.025, SIZE_MAX = 0.09;
+const SIZE_MIN = 0.04, SIZE_MAX = 0.13;
 /** Below this the glint isn't drawn. */
 const MIN_K = 0.04;
 
@@ -55,7 +55,7 @@ export class ScopeGlints {
       const mat = new THREE.SpriteNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: false, fog: false });
       mat.name = 'scopeGlint';
       const t = texture(glintTex(), uv());
-      mat.colorNode = vec4(t.rgb.mul(float(3)), 1); // pre-boosted for bloom
+      mat.colorNode = vec4(t.rgb.mul(float(5)), 1); // pre-boosted for bloom
       mat.opacityNode = t.a.mul(materialOpacity);
       const sprite = new THREE.Sprite(mat);
       sprite.visible = false;
@@ -87,7 +87,7 @@ export class ScopeGlints {
       g.sprite.position.set(f.x - Math.sin(p.yaw) * c * 0.45, f.y + PLAYER.eyeHeight - 0.05 + Math.sin(p.pitch) * 0.45, f.z - Math.cos(p.yaw) * c * 0.45);
       const s = SIZE_MIN + (SIZE_MAX - SIZE_MIN) * k;
       g.sprite.scale.set(s, s, 1);
-      g.mat.opacity = Math.min(1, 0.25 + k);
+      g.mat.opacity = Math.min(1, 0.45 + k);
       g.sprite.visible = true;
     }
     for (let i = n; i < this.shown; i++) this.pool[i].sprite.visible = false;
