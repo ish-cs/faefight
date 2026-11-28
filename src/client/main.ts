@@ -1225,6 +1225,8 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
   /** This map's hook reach (grappleRange), for the grapple aim marker. */
   let hookRange = 0;
   const grappleMarker = new GrappleMarker();
+  const seenTmp = new THREE.Vector3();
+  const seenAt = (q: PlayerState) => (renderer.playerPos(q.id, seenTmp) ? seenTmp : q.pos);
   let mapDef: MapDef | null = null;
   let humanId = 0;
   /** No player of our own this match (spectating host, or handed to a bot via /spectate). */
@@ -2372,7 +2374,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     const hookHeld = !spectating && !!me?.alive && me.hotbar[input.selected] === 'grapple' && (me.inv.grapples ?? 0) > 0 && (!me.hook || me.hook.st === 3) && !me.mv?.pull;
     if (hookHeld && predictor && lastRendered) {
       const st = latest ?? snap!, t = simNow();
-      grappleMarker.update(predictor.world, hookRange, st.waterY, me!, lastRendered, sample.yaw, sample.pitch, st.players, t, t >= (me!.hookReadyAt ?? 0), renderer.camera);
+      grappleMarker.update(predictor.world, hookRange, st.waterY, me!, lastRendered, sample.yaw, sample.pitch, st.players, t, t >= (me!.hookReadyAt ?? 0), renderer.camera, seenAt);
     } else grappleMarker.hide();
     probe.lap(S.build);
     // Lag compensation: tell the host which moment of everyone else we were looking at when we fired.

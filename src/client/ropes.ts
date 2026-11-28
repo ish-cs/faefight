@@ -6,11 +6,11 @@ import type { HookState } from '../sim/types';
 const SEGS = 16, MAX_ROPES = 8, PRONGS = 3;
 const CABLE_W = 0.022, PRONG_W = 0.035, PRONG_LEN = 0.2;
 /**
- * The elastic look, all from the time since the bite (no sim rope state, so nothing steps at the 30 Hz snapshot rate):
- * the rope lands with BITE_SLACK of extra length per metre that is taken up at TAKE_UP /s, with one damped twang
- * (amplitude per metre, capped; frequency; decay /s). Flying out it sags FLY_SAG per metre with a slow whip.
+ * The elastic look, all from the time since the bite was seen (no sim rope state, so nothing steps at the 30 Hz snapshot
+ * rate): flying out the rope sags FLY_SAG per metre with a slow whip; once it bites that sag is taken up at TAKE_UP /s
+ * (continuous: it starts from the flying sag) with one damped twang (amplitude per metre, capped; frequency; decay /s).
  */
-const BITE_SLACK = 0.06, TAKE_UP = 14, TWANG_AMP = 0.03, TWANG_MAX = 0.3, TWANG_HZ = 6, TWANG_DECAY = 9;
+const TAKE_UP = 14, TWANG_AMP = 0.03, TWANG_MAX = 0.3, TWANG_HZ = 6, TWANG_DECAY = 9;
 const FLY_SAG = 0.05, WHIP = 0.06, WHIP_HZ = 2.5;
 
 /** Per-player rope look state (reused: one object per player id for the match). */
@@ -70,31 +70,26 @@ export class Ropes {
     else end.set(h.x, h.y, h.z);
     const full = from.distanceTo(end);
     if (full < 0.05) return false;
-    // How far the claw is out: flying (st 0), out and back (st 3), latched (1, 2).
+    // How far the claw is out: flying (st 0, and a latch whose snapshot beat the render clock: the claw finishes its
+    // flight instead of jumping ahead), out and back (st 3).
     let out = full;
-    if (h.st === 0) out = Math.min(full, Math.max(0, t - h.t0) * GRAPPLE.tipSpeed);
-    else if (h.st === 3) out = Math.max(0, Math.min(full, (t - h.t0) * GRAPPLE.tipSpeed, (h.at - t) * GRAPPLE.tipSpeed));
+    if (h.st !== 3) out = Math.min(full, Math.max(0, t - h.t0) * GRAPPLE.tipSpeed);
+    else out = Math.max(0, Math.min(full, (t - h.t0) * GRAPPLE.tipSpeed, (h.at - t) * GRAPPLE.tipSpeed));
     if (out < 0.05) return true;
     end.sub(from).multiplyScalar(out / full).add(from);
     let look = this.looks.get(id);
     if (!look) { look = { st: -1, bitAt: -1e9 }; this.looks.set(id, look); }
-    const latched = h.st === 1 || h.st === 2;
-    if (latched && look.st !== h.st) look.bitAt = Math.max(h.at, t - 0.05); // bit (the snapshot can land a tick late)
-    look.st = h.st;
-    const age = Math.max(0, t - look.bitAt);
-    if (latched) {
-      // Slack taken up fast after the bite (parabola of the same length), then a straight rope.
-      const extra = BITE_SLACK * out * Math.exp(-TAKE_UP * age);
-      this.sag = Math.sqrt((3 * out * extra) / 8) + 0.004 * out;
-      this.wob = Math.min(TWANG_MAX, TWANG_AMP * out) * Math.exp(-TWANG_DECAY * age);
-      this.wobPhase = Math.sin(age * TWANG_HZ * Math.PI * 2);
-      this.whip = 0;
-    } else {
-      this.sag = FLY_SAG * out;
-      this.wob = 0;
-      this.whip = WHIP * Math.min(1, out / 6);
-      this.whipT = t * WHIP_HZ * Math.PI * 2;
-    }
+    const bit = (h.st === 1 || h.st === 2) && out >= full;
+    const st = bit ? h.st : h.st === 3 ? 3 : 0;
+    if (bit && look.st !== st) look.bitAt = t; // bit: the take-up starts from this frame's shape (no pop)
+    look.st = st;
+    // The flying sag and whip, taken up fast once it bites, then a straight rope with one small twang.
+    const age = Math.max(0, t - look.bitAt), take = bit ? Math.exp(-TAKE_UP * age) : 1;
+    this.sag = (FLY_SAG * take + (bit ? 0.004 : 0)) * out;
+    this.whip = WHIP * Math.min(1, out / 6) * take;
+    this.whipT = t * WHIP_HZ * Math.PI * 2;
+    this.wob = bit ? Math.min(TWANG_MAX, TWANG_AMP * out) * Math.exp(-TWANG_DECAY * age) : 0;
+    this.wobPhase = Math.sin(age * TWANG_HZ * Math.PI * 2);
     const width = CABLE_W;
     // Sideways for the wobble: horizontal, across the rope.
     this.side.subVectors(end, from).cross(this.u.set(0, 1, 0));

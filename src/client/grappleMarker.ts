@@ -10,7 +10,8 @@ import type { PlayerState, Vec3 } from '../sim/types';
  * small caret over the X when it snapped up onto a ledge top), dim while the hook is cooling down, hidden when nothing
  * in reach would take it. Worked out every frame with the sim's own rule (grappleAim.ts) against the predictor's world
  * from the same eye ray the sim fires along, so it never shows a spot the hook wouldn't take. One DOM element, no
- * draw calls; nothing runs while the hook isn't held.
+ * draw calls; nothing runs while the hook isn't held. Players are taken where they are drawn (`seen`), as the host's
+ * lag compensation rewinds them to the moment the click was made.
  */
 export class GrappleMarker {
   private readonly el: HTMLDivElement;
@@ -41,11 +42,13 @@ export class GrappleMarker {
    * third-person crosshair fix-up); `ready`: off cooldown with a hook to spend. Returns the target (or null).
    */
   update(physics: Physics, range: number, waterY: number, me: PlayerState, feet: Vec3, yaw: number, pitch: number,
-    players: readonly PlayerState[], now: number, ready: boolean, camera: THREE.Camera): AimTarget | null {
+    players: readonly PlayerState[], now: number, ready: boolean, camera: THREE.Camera, seen?: (q: PlayerState) => Vec3 | null): AimTarget | null {
     if (this.physics !== physics || !this.world || this.world.range !== range || this.world.waterY !== waterY) {
       this.physics = physics;
       this.world = physicsAimWorld(physics, range, waterY);
     }
+    // Players where I see them (interpolated): the host rewinds to exactly that view when the hook fires (viewT).
+    this.world.seen = seen;
     const eye = this.eye;
     eye.x = feet.x; eye.y = feet.y + PLAYER.eyeHeight; eye.z = feet.z;
     const t = grappleAim(this.world, me, eye, aimDir(yaw, pitch), players, now);
