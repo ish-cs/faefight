@@ -140,6 +140,10 @@ const STORM_PREP_SEC = 150;
 const KIT_PIECES: PieceKind[] = ['steel', 'metal', 'wood', 'sandbags'];
 /** Shop score of the trip for a rifle while out-ranged lately (strength.outranged). */
 const RIFLE_TRIP = 0.7;
+/** Shop trip score for the early rifle once rich enough (strength.rifleAt): as good as standing at the counter. */
+const RICH_RIFLE_TRIP = 0.9;
+/** ... and with the counter this close and nobody on me: a few seconds that beat camping a sealed door (attack ~1.75). */
+const RICH_RIFLE_NEAR_M = 20, RICH_RIFLE_NEAR = 1.8;
 /** Storm goal score for leaving my bunker before sudden death's slabs drop (above every other goal), and how far past the doorway to go. */
 const BARRIER_LEAVE = 2, BUNKER_EXIT = 3;
 /** Spare decks carried for the bridge to the center; how long into the storm a shop trip out in it is still survivable (low dps). */
@@ -380,6 +384,8 @@ export class Bot {
   private nextHookCheck = 0;
   /** When I noticed I'm stranded with no way home (strandedDitch). */
   private strandedSince: number | null = null;
+  /** Last tick strandedDitch sent me into the water (the off-node "still cut off" rule holds only while it does). */
+  private ditching = false;
   hookNote: { t: number; text: string } | null = null;
   /** Blowing out a pier section under an enemy (or under the piece they hide behind): which, how, and why. */
   private dockPlan: { id: number; enemy: number; at: Vec3; weapon: 'rocket' | 'grenade'; why: 'under' | 'cover' | 'defend'; until: number } | null = null;
@@ -490,6 +496,7 @@ export class Bot {
       this.fightSince = null;
       this.hookIntent = null;
       this.strandedSince = null;
+      this.ditching = false;
       this.healHideAt = null;
       this.lastEff = 0;
       this.nextScoreAt = -Infinity;
@@ -722,6 +729,7 @@ export class Bot {
     turned(was, dir, 'rimRescue');
     // Stranded with no way home at all: walk off into the water toward home (the respawn puts me back there).
     const ditch = this.strandedDitch(ctx);
+    this.ditching = ditch !== null;
     if (ditch) { dir = ditch; jump = false; act = { ...act, sprint: true }; this.moveSrc = 'ditch'; }
     this.moveDir = dir;
     // Stuck means pushing and not moving; held back at an edge by safeDir isn't stuck (a hop there goes in the water).
@@ -919,8 +927,10 @@ export class Bot {
   private cutOff(c: Ctx): boolean {
     const me = c.me, node = this.nav.nodeAt(me.pos), home = c.home.index;
     // Over the rim on the way into the water (the ditch under way): still cut off. Resetting here held a stranded bot
-    // at the edge, its clock starting over each time it got there. (Out on a bridge before that: not cut off.)
-    if (node < 0 && this.strandedSince !== null && !c.homeReach && c.view.now - this.strandedSince >= this.P.drive.strandedSec) return true;
+    // at the edge, its clock starting over each time it got there. Only once the ditch is under way: walking out on a
+    // bridge with decks picked up (botDrown mixed seed 2: a PRO marooned on the center found 3, walked to the bridge
+    // tip and the held clock swam it home) is not the ditch.
+    if (node < 0 && this.ditching && this.strandedSince !== null && !c.homeReach && c.view.now - this.strandedSince >= this.P.drive.strandedSec) return true;
     const cut = node >= 0 && node !== home && !c.homeReach && (me.inv.pieces.scaffold ?? 0) < this.scaffoldsTo(node, home) &&
       !c.view.map.some((isl) => isl.index === node || this.nav.hop(node, isl.index) !== null);
     if (!cut) this.strandedSince = null;
@@ -1766,9 +1776,11 @@ export class Bot {
         // in sudden death likewise.
         if (view.storm && (view.storm.r <= view.storm.rf + 0.5 || (!gun && c.enemy?.equipped === 'fists'))) return 0;
         const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + this.sealedCaution(c);
-        // Low hp backs me off from someone who can reach me (or just did), not from a pistol 80 m across the water
-        // (ffa8-hard seed 11: a Hard bot swung between this and its generator for 63 s, never collecting it).
-        const reach = view.now - this.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
+        // At home, low hp backs me off only from someone who can reach me (or just did), not from a pistol 80 m across
+        // the water (ffa8-hard seed 11: a Hard bot swung between this and its generator for 63 s, never collecting it).
+        // Away from home it still sends me back (botStrength seed 3: a PRO on 9 hp kept bridging and spent its rifle
+        // money on decks instead of going home to collect).
+        const reach = c.on !== c.home.index || view.now - this.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
         if (hp < low && reach) return 1.15 + (low - hp);
         // Unarmed vs a gun: back off only from one close enough to matter (not someone across the water).
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
@@ -1873,7 +1885,7 @@ export class Bot {
         if (view.storm && Math.hypot(shop.x - view.storm.x, shop.z - view.storm.z) > this.stormSafeR(view.storm) - 2) return 0;
         const plan = this.plan(c);
         if (!plan.items.length || this.buyBlocked(plan.items[0])) return 0;
-        if (dist2D(me.pos, shop) < 4 && plan.spent <= this.spendCash(me)) return 0.9;
+        if (dist2D(me.pos, shop) < 4 && plan.spent <= this.spendCash(me)) return Math.max(0.9, this.richRifle(c, plan.items));
         // Topping up heals is no reason for a trip home once I hold one (they're bought on the next visit anyway).
         const items = hpHealsHeld(me) > 0 ? plan.items.filter((i) => i !== 'medkit') : plan.items;
         if (!items.length || (this.stormPrep(view) && items.every((i) => i === 'medkit'))) return 0;
@@ -1883,7 +1895,8 @@ export class Bot {
           (!c.homeReach && !me.inv.pieces.scaffold && items.includes('scaffold'));
         // Out-ranged by a rifle lately and the rifle is next: go get one (strength.outranged).
         const rifle = items[0] === 'rifle' && this.outrangedLately(view.now) ? RIFLE_TRIP : 0;
-        return Math.max(urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0, rifle, this.endgameKit(c, items)) - away;
+        // (Rich for the rifle: worth the trip from anywhere.)
+        return Math.max(Math.max(urgent ? 0.75 : items.length >= 3 || plan.covered ? 0.6 : 0, rifle, this.endgameKit(c, items)) - away, this.richRifle(c, items));
       }
       case 'bridge': {
         const have = me.inv.pieces.scaffold ?? 0;
@@ -2054,6 +2067,17 @@ export class Bot {
     const S = this.P.strength, v = S.endgameSeal[this.difficulty];
     if (v <= 0 || c.view.suddenDeath) return 0;
     return 1 + c.view.others.filter((o) => !o.eliminated).length <= S.endgameLeft ? v : 0;
+  }
+
+  /**
+   * Rich enough for the early rifle (strength.rifleAt) and it's on my list: the shop trip scores like standing at the
+   * counter (else 0). botStrength seed 1: PRO/Hard carried $800-2000 for minutes, collecting and looting, and never
+   * went to buy it ('kit affordable' 0.6 lost to everything). Off with rifleAt at its Infinity default.
+   */
+  richRifle(c: Ctx, items: ShopItem[]): number {
+    if (!items.includes('rifle') || this.spendCash(c.me) < this.P.strength.rifleAt[this.difficulty]) return 0;
+    const shop = this.shopSpot(c);
+    return shop && !c.danger && dist2D(shop, c.me.pos) < RICH_RIFLE_NEAR_M ? RICH_RIFLE_NEAR : RICH_RIFLE_TRIP;
   }
 
   /** Endgame, short of a seal kit for the rival's open doors and the shop sells me a plug: that trip's score (else 0). */
@@ -3623,7 +3647,12 @@ export class Bot {
    * anyone and take vault cash; upgrades and gun locks stay home-only). Null: none in reach.
    */
   private shopSpot(c: Ctx): Vec3 | null {
-    if (c.homeReach) return c.home.shop;
+    if (c.homeReach) {
+      // On a rival's island with them sealed in (camping their door): their counter, when nearer than mine, is safe to
+      // use (botStrength seed 3: a PRO with $600 camped 15 m from it, its own shop 120 m off, and had no rifle).
+      const isl = c.on >= 0 && c.on !== c.home.index && c.view.sealed[c.on] ? c.view.map[c.on] : null;
+      return isl && dist2D(isl.shop, c.me.pos) < dist2D(c.home.shop, c.me.pos) ? isl.shop : c.home.shop;
+    }
     const starts = this.nav.standNodes(c.me.pos);
     let best: Vec3 | null = null, bestD = Infinity;
     for (const isl of c.view.map) {

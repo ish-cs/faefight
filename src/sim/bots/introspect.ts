@@ -118,7 +118,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; richRifle(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null;
   stormPrep(view: BotView): boolean; sealingSoon(view: BotView): boolean; leaveBeforeBarriers(c: Ctx): boolean; rivalShutIn(c: Ctx): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
@@ -199,7 +199,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
     case 'disengage': {
       if (!c.enemy && now - I.mem.lastHurtAt > 1.5) return zero('not under fire');
       const low = 0.25 + 0.35 * t.caution - 0.15 * t.aggression + I.sealedCaution(c);
-      const reach = now - I.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
+      const reach = c.on !== c.home.index || now - I.mem.lastHurtAt < 1.5 || !c.enemy || c.enemyDist < WEAPONS[c.enemy.equipped].range;
       if (hp < low && reach) {
         return { f: [['low hp', 1.15], ['below bail line', low - hp]], why: `Down to ${Math.round(me.hp)} hp, under my bail-out line of ${Math.round(low * 100)}: backing off` };
       }
@@ -338,15 +338,16 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const blocked = (I as unknown as { buyBlockedUntil: Map<ShopItem, number> }).buyBlockedUntil.get(plan.items[0]) ?? -Infinity;
       if (blocked > now) return zero(`${plan.items[0]} buy failed, waiting`);
       const list = shopList(plan.items);
-      if (dist2D(me.pos, home.shop) < 4 && plan.spent <= me.inv.cash) return { f: [['at the shop', 0.9]], why: `At the shop: buying ${list}` };
+      if (dist2D(me.pos, shop) < 4 && plan.spent <= me.inv.cash) return { f: [['at the shop', Math.max(0.9, I.richRifle(c, plan.items))]], why: `At the shop: buying ${list}` };
       const decksHome = !c.homeReach && !me.inv.pieces.scaffold && plan.items.includes('scaffold');
       const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv)) || decksHome;
       const v0 = urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0;
-      const rifle = plan.items[0] === 'rifle' && I.outrangedLately(now) ? 0.7 : 0, eg = I.endgameKit(c, plan.items);
-      const v = Math.max(v0, rifle, eg);
+      const rifle = plan.items[0] === 'rifle' && I.outrangedLately(now) ? 0.7 : 0, rich = I.richRifle(c, plan.items), eg = I.endgameKit(c, plan.items);
+      const base = Math.max(v0, rifle, eg), useRich = rich > 0 && rich >= base - away;
+      const v = useRich ? rich : base;
       if (!v) return zero('saving up');
-      const f: [string, number][] = [[v === v0 ? (urgent ? 'urgent buy' : 'kit affordable') : v === rifle ? 'out-ranged: rifle' : 'endgame seal kit', v]];
-      if (away) f.push(['away', -away]);
+      const f: [string, number][] = [[useRich ? 'rich: rifle' : v === v0 ? (urgent ? 'urgent buy' : 'kit affordable') : v === rifle ? 'out-ranged: rifle' : 'endgame seal kit', v]];
+      if (away && !useRich) f.push(['away', -away]);
       return { f, why: `Off to buy ${list} ($${Math.round(plan.spent)})${urgent ? `: I need ${plan.items.includes('pistol') ? 'a gun' : plan.items.includes('charge') ? 'a charge' : decksHome ? 'decks to get home' : 'ammo'}` : ''}` };
     }
     case 'bridge': {
