@@ -215,8 +215,10 @@ function gunMaterial(rough: number, metal: number, wood = false) {
 }
 
 const metalMat = gunMaterial(0.38, 0.75);
-const furnMat: Record<string, THREE.MeshStandardNodeMaterial> = {
+// Keyed by every gun (not string): a missing entry left the sniper's stock on three's default flat material.
+const furnMat: Record<Exclude<WeaponKind, 'fists'>, THREE.MeshStandardNodeMaterial> = {
   pistol: gunMaterial(0.68, 0.1), smg: gunMaterial(0.72, 0.1), shotgun: gunMaterial(0.62, 0, true), rifle: gunMaterial(0.58, 0, true), rocket: gunMaterial(0.7, 0.15),
+  sniper: gunMaterial(0.74, 0.05), // matte polymer stock
 };
 const shellMat = gunMaterial(0.6, 0);
 const geoCache = new Map<string, { metal: THREE.BufferGeometry; furn: THREE.BufferGeometry; mag: THREE.BufferGeometry }>();
