@@ -70,7 +70,8 @@ export function smokeChord(c: SmokeCloud, a: Vec3, b: Vec3, now: number): number
   const s = Math.sqrt(disc);
   const t0 = Math.max(0, (-B - s) / A), t1 = Math.min(1, (-B + s) / A);
   if (t1 <= t0) return 0;
-  const L = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2 + (b.z - a.z) ** 2);
+  const ex = b.x - a.x, ey = b.y - a.y, ez = b.z - a.z;
+  const L = Math.sqrt(ex * ex + ey * ey + ez * ez);
   return (t1 - t0) * L;
 }
 
