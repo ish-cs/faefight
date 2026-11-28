@@ -2155,27 +2155,32 @@ export class Bot {
     const D = this.P.discipline, now = c.view.now;
     // My own doorway plugged (discipline.homeFirst): offence is capped below clearing it.
     const debt = this.homeDebt(c);
-    const bases: { g: Goal; raw: number; driven: number; base: number }[] = [];
+    // One pass, scoring and noise interleaved as before (score() can draw from the rng: fortSlots), so with every
+    // discipline knob off the decisions are bit-identical to the old brain.
+    let survival = false;
     for (const g of GOALS) {
       if ((this.goalBan.get(g) ?? -Infinity) > now && !this.stormPrepGoal(g)) continue; // banned for a while (goal watchdog)
       const raw = this.score(g, c);
       const driven = this.teamDrive(g, c, this.drive(g, c, raw));
       const base = debt && this.offence(g, c) ? Math.min(driven, D.debtCap) : driven;
-      bases.push({ g, raw, driven, base });
-    }
-    // Commitment (discipline.commitSec): a goal just switched to holds a while, out of combat only (an enemy in sight
-    // or a hit just now: reactions such as cover stay instant), and never against running or the storm.
-    const survival = bases.some((b) => (b.g === 'disengage' || b.g === 'storm' || b.g === 'cover') && b.base > 0);
-    const calm = !c.enemy && now - this.mem.lastHurtAt > COMMIT_CALM_SEC;
-    const committed = !survival && calm && now - this.switchAt < D.commitSec[this.difficulty];
-    for (const { g, raw, driven, base } of bases) {
       const rule = base !== driven ? (debt === 'sealed' ? 'my bunker is sealed: clear it first' : 'my doorway is plugged: clear it first') : undefined;
+      if ((g === 'disengage' || g === 'storm' || g === 'cover') && base > 0) survival = true;
       if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, driven, base, noise: 0, sticky: 0, score: base, rule }); continue; }
-      const noise = this.goalNoise(g, now), sticky = g === this.goal ? D.sticky[this.difficulty] + (committed ? D.commitBonus : 0) : 0;
+      const noise = this.goalNoise(g, now), sticky = g === this.goal ? D.sticky[this.difficulty] : 0;
       const s = base + noise + sticky;
       rows?.push({ goal: g, raw, driven, base, noise, sticky, score: s, rule });
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }
+    }
+    // Commitment (discipline.commitSec): a goal just switched to holds a while, out of combat only (an enemy in sight
+    // or a hit just now: reactions such as cover stay instant), and never against running, the storm or cover.
+    const calm = !c.enemy && now - this.mem.lastHurtAt > COMMIT_CALM_SEC;
+    const cur = scored.find((x) => x.goal === this.goal);
+    if (cur && !survival && calm && now - this.switchAt < D.commitSec[this.difficulty] && D.commitBonus > 0) {
+      cur.score += D.commitBonus;
+      const row = rows?.find((r) => r.goal === this.goal);
+      if (row) { row.sticky += D.commitBonus; row.score += D.commitBonus; }
+      if (cur.score > bestScore) { bestScore = cur.score; best = cur.goal as Goal; }
     }
     this.lastScores = scored.sort((a, b) => b.score - a.score).slice(0, 4);
     if (rows) this.probe!.decided(c, rows, best);
