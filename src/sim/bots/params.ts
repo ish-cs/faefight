@@ -630,10 +630,12 @@ export const DISCIPLINE: DisciplineParams = {
   bankTripAt: 500,
   bankRisk: D(0, 0, 0, 0.9),
   sticky: D(0.1, 0.1, 0.1, 0.1),
-  commitSec: D(0, 0, 0, 2),
+  // Off by default (mixed ×120 A/B, 2026-11-28): with commitment / seal abort / no-partial-bridge on, the longest home
+  // sit was 64 s (off 49.5) and a PRO froze 730 s (off 288); commitment alone off was worse still (decisive 29).
+  commitSec: D(0, 0, 0, 0),
   commitBonus: 0.25,
-  sealAbortSec: D(0, 0, 0, 20),
-  bridgeShort: D(Infinity, Infinity, Infinity, 5),
+  sealAbortSec: D(0, 0, 0, 0),
+  bridgeShort: D(Infinity, Infinity, Infinity, Infinity),
   cheapKit: D(0, 0, 0, 1),
   kitShop: D(0, 0, 0, 0.95),
 };
