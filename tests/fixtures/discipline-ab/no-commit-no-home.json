@@ -1,0 +1,8 @@
+{
+ "params": {
+  "discipline.commitSec.pro": 0,
+  "discipline.sealAbortSec.pro": 0,
+  "discipline.bridgeShort.pro": 99,
+  "discipline.homeFirst.pro": 0
+ }
+}

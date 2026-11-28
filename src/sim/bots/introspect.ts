@@ -27,7 +27,11 @@ import type { AllyStatus, BotView, OtherStatus } from './view';
  * One goal's line in the utility table: `raw` from Bot.score, `base` after Bot.drive (the win-seeking push of
  * medium+ bots), plus decision noise and the stickiness bonus.
  */
-export type ScoreRow = { goal: Goal; raw?: number; base: number; noise: number; sticky: number; score: number };
+export type ScoreRow = {
+  goal: Goal; raw?: number; base: number; noise: number; sticky: number; score: number;
+  /** After drive/teamDrive, before a discipline rule (`rule` says which) changed it to `base`. */
+  driven?: number; rule?: string;
+};
 export type GoalSwitch = { t: number; from: Goal; to: Goal; why: string };
 
 /** Compact, JSON-friendly digest (also what goes over the wire to a spectating guest). */
@@ -122,7 +126,7 @@ type Internals = {
   mem: Pick<Memory, 'seen' | 'diedAt' | 'lastHurtAt' | 'lastHurtBy' | 'recent'> & { grudge: Map<number, number> };
   intruder(c: Ctx): Sighting | null; nearestLoot(c: Ctx): Vec3 | null; raidIsland(c: Ctx): IslandLayout | null;
   incomingDeck(c: Ctx): PieceState | null; plan(c: Ctx): { items: ShopItem[]; covered: boolean; spent: number };
-  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; lowHpFarOff(c: Ctx): boolean; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedScore(c: Ctx): number; glintNote: { t: number; id: number } | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; richRifle(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean;
+  needs(c: Ctx): Needs; trapped(c: Ctx): boolean; finalHunt(c: Ctx): boolean; sealedHomeCalm(c: Ctx): boolean; sealedCaution(c: Ctx): number; lowHpFarOff(c: Ctx): boolean; kitlessAttack(c: Ctx): number; outrangedBy(c: Ctx): PlayerState | null; outrangedScore(c: Ctx): number; glintNote: { t: number; id: number } | null; outrangedLately(now: number): boolean; bankAway(c: Ctx): number; endgameSeal(c: Ctx): number; endgameKit(c: Ctx, items: ShopItem[]): number; richRifle(c: Ctx, items: ShopItem[]): number; leaderFocusId(view: BotView, id: number): number; blockers(c: Ctx): PieceState[]; canClear(c: Ctx, p: PieceState): boolean; homeDebt(c: Ctx): 'sealed' | 'plugged' | null; chargeTrip(c: Ctx): number; bankRisk(c: Ctx): number; campKit(c: Ctx, items: ShopItem[]): number; shortDecks(c: Ctx, have: number, need: number): boolean;
   crossing(c: Ctx): boolean; stormSafeR(st: NonNullable<BotView['storm']>): number; needCenterBridge(c: Ctx): boolean;
   stormLeave(c: Ctx): { sec: number; to: Vec3; slack: number } | null;
   stormPrep(view: BotView): boolean; sealingSoon(view: BotView): boolean; leaveBeforeBarriers(c: Ctx): boolean; rivalShutIn(c: Ctx): boolean; scaffoldsNeeded(c: Ctx): number; insuranceDue(me: PlayerState): number; wantsVaultUpgrade(me: PlayerState): boolean; bankKeep(c: Ctx): number;
@@ -243,17 +247,27 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const can = bl.some((p) => I.canClear(c, p));
       const kinds = [...new Set(bl.map((p) => p.kind))].join(', ');
       const how = me.inv.charges > 0 ? 'a charge' : gun ? 'my gun' : 'my fists';
+      const buy = !can && c.homeReach ? I.chargeTrip(c) : 0;
+      if (view.sealed[home.index] && !c.homeReach) return zero("sealed, no walk home");
+      if (view.sealed[home.index] && buy > 0.1) {
+        return { f: [['cannot clear: buy a charge', buy], ['caution', 0.1 * t.caution]], why: `My bunker is sealed (${kinds}) and nothing I carry gets through: buying a charge to blast it` };
+      }
       if (view.sealed[home.index]) {
         return {
           f: [[can ? 'can clear' : 'cannot clear', can ? 0.85 : 0.1], ...(can && I.sealedHomeCalm(c) ? [['sealed home: death = out', I.P.drive.sealedHome[I.difficulty]] as [string, number]] : []), ['caution', 0.1 * t.caution]],
           why: can ? `My bunker is sealed (${kinds}): clearing it with ${how}` : `My bunker is sealed (${kinds}) and nothing I carry gets through`,
         };
       }
+      if (buy > 0) return { f: [['plugged, buy a charge', buy]], why: `${kinds} in my doorway and nothing I carry gets through: buying a charge first (a plugged door is a debt)` };
       if (!(c.homeReach && can)) return zero(can ? "can't walk home" : `can't clear ${kinds}`);
-      if (!ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) && me.inv.cash + me.vault.cash >= AMMO_BOX.price) {
-        return { f: [['plugged door, gun empty', 0.5]], why: `${kinds} in my doorway and my gun is empty: ammo first, then I shoot it out` };
+      const floor = I.homeDebt(c) ? I.P.discipline.debtDefend : 0;
+      const restock = !ownsGun(me.inv) && GUNS.some((g) => me.inv.weapons[g]) && me.inv.cash + me.vault.cash + view.generators[home.index] >= AMMO_BOX.price;
+      const v0 = restock ? 0.5 : 0.7 + 0.15 * t.caution;
+      const debt: [string, number][] = floor > v0 ? [['doorway debt: clear before offence', floor - v0]] : [];
+      if (restock) {
+        return { f: [['plugged door, gun empty', 0.5], ...debt], why: `${kinds} in my doorway and my gun is empty: ammo first, then I shoot it out` };
       }
-      return { f: [['plugged door', 0.7], ['caution', 0.15 * t.caution]], why: `${bl.length === 1 ? 'A' : bl.length} ${kinds} in my doorway: clearing it with ${how} before heading out` };
+      return { f: [['plugged door', 0.7], ['caution', 0.15 * t.caution], ...debt], why: `${bl.length === 1 ? 'A' : bl.length} ${kinds} in my doorway: clearing it with ${how} before heading out` };
     }
     case 'heal': {
       if (view.suddenDeath) return zero('sudden death');
@@ -307,6 +321,10 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       };
     }
     case 'bank': {
+      const risk = I.bankRisk(c);
+      if (c.on !== home.index && risk > I.bankAway(c)) {
+        return { f: [['home plugged: bank first', I.P.discipline.bankRisk[I.difficulty]], ['walk', risk - I.P.discipline.bankRisk[I.difficulty]]], why: `Carrying $${Math.round(me.inv.cash)} with my own bunker plugged: walking home to bank it before anything risky` };
+      }
       if (c.on !== home.index) {
         const b = I.bankAway(c);
         if (b <= 0) return zero('not home');
@@ -315,6 +333,7 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       }
       if (view.suddenDeath) return zero('sudden death');
       if (I.stormPrep(view)) return zero('storm coming: no time for the vault');
+      if (risk > 0) return { f: [['rich: bank before risk', risk]], why: `Carrying $${Math.round(me.inv.cash)} (≥ $${I.P.discipline.bankTripAt}): banking it before heading out` };
       const sc = me.inv.pieces.scaffold ?? 0, need = I.scaffoldsNeeded(c);
       const close = !!c.enemy && c.enemyDist < 8;
       const due = I.insuranceDue(me);
@@ -364,11 +383,11 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const decksHome = !c.homeReach && !me.inv.pieces.scaffold && plan.items.includes('scaffold');
       const urgent = plan.items.includes('pistol') || plan.items.includes('charge') || (plan.items[0] === 'ammo' && !ownsGun(me.inv)) || decksHome;
       const v0 = urgent ? 0.75 : plan.items.length >= 3 || plan.covered ? 0.6 : 0;
-      const rifle = plan.items[0] === 'rifle' && I.outrangedLately(now) ? 0.7 : 0, rich = I.richRifle(c, plan.items), eg = I.endgameKit(c, plan.items);
-      const base = Math.max(v0, rifle, eg), useRich = rich > 0 && rich >= base - away;
+      const rifle = plan.items[0] === 'rifle' && I.outrangedLately(now) ? 0.7 : 0, rich = I.richRifle(c, plan.items), eg = I.endgameKit(c, plan.items), camp = I.campKit(c, plan.items);
+      const base = Math.max(v0, rifle, eg, camp), useRich = rich > 0 && rich >= base - away;
       const v = useRich ? rich : base;
       if (!v) return zero('saving up');
-      const f: [string, number][] = [[useRich ? 'rich: rifle' : v === v0 ? (urgent ? 'urgent buy' : 'kit affordable') : v === rifle ? 'out-ranged: rifle' : 'endgame seal kit', v]];
+      const f: [string, number][] = [[useRich ? 'rich: rifle' : v === v0 ? (urgent ? 'urgent buy' : 'kit affordable') : v === rifle ? 'out-ranged: rifle' : v === eg ? 'endgame seal kit' : 'camping without a kit', v]];
       if (away && !useRich) f.push(['away', -away]);
       return { f, why: `Off to buy ${list} ($${Math.round(plan.spent)})${urgent ? `: I need ${plan.items.includes('pistol') ? 'a gun' : plan.items.includes('charge') ? 'a charge' : decksHome ? 'decks to get home' : 'ammo'}` : ''}` };
     }
@@ -380,6 +399,8 @@ function explain(g: Goal, I: Internals, c: Ctx): Explained {
       const need = I.scaffoldsNeeded(c);
       const toRival = c.bridgeTo !== I.nav.centerNode && !I.allyIsland(view, c.bridgeTo);
       if (toRival && need <= 1 && sealKit(me.inv) < c.openDoors.length) return zero('need a seal kit before landing');
+      const outOnIt = I.goal === 'bridge' && c.on !== home.index;
+      if (!outOnIt && I.shortDecks(c, have, need)) return zero(`${have} of ${need} decks: buying the rest first`);
       const f: [string, number][] = [['base', 0.45], ['aggression', 0.15 * t.aggression]];
       if (have >= need) f.push(['enough decks', 0.1]);
       if (!toRival) { f.push(['greed', 0.05 * t.greed]); if (I.stormPrep(view)) f.push(['storm prep', 0.45]); }
@@ -746,7 +767,9 @@ export function debugBrain(bot: Bot): BrainDigest {
     const raw = r.raw ?? r.base;
     const other = raw - (e?.f ?? []).reduce((a, [, v]) => a + v, 0);
     if (Math.abs(other) > 0.005) f.push(['other', r2(other)]);
-    if (Math.abs(r.base - raw) >= 0.005) f.push(['drive', r2(r.base - raw)]);
+    const driven = r.driven ?? r.base;
+    if (Math.abs(driven - raw) >= 0.005) f.push(['drive', r2(driven - raw)]);
+    if (r.rule && Math.abs(r.base - driven) >= 0.005) f.push([r.rule, r2(r.base - driven)]);
     if (Math.abs(r.noise) >= 0.005) f.push(['noise', r2(r.noise)]);
     if (r.sticky) f.push(['sticky', r2(r.sticky)]);
     const row: BrainDigest['scores'][number] = [r.goal, r2(r.score), r2(r.base), f];

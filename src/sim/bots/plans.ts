@@ -76,6 +76,8 @@ export type Needs = {
   medkits?: number; steel?: boolean; genLevel?: number;
   /** Metal plugs wanted in the kit (drive.hardKit): buy metal while fewer metal/steel than `kit`, at this many metal prices of cash (0 = no). */
   hardKit?: number;
+  /** discipline.cheapKit: short of a kit the cash doesn't cover in metal (or steel), buy wood plugs (never block a seal). */
+  cheapKit?: boolean;
   /** Carry a grappling hook: 'cross' (a crossing to make: bought before scaffolds), 'rich' (spare cash). */
   grapple?: 'cross' | 'rich';
   /** Spike traps to carry (on top of the ones standing). */
@@ -160,12 +162,15 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   const rifleFirst = (!!needs.rifle || !!needs.rifleSlot) && !inv.weapons.rifle;
   if (!rifleFirst && !inv.smokes && (needs.smokes ?? 0) > 0 && room('smoke') && cash >= SMOKE.price + PIECES.wood.price + deckCost) return 'smoke';
   if (!rifleFirst && inv.smokes && !inv.flashes && (needs.flashes ?? 0) > 0 && room('flash') && cash >= FLASH.price + PIECES.wood.price + deckCost) return 'flash';
-  if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
+  const kitShort = needs.kit - (sealKit(inv) - reservedBagPlugs(inv, needs));
+  if (kitShort > 0) {
+    // Cheapest working kit when the cash won't cover the rest in the dearer piece (discipline.cheapKit).
+    const covers = (k: PieceKind) => !needs.cheapKit || cash >= kitShort * PIECES[k].price;
     // (A kind the hotbar has no room for is skipped: the shop would refuse it.)
-    if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price && room('steel')) return 'steel';
+    if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price && covers('steel') && room('steel')) return 'steel';
     const skilled = difficulty === 'hard' || difficulty === 'pro';
-    const wantMetal = skilled ? cash >= PIECES.metal.price
-      : (difficulty === 'medium' || style.metal) && cash >= 2 * PIECES.metal.price;
+    const wantMetal = covers('metal') && (skilled ? cash >= PIECES.metal.price
+      : (difficulty === 'medium' || style.metal) && cash >= 2 * PIECES.metal.price);
     if (wantMetal && room('metal')) return 'metal';
     if (room('wood')) return cash >= PIECES.wood.price ? 'wood' : null;
   }
