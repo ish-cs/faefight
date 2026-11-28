@@ -46,6 +46,25 @@ export const aimDir = (yaw: number, pitch: number): Vec3 => {
   return v3(-dm.sin(yaw) * c, dm.sin(pitch), -dm.cos(yaw) * c);
 };
 
+/** Scope glint: full when a scoped sniper points within `fullDeg` of you, gone past `coneDeg`. */
+export const GLINT = { fullDeg: 2.5, coneDeg: 10 };
+type Aimer = Pick<PlayerState, 'pos' | 'yaw' | 'pitch' | 'ads' | 'equipped'>;
+/**
+ * How brightly `p`'s scope glints toward the point `at` (0..1): only a scoped sniper glints, brightest straight down
+ * its line of sight. The client draws it (the sun catching the lens); bots read it as a sniper about to shoot.
+ */
+export function scopeGlint(p: Aimer, at: Vec3): number {
+  if (!p.ads || p.equipped !== 'sniper') return 0;
+  const d = sub(at, v3(p.pos.x, p.pos.y + PLAYER.eyeHeight, p.pos.z));
+  const len = Math.hypot(d.x, d.y, d.z);
+  if (len < 1e-6) return 0;
+  const f = aimDir(p.yaw, p.pitch);
+  const deg = dm.acos(Math.min(1, Math.max(-1, (f.x * d.x + f.y * d.y + f.z * d.z) / len))) / DEG;
+  return deg <= GLINT.fullDeg ? 1 : deg >= GLINT.coneDeg ? 0 : (GLINT.coneDeg - deg) / (GLINT.coneDeg - GLINT.fullDeg);
+}
+/** A scope glint bright enough to notice, toward `who`'s chest. */
+export const glintsAt = (p: Aimer, who: Pick<PlayerState, 'pos'>): boolean => scopeGlint(p, v3(who.pos.x, who.pos.y + 1.2, who.pos.z)) >= 0.5;
+
 /**
  * Direction of pellet `i` of a shot: the whole shot is thrown off by a deterministic offset inside the
  * spread cone (seeded per player per tick, so host and replays agree); shotgun pellets 1.. sit on a

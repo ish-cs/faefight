@@ -5,7 +5,7 @@ import type { EmoteId, QuipId } from './emotes';
 export type Vec3 = { x: number; y: number; z: number };
 
 export type PieceKind = 'sandbags' | 'wood' | 'metal' | 'steel' | 'scaffold' | 'ramp' | 'container';
-export type WeaponKind = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'rocket';
+export type WeaponKind = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'rocket' | 'sniper';
 export type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
 export type PotionKind = 'shieldSmall' | 'shieldBig' | 'healPotion' | 'speedPotion';
 

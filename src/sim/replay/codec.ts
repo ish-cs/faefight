@@ -13,7 +13,7 @@ import { READ_FORMATS, REPLAY_FORMAT, type Replay, type ReplayHeader, type TickI
 
 const MAGIC = [0x46, 0x41, 0x45, 0x52]; // FAER
 
-const WEAPONS: WeaponKind[] = ['fists', 'pistol', 'smg', 'shotgun', 'rifle', 'rocket'];
+const WEAPONS: WeaponKind[] = ['fists', 'pistol', 'smg', 'shotgun', 'rifle', 'rocket', 'sniper'];
 const BOOLS = ['jump', 'sprint', 'fire', 'ads', 'reload', 'interact', 'throwGrenade', 'placeCharge', 'useMedkit', 'drink'] as const;
 const JSONS = ['build', 'shop', 'vault', 'moveSlot'] as const;
 const KNOWN = new Set<string>(['moveX', 'moveZ', 'yaw', 'pitch', 'slot', 'select', 'drop', ...BOOLS, ...JSONS]);

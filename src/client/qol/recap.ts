@@ -28,7 +28,7 @@ export type Recap = {
 
 type Hit = { t: number; by: number | null; amount: number; source: DamageSource; weapon: string | null; part: unknown };
 
-const GUNS = new Set(['pistol', 'smg', 'shotgun', 'rifle']);
+const GUNS = new Set(['pistol', 'smg', 'shotgun', 'rifle', 'sniper']);
 const BLASTS = new Set(['rocket', 'grenade', 'charge', 'barrel', 'propane']);
 
 export function sourceOf(weapon: unknown, by: unknown): DamageSource {

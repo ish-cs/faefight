@@ -210,6 +210,12 @@ export class InputController {
     this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch + r.dPitch));
   }
 
+  /** Turn the look by (dYaw, dPitch) rad (scope sway): same pitch limit as the mouse. */
+  nudge(dYaw: number, dPitch: number) {
+    this.yaw += dYaw;
+    this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch + dPitch));
+  }
+
   get free() {
     return this.enabled && isHeld('freePlace', this.keys);
   }

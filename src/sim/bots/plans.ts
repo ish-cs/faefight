@@ -6,7 +6,8 @@ import type { Doorway } from '../map';
 import type { Difficulty, HotbarItem, Inventory, PieceKind, PieceState, PlayerState, PotionKind, ShopItem, Vec3, WeaponKind } from '../types';
 import { add, dist2D, forward, scale, v3 } from '../vec';
 
-export const GUNS: Exclude<WeaponKind, 'fists'>[] = ['rifle', 'smg', 'pistol', 'shotgun'];
+// The sniper last: drawn only past `sniperM` (bestGun), or when it's the only gun with ammo.
+export const GUNS: Exclude<WeaponKind, 'fists'>[] = ['rifle', 'smg', 'pistol', 'shotgun', 'sniper'];
 /** Pieces tall enough to plug a doorway alone, strongest first. */
 export const TALL: PieceKind[] = ['steel', 'metal', 'wood'];
 const HARD: PieceKind[] = ['metal', 'steel', 'container'];
@@ -21,9 +22,10 @@ export const hasAmmo = (inv: Inventory, g: WeaponKind) => {
 export const ownsGun = (inv: Inventory) => GUNS.some((g) => hasAmmo(inv, g));
 export const isHard = (kind: PieceKind) => HARD.includes(kind);
 
-/** Best gun to hold at this range ('fists' if none has ammo); the shotgun inside `close` m. */
-export function bestGun(inv: Inventory, range: number, close = 8): WeaponKind {
+/** Best gun to hold at this range ('fists' if none has ammo); the shotgun inside `close` m, the sniper from `sniperM` m. */
+export function bestGun(inv: Inventory, range: number, close = 8, sniperM = Infinity): WeaponKind {
   if (range < close && hasAmmo(inv, 'shotgun')) return 'shotgun';
+  if (range >= sniperM && hasAmmo(inv, 'sniper')) return 'sniper';
   return GUNS.find((g) => hasAmmo(inv, g)) ?? 'fists';
 }
 
@@ -86,6 +88,10 @@ export type Needs = {
   rifle?: boolean;
   /** Keep a hotbar slot free for the rifle until I have one. */
   rifleSlot?: boolean;
+  /** Buy the sniper rifle now (sniper.taste / buyAt / longM): right after the gun's ammo, like a wanted rifle. */
+  sniper?: boolean;
+  /** Keep a hotbar slot free for the sniper until I have one (the taste and the sight line, before the cash is there). */
+  sniperSlot?: boolean;
 };
 
 /** Personal shopping taste (from personality): order and materials, never what is allowed. */
@@ -129,11 +135,14 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   const healShort = cash >= MEDKIT.price && inv.medkits + (inv.potions.healPotion ?? 0) < (needs.medkits ?? 0) && !p.hotbar.includes('medkit') && !p.hotbar.includes('healPotion');
   // Hard/PRO keep a slot for the rifle until they have one (needs.rifleSlot): spoils arrive with a full hotbar otherwise.
   const rifleSlot = !!needs.rifleSlot && !inv.weapons.rifle;
+  const sniperSlot = !!needs.sniperSlot && !inv.weapons.sniper;
   const free = p.hotbar.filter((x) => x === null).length;
   const room = (k: HotbarItem) => countOf(inv, k) > 0 ||
-    (canAdd(p.hotbar, k) && free >= 1 + (healShort && k !== 'medkit' && k !== 'grapple' ? 1 : 0) + (rifleSlot && k !== 'rifle' ? 1 : 0));
+    (canAdd(p.hotbar, k) && free >= 1 + (healShort && k !== 'medkit' && k !== 'grapple' ? 1 : 0) + (rifleSlot && k !== 'rifle' ? 1 : 0) + (sniperSlot && k !== 'sniper' ? 1 : 0));
   // Out-ranged (or rich enough): the rifle before anything but the gun's ammo; never saved up for.
   if (needs.rifle && !inv.weapons.rifle && room('rifle') && cash >= WEAPONS.rifle.price) return 'rifle';
+  // Rich, with the taste for it and a long sight line to hold: the sniper next (never saved up for).
+  if (needs.sniper && !inv.weapons.sniper && room('sniper') && cash >= WEAPONS.sniper.price) return 'sniper';
   // A ramp in the pocket for fights (skilled players): cheap, never saved up for.
   for (const [k, n] of Object.entries(needs.combatKit ?? {}) as [PieceKind, number][])
     if ((inv.pieces[k] ?? 0) < n && room(k) && cash >= PIECES[k].price) return k;

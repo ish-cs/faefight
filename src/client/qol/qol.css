@@ -135,6 +135,12 @@
 
 /* Killcam: letterbox bars (thicker in the slow beat, --kc-slow 0..1) + vignette over the replay, a lower-third
    card (killer, weapon, distance, what they had left), a fade to black at the end that clears to the live view. */
+/* Killcam, sniper kill: the slow beat through the killer's scope (lens vignette + duplex reticle, like the live scope). */
+.hud .kc-scope { position: absolute; inset: 0; pointer-events: none; z-index: 2;
+  background: radial-gradient(circle at 50% 50%, transparent 0, rgba(20, 30, 30, 0.1) 27vmin, rgba(0, 0, 0, 0.85) 29.5vmin, #020304 31vmin); }
+.hud .kc-scope::before, .hud .kc-scope::after { content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #000; }
+.hud .kc-scope::before { width: 60vmin; height: 2px; }
+.hud .kc-scope::after { width: 2px; height: 60vmin; }
 .hud .qol-killcam-frame { position: absolute; inset: 0; pointer-events: none; z-index: 2; --kc-slow: 0; box-shadow: inset 0 0 180px rgba(0, 0, 0, 0.55); }
 .qol-killcam-frame::before, .qol-killcam-frame::after { content: ""; position: absolute; left: 0; right: 0; height: 11vh; background: #000; transform-origin: top; transform: scaleY(calc(0.62 + 0.38 * var(--kc-slow))); animation: kc-bar-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); }
 .qol-killcam-frame::before { top: 0; }

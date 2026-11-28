@@ -11,7 +11,7 @@ export type LootModel =
 export type LootItem = LootModel & { text: string };
 
 const NAME: Record<string, string> = {
-  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', rocket: 'Rocket launcher',
+  pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Rifle', sniper: 'Sniper rifle', rocket: 'Rocket launcher',
   sandbags: 'Sandbags', wood: 'Wood', metal: 'Sheet metal', steel: 'Steel plate', scaffold: 'Scaffold', ramp: 'Ramp', container: 'Container',
   grenade: 'Grenade', charge: 'Breach charge', medkit: 'Medkit', trap: 'Spike trap', smoke: 'Smoke grenade', flash: 'Flashbang',
   shieldSmall: 'Small shield', shieldBig: 'Big shield', healPotion: 'Heal potion', speedPotion: 'Speed potion',

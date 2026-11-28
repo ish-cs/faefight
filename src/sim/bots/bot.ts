@@ -1,6 +1,6 @@
 import * as dm from '../dmath';
 import { AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, MEDKIT, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
-import { eyePos } from '../combat';
+import { eyePos, glintsAt } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
 import type { DockDef, Doorway, IslandLayout } from '../map';
@@ -8,7 +8,7 @@ import { overDock } from '../docks';
 import { isHomeOnly } from '../economy';
 import { NO_INPUT } from '../types';
 import type {
-  BuildRequest, Difficulty, HotbarItem, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
+  BuildRequest, Difficulty, HotbarItem, Inventory, Loadout, PieceKind, PieceState, PlayerInput, PlayerState, ShopItem, TrapNet, TrapRequest, VaultAction, Vec3, WeaponKind,
   UtilityKind,
 } from '../types';
 import { funds } from '../economy';
@@ -108,7 +108,7 @@ const SCAFFOLD_STEP = 3.8;
 const WAIT_HEAD_M = 45;
 const WAIT_COMING_M = 150;
 const WAIT_BREAK_SEC = 30;
-const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, smg: 12, pistol: 16, rifle: 25, rocket: 20 };
+const PREFERRED_RANGE: Record<WeaponKind, number> = { fists: 1.2, shotgun: 6, smg: 12, pistol: 16, rifle: 25, rocket: 20, sniper: 45 };
 /** Memory horizons: an intruder seen on my island, a rival's whereabouts. */
 const INTRUDER_SEC = 8, WHEREABOUTS_SEC = 20;
 const LOOT_RANGE = 35;
@@ -378,6 +378,10 @@ export class Bot {
   private slitNote: { t: number; text: string } | null = null;
   /** Last rifle hit that out-ranged my guns (strength.outranged): who and when. */
   private outranged: { id: number; t: number } | null = null;
+  /** Sniper: since when the scoped crosshair has been on the current target (null = not steadying). */
+  private steadySince: number | null = null;
+  /** Last scope glint that sent me for cover (brain panel). */
+  glintNote: { t: number; id: number } | null = null;
   /** Per-enemy beliefs (belief.ts): their gun and range against me, damage to me, kills. */
   readonly beliefs = new Beliefs();
   private lastHealDropAt = -Infinity;
@@ -588,7 +592,7 @@ export class Bot {
     const W = this.P.weapon;
     // Shotgun range with hysteresis: holding it, keep it a bit past 8 m (no flip-flop as they step in and out).
     const best = torch || dock?.weapon === 'rocket' ? 'rocket'
-      : bestGun(me.inv, enemy ? ctx.enemyDist : 30, me.equipped === 'shotgun' ? 8 + W.shotgunHyst : 8);
+      : bestGun(me.inv, enemy ? ctx.enemyDist : 30, me.equipped === 'shotgun' ? 8 + W.shotgunHyst : 8, this.sniperM(me));
     const gunReady = (range: number) => {
       const w = me.equipped;
       const ammo = w === 'fists' ? null : me.inv.weapons[w];
@@ -648,7 +652,9 @@ export class Bot {
       // (A goal's own target, e.g. a plug in my doorway, beats a far-off enemy I wouldn't hurt anyway.)
       // Only a head showing over a crate: aim for that (the body behind it would only put holes in the crate).
       const aimY = view.peeking?.includes(foe.id) ? HEAD.y : CHEST;
-      const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, aimY, 0)), foe.id, cur);
+      // Looking through a sniper scope steadies the hand (sniper.scopeAim shrinks the aim cone).
+      const scoped = me.equipped === 'sniper' && me.ads;
+      const r = this.aim.track(now, dt, eye, add(foe.pos, v3(0, aimY, 0)), foe.id, cur, scoped ? this.P.sniper.scopeAim[this.difficulty] : 1);
       look = r;
       const foeDist = dist2D(foe.pos, me.pos);
       // Past where my gun still does real damage (falloff floor), don't give my position away for scratches,
@@ -660,10 +666,18 @@ export class Bot {
       // or they're the last rival standing (nobody else to give my position away to: a duel is won on first damage).
       // Islands by nav node, so the center island counts as one (islandAt says -1 there, like water).
       const myNode = this.nav.nodeAt(me.pos);
+      // (The sniper is for exactly those shots: sniper.crossShots.)
       const across = foeDist > this.P.drive.crossFire[this.difficulty] && !hittingMe &&
+        !(me.equipped === 'sniper' && this.P.sniper.crossShots[this.difficulty] >= 0.5) &&
         view.others.some((o) => !o.eliminated && o.id !== foe.id) &&
         (myNode < 0 || this.nav.nodeAt(foe.pos) !== myNode);
       fire = r.ready && r.onTarget && gunReady(foeDist) && !scratch && !across && !this.burstRest(now, me, foeDist);
+      // Sniper: scoped in, then on target for sniper.steadySec before the shot (a steady shot, not a hip flick).
+      if (me.equipped === 'sniper') {
+        const steady = scoped && r.ready && r.onTarget && gunReady(foeDist) && !across;
+        this.steadySince = steady ? this.steadySince ?? now : null;
+        if (fire) fire = steady && now - this.steadySince! >= this.P.sniper.steadySec[this.difficulty] - 1e-9;
+      }
       if (hook?.why === 'yank' && hook.target === foe.id && r.ready && r.onTarget) { grapple = true; fire = false; }
     } else if (nade) {
       look = hand(nade, TURN_RATE);
@@ -692,6 +706,7 @@ export class Bot {
       look = hand(cur, TURN_RATE); // nothing to look at: the hand comes to rest
     }
 
+    if (me.equipped !== 'sniper' || !foe) this.steadySince = null;
     // Weapons: hold the best gun, reload when nobody is in sight.
     const ammo = me.equipped === 'fists' ? null : me.inv.weapons[me.equipped];
     const slot = this.weaponSlot(ctx, act, best, !!torch, dock?.weapon === 'rocket', grapple);
@@ -709,6 +724,10 @@ export class Bot {
       if (a === b) return;
       if (!a || !b || a.x * b.x + a.z * b.z < 0.87) this.moveSrc = src;
     };
+    // Steadying a sniper shot: stand still (moving widens the cone), unless I'm getting away or being hit.
+    if (this.steadySince !== null && this.goal !== 'disengage' && this.goal !== 'storm' && now - this.mem.lastHurtAt > 1 && !act.build) {
+      dir = null; jump = false; this.moveSrc = 'sniperSteady';
+    }
     const dodge = this.dodgeBolt(me, view);
     if (dodge) { dir = dodge; act = { ...act, sprint: true }; this.moveSrc = 'dodgeBolt'; }
     // Blinded: back off or hold; never push a fight into their smoke (utilityPlan.ts).
@@ -831,8 +850,10 @@ export class Bot {
     const threat = !!enemy && (c.enemyDist < W.threatM || now - this.mem.lastHurtAt < W.hurtSec);
     let want = best;
     let why = torch ? 'rocket: torch a wooden base' : dock ? 'rocket: blow the pier out under them' : `${best}: best at this range`;
+    if (best === 'sniper' && me.equipped === 'sniper' && enemy)
+      why = this.steadySince !== null ? `sniper: scoped, steadying ${(now - this.steadySince).toFixed(1)}/${this.P.sniper.steadySec[this.difficulty]} s` : `sniper: scoping @${enemy.id} at ${Math.round(c.enemyDist)} m`;
     if (want === 'rocket' && rocket && rocket.mag === 0 && enemy) {
-      want = bestGun(me.inv, c.enemyDist);
+      want = bestGun(me.inv, c.enemyDist, 8, this.sniperM(me));
       why = `${want}: no time to reload the rocket`;
     } else if (want !== 'rocket' && this.difficulty !== 'easy' && !enemy && rocket && rocket.mag === 0 && rocket.spare > 0 &&
         now - this.mem.lastHurtAt > 2 && this.goal !== 'disengage' && this.goal !== 'storm' &&
@@ -1507,6 +1528,8 @@ export class Bot {
       rifle: this.wantsRifle(c),
       // rifleAt past any real cash (Infinity, or a finite 1e9 from a params file) = no early rifle: no slot kept either.
       rifleSlot: this.P.strength.rifleAt[this.difficulty] < 1e6,
+      sniper: this.sniperTaste(c) && total >= this.P.sniper.buyAt[this.difficulty],
+      sniperSlot: this.sniperTaste(c),
     };
   }
 
@@ -1795,7 +1818,7 @@ export class Bot {
         const outgunned = !gun && !view.suddenDeath && !!c.enemy && c.enemy.equipped !== 'fists' && c.enemyDist > 4 &&
           (c.enemyDist < Math.min(ENGAGE_RANGE, WEAPONS[c.enemy.equipped].range) || view.now - this.mem.lastHurtAt < 1.5);
         // A rifle picking me off from across the water, out of my gun's range: get out of its sight, don't trade.
-        const outranged = this.outrangedBy(c) ? this.P.strength.outranged[this.difficulty] : 0;
+        const outranged = this.outrangedScore(c);
         return Math.max(outgunned ? 0.95 + 0.2 * t.caution : 0, outranged);
       }
       case 'defend': {
@@ -2023,23 +2046,54 @@ export class Bot {
     return this.plan(c).items.some((i) => (KIT_PIECES as string[]).includes(i)) ? pen : 0;
   }
 
-  /** A visible rifle just hit me from past strength.outrangedM, where my own best gun isn't a rifle: remember it. */
+  /** Sniper threshold for bestGun: sniper.useM, or useM - hystM while holding it (no flip-flop at the edge). */
+  private sniperM(me: PlayerState): number {
+    const S = this.P.sniper;
+    return me.equipped === 'sniper' ? S.useM - S.hystM : S.useM;
+  }
+
+  /** Does `their` long gun out-range my best gun at `d` m? A rifle beats anything short of a rifle; a sniper beats all but a sniper. */
+  private outgunned(their: WeaponKind, inv: Inventory, d: number): boolean {
+    const mine = bestGun(inv, d, 8, this.P.sniper.useM);
+    return their === 'sniper' ? mine !== 'sniper' : their === 'rifle' && mine !== 'rifle' && mine !== 'sniper';
+  }
+
+  /**
+   * A visible rifle or sniper just hit me from past strength.outrangedM, where my own best gun doesn't match it: remember
+   * it. A rival's scope glinting at me from there (scoped sniper pointed my way) counts too, before the shot (sniper.glint).
+   */
   private noteOutranged(view: BotView) {
     const S = this.P.strength;
-    if (S.outranged[this.difficulty] <= 0 || this.mem.lastHurtBy === null || view.now - this.mem.lastHurtAt > 0.1) return;
-    const e = view.enemies.find((x) => x.id === this.mem.lastHurtBy);
-    if (!e || e.equipped !== 'rifle') return;
-    const d = dist2D(e.pos, view.self.pos);
-    if (d < S.outrangedM || bestGun(view.self.inv, d) === 'rifle') return;
-    this.outranged = { id: e.id, t: view.now };
+    if (S.outranged[this.difficulty] <= 0) return;
+    if (this.mem.lastHurtBy !== null && view.now - this.mem.lastHurtAt <= 0.1) {
+      const e = view.enemies.find((x) => x.id === this.mem.lastHurtBy);
+      const d = e ? dist2D(e.pos, view.self.pos) : 0;
+      if (e && d >= S.outrangedM && this.outgunned(e.equipped, view.self.inv, d)) { this.outranged = { id: e.id, t: view.now }; return; }
+    }
+    if (this.P.sniper.glint[this.difficulty] <= 0) return;
+    for (const e of view.enemies) {
+      if (!e.alive || e.equipped !== 'sniper' || !e.ads) continue;
+      const d = dist2D(e.pos, view.self.pos);
+      if (d < S.outrangedM || !this.outgunned('sniper', view.self.inv, d) || !glintsAt(e, view.self)) continue;
+      this.outranged = { id: e.id, t: view.now };
+      this.glintNote = { t: view.now, id: e.id };
+      return;
+    }
   }
 
   /** The rifle out-ranging me right now that I can't close on (not on my ground): break line of sight. Null if none. */
+  /** Score of breaking line of sight from outrangedBy: strength.outranged after a hit, sniper.glint after a glint alone. */
+  outrangedScore(c: Ctx): number {
+    if (!this.outrangedBy(c)) return 0;
+    const g = this.glintNote, o = this.outranged!;
+    return g && g.id === o.id && g.t === o.t ? this.P.sniper.glint[this.difficulty] : this.P.strength.outranged[this.difficulty];
+  }
+
   outrangedBy(c: Ctx): PlayerState | null {
     const o = this.outranged;
     if (!o || c.view.now - o.t > this.P.strength.outrangedSec || c.view.suddenDeath) return null;
     const e = c.view.enemies.find((x) => x.id === o.id && x.alive);
-    return e && !this.sameGround(c.me.pos, e.pos) && bestGun(c.me.inv, dist2D(e.pos, c.me.pos)) !== 'rifle' ? e : null;
+    return e && !this.sameGround(c.me.pos, e.pos) && this.outgunned(e.equipped === 'sniper' ? 'sniper' : 'rifle', c.me.inv, dist2D(e.pos, c.me.pos)) ? e : null;
   }
 
   /** Out-ranged by a rifle within strength.outrangedMemSec. */
@@ -2048,6 +2102,13 @@ export class Bot {
   }
 
   /** Rifle before bridging gear: rich enough (strength.rifleAt), or out-ranged lately with its price to spend. */
+  /** No sniper yet, a long-range taste (sniper.taste) and a long sight line to the rival (sniper.longM): one is wanted (bought at sniper.buyAt). */
+  sniperTaste(c: Ctx): boolean {
+    const S = this.P.sniper;
+    if (c.me.inv.weapons.sniper || this.t.range < S.taste[this.difficulty]) return false;
+    return !!c.rivalIsl && dist2D(c.rivalIsl.center, c.home.center) >= S.longM;
+  }
+
   wantsRifle(c: Ctx): boolean {
     if (c.me.inv.weapons.rifle) return false;
     const cash = this.spendCash(c.me);
@@ -2973,7 +3034,7 @@ export class Bot {
       const wp = this.sameGround(me.pos, e.pos) ? null : this.nav.routeTo(e.pos);
       if (this.sameGround(me.pos, e.pos) || wp) return { dir: norm(flat(sub(wp ?? e.pos, me.pos))), sprint: true, approach: true };
     }
-    const gun = bestGun(me.inv, enemyDist);
+    const gun = bestGun(me.inv, enemyDist, 8, this.sniperM(me));
     const pref = PREFERRED_RANGE[gun] * (0.8 + 0.5 * t.range);
     // Skilled players close in rather than trade shots from afar.
     const want = this.difficulty === 'easy' ? pref : Math.min(pref, this.P.drive.maxRange[this.difficulty]);

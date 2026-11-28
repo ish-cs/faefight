@@ -688,7 +688,7 @@ export const LINES: Record<LineKey, readonly string[]> = {
 
 /** "the shotgun" etc. for {w}. Unknown kinds read as-is. */
 export const WEAPON_PHRASE: Record<string, string> = {
-  fists: 'bare hands', pistol: 'the pistol', smg: 'the SMG', shotgun: 'the shotgun', rifle: 'the rifle',
+  fists: 'bare hands', pistol: 'the pistol', smg: 'the SMG', shotgun: 'the shotgun', rifle: 'the rifle', sniper: 'the sniper',
   rocket: 'the rocket launcher', grenade: 'a grenade', charge: 'a breach charge',
   storm: 'the storm', lightning: 'lightning', barrel: 'barrel', propane: 'propane tank', trap: 'spike trap',
 };
