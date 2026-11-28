@@ -56,6 +56,7 @@ test('sniper: buy, scope, one-shot headshot; glint', async ({ page }) => {
   await expect(page.getByTestId('panel')).toBeVisible();
   await expect(page.getByTestId('buy-sniper')).toHaveAttribute('aria-label', /^Sniper rifle, \$650/);
   await page.getByTestId('buy-sniper').hover();
+  await page.waitForTimeout(300);
   await shot(page, 'shop');
   await page.getByTestId('buy-sniper').click();
   await expect.poll(async () => (await me()).inv.weapons.sniper).toEqual({ mag: 5, spare: 10 });
@@ -106,25 +107,34 @@ test('sniper: buy, scope, one-shot headshot; glint', async ({ page }) => {
   await page.mouse.up({ button: 'right' });
   expect(killed).toBe(true);
 
-  // Glint: hand a bot a sniper and stand 70 m in front of it in the open; it scopes in on us (it's the only rival
-  // in view), and its lens flashes toward our camera.
-  const bot2 = (await snap()).players.find((p) => p.isBot && p.alive && p.id !== bot.id) ?? (await snap()).players.find((p) => p.isBot && p.alive)!;
+  // Glint: hand the bot a sniper; put it on its own shore and us on ours facing it (~50 m over the water): it scopes in
+  // on us, and its lens flashes toward our camera. (1v1: the same bot, once it has respawned.)
+  await expect.poll(async () => (await snap()).players.some((p) => p.isBot && p.alive), { timeout: 20_000 }).toBe(true);
+  const bot2 = (await snap()).players.find((p) => p.isBot && p.alive)!;
+  const rival = map[bot2.island];
+  const ux = rival.center.x - home.center.x, uz = rival.center.z - home.center.z, ul = Math.hypot(ux, uz);
+  const mx = home.center.x + (ux / ul) * 14, mz = home.center.z + (uz / ul) * 14;
+  const bx = rival.center.x - (ux / ul) * 14, bz = rival.center.z - (uz / ul) * 14;
   await dbg(page, 'give', { weapons: { sniper: { mag: 5, spare: 50 } } }, bot2.id);
-  await page.keyboard.press('KeyV'); // third person: see more around us
+  await dbg(page, 'give', { weapons: { sniper: { mag: 5, spare: 10 } } });
+  await dbg(page, 'shield', 100);
+  const glintsShown = () => page.evaluate(() => (window as unknown as { __faefight: { renderer: { glints: { shown: number } } } }).__faefight.renderer.glints.shown);
   let glint = 0;
-  for (let i = 0; i < 40 && glint === 0; i++) {
-    await dbg(page, 'teleport', home.center.x, home.center.z, bot2.id);
-    await dbg(page, 'teleport', home.center.x + fx * 70, home.center.z + fz * 70);
-    const s = await snap();
-    const b = s.players.find((p) => p.id === bot2.id)!, m = s.players.find((p) => p.id === humanId)!;
-    await look(page, Math.atan2(-(b.pos.x - m.pos.x), -(b.pos.z - m.pos.z)), -0.02);
-    await page.waitForTimeout(250);
-    glint = await page.evaluate(() => (window as unknown as { __faefight: { renderer: { glints: { shown: number } } } }).__faefight.renderer.glints.shown);
+  await dbg(page, 'teleport', mx, mz);
+  await look(page, Math.atan2(-ux, -uz), -0.01);
+  for (let i = 0; i < 60 && glint === 0; i++) {
+    if (i % 10 === 0) await dbg(page, 'teleport', bx, bz, bot2.id);
+    await page.waitForTimeout(150);
+    glint = await glintsShown();
   }
-  // Zoom on it with the scope for a clear look at the glint.
+  await shot(page, 'glint-wide');
+  // Through our own scope: the glint up close.
+  const s2 = await snap();
+  const b2 = s2.players.find((p) => p.id === bot2.id)!, m2 = s2.players.find((p) => p.id === humanId)!;
+  await look(page, Math.atan2(-(b2.pos.x - m2.pos.x), -(b2.pos.z - m2.pos.z)), Math.atan2(b2.pos.y - m2.pos.y, Math.hypot(b2.pos.x - m2.pos.x, b2.pos.z - m2.pos.z)));
   await page.mouse.down({ button: 'right' });
-  await page.waitForTimeout(400);
-  await shot(page, 'glint');
+  await page.waitForTimeout(450);
+  await shot(page, 'glint-scoped');
   await page.mouse.up({ button: 'right' });
   expect(glint).toBeGreaterThan(0);
   expect(errors.filter((e) => !/favicon|404/.test(e))).toEqual([]);
