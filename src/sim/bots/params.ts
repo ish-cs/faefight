@@ -545,10 +545,14 @@ export const VAULT: VaultParams = {
   upgradeAt: D(Infinity, 500, 200, 100), upgradeScore: 0.75, upgradeNear: 0.3, healSlot: 1,
 };
 
+// Knob A/B 2026-11-27 (ffa8-mixed ×60, same seeds as main): only `outranged` holds every gate. The early rifle cut
+// decisive-before-SD 24 → 15 and pushed Hard's placement to 4.5; bankAway took decisive to 5–20 and frozen to 477 s;
+// leaderFocus cost PRO placement (3.18 → 3.4–3.5); endgameSeal showed no gain and pulls a 1v1 bot off cover. Those
+// stay as tunable knobs (PARAM_RANGES) at 0 for the ES trainer.
 export const STRENGTH: StrengthParams = {
-  rifleAt: D(Infinity, Infinity, 300, 300), longGun: D(0, 0, 0, 0), outranged: D(0, 0, 0.9, 1), outrangedM: 30, outrangedSec: 2.5, outrangedMemSec: 90,
-  bankAway: D(0, 0, 0.8, 0.85), richCarry: 700, endgameSeal: D(0, 0, 0.45, 0.6), endgameLeft: 3,
-  leaderFocus: D(0, 0, 0.35, 0.5),
+  rifleAt: D(Infinity, Infinity, Infinity, Infinity), longGun: D(0, 0, 0, 0), outranged: D(0, 0, 0.9, 1), outrangedM: 30, outrangedSec: 2.5, outrangedMemSec: 90,
+  bankAway: D(0, 0, 0, 0), richCarry: 700, endgameSeal: D(0, 0, 0, 0), endgameLeft: 3,
+  leaderFocus: D(0, 0, 0, 0),
 };
 
 export const DEFAULT_BOT_PARAMS: Readonly<BotParams> = Object.freeze({ drive: DRIVE, buildSkill: BUILD_SKILL, buildTuning: BUILD_TUNING, hook: HOOK, trap: TRAP_TUNING, aim: AIM_PARAMS, gunSkill: GUN_SKILL, team: TEAM, weapon: WEAPON, heal: HEAL, vault: VAULT, strength: STRENGTH });

@@ -12,7 +12,13 @@ import type { Difficulty, Snapshot } from '../../src/sim/types';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- private helpers stubbed per test
 type B = Record<string, any>;
-const bot = (d: Difficulty, P = DEFAULT_BOT_PARAMS) => new Bot(1, d, mulberry32(1), undefined, P) as unknown as B;
+// Only `outranged` is on by default since the 2026-11-27 knob A/B; the others are off but tunable. ON = every knob at
+// the values the A/B tried, so these checks keep covering the code paths the ES trainer can switch on.
+const ON = withParams({
+  'strength.rifleAt.hard': 300, 'strength.rifleAt.pro': 300, 'strength.bankAway.hard': 0.8, 'strength.bankAway.pro': 0.85,
+  'strength.endgameSeal.hard': 0.45, 'strength.endgameSeal.pro': 0.6, 'strength.leaderFocus.hard': 0.35, 'strength.leaderFocus.pro': 0.5,
+});
+const bot = (d: Difficulty, P: typeof DEFAULT_BOT_PARAMS = ON) => new Bot(1, d, mulberry32(1), undefined, P) as unknown as B;
 const v3 = (x: number, z: number) => ({ x, y: 2, z });
 
 describe('strength.rifleAt / outranged: the rifle comes early', () => {
@@ -35,8 +41,8 @@ describe('strength.rifleAt / outranged: the rifle comes early', () => {
       me: { inv: { cash, weapons: rifle ? { rifle: { mag: 25, spare: 50 } } : { pistol: { mag: 12, spare: 0 } } }, vault: { cash: 0 } },
       view: { now },
     }) as never;
-    expect(bot('pro').wantsRifle(ctx(STRENGTH.rifleAt.pro))).toBe(true);
-    expect(bot('hard').wantsRifle(ctx(STRENGTH.rifleAt.hard - 1))).toBe(false);
+    expect(bot('pro').wantsRifle(ctx(ON.strength.rifleAt.pro))).toBe(true);
+    expect(bot('hard').wantsRifle(ctx(ON.strength.rifleAt.hard - 1))).toBe(false);
     expect(bot('medium').wantsRifle(ctx(5000))).toBe(false);
     expect(bot('pro').wantsRifle(ctx(5000, true))).toBe(false);
     // A rich-only rifle buyer (rifleAt above its price) still buys one once out-ranged.
@@ -76,8 +82,8 @@ describe('strength.bankAway: rich away from home, walk home and bank', () => {
   }) as never;
   const b = (d: Difficulty) => { const x = bot(d); x.stormPrep = () => false; x.trapped = () => false; return x; };
   test('scores by tier minus the walk; nothing for little cash, an enemy close, no walk home, or Easy/Medium', () => {
-    expect(b('hard').bankAway(ctx())).toBeCloseTo(2 * STRENGTH.bankAway.hard - 60 / 200);
-    expect(b('hard').bankAway(ctx({ cash: STRENGTH.richCarry }))).toBeCloseTo(STRENGTH.bankAway.hard - 60 / 200);
+    expect(b('hard').bankAway(ctx())).toBeCloseTo(2 * ON.strength.bankAway.hard - 60 / 200);
+    expect(b('hard').bankAway(ctx({ cash: STRENGTH.richCarry }))).toBeCloseTo(ON.strength.bankAway.hard - 60 / 200);
     expect(b('pro').bankAway(ctx({ cash: STRENGTH.richCarry - 1 }))).toBe(0);
     expect(b('pro').bankAway(ctx({ enemyDist: 12 }))).toBe(0);
     expect(b('pro').bankAway(ctx({ homeReach: false }))).toBe(0);
@@ -89,21 +95,21 @@ describe('strength.endgameSeal / leaderFocus', () => {
   const others = (n: number, kills: number[] = []) => Array.from({ length: 7 }, (_, i) => ({ id: i + 2, eliminated: i >= n, kills: kills[i] ?? 0 }));
   test('endgameSeal: only with endgameLeft players or fewer still in, never in sudden death', () => {
     const c = (left: number, sd = false) => ({ view: { suddenDeath: sd, others: others(left - 1) } }) as never;
-    expect(bot('pro').endgameSeal(c(2))).toBe(STRENGTH.endgameSeal.pro);
-    expect(bot('hard').endgameSeal(c(STRENGTH.endgameLeft))).toBe(STRENGTH.endgameSeal.hard);
+    expect(bot('pro').endgameSeal(c(2))).toBe(ON.strength.endgameSeal.pro);
+    expect(bot('hard').endgameSeal(c(STRENGTH.endgameLeft))).toBe(ON.strength.endgameSeal.hard);
     expect(bot('hard').endgameSeal(c(STRENGTH.endgameLeft + 1))).toBe(0);
     expect(bot('hard').endgameSeal(c(2, true))).toBe(0);
     expect(bot('easy').endgameSeal(c(2))).toBe(0);
   });
   test('endgameKit: the shop trip for plugs in the endgame while short of a kit', () => {
     const c = (kit: number) => ({ view: { suddenDeath: false, others: others(1), sealed: [false, false] }, rivalIsl: { index: 1 }, openDoors: [{}, {}], me: { inv: { pieces: { metal: kit } } } }) as never;
-    expect(bot('pro').endgameKit(c(0), ['metal'])).toBeCloseTo(0.55 + STRENGTH.endgameSeal.pro);
+    expect(bot('pro').endgameKit(c(0), ['metal'])).toBeCloseTo(0.55 + ON.strength.endgameSeal.pro);
     expect(bot('pro').endgameKit(c(0), ['medkit'])).toBe(0);
     expect(bot('pro').endgameKit(c(2), ['metal'])).toBe(0);
   });
   test('leaderFocus: the clear kill leader (2+ kills, more than mine)', () => {
     const view = (kills: number[], mine = 0) => ({ self: { kills: mine }, others: others(7, kills) }) as never;
-    expect(bot('pro').leaderFocusId(view([5, 1, 2]), 2)).toBe(STRENGTH.leaderFocus.pro);
+    expect(bot('pro').leaderFocusId(view([5, 1, 2]), 2)).toBe(ON.strength.leaderFocus.pro);
     expect(bot('pro').leaderFocusId(view([5, 1, 2]), 3)).toBe(0);
     expect(bot('pro').leaderFocusId(view([1, 1]), 2)).toBe(0);
     expect(bot('pro').leaderFocusId(view([5], 6), 2)).toBe(0);
@@ -113,13 +119,16 @@ describe('strength.endgameSeal / leaderFocus', () => {
 
 describe('strength in play', () => {
   // Main: Hard/PRO bought a rifle only with a Sniper personality (range > 0.75); the SMG was the end of the line.
-  test('Hard/PRO pick up a rifle by 5:00 in most games (rifleAt, rifle slot kept free)', async () => {
+  test('with rifleAt on, Hard/PRO pick up a rifle by 5:00 in most games (rifle slot kept free)', async () => {
     const diffs: Difficulty[] = ['pro', 'hard', 'medium', 'easy'];
     const lines: string[] = [];
     let armed = 0, seats = 0;
     for (const seed of [1, 2, 3]) {
       const rifleAt: (number | null)[] = diffs.map(() => null);
-      const m = await Match.create({ players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed });
+      const m = await Match.create(
+        { players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d })), seed },
+        { makeBot: (id, d, rng) => new Bot(id, d, rng, undefined, ON) as never },
+      );
       let snap: Snapshot = m.tick(new Map());
       for (let i = 0; i < 5 * 60 * 30 && snap.winner === null; i++) {
         snap = m.tick(new Map());
