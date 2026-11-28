@@ -1,7 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { NEEDS_GPU, ON_CI } from './gpu';
+import { BLUR_BYPASS } from '../../src/client/world/motionBlur';
 
 test.skip(ON_CI, NEEDS_GPU);
+test.skip(BLUR_BYPASS, 'motion blur bypassed (hotfix stopgap, world/motionBlur.ts BLUR_BYPASS)');
 
 type Blur = { on: number; shutter: number; radial: number; hold: number; ctx: 'play' | 'spectate' | 'killcam'; play: string; spectate: string };
 const blur = (page: Page) => page.evaluate(() => (window as unknown as { __faefight: { motionBlur(): Blur } }).__faefight.motionBlur());

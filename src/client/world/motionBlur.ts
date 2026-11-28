@@ -45,7 +45,14 @@ const OFF: BlurParams = { exposure: 0, radial: 0, hold: 0 };
 /** Whether the preset compiles the blur pass at all (sky.ts: high / ultra, not competitive). */
 export const blurAvailable = (quality: Quality, competitive: boolean) => quality !== 'low' && !competitive;
 
+/**
+ * HOTFIX stopgap (2026-11-27): a black 3D world was reported on prod with motion blur on. Until the cause is fixed,
+ * the blur pass stays bypassed in every context (play, spectate, killcam): its uniform branch never runs.
+ */
+export const BLUR_BYPASS = true;
+
 export function blurParams(i: BlurInput): BlurParams {
+  if (BLUR_BYPASS) return OFF;
   if (!blurAvailable(i.quality, i.competitive) || i.reducedMotion || i.saver) return OFF;
   if (i.ctx === 'killcam') return i.killcamSlow > 0 ? { exposure: i.killcamSlow * KILLCAM_BLUR.exposure, radial: i.killcamSlow * KILLCAM_BLUR.radial, hold: 0 } : OFF;
   const level: BlurLevel = i.ctx === 'play' ? i.play

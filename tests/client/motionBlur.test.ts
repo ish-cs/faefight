@@ -1,11 +1,17 @@
 import { describe, expect, test } from 'vitest';
-import { BLUR_EXPOSURE, BLUR_HOLD, type BlurInput, blurParams, KILLCAM_BLUR } from '../../src/client/world/motionBlur';
+import { BLUR_BYPASS, BLUR_EXPOSURE, BLUR_HOLD, type BlurInput, blurParams, KILLCAM_BLUR } from '../../src/client/world/motionBlur';
 import { defaultSettings, sanitizeSettings } from '../../src/client/settings/store';
 
 const base: BlurInput = { ctx: 'play', play: 'off', spectate: 'auto', quality: 'ultra', competitive: false, reducedMotion: false, saver: false, killcamSlow: 0 };
 const off = { exposure: 0, radial: 0, hold: 0 };
 
-describe('motion blur', () => {
+test('hotfix stopgap: with BLUR_BYPASS every context gets no blur', () => {
+  if (!BLUR_BYPASS) return;
+  for (const ctx of ['play', 'spectate', 'killcam'] as const)
+    expect(blurParams({ ...base, ctx, play: 'high', spectate: 'high', killcamSlow: 1 })).toEqual(off);
+});
+
+describe.skipIf(BLUR_BYPASS)('motion blur', () => {
   test('defaults: off while playing, on while spectating (auto: Low on High, High on Ultra)', () => {
     const d = defaultSettings().video;
     expect(d.motionBlur).toBe('off');
