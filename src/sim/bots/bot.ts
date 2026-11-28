@@ -1457,6 +1457,9 @@ export class Bot {
     // The storm ends on the center island: medium+ bots get a bridge there before it comes (anyone would, seeing the clock).
     if (C >= 0 && !centerReach && this.stormPrep(view)) bridgeTo = C;
     const bridgeFrom = !homeReach && stand.length && stand[0] !== bridgeTo ? stand[0] : home.index;
+    // Nothing to bridge when it would start where it ends (e.g. hunting someone seen on my own island while I'm off
+    // it with no ground under me: ffa8-mixed seed 5 crashed in nav.lane).
+    if (bridgeTo === bridgeFrom) bridgeTo = null;
     return { view, me, home, on, src, rival, rivalIsl, enemy, enemyDist, reach, hookFrom, hunt, homeReach, openDoors, bridgeTo, bridgeFrom, centerReach, danger };
   }
 
