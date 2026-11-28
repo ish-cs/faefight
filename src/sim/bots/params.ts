@@ -326,8 +326,12 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
  *   turn is done by the time they're worth a shot, like main's always-on tracking. 0 cost the fight tempo: ffa8-mixed
  *   x60 decisive 9/60 vs main 26/60, PRO wins 36 vs 45; 15 m all tiers: 20/60, PRO 44. Easy notices late (6 m) and
  *   checks on enemies less (first look 0.6 s, threatShare 0.2): its long looks pre-aimed it level with Medium.
+ * - spotAimedAt: × aimedAtDeg: how readily I notice someone lining me up (0 = never; then only a hit makes them a threat).
+ *   Easy 0.3 (~4°): a weak player is slow to read who is aiming at them. At 1 Easy looked straight back at every Medium
+ *   pre-aim and turned the first shot into a trade: 1v1 Medium > Easy x60 80% (main 93%). 0: 90% but Easy out-placed
+ *   Medium in mixed FFAs (x120 5.14 vs 5.30); 0.5: 82%, mixed fine (M 5.09, E 5.21); 0.3: 87%.
  */
-export type GazeSkill = { firstLookSec: number; glanceRate: number; glanceSec: number; threatShare: number; driftDeg: number; turnRate: number; engageLeadM: number };
+export type GazeSkill = { firstLookSec: number; glanceRate: number; glanceSec: number; threatShare: number; driftDeg: number; turnRate: number; engageLeadM: number; spotAimedAt: number };
 /**
  * - engageHoldSec: keep my eyes on the enemy I engaged this long after I'd stop shooting (no flicking away mid-fight).
  * - threatSec: an enemy who hit me within this long is a threat: eyes on them (or where they were).
@@ -632,10 +636,10 @@ export const AIM_PARAMS: AimParams = {
 
 export const GAZE: GazeParams = {
   skill: {
-    easy: { firstLookSec: 0.6, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.2, driftDeg: 12, turnRate: 4, engageLeadM: 0 },
-    medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5, engageLeadM: 20 },
-    hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6, engageLeadM: 15 },
-    pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7, engageLeadM: 15 },
+    easy: { firstLookSec: 0.6, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.2, driftDeg: 12, turnRate: 4, engageLeadM: 0, spotAimedAt: 0.3 },
+    medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5, engageLeadM: 20, spotAimedAt: 1 },
+    hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6, engageLeadM: 15, spotAimedAt: 1 },
+    pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7, engageLeadM: 15, spotAimedAt: 1 },
   },
   engageHoldSec: 1.2, threatSec: 4, aimedAtDeg: 12, aimedAtM: 60, resightSec: 10, firstLookM: 50,
 };
@@ -798,7 +802,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['aim.feel.*.spring', [6, 45]], ['aim.feel.*.damping', [0.55, 1.2]], ['aim.feel.*.maxAccel', [40, 600]],
   ['aim.feel.*.driftHz', [0.5, 8]], ['aim.feel.*.holdSec', [0, 2]], ['aim.commitSec', [0, 2]], ['aim.switchRatio', [0.3, 1]],
   ['gaze.skill.*.firstLookSec', [0.1, 2.5]], ['gaze.skill.*.glanceRate', [0, 0.6]], ['gaze.skill.*.glanceSec', [0.2, 2.5]], ['gaze.skill.*.threatShare', [0, 1]],
-  ['gaze.skill.*.driftDeg', [0, 25]], ['gaze.skill.*.turnRate', [2, 12]], ['gaze.skill.*.engageLeadM', [0, 25]], ['gaze.engageHoldSec', [0.2, 4]], ['gaze.threatSec', [0.5, 6]], ['gaze.aimedAtDeg', [0, 20]], ['gaze.aimedAtM', [0, 80]], ['gaze.resightSec', [1, 30]], ['gaze.firstLookM', [10, 120]],
+  ['gaze.skill.*.driftDeg', [0, 25]], ['gaze.skill.*.turnRate', [2, 12]], ['gaze.skill.*.engageLeadM', [0, 25]], ['gaze.skill.*.spotAimedAt', [0, 1.5]], ['gaze.engageHoldSec', [0.2, 4]], ['gaze.threatSec', [0.5, 6]], ['gaze.aimedAtDeg', [0, 20]], ['gaze.aimedAtM', [0, 80]], ['gaze.resightSec', [1, 30]], ['gaze.firstLookM', [10, 120]],
   ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
   ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
