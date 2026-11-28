@@ -101,7 +101,7 @@ const OTHERS = [status(1, RIVAL), status(2, 2, { eliminated: true }), status(3, 
 
 describe('discipline knobs: tunable, on for Hard/PRO, off = the old brain', () => {
   test('every knob has a search box and the defaults lie inside', () => {
-    for (const k of ['homeFirst.pro', 'debtCap', 'debtDefend', 'chargeShop.pro', 'bankTripAt', 'bankRisk.pro', 'sticky.pro', 'commitSec.pro',
+    for (const k of ['homeFirst.pro', 'debtCap', 'debtDefend', 'debtSec.pro', 'chargeShop.pro', 'bankTripAt', 'bankRisk.pro', 'sticky.pro', 'commitSec.pro',
       'commitBonus', 'sealAbortSec.pro', 'bridgeShort.pro', 'cheapKit.pro', 'kitShop.pro']) expect(PARAM_RANGES[`discipline.${k}`]).toBeDefined();
     expect(DISCIPLINE.homeFirst.easy).toBe(0);
     expect(DISCIPLINE.homeFirst.pro).toBe(1);
@@ -145,6 +145,27 @@ describe('2. a plugged own doorway is a debt', () => {
       [status(1, RIVAL, { alive: false, respawnAt: 405 }), status(2, 2, { eliminated: true }), status(3, 3, { eliminated: true })]);
     expect(decide(v(), PRE_DISCIPLINE_PARAMS).goal).not.toBe('defend');
     expect(decide(v()).goal).toBe('defend');
+  });
+  test('time box: no plug gone and no nearer home for debtSec lifts the cap (clear, then go), and it re-arms', () => {
+    const lim = DISCIPLINE.debtSec.pro;
+    const inv = { charges: 1, cash: 100, pieces: { metal: 3 } };
+    const v = (now: number) => view(me('rival', inv), [...bridge(HOME, RIVAL), ...plugs(HOME, [0, 1, 2], 'metal')], [true, false, false, false], OTHERS, now);
+    const { goal, bot } = decide(v(400));
+    expect(goal).toBe('defend');
+    bot.think(v(400 + lim - 5));
+    expect(bot.currentGoal).toBe('defend');
+    bot.think(v(400 + lim + 1));
+    expect(bot.currentGoal).toBe(decide(v(400 + lim + 1), PRE_DISCIPLINE_PARAMS).goal); // the old brain's pick: 'seal'
+    expect(bot.currentGoal).not.toBe('defend');
+    bot.think(v(400 + 2 * lim + 3));
+    expect(bot.currentGoal).toBe('defend');
+  });
+  test('camping a dead rival\'s respawn window with a kit: the kill/seal is not capped by my plugged doorway', () => {
+    const v = view(me('rival', { charges: 1, cash: 100, pieces: { metal: 3 } }), [...bridge(HOME, RIVAL), ...plugs(HOME, [1], 'metal')], [false, false, false, false],
+      [status(1, RIVAL, { alive: false, respawnAt: 406 }), status(2, 2, { eliminated: true }), status(3, 3, { eliminated: true })]);
+    const { goal, bot } = decide(v);
+    expect(bot.respawnWindow?.id).toBe(1);
+    expect(['seal', 'attack']).toContain(goal);
   });
 });
 

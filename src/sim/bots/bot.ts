@@ -52,6 +52,8 @@ const FLIP_BACK_SEC = 5, NOISE_HOLD_SEC = 3;
 const SEAL_TRY_GAP_SEC = 10;
 /** Commitment (discipline.commitSec) holds only this long after the last hit taken. */
 const COMMIT_CALM_SEC = 1.5;
+/** Getting this much nearer home counts as progress on a doorway debt (discipline.debtSec). */
+const DEBT_NEARER_M = 3;
 /** Misjudgement in goal/target scores (decision mistakes). */
 const NOISE: Record<Difficulty, number> = { easy: 0.3, medium: 0.15, hard: 0.08, pro: 0.03 };
 const BUY_GAP: Record<Difficulty, number> = { easy: 3, medium: 1.5, hard: 0.6, pro: 0.35 };
@@ -339,6 +341,9 @@ export class Bot {
   private goalBan = new Map<Goal, number>();
   /** Current seal attempt (discipline.sealAbortSec): rival, their open doors and my nearest distance at the last progress. */
   private sealTry: { rival: number; doors: number; near: number; at: number; last: number } | null = null;
+  /** Doorway debt clock (discipline.debtSec): last progress (a plug gone, or nearer home), plugs and distance then. */
+  private debtClock: { since: number; plugs: number; near: number } | null = null;
+  private debtPauseUntil = -Infinity;
   private targetBan = new Map<number, number>();
   private lastNadeAt = -Infinity;
   private lastTorchAt = -Infinity;
@@ -2076,10 +2081,29 @@ export class Bot {
    * (discipline.homeFirst): offence waits until it's gone. 'sealed' when every doorway is shut.
    */
   homeDebt(c: Ctx): 'sealed' | 'plugged' | null {
+    return c.view.now < this.debtPauseUntil ? null : this.rawDebt(c);
+  }
+
+  private rawDebt(c: Ctx): 'sealed' | 'plugged' | null {
     if (this.P.discipline.homeFirst[this.difficulty] <= 0 || c.view.suddenDeath || !c.homeReach || !this.sealedHomeCalm(c)) return null;
     const bl = this.blockers(c);
     if (!bl.length || !(bl.some((p) => this.canClear(c, p)) || this.chargeTrip(c) > 0)) return null;
     return c.view.sealed[c.home.index] ? 'sealed' : 'plugged';
+  }
+
+  /**
+   * Time box on the doorway debt (discipline.debtSec): clear, then go. A debt with no progress (no plug gone, no
+   * nearer home) for debtSec lifts the cap for as long again, so a plug I can't get through doesn't pin me home.
+   */
+  private tickDebt(c: Ctx): void {
+    const lim = this.P.discipline.debtSec[this.difficulty], now = c.view.now;
+    if (!(lim < Infinity) || now < this.debtPauseUntil) return;
+    if (!this.rawDebt(c)) { this.debtClock = null; return; }
+    const plugs = this.blockers(c).length, near = dist2D(c.me.pos, c.home.bunker.center);
+    const k = this.debtClock;
+    if (!k || plugs < k.plugs || near < k.near - DEBT_NEARER_M) this.debtClock = { since: now, plugs, near: Math.min(near, k?.near ?? near) };
+    else if (now - k.since > lim) { this.debtPauseUntil = now + lim; this.debtClock = null; }
+    else k.plugs = plugs;
   }
 
   /** discipline.chargeShop when a charge is what the shop would sell me next (a plug I can't otherwise clear), else 0. */
@@ -2154,7 +2178,10 @@ export class Bot {
     const scored: { goal: string; score: number }[] = [];
     const D = this.P.discipline, now = c.view.now;
     // My own doorway plugged (discipline.homeFirst): offence is capped below clearing it.
+    this.tickDebt(c);
     const debt = this.homeDebt(c);
+    // Camping a dead rival's respawn window: the kill (or the seal on them) ends their game, so it isn't capped.
+    const camp = debt !== null && this.inWindow(c);
     // One pass, scoring and noise interleaved as before (score() can draw from the rng: fortSlots), so with every
     // discipline knob off the decisions are bit-identical to the old brain.
     let survival = false;
@@ -2162,7 +2189,7 @@ export class Bot {
       if ((this.goalBan.get(g) ?? -Infinity) > now && !this.stormPrepGoal(g)) continue; // banned for a while (goal watchdog)
       const raw = this.score(g, c);
       const driven = this.teamDrive(g, c, this.drive(g, c, raw));
-      const base = debt && this.offence(g, c) ? Math.min(driven, D.debtCap) : driven;
+      const base = debt && this.offence(g, c) && !(camp && (g === 'attack' || g === 'seal')) ? Math.min(driven, D.debtCap) : driven;
       const rule = base !== driven ? (debt === 'sealed' ? 'my bunker is sealed: clear it first' : 'my doorway is plugged: clear it first') : undefined;
       if ((g === 'disengage' || g === 'storm' || g === 'cover') && base > 0) survival = true;
       if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, driven, base, noise: 0, sticky: 0, score: base, rule }); continue; }

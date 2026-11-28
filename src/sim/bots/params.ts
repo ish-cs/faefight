@@ -395,6 +395,9 @@ export type StrengthParams = {
  * - homeFirst: a plug in my own doorway is a debt. While I can clear it (or buy the charge that does) and can walk
  *   home, offence (seal / attack / raid / contest, bridging to a rival) is capped at debtCap, unless an enemy is
  *   within SEALED_HOME_CLEAR m (then fight). debtDefend: defend's floor in that state (unsealed home).
+ *   debtSec: the cap is time-boxed: a debt with no plug cleared for this long lifts the cap for as long again (clear,
+ *   then go; a plug it can't get through in time no longer pins it home). Camping a dead rival's respawn window is
+ *   never capped (the kill ends their game).
  * - chargeShop: defend score when nothing I carry gets through the plug but I can pay for a charge: defend then
  *   walks to the shop and buys it (it used to score 0 and the plug dropped out of the bot's thinking).
  * - bankRisk / bankTripAt: carrying at least bankTripAt, banking scores bankRisk (never halved by the push) on my
@@ -415,6 +418,7 @@ export type DisciplineParams = {
   homeFirst: Record<Difficulty, number>;
   debtCap: number;
   debtDefend: number;
+  debtSec: Record<Difficulty, number>;
   chargeShop: Record<Difficulty, number>;
   bankTripAt: number;
   bankRisk: Record<Difficulty, number>;
@@ -599,6 +603,7 @@ export const DISCIPLINE: DisciplineParams = {
   homeFirst: D(0, 0, 0, 1),
   debtCap: 0.4,
   debtDefend: 0.95,
+  debtSec: D(Infinity, Infinity, Infinity, 45),
   chargeShop: D(0, 0, 0, 1.1),
   bankTripAt: 500,
   bankRisk: D(0, 0, 0, 0.9),
@@ -713,7 +718,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['weapon.holdSec', [0, 2]], ['weapon.rocketHoldSec', [0.5, 5]], ['weapon.threatM', [4, 30]], ['weapon.hurtSec', [0, 3]], ['weapon.shotgunHyst', [0, 5]],
   ['vault.medkits.*', [0, 4]], ['vault.scaffolds.*', [0, 15]], ['vault.keep.*', [0, 150]], ['vault.buy.*', [0, 1]],
   ['vault.carry.*', [0, 400]], ['vault.bankMin', [30, 300]], ['vault.upgradeAt.*', [100, 2000]], ['vault.upgradeScore', [0.1, 1]], ['vault.upgradeNear', [0, 1]], ['vault.healSlot', [0, 1]],
-  ['discipline.homeFirst.*', [0, 1]], ['discipline.debtCap', [0, 0.8]], ['discipline.debtDefend', [0.5, 1.5]], ['discipline.chargeShop.*', [0, 1.5]],
+  ['discipline.homeFirst.*', [0, 1]], ['discipline.debtCap', [0, 0.8]], ['discipline.debtDefend', [0.5, 1.5]], ['discipline.debtSec.*', [10, 120]], ['discipline.chargeShop.*', [0, 1.5]],
   ['discipline.bankTripAt', [200, 2000]], ['discipline.bankRisk.*', [0, 1.3]], ['discipline.sticky.*', [0, 0.4]],
   ['discipline.commitSec.*', [0, 6]], ['discipline.commitBonus', [0, 0.6]], ['discipline.sealAbortSec.*', [0, 60]], ['discipline.bridgeShort.*', [0, 10]],
   ['discipline.cheapKit.*', [0, 1]], ['discipline.kitShop.*', [0, 1.3]],
