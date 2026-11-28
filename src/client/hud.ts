@@ -221,6 +221,9 @@ export class Hud {
   private center = el('div', 'center-msg');
   private crosshair = el('div', 'crosshair');
   private reloadRing = el('div', 'reload-ring');
+  /** Throw charge meter around the crosshair (setThrowCharge); hidden unless a throw is being charged. */
+  private chargeRing = el('div', 'charge-ring');
+  private chargeShown = -2;
   private scope = el('div', 'scope');
   private damage = el('div', 'damage-flash');
   private endScreen = el('div', 'end-screen');
@@ -279,6 +282,8 @@ export class Hud {
     for (const c of ['t', 'b', 'l', 'r', 'hm']) this.crosshair.append(el('i', c));
     this.crosshair.dataset.testid = 'crosshair';
     this.reloadRing.dataset.testid = 'reload-ring';
+    this.chargeRing.dataset.testid = 'charge-ring';
+    this.chargeRing.style.display = 'none';
     this.fps.dataset.testid = 'fps';
     this.fpsDetail.dataset.testid = 'fps-detail';
     this.fpsDetail.style.display = 'none';
@@ -293,7 +298,7 @@ export class Hud {
     this.stormVignette.dataset.testid = 'storm-vignette';
     this.elimBanner.dataset.testid = 'elim-banner';
     this.lowHp.dataset.testid = 'lowhp-vignette';
-    this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.center,
+    this.root.append(tl, bl, br, tc, this.hotbar, this.heal, this.drinkBox, this.prompt, this.killfeed, this.scope, this.crosshair, this.reloadRing, this.chargeRing, this.center,
       this.sealedBanner, this.stormVignette, this.lowHp, this.stormWarn, this.elimBanner, this.damage, this.endScreen, this.fps, this.panel, this.brain);
     parent.append(this.root);
   }
@@ -569,6 +574,18 @@ export class Hud {
     if (c && dist2D(c.goldGen, me.pos) <= r) return 'gold';
     if (c && dist2D(c.supplyGen, me.pos) <= r) return 'supply';
     return this.practice ? 'shop' : null;
+  }
+
+  /** Per frame: the throw charge 0..1 (-1 = not charging). Touches the DOM only when the shown percent changes. */
+  setThrowCharge(p: number) {
+    const v = p < 0 ? -1 : Math.round(p * 100);
+    if (v === this.chargeShown) return;
+    if ((v < 0) !== (this.chargeShown < 0)) this.chargeRing.style.display = v < 0 ? 'none' : '';
+    this.chargeShown = v;
+    if (v < 0) return;
+    this.chargeRing.style.setProperty('--p', `${Math.round(v * 3.6)}deg`);
+    this.chargeRing.classList.toggle('full', v >= 100);
+    this.chargeRing.dataset.pct = String(v);
   }
 
   update(snap: Snapshot, ctx: HudContext) {

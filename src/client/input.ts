@@ -1,6 +1,6 @@
-import { BUILD } from '../sim/constants';
+import { BUILD, THROW } from '../sim/constants';
 import { HOTBAR_SIZE, isGunItem, isPieceItem, isPotionItem } from '../sim/hotbar';
-import type { HotbarItem, PieceKind, PlayerInput, TrapRequest } from '../sim/types';
+import type { HotbarItem, PieceKind, PlayerInput, TrapRequest, UtilityKind } from '../sim/types';
 import { AimLatch, effectiveButton, isCtrlCode, isMacPlatform, platformNav } from './aimInput';
 import { ClickGate } from './clickGate';
 import { RecoilRecovery } from './recoil';
@@ -75,11 +75,14 @@ export class InputController {
   private mac = isMacPlatform(platformNav());
   /** A Mac Ctrl+click (arrives as button 2) taken as a left click is down: its button-2 release is a left release. */
   private ctrlClick = false;
+  /** Charging a throw (grenade / smoke / flash in hand, left button held): when it started (performance.now()) and what. */
+  private chargeAt: number | null = null;
+  chargeKind: 'grenade' | UtilityKind | null = null;
 
   constructor(private canvas: HTMLCanvasElement, private hooks: InputHooks) {
     window.addEventListener('keydown', (e) => this.onKey(e, true));
     window.addEventListener('keyup', (e) => this.onKey(e, false));
-    window.addEventListener('blur', () => { this.keys.clear(); this.fireHeld = false; this.gate.reset(); this.aim.reset(); this.ctrlClick = false; });
+    window.addEventListener('blur', () => { this.keys.clear(); this.fireHeld = false; this.cancelThrow(); this.gate.reset(); this.aim.reset(); this.ctrlClick = false; });
     // A lock request refused (Chrome: for ~1 s after Esc, or without a user activation) is retried on
     // the next user activation anywhere on the page. Esc is not an activation, so it doesn't retry.
     const retry = (e: Event) => {
@@ -94,7 +97,7 @@ export class InputController {
       const button = this.ctrlClick && e.button === 2 ? 0 : e.button;
       if (this.ctrlClick && e.button === 2) this.ctrlClick = false;
       if (this.gate.release(button)) return; // the release of a re-capture click: nothing to undo
-      if (button === 0) this.fireHeld = false;
+      if (button === 0) { this.fireHeld = false; this.releaseThrow(); }
       if (button !== 0) this.keys.delete(`Mouse${button}`);
     });
     window.addEventListener('mousemove', (e) => this.onMouseMove(e));
@@ -149,7 +152,7 @@ export class InputController {
 
   select(i: number) {
     if (!Number.isInteger(i) || i < 0 || i >= HOTBAR_SIZE) throw new Error(`InputController.select: bad slot ${i}`);
-    if (i !== this.selected) { this.fireHeld = false; this.recoil.reset(); this.aim.reset(); }
+    if (i !== this.selected) { this.fireHeld = false; this.recoil.reset(); this.aim.reset(); this.cancelThrow(); }
     this.selected = i;
   }
 
@@ -158,6 +161,7 @@ export class InputController {
     if (open === this.inventory) return;
     this.inventory = open;
     this.fireHeld = false;
+    this.cancelThrow();
     if (open) { if (document.pointerLockElement) document.exitPointerLock(); }
     else this.requestLock();
     this.hooks.inventoryChange(open);
@@ -249,6 +253,32 @@ export class InputController {
     saveSensitivity(v);
   }
 
+  /**
+   * Charge of the throw being held, 0 (just pressed) .. 1 (THROW.chargeSec or more, capped); -1 when not charging.
+   * Rounded to 1/100 so what the preview draws is exactly what the release sends.
+   */
+  chargePower(now = performance.now()): number {
+    if (this.chargeAt === null) return -1;
+    return Math.round(Math.min(1, Math.max(0, (now - this.chargeAt) / (THROW.chargeSec * 1000))) * 100) / 100;
+  }
+
+  /** Drop a throw being charged without throwing (right click, weapon switch, menu, focus lost). */
+  cancelThrow() {
+    if (this.chargeAt !== null) console.info('[input] throw cancelled');
+    this.chargeAt = null;
+    this.chargeKind = null;
+  }
+
+  /** Left button up while charging: throw with the charge reached. */
+  private releaseThrow() {
+    if (this.chargeAt === null || !this.chargeKind) return;
+    const throwPower = this.chargePower();
+    if (this.chargeKind === 'grenade') this.queue({ throwGrenade: true, throwPower });
+    else this.queue({ throwUtil: this.chargeKind, throwPower });
+    this.chargeAt = null;
+    this.chargeKind = null;
+  }
+
   queue(p: Partial<PlayerInput>) {
     Object.assign(this.oneShot, p);
   }
@@ -267,13 +297,14 @@ export class InputController {
     // Other buttons act like keys ('Mouse2' = right button), so the keymap can bind them (aim by default).
     if (button !== 0) {
       const code = `Mouse${button}`;
+      if (this.chargeAt !== null) { this.cancelThrow(); this.keys.add(code); return; } // right click cancels a throw
       if (!this.keys.has(code) && isAction('aim', code)) this.aim.press();
       this.keys.add(code);
       return;
     }
     if (this.buildMode) { this.fireHeld = true; this.hooks.place(); return; } // held = drag-build
-    if (this.held === 'grenade') { this.oneShot.throwGrenade = true; return; }
-    if (this.held === 'smoke' || this.held === 'flash') { this.oneShot.throwUtil = this.held; return; }
+    // Throwables: hold to charge (further throw), release to throw (releaseThrow); the preview arc shows meanwhile.
+    if (this.held === 'grenade' || this.held === 'smoke' || this.held === 'flash') { this.chargeAt = performance.now(); this.chargeKind = this.held; return; }
     if (this.held === 'charge') { this.oneShot.placeCharge = true; return; }
     if (this.held === 'trap') { if (this.trapReq) { this.oneShot.trap = this.trapReq; this.onTrapPlaced?.(); } return; }
     if (this.held === 'medkit') { this.oneShot.useMedkit = true; return; }
@@ -327,6 +358,8 @@ export class InputController {
   /** Current input; one-shot actions are included once and then cleared. */
   sample(): PlayerInput {
     if (!this.enabled) this.aim.reset(); // a menu or panel ends a toggled aim
+    // Charging ends with a menu, or when what's in hand is no longer the throwable (ran out, slot changed).
+    if (this.chargeKind !== null && (!this.enabled || this.held !== this.chargeKind)) this.cancelThrow();
     const on = (a: Action) => (this.enabled && isHeld(a, this.keys) ? 1 : 0);
     const input: PlayerInput = {
       moveX: on('right') - on('left'),
