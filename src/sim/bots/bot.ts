@@ -625,7 +625,8 @@ export class Bot {
       look = hand(want, TURN_RATE * 1.2);
       fire = me.equipped === 'rocket' && angleBetween(look, want) < 0.035 && gunReady(dist2D(me.pos, dock.at));
     } else if (dock) {
-      const a = chargedThrow(eye, dock.at, false, this.P.util.lobPitch[this.difficulty]);
+      // The deck at their feet: the legacy-speed lob (a steep one tends to come down on them, high over the planks).
+      const a = dockThrow(eye, dock.at);
       if (a) {
         look = hand(a, TURN_RATE * 1.2);
         if (angleBetween(look, a) < 0.03 && me.busyUntil <= now) {
@@ -3848,6 +3849,13 @@ export function throwAngles(eye: Vec3, to: Vec3, low: boolean, speed = GRENADE.t
     prevBelow = h.y < dy;
   }
   return null;
+}
+
+/** The legacy-speed lob as a charged throw (onto a pier deck). */
+function dockThrow(eye: Vec3, to: Vec3): (Angles & { power: number }) | null {
+  const power = legacyPower(GRENADE.throwSpeed);
+  const a = throwAngles(eye, to, false, throwSpeed('grenade', power));
+  return a && { ...a, power };
 }
 
 /** Charge (0..1) that throws at the kind's legacy speed. */
