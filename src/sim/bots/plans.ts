@@ -135,9 +135,9 @@ export function nextPurchase(p: PlayerState, needs: Needs, difficulty: Difficult
   if ((inv.pieces.scaffold ?? 0) < needs.scaffolds + (needs.build?.scaffold ?? 0) && room('scaffold')) return cash >= PIECES.scaffold.price ? 'scaffold' : null;
   // Otherwise right after the decks (before the seal kit): a strong player never heads out without one.
   if (heals === 0 && (needs.medkits ?? 0) > 0 && room('medkit') && cash >= MEDKIT.price) return 'medkit';
-  // One smoke and one flash right after the first heal (cover a retreat / crossing / seal, open a push): cheap, never saved up for.
-  if (!inv.smokes && (needs.smokes ?? 0) > 0 && room('smoke') && cash >= SMOKE.price + PIECES.wood.price) return 'smoke';
-  if (!inv.flashes && (needs.flashes ?? 0) > 0 && room('flash') && cash >= FLASH.price + 2 * PIECES.wood.price) return 'flash';
+  // One smoke (then one flash) right after the first heal, when the decks are paid for too: cheap, never saved up for.
+  if (!inv.smokes && (needs.smokes ?? 0) > 0 && room('smoke') && cash >= SMOKE.price + PIECES.wood.price + deckCost) return 'smoke';
+  if (inv.smokes && !inv.flashes && (needs.flashes ?? 0) > 0 && room('flash') && cash >= FLASH.price + PIECES.wood.price + deckCost) return 'flash';
   if (sealKit(inv) - reservedBagPlugs(inv, needs) < needs.kit) {
     // (A kind the hotbar has no room for is skipped: the shop would refuse it.)
     if ((style.steel || needs.steel) && cash >= 2 * PIECES.steel.price && room('steel')) return 'steel';
