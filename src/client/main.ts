@@ -19,7 +19,6 @@ import type { MatchSetup } from '../sim/matchApi';
 import { NO_INPUT, type BuildRequest, type Difficulty, type Inventory, type PieceKind, type PieceState, type PlayerInput, type PlayerState, type ShopItem, type Snapshot } from '../sim/types';
 import { flashAlpha } from '../sim/utility';
 import { ScreenFx } from './screenFx';
-import { lightU } from './world/lightUniforms';
 import { BuildPredictor } from './buildPredict';
 import type { BrainDigest } from '../sim/bots/introspect';
 import { adoptSpawnLook, moveForAim } from './aim';
@@ -2400,7 +2399,7 @@ async function runGame(backend: Backend, menu: HTMLElement, onChat: ((c: ChatUi)
     let blind: PlayerState['blind'];
     if (snap && !kc) { const vid = spectator.following ?? humanId; for (const p of snap.players) if (p.id === vid) { blind = p.blind; break; } }
     const flashA = flashAlpha(blind, simNow());
-    screenFx.frame(kc ? 0 : renderer.smokeFog, flashA, blind ? blind.at : null, settings.get().gameplay.reducedFlash, lightU.impostor.value);
+    screenFx.frame(kc ? 0 : renderer.smokeFog, flashA, blind ? blind.at : null, settings.get().gameplay.reducedFlash, renderer.lightTone);
     audio.flashed(flashA);
     // First-person camera bob: our own (predicted) ground speed, or the spectated player's when watching from their eyes.
     let bobSpeed = -1;
