@@ -2582,6 +2582,7 @@ export class Bot {
    * shoot it out (fists for a soft one when gunless). Null when there's none, or it's one I can't break that way.
    */
   private clearBridgeStart(c: Ctx, l: Lane): Act | null {
+    if (c) return null;
     const from = this.nav.nodes[l.from];
     const s = landEdge(from) + 0.5, ep = laneAt(l, s);
     let p: PieceState | null = null;
