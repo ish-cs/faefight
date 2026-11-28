@@ -55,15 +55,17 @@ export class Gaze {
   }
 
   /**
-   * Is enemy `e` a threat to me right now: hit me within threatSec, or armed, close and looking straight at me.
+   * Is enemy `e` a threat to me right now: hit me within threatSec, or armed, close and looking straight at me (a cone of
+   * aimedAtDeg × my spotAimedAt).
    * `hurtBy`/`hurtAt`: my last hit (Memory).
    */
   threat(now: number, me: PlayerState, e: PlayerState, hurtBy: number | null, hurtAt: number): boolean {
     if (hurtBy === e.id && now - hurtAt < this.T.threatSec) return true;
-    if (e.equipped === 'fists' || this.T.aimedAtDeg <= 0) return false;
+    const deg = this.T.aimedAtDeg * this.S.spotAimedAt;
+    if (e.equipped === 'fists' || deg <= 0) return false;
     const dx = me.pos.x - e.pos.x, dz = me.pos.z - e.pos.z;
     if (dx * dx + dz * dz > this.T.aimedAtM * this.T.aimedAtM) return false;
-    return Math.abs(wrapAngle(e.yaw - yawOf({ x: dx, z: dz }))) <= this.T.aimedAtDeg * DEG;
+    return Math.abs(wrapAngle(e.yaw - yawOf({ x: dx, z: dz }))) <= deg * DEG;
   }
 
   /**
