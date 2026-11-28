@@ -573,8 +573,8 @@ export const AIM_PARAMS: AimParams = {
 
 export const GAZE: GazeParams = {
   skill: {
-    easy: { firstLookSec: 0.6, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.2, driftDeg: 12, turnRate: 4, engageLeadM: 6 },
-    medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5, engageLeadM: 15 },
+    easy: { firstLookSec: 0.6, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.2, driftDeg: 12, turnRate: 4, engageLeadM: 0 },
+    medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5, engageLeadM: 20 },
     hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6, engageLeadM: 15 },
     pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7, engageLeadM: 15 },
   },
