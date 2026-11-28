@@ -1,9 +1,9 @@
 import * as dm from '../dmath';
 import { THROW, AMMO_BOX, CHARGE, DT, ECONOMY, GRAPPLE, GRENADE, HEAD, LIFECYCLE, MAP, MEDKIT, PIECES, PLAYER, ROCKET, SEAL, STORM, TRAP, WEAPONS } from '../constants';
-import { eyePos, throwSpeed } from '../combat';
+import { eyePos, nearestOnPiece, throwSpeed } from '../combat';
 import { isFlammable, steerFromFire } from '../fire';
 import { friendly, trapCenter } from '../traps';
-import type { DockDef, Doorway, IslandLayout } from '../map';
+import type { Box, DockDef, Doorway, IslandLayout } from '../map';
 import { overDock } from '../docks';
 import { isHomeOnly } from '../economy';
 import { NO_INPUT } from '../types';
@@ -32,7 +32,7 @@ import {
   type Needs, type ShopStyle,
 } from './plans';
 import type { AllyStatus, BotView, OtherStatus } from './view';
-import { planUtility, utilAngles, utilReact, type UtilSituation } from './utilityPlan';
+import { capped, planUtility, utilAngles, utilReact, type UtilSituation } from './utilityPlan';
 import { chestOf, slitLines } from './slit';
 import { BrainProbe, debugBrain, noteSwitch, type BrainDigest, type GoalSwitch, type ScoreRow } from './introspect';
 
@@ -350,6 +350,8 @@ export class Bot {
   private lastNadeAt = -Infinity;
   /** Smoke / flash (utilityPlan.ts): last throw, and the last utility decision for the brain panel. */
   private utilLastAt = -Infinity;
+  /** When my recent smoke/flash throws went out (per-fight cap, util.capN within util.capSec); oldest first. */
+  private utilTimes: number[] = [];
   utilNote: { t: number; text: string } | null = null;
   private lastTorchAt = -Infinity;
   private lastTorchSpot: Vec3 | null = null;
@@ -604,6 +606,8 @@ export class Bot {
     const barrel = enemy && !dock ? this.barrelShot(ctx) : null;
     const util = this.utilSituation(ctx, !!heal && (heal.act === 'hide' || heal.act === 'wait' || heal.act === 'use'));
     const utilPlan = planUtility(util);
+    if (!utilPlan && (enemy || util.target) && capped(util) && ((me.inv.smokes ?? 0) + (me.inv.flashes ?? 0)) > 0 && (!this.utilNote || now - this.utilNote.t >= 4))
+      this.utilNote = { t: now, text: `saving smoke/flash: ${this.P.util.capN} thrown in the last ${this.P.util.capSec} s (cap)` };
     const utilAim = utilPlan ? utilAngles(eye, utilPlan.at, utilPlan.kind) : null;
     let throwUtil: UtilityKind | undefined;
     const slitOut = this.slitOutShot(ctx, foe);
@@ -648,6 +652,8 @@ export class Bot {
         throwUtil = utilPlan.kind;
         throwPower = utilAim.power;
         this.utilLastAt = now;
+        this.utilTimes.push(now);
+        while (this.utilTimes.length > 8) this.utilTimes.shift();
         this.utilNote = { t: now, text: utilPlan.why };
       }
     } else if (foe && !((act.shootAt || act.lookFirst) && dist2D(foe.pos, me.pos) > SHOOT_AT_OVER_FOE_M)) {
@@ -2696,7 +2702,7 @@ export class Bot {
       target: seen && this.targetId !== null ? { id: this.targetId, pos: seen.pos, t: seen.t } : null,
       rivalBunker: c.rivalIsl?.bunker.center ?? null,
       retreating: this.goal === 'disengage' || this.goal === 'heal' || healHiding || !!this.retreat,
-      lastAt: this.utilLastAt, lastHurtAt: this.mem.lastHurtAt,
+      lastAt: this.utilLastAt, lastHurtAt: this.mem.lastHurtAt, throwTimes: this.utilTimes,
     };
   }
 
@@ -2737,6 +2743,11 @@ export class Bot {
       } else if (age > NADE_SEEN_SEC || age < 0.3 || d < NADE_MIN || d > NADE_MAX) continue;
       const a = chargedThrow(eye, v3(s.pos.x, s.pos.y + 0.3, s.pos.z), low, this.P.util.lobPitch[this.difficulty]);
       if (!a) continue;
+      // It goes off where it first touches: never a throw that clips my own cover (or the ground) right in front of me.
+      if (!lobClear(eye, a, throwSpeed('grenade', a.power), view.pieces, view.statics ?? [], this.P.util.nadeSafeM)) {
+        this.utilNote = { t: now, text: 'grenade held: the arc clips cover too close to me' };
+        continue;
+      }
       // Thrown by hand: as accurate as this player's aim.
       const cone = AIM[this.difficulty].coneRad * (low ? 0.5 : 1);
       const r = this.rng() * cone, th = this.rng() * 2 * Math.PI;
@@ -3849,6 +3860,31 @@ export function throwAngles(eye: Vec3, to: Vec3, low: boolean, speed = GRENADE.t
     prevBelow = h.y < dy;
   }
   return null;
+}
+
+/**
+ * Whether a throw at `a` / `speed` from `eye` (same launch and per-tick gravity as combat.stepThrown) stays clear of
+ * everything near me: false when, within `safeM` (m, horizontal) of the eye, the path touches a built piece, a static
+ * box, or drops to my feet's level (it would go off there, inside its own blast radius).
+ */
+export function lobClear(eye: Vec3, a: Angles, speed: number, pieces: readonly PieceState[], statics: readonly Box[], safeM: number): boolean {
+  const cp = dm.cos(a.pitch), f = forward(a.yaw);
+  let x = 0, y = 0, z = 0, vx = speed * cp * f.x, vy = speed * dm.sin(a.pitch) + THROW.up, vz = speed * cp * f.z;
+  const near = pieces.filter((p) => dist2D(p.pos, eye) < safeM + 4);
+  const boxes = statics.filter((b) => dist2D(b.center, eye) < safeM + Math.hypot(b.half.x, b.half.z));
+  for (let i = 0; i < 90; i++) {
+    vy -= PLAYER.gravity * DT;
+    x += vx * DT; y += vy * DT; z += vz * DT;
+    if (Math.hypot(x, z) > safeM) return true;
+    const pt = v3(eye.x + x, eye.y + y, eye.z + z);
+    if (y < -PLAYER.eyeHeight + 0.1) return false; // down at my own feet
+    for (const p of near) if (nearestOnPiece(p, pt).d < 0.15) return false;
+    for (const b of boxes) {
+      const l = rotateY(sub(pt, b.center), -b.rotY);
+      if (Math.abs(l.x) <= b.half.x + 0.15 && Math.abs(l.y) <= b.half.y + 0.15 && Math.abs(l.z) <= b.half.z + 0.15) return false;
+    }
+  }
+  return true;
 }
 
 /** The legacy-speed lob as a charged throw (onto a pier deck). */

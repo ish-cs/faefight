@@ -7,6 +7,7 @@ import { inSmoke, isBlind } from '../utility';
 import { add, dist2D, norm, scale, v3 } from '../vec';
 import { lookAt, type Angles } from './aim';
 import { islandAt } from './nav';
+import { overDock } from '../docks';
 import type { BotView } from './view';
 import type { UtilParams } from './utilParams';
 
@@ -28,6 +29,8 @@ export type UtilSituation = {
   retreating: boolean;
   /** Last time I threw one, and when an enemy last hurt me. */
   lastAt: number; lastHurtAt: number;
+  /** When my recent smoke/flash throws went out (the per-fight cap, P.capN within P.capSec). */
+  throwTimes?: readonly number[];
 };
 export type UtilThrow = { kind: UtilityKind; at: Vec3; why: string };
 
@@ -39,10 +42,25 @@ const allyNear = (view: BotView, at: Vec3, r: number) => !!view.allies?.some((a)
 /** A cloud already covers this spot. */
 const smoked = (view: BotView, at: Vec3) => !!view.smokes && inSmoke(view.smokes, v3(at.x, at.y + 1.6, at.z), view.now);
 
+/** Smoke/flash throws I made within the last P.capSec. */
+export const recentThrows = (s: Pick<UtilSituation, 'throwTimes' | 'view' | 'P'>) =>
+  s.throwTimes ? s.throwTimes.reduce((n, t) => n + (s.view.now - t < s.P.capSec ? 1 : 0), 0) : 0;
+/** The per-fight cap is used up. */
+export const capped = (s: Pick<UtilSituation, 'throwTimes' | 'view' | 'P'>) => recentThrows(s) >= s.P.capN;
+/** Open water at `at`: no island, no pier deck, no built piece within 2.5 m (a bridge / deck under it). */
+function overSea(view: BotView, at: Vec3): boolean {
+  if (islandAt(view.map, at) >= 0) return false;
+  const cv = view.center?.island;
+  if (cv && dist2D(at, cv.center) <= cv.radius) return false;
+  if (view.docks?.some((dk) => overDock(dk, at, 0.5))) return false;
+  return !view.pieces?.some((p) => dist2D(p.pos, at) < 2.5);
+}
+
 /** Which utility to throw where right now, or null. Pure: no state is changed. */
 export function planUtility(s: UtilSituation): UtilThrow | null {
   const { view, me, P, difficulty: d } = s, now = view.now;
   if (!me.alive || view.blind || now - s.lastAt < P.gapSec || me.busyUntil > now) return null;
+  if (capped(s)) return null;
   const foePos = s.enemy?.pos ?? (s.target && now - s.target.t <= P.seenSec ? s.target.pos : null);
   // 1. Smoke a retreat / heal: a cloud a few metres toward them, between us.
   if (has(me, 'smoke') && s.retreating && (s.enemy && s.enemyDist < P.retreatM || now - s.lastHurtAt < 1.5) && !smoked(view, me.pos) && roll(s, 1, P.smokeRetreat[d])) {
@@ -55,7 +73,7 @@ export function planUtility(s: UtilSituation): UtilThrow | null {
   if (has(me, 'smoke') && foePos && (onDeck || s.goal === 'bridge') && dist2D(foePos, me.pos) < 45 && roll(s, 2, P.smokeCross[d])) {
     const toward = norm(v3(foePos.x - me.pos.x, 0, foePos.z - me.pos.z));
     const at = add(me.pos, scale(toward, 6));
-    if (!smoked(view, at)) return { kind: 'smoke', at, why: 'smoke to cover the crossing' };
+    if (!smoked(view, at) && (!overSea(view, at) || roll(s, 7, P.seaSmoke[d]))) return { kind: 'smoke', at, why: 'smoke to cover the crossing' };
   }
   // 3. Smoke a seal attempt: at their bunker with them seen around (the cloud between me and where they shoot from).
   if (has(me, 'smoke') && foePos && s.rivalBunker && (s.goal === 'seal' || s.goal === 'attack') && dist2D(me.pos, s.rivalBunker) < 14 &&
