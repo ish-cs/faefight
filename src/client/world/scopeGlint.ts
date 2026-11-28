@@ -12,7 +12,7 @@ import type { PlayerState, Vec3 } from '../../sim/types';
  */
 const POOL = 8;
 /** On-screen size (fraction of the view height) at a faint and at a full glint. */
-const SIZE_MIN = 0.018, SIZE_MAX = 0.07;
+const SIZE_MIN = 0.025, SIZE_MAX = 0.09;
 /** Below this the glint isn't drawn. */
 const MIN_K = 0.04;
 
