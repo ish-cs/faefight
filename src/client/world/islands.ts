@@ -57,8 +57,9 @@ function labelSprite(text: string, bg: string): THREE.Sprite {
  * toward the quay edge.
  */
 function islandTopMaterial(R: number) {
-  // Texture budget: a WebGPU fragment stage may bind 16 textures; with the env map + up to 4 shadow cascades this
-  // stays at 10 (apron/gravel/sand albedo+normal, grass albedo, masks, overlay, noise).
+  // Texture budget: a WebGPU fragment stage may bind 16 textures and ultra is at exactly 16 (2 env probes, 4 shadow
+  // cascades, wetness, apron/gravel albedo + normal, sand + grass albedo, masks, overlay, noise): any new sample here
+  // breaks the ultra slab (shoot ultra after touching this).
   const surf = islandSurface(R, ISLAND_DECOR);
   const m = new THREE.MeshStandardNodeMaterial();
   m.name = 'islandTop';
@@ -101,7 +102,9 @@ function islandTopMaterial(R: number) {
   alb = alb.mul(mix(float(1), float(0.74), damp));
   m.colorNode = alb;
   let nrm = mix(con.normal, grv.normal, gk);
-  nrm = mix(nrm, snd.normal, ks);
+  // sand: the gravel's grain, flattened (a sand normal map is the 17th texture on ultra since the env is two probes;
+  // WebGPU's per-stage limit is 16 → the slab pipeline fails and the slab vanishes)
+  nrm = mix(nrm, mix(grv.normal, vec3(0.5, 0.5, 1), 0.55), ks);
   nrm = mix(nrm, vec3(0.5, 0.5, 1), kg.mul(0.5));
   nrm = mix(nrm, vec3(0.5, 0.5, 1), wet.mul(0.9));
   m.normalNode = normalMap(nrm, vec2(1.2, 1.2));
