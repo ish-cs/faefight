@@ -334,6 +334,11 @@ export class Bot {
   private lastDidAt = -Infinity;
   /** Goals (and the rival they were aimed at) that went nowhere lately: left alone a while. */
   private goalBan = new Map<Goal, number>();
+  /**
+   * Extra score per goal from outside (UserProxy, bots/userProxy.ts: its macro tree). Null for every normal bot: the
+   * scores are then exactly as without it (adding 0 never changes a float).
+   */
+  goalBias: ((goal: Goal, view: BotView) => number) | null = null;
   private targetBan = new Map<number, number>();
   private lastNadeAt = -Infinity;
   private lastTorchAt = -Infinity;
@@ -2092,7 +2097,7 @@ export class Bot {
       const base = this.teamDrive(g, c, this.drive(g, c, raw));
       if (base <= 0 && g !== best) { rows?.push({ goal: g, raw, base, noise: 0, sticky: 0, score: base }); continue; }
       const noise = this.goalNoise(g, c.view.now), sticky = g === this.goal ? STICKY : 0;
-      const s = base + noise + sticky;
+      const s = base + noise + sticky + (this.goalBias ? this.goalBias(g, c.view) : 0);
       rows?.push({ goal: g, raw, base, noise, sticky, score: s });
       scored.push({ goal: g, score: s });
       if (s > bestScore) { bestScore = s; best = g; }

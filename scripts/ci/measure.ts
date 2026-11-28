@@ -15,8 +15,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-type Difficulty = 'easy' | 'medium' | 'hard' | 'pro';
-export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro', 'ffa4-pro', 'proxy-1v1-hard', 'proxy-1v1-pro', 'proxy-ffa8-hard'] as const;
+/** 'userproxy': the human stand-in seat, labelled apart from the tier it plays on. */
+type Difficulty = 'easy' | 'medium' | 'hard' | 'pro' | 'userproxy';
+export const SCENARIOS = ['1v1-hard', '1v1-pro-vs-hard', '1v1-hard-vs-medium', '1v1-medium-vs-easy', 'ffa8-pro', 'ffa8-hard', 'ffa8-mixed', 'ffa8-pro-arch', 'ffa8-hard-arch', '1v1-pro-arch', 'ffa3-pro', 'ffa4-pro',
+  'proxy-1v1-hard', 'proxy-1v1-pro', 'proxy-ffa8-hard',
+  '1v1-hard-vs-userproxy', '1v1-pro-vs-userproxy', 'ffa8-userproxy-vs-7hard', 'ffa8-userproxy-vs-7pro'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 const SD = 900; // LIFECYCLE.suddenDeathAt (checked against the sim at runtime)
@@ -26,19 +29,34 @@ const USERPROXY = 'userproxy' as Difficulty;
 /** The 1v1 skill ladder: each scenario pits the higher tier against the one below. */
 const LADDER: Partial<Record<Scenario, [Difficulty, Difficulty]>> = {
   '1v1-pro-vs-hard': ['pro', 'hard'], '1v1-hard-vs-medium': ['hard', 'medium'], '1v1-medium-vs-easy': ['medium', 'easy'],
+  // Bot-cognition spec §7.4: the bot tier vs the human stand-in. proxy-*: the fixed PRO-Sniper stand-in (NET 42);
+  // *-userproxy: the fitted UserProxy (bot-cognition P0).
   'proxy-1v1-hard': ['hard', USERPROXY], 'proxy-1v1-pro': ['pro', USERPROXY],
+  '1v1-hard-vs-userproxy': ['hard', USERPROXY], '1v1-pro-vs-userproxy': ['pro', USERPROXY],
 };
-const TIERS: Difficulty[] = ['pro', 'hard', 'medium', 'easy'];
+const TIERS: Difficulty[] = ['pro', 'hard', 'medium', 'easy', 'userproxy'];
 
 /**
- * Human-proxy seat (bot-cognition spec §7.4 stand-in until the P0 UserProxy): a PRO bot with the Sniper preset on
- * PRE_STRENGTH_PARAMS (the pre-2026-11-28 behaviour) where the ref has it, so it plays the same on main and on a branch.
- * Its seat is labelled 'userproxy' in the results. proxy-1v1-*: seat 1 on odd seeds; proxy-ffa8-hard: seat (seed-1)%8.
+ * Human-proxy seat (-1: none), one convention for every proxy scenario (kept from NET 42's proxy-* so their
+ * per-seed baselines stay comparable): 1v1, the proxy is seat 0 on odd seeds and seat 1 on even seeds (the bot tier
+ * takes the other seat); 8-player FFA, seat (seed - 1) % 8. The seat is labelled 'userproxy' in the results.
  */
-function proxySeat(scenario: Scenario, seed: number): number {
-  if (scenario === 'proxy-1v1-hard' || scenario === 'proxy-1v1-pro') return seed % 2 ? 0 : 1;
-  if (scenario === 'proxy-ffa8-hard') return (seed - 1) % 8;
+export function proxySeat(scenario: Scenario, seed: number): number {
+  if (scenario === 'proxy-1v1-hard' || scenario === 'proxy-1v1-pro' || scenario === '1v1-hard-vs-userproxy' || scenario === '1v1-pro-vs-userproxy') return seed % 2 ? 0 : 1;
+  if (scenario === 'proxy-ffa8-hard' || scenario === 'ffa8-userproxy-vs-7hard' || scenario === 'ffa8-userproxy-vs-7pro') return (seed - 1) % 8;
   return -1;
+}
+
+/**
+ * The fitted UserProxy model: private (it comes from the user's replays), so never in the repo. CI: the
+ * USERPROXY_MODEL secret (JSON) via env; locally: USERPROXY_MODEL or USERPROXY_MODEL_FILE (default
+ * .replays-local/userproxy.json). Fails loudly when a proxy scenario runs without one.
+ */
+export function proxyModelJson(): unknown {
+  const file = process.env.USERPROXY_MODEL_FILE || '.replays-local/userproxy.json';
+  const raw = process.env.USERPROXY_MODEL || (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
+  if (!raw.trim()) throw new Error(`measure: a userproxy scenario needs the model: set USERPROXY_MODEL (CI secret) or write ${file} (scripts/replays/userproxy.ts)`);
+  return JSON.parse(raw);
 }
 
 function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxSec: number } {
@@ -57,11 +75,14 @@ function seatsFor(scenario: Scenario, seed: number): { diffs: Difficulty[]; maxS
     case 'ffa8-pro-arch': return { diffs: Array(8).fill('pro'), maxSec: SD + 180 };
     case 'ffa8-hard-arch': return { diffs: Array(8).fill('hard'), maxSec: SD + 180 };
     case '1v1-pro-arch': return { diffs: ['pro', 'pro'], maxSec: 25 * 60 };
-    case 'proxy-1v1-hard': case 'proxy-1v1-pro': {
+    case 'proxy-1v1-hard': case 'proxy-1v1-pro': case '1v1-hard-vs-userproxy': case '1v1-pro-vs-userproxy': {
       const d = LADDER[scenario]![0];
-      return { diffs: seed % 2 ? [USERPROXY, d] : [d, USERPROXY], maxSec: 25 * 60 };
+      return { diffs: proxySeat(scenario, seed) === 0 ? [USERPROXY, d] : [d, USERPROXY], maxSec: 25 * 60 };
     }
-    case 'proxy-ffa8-hard': return { diffs: Array.from({ length: 8 }, (_, i) => (i === proxySeat(scenario, seed) ? USERPROXY : 'hard')), maxSec: SD + 180 };
+    case 'proxy-ffa8-hard': case 'ffa8-userproxy-vs-7hard': case 'ffa8-userproxy-vs-7pro': {
+      const d: Difficulty = scenario === 'ffa8-userproxy-vs-7pro' ? 'pro' : 'hard';
+      return { diffs: Array.from({ length: 8 }, (_, i) => (i === proxySeat(scenario, seed) ? USERPROXY : d)), maxSec: SD + 180 };
+    }
   }
 }
 
@@ -101,6 +122,8 @@ type SeatOut = {
   frozenMax?: number; frozenAt?: number; frozenMaxSd?: number;
   /** Movement jitter (src/sim/bots/moveStats.ts; refs without it leave this out). */
   jitter?: SeatJitter;
+  /** Same-game stats (spec §7.3; optional: older shards): hits dealt, head hits, rifle hits, credited eliminations, s in the game (until out or the end). */
+  hits?: number; headshots?: number; rifleHits?: number; elimsBy?: number; inGameSec?: number;
 };
 /** Flips: walk direction turning > 120° within 0.3 s; episodes: 3+ flips in a row while staying within 1 m. */
 type SeatJitter = {
@@ -195,21 +218,43 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
     return { archetype: a, traits };
   };
   const pSeat = proxySeat(scenario, seed);
-  const proxyParams = pSeat < 0 ? undefined : ((await import('../../src/sim/bots/params')) as unknown as { PRE_STRENGTH_PARAMS?: unknown }).PRE_STRENGTH_PARAMS;
+  // proxy-*: the fixed stand-in, a PRO Sniper on PRE_STRENGTH_PARAMS where the ref has them (plays the same on main and a branch).
+  const standIn = pSeat >= 0 && scenario.startsWith('proxy-');
+  const proxyParams = standIn ? ((await import('../../src/sim/bots/params')) as unknown as { PRE_STRENGTH_PARAMS?: unknown }).PRE_STRENGTH_PARAMS : undefined;
   const sniper = () => ({ archetype: 'Sniper', traits: { ...pers.PRESETS.Sniper } });
+  // *-userproxy: the fitted UserProxy model.
+  type UP = { isUserProxyModel: (v: unknown) => boolean; proxyPersonality: (m: unknown) => unknown; goalBiasFor: (m: unknown) => unknown };
+  let proxy: { model: { difficulty: Exclude<Difficulty, 'userproxy'> }; up: UP } | null = null;
+  if (pSeat >= 0 && !standIn) {
+    // Variable specifier: userProxy.ts exists only on refs from bot-cognition P0 on.
+    const upModule = '../../src/sim/bots/userProxy';
+    const up = await import(/* @vite-ignore */ upModule) as UP;
+    const model = proxyModelJson();
+    if (!up.isUserProxyModel(model)) throw new Error('measure: the UserProxy model is malformed');
+    proxy = { model: model as { difficulty: Exclude<Difficulty, 'userproxy'> }, up };
+  }
+  const proxyTier = (): Exclude<Difficulty, 'userproxy'> => (proxy ? proxy.model.difficulty : 'pro');
   const m = await Match.create(
-    { players: diffs.map((d) => ({ name: '', isBot: true, difficulty: d === USERPROXY ? 'pro' as Difficulty : d })), seed },
+    { players: diffs.map((d) => ({ name: '', isBot: true, difficulty: (d === USERPROXY ? proxyTier() : d) as Exclude<Difficulty, 'userproxy'> })), seed },
     { makeBot: (id, d, rng) => {
-      const b = id - 1 === pSeat
-        ? new BotCtor(id, 'pro', rng, sniper(), ...(proxyParams ? [proxyParams] : []))
-        : new BotCtor(id, d, rng, personalityFor(id - 1, rng), ...(params ? [params] : []));
-      brains[id - 1] = b; return b as never;
+      if (id - 1 === pSeat && standIn) {
+        const b = new BotCtor(id, 'pro', rng, sniper(), ...(proxyParams ? [proxyParams] : []));
+        brains[id - 1] = b; return b as never;
+      }
+      if (id - 1 === pSeat && proxy) {
+        // The proxy plays on its own params (defaults), never the --params under test.
+        const b = new BotCtor(id, proxy.model.difficulty, rng, proxy.up.proxyPersonality(proxy.model)) as Brain & { goalBias?: unknown };
+        b.goalBias = proxy.up.goalBiasFor(proxy.model);
+        brains[id - 1] = b; return b as never;
+      }
+      const b = new BotCtor(id, d, rng, personalityFor(id - 1, rng), ...(params ? [params] : [])); brains[id - 1] = b; return b as never;
     } },
   );
   const seats: SeatOut[] = diffs.map((d, i) => ({
     difficulty: d, kills: 0, deaths: 0, aliveSec: 0, attackSec: 0, idleHome: 0, longestHomeIdle: 0, hitDists: [], eliminatedAt: null,
     archetype: brains[i]?.personality?.archetype, traits: brains[i]?.personality?.traits, damage: 0, seals: 0, healsGot: 0, healsUsed: 0, healsUsedFight: 0, lowHpDeaths: 0,
     deposits: 0, banked: 0, vaultPaid: 0, restocks: 0, interest: 0, vaultLv: 1, frozenMax: 0, frozenAt: 0, frozenMaxSd: 0,
+    hits: 0, headshots: 0, rifleHits: 0, elimsBy: 0, inGameSec: 0,
   }));
   const still = new Map<number, { x: number; z: number; t: number }>();
   let lastAction = 0, deadAir = 0, deadAirAt = 0;
@@ -336,6 +381,9 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (by == null || by === target || !a || !t) continue;
         seats[by - 1].damage! += Number(e.data.amount) || 0;
         seats[by - 1].hitDists.push(Math.round(Math.hypot(a.x - t.x, a.z - t.z)));
+        seats[by - 1].hits!++;
+        if (e.data.part === 'head') seats[by - 1].headshots!++;
+        if (e.data.weapon === 'rifle') seats[by - 1].rifleHits!++;
         touch(by - 1, e.t); touch(target - 1, e.t);
         bo[by - 1].hits++;
         if (a.y - t.y >= HIGH_M) bo[by - 1].highHits++;
@@ -356,7 +404,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
         if (firstSeal === null && by != null && by !== e.data.owner && e.t < SD) firstSeal = e.t;
         if (by != null && by !== e.data.owner && e.t < SD) preSdSeals++;
       } else if ((e.type as string) === 'elimination') {
-        if (e.data.by != null) { credited++; spoils += Number(e.data.spoils) || 0; }
+        if (e.data.by != null) { credited++; spoils += Number(e.data.spoils) || 0; const s = seats[(e.data.by as number) - 1]; if (s) s.elimsBy!++; }
       } else if ((e.type as string) === 'restock') {
         const s = seats[(e.data.player as number) - 1];
         if (s) s.restocks!++;
@@ -389,6 +437,7 @@ async function runOne(scenario: Scenario, seed: number, paramsPath: string | nul
   // Rapier worlds live in WASM memory and are never garbage collected.
   (m as unknown as { physics?: { world?: { free?: () => void } } }).physics?.world?.free?.();
   const winner = snap.winner !== null && snap.winner > 0 ? snap.winner : null;
+  for (const s of seats) s.inGameSec = s.eliminatedAt ?? snap.time;
   return {
     scenario, seed, winner, winnerDifficulty: winner ? diffs[winner - 1] : null, time: snap.time,
     decisive: winner !== null && snap.time < SD, preSdElims, preSdSeals, lateKills, elims, credited, spoils, firstSeal, msPerTick, wallSec: (performance.now() - w0) / 1000, seats,
@@ -445,7 +494,11 @@ export type ScenarioSummary = {
   /** Kept for older readers: the same as `ladder` on 1v1-pro-vs-hard. */
   proVsHard: Share | null;
   /** 1v1 ladder scenarios: the higher tier's share of games (a game with no winner counts half). */
-  ladder: (Share & { higher: Difficulty; lower: Difficulty }) | null;
+  ladder: (Share & { higher: Difficulty; lower: Difficulty; wilson?: [number, number] }) | null;
+  /** Same-game per-tier stats (spec §7.3), rates per minute in the game. Absent: shards without the fields. */
+  tierStats?: Partial<Record<Difficulty, TierStats>>;
+  /** Scenarios with a UserProxy seat: its share of wins (Wilson 95% CI). */
+  userproxyWins?: { wins: number; games: number; share: number; wilson: [number, number] };
   /** FFAs with more than one tier: mean final placement per tier (1 = won), its 95% CI and number of seats. */
   placementByTier: Partial<Record<Difficulty, { mean: number; ci95: number; n: number }>> | null;
   /** Per game (all seats): heals got, used, used mid-fight, deaths after ≥ 3 s at ≤ 50 hp + shield. Null: shards without heal data. */
@@ -469,6 +522,38 @@ export type ScenarioSummary = {
     worst: { seed: number; seat: number; difficulty: Difficulty; t: number; x: number; z: number; goal: string; flips: number; srcs: string }[];
   };
 };
+
+export type TierStats = {
+  seats: number; headshotPct: number; kd: number; killsPerMin: number; sealsPerMin: number; elimsPerMin: number;
+  hitsPerMin: number; dmgPerHit: number; medianRangeM: number | null; rifleHitPct: number;
+};
+
+/** Wilson score interval (95%) for k successes in n (k may be fractional: a draw counts half). */
+export function wilson(k: number, n: number): [number, number] {
+  if (!n) return [0, 1];
+  const z = 1.96, p = k / n, den = 1 + (z * z) / n, c = (p + (z * z) / (2 * n)) / den;
+  const h = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / den;
+  return [Math.max(0, c - h), Math.min(1, c + h)];
+}
+
+export function tierStats(games: GameOut[]): Partial<Record<Difficulty, TierStats>> | undefined {
+  const seats = games.flatMap((g) => g.seats);
+  if (!seats.length || seats.some((x) => x.hits === undefined)) return undefined;
+  const out: Partial<Record<Difficulty, TierStats>> = {};
+  for (const d of TIERS) {
+    const xs = seats.filter((x) => x.difficulty === d);
+    if (!xs.length) continue;
+    const sum = (f: (x: SeatOut) => number) => xs.reduce((a, x) => a + f(x), 0);
+    const min = sum((x) => x.inGameSec ?? 0) / 60 || 1, hits = sum((x) => x.hits ?? 0);
+    out[d] = {
+      seats: xs.length, headshotPct: (100 * sum((x) => x.headshots ?? 0)) / Math.max(1, hits), kd: sum((x) => x.kills) / Math.max(1, sum((x) => x.deaths)),
+      killsPerMin: sum((x) => x.kills) / min, sealsPerMin: sum((x) => x.seals ?? 0) / min, elimsPerMin: sum((x) => x.elimsBy ?? 0) / min,
+      hitsPerMin: hits / min, dmgPerHit: sum((x) => x.damage ?? 0) / Math.max(1, hits), medianRangeM: median(xs.flatMap((x) => x.hitDists)),
+      rifleHitPct: (100 * sum((x) => x.rifleHits ?? 0)) / Math.max(1, hits),
+    };
+  }
+  return out;
+}
 
 export type BuildSummary = {
   fights: number; piecesPerFight: number; builtShare: number; winBuilt: number | null; winPlain: number | null;
@@ -526,7 +611,8 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
   const pair = LADDER[scenario];
   if (pair) {
     const scores: number[] = games.map((g) => (g.winner === null ? 0.5 : g.winnerDifficulty === pair[0] ? 1 : 0));
-    ladder = { higher: pair[0], lower: pair[1], share: scores.reduce((a, b) => a + b, 0) / Math.max(1, scores.length), ci95: ci95(scores), games: scores.length };
+    const won = scores.reduce((a, b) => a + b, 0);
+    ladder = { higher: pair[0], lower: pair[1], share: won / Math.max(1, scores.length), ci95: ci95(scores), games: scores.length, wilson: wilson(won, scores.length) };
   }
   const proVsHard: ScenarioSummary['proVsHard'] = scenario === '1v1-pro-vs-hard' && ladder ? { share: ladder.share, ci95: ladder.ci95, games: ladder.games } : null;
   let placementByTier: ScenarioSummary['placementByTier'] = null;
@@ -553,6 +639,11 @@ export function summarize(scenario: Scenario, games: GameOut[]): ScenarioSummary
     msPerTick: games.reduce((a, g) => a + g.msPerTick, 0) / Math.max(1, games.length),
     maxWallSec: Math.max(0, ...games.map((g) => g.wallSec)),
     proVsHard, ladder, placementByTier,
+    tierStats: tierStats(games),
+    ...(games.some((g) => g.seats.some((x) => x.difficulty === 'userproxy')) ? { userproxyWins: (() => {
+      const w = games.filter((g) => g.winnerDifficulty === 'userproxy').length;
+      return { wins: w, games: games.length, share: w / Math.max(1, games.length), wilson: wilson(w, games.length) };
+    })() } : {}),
     heals: seats.every((x) => x.healsUsed !== undefined) ? {
       got: seats.reduce((a, x) => a + x.healsGot!, 0) / Math.max(1, games.length),
       used: seats.reduce((a, x) => a + x.healsUsed!, 0) / Math.max(1, games.length),
@@ -634,7 +725,11 @@ export function markdown(sums: ScenarioSummary[], meta: Record<string, string>):
     '',
     ...(sums.some((s) => s.ladder) ? ['### 1v1 ladder', '',
       '| matchup | higher tier wins | 95% CI | games |', '|---|---|---|---|',
-      ...sums.filter((s) => s.ladder).map((s) => `| ${s.ladder!.higher} vs ${s.ladder!.lower} | ${(100 * s.ladder!.share).toFixed(0)}% | ± ${(100 * s.ladder!.ci95).toFixed(0)} | ${s.ladder!.games} |`), ''] : []),
+      ...sums.filter((s) => s.ladder).map((s) => `| ${s.ladder!.higher} vs ${s.ladder!.lower} | ${(100 * s.ladder!.share).toFixed(0)}% | ± ${(100 * s.ladder!.ci95).toFixed(0)}${s.ladder!.wilson ? ` (Wilson ${(100 * s.ladder!.wilson[0]).toFixed(0)}–${(100 * s.ladder!.wilson[1]).toFixed(0)}%)` : ''} | ${s.ladder!.games} |`), ''] : []),
+    ...sums.filter((s) => s.userproxyWins).flatMap((s) => [`### ${s.scenario}: UserProxy wins ${s.userproxyWins!.wins}/${s.userproxyWins!.games} = ${(100 * s.userproxyWins!.share).toFixed(1)}% (Wilson 95% ${(100 * s.userproxyWins!.wilson[0]).toFixed(1)}–${(100 * s.userproxyWins!.wilson[1]).toFixed(1)}%)`, '']),
+    ...sums.filter((s) => s.tierStats).flatMap((s) => [`### ${s.scenario}: per-tier stats from the same games (per minute in the game)`, '',
+      '| tier | seats | headshot % | K/D | kills/min | seals/min | elims/min | hits/min | dmg/hit | median range | rifle hits |', '|---|---|---|---|---|---|---|---|---|---|---|',
+      ...Object.entries(s.tierStats!).map(([d, t]) => `| ${d} | ${t!.seats} | ${t!.headshotPct.toFixed(1)}% | ${t!.kd.toFixed(2)} | ${t!.killsPerMin.toFixed(2)} | ${t!.sealsPerMin.toFixed(3)} | ${t!.elimsPerMin.toFixed(3)} | ${t!.hitsPerMin.toFixed(1)} | ${t!.dmgPerHit.toFixed(1)} | ${t!.medianRangeM ?? '-'} m | ${t!.rifleHitPct.toFixed(0)}% |`), '']),
     ...sums.filter((s) => s.placementByTier).flatMap((s) => [`### ${s.scenario}: average placement by tier (1 = won)`, '',
       '| tier | mean placement | 95% CI | seats |', '|---|---|---|---|',
       ...Object.entries(s.placementByTier!).map(([d, p]) => `| ${d} | ${p!.mean.toFixed(2)} | ± ${p!.ci95.toFixed(2)} | ${p!.n} |`), '']),

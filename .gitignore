@@ -10,3 +10,6 @@ playwright-report/
 .autoimprove/
 .measure/
 .train-ci/
+
+# Private replay-derived data (user replays, fitted UserProxy model, vs-user log): never commit
+.replays-local/
