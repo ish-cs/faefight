@@ -14,7 +14,7 @@ import type { UtilParams } from './utilParams';
  * - smoke to cover a retreat / a heal with someone on me, a bridge crossing under fire, or a seal attempt at a rival's
  *   bunker they were just seen at;
  * - a flashbang before pushing a fight or a rival who just ducked behind cover / into their bunker;
- * and reacting to them: no fighting into someone else's smoke, and backing off (or holding) while blinded.
+ * and reacting to them: no fighting into someone else's smoke (flank round it), and backing off (or holding) while blinded.
  * Every roll is a hash of (bot, time window, kind), not the bot's rng, so carrying them never shifts its other choices.
  */
 /** What the bot's brain knows that the plan needs (bot.ts fills it in). */
@@ -104,10 +104,15 @@ export function utilReact(s: UtilSituation, dir: Vec3 | null): { dir: Vec3 | nul
     return { dir: null, note: 'blinded: holding still' };
   }
   if (dir && view.smokes && s.goal === 'fight' && roll(s, 6, P.avoidSmoke[d])) {
-    const ahead = add(me.pos, scale(dir, 1.5));
-    const enemyCloud = view.smokes.some((c) => c.owner !== me.id && !view.allies?.some((a) => a.id === c.owner));
-    if (enemyCloud && !inSmoke(view.smokes, v3(me.pos.x, me.pos.y + 1.6, me.pos.z), now) && inSmoke(view.smokes, v3(ahead.x, ahead.y + 1.6, ahead.z), now))
-      return { dir: null, note: 'not pushing into their smoke' };
+    const head = v3(me.pos.x, me.pos.y + 1.6, me.pos.z);
+    const ahead = add(head, scale(dir, 1.5));
+    if (inSmoke(view.smokes, head, now) || !inSmoke(view.smokes, ahead, now)) return null;
+    // The cloud in my way: flank round its edge (the side my walk already leans to) instead of walking into it.
+    const c = view.smokes.find((k) => k.owner !== me.id && !view.allies?.some((a) => a.id === k.owner) && inSmoke([k], ahead, now));
+    if (!c) return null;
+    const to = norm(v3(c.pos.x - me.pos.x, 0, c.pos.z - me.pos.z));
+    const side = to.x * dir.z - to.z * dir.x >= 0 ? 1 : -1;
+    return { dir: v3(-to.z * side, 0, to.x * side), note: 'flanking round their smoke, not into it' };
   }
   return null;
 }
