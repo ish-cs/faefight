@@ -304,8 +304,8 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
  * - turnRate: calm turn speed cap (rad/s); engaging uses the aim hand's full speed.
  * - engageLeadM: eyes go on an enemy this many metres before they come into shooting distance (about to shoot), so the
  *   turn is done by the time they're worth a shot, like main's always-on tracking. 0 cost the fight tempo: ffa8-mixed
- *   x60 decisive 9/60 vs main 26/60, PRO wins 36 vs 45; 15 m all tiers: 20/60, PRO 44. Easy notices late (6 m, and a
- *   shorter first look: a long one pre-aimed it and put it level with Medium).
+ *   x60 decisive 9/60 vs main 26/60, PRO wins 36 vs 45; 15 m all tiers: 20/60, PRO 44. Easy notices late (6 m) and
+ *   checks on enemies less (first look 0.6 s, threatShare 0.2): its long looks pre-aimed it level with Medium.
  */
 export type GazeSkill = { firstLookSec: number; glanceRate: number; glanceSec: number; threatShare: number; driftDeg: number; turnRate: number; engageLeadM: number };
 /**
@@ -546,7 +546,7 @@ export const AIM_PARAMS: AimParams = {
 
 export const GAZE: GazeParams = {
   skill: {
-    easy: { firstLookSec: 0.9, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.35, driftDeg: 12, turnRate: 4, engageLeadM: 6 },
+    easy: { firstLookSec: 0.6, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.2, driftDeg: 12, turnRate: 4, engageLeadM: 6 },
     medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5, engageLeadM: 15 },
     hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6, engageLeadM: 15 },
     pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7, engageLeadM: 15 },
