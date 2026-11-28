@@ -327,8 +327,9 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
  *   x60 decisive 9/60 vs main 26/60, PRO wins 36 vs 45; 15 m all tiers: 20/60, PRO 44. Easy notices late (6 m) and
  *   checks on enemies less (first look 0.6 s, threatShare 0.2): its long looks pre-aimed it level with Medium.
  * - spotAimedAt: × aimedAtDeg: how readily I notice someone lining me up (0 = never; then only a hit makes them a threat).
- *   Easy 0: a weak player doesn't read who is aiming at them. At 1 Easy looked straight back at every Medium pre-aim and
- *   turned the first shot into a trade: 1v1 Medium > Easy x60 80% (main 93%); aimed-at off for Easy: 88%.
+ *   Easy 0.5 (6°): a weak player is slow to read who is aiming at them. At 1 Easy looked straight back at every Medium
+ *   pre-aim and turned the first shot into a trade: 1v1 Medium > Easy x60 80% (main 93%); at 0: 90%, but Easy then
+ *   out-placed Medium in mixed FFAs (x120 5.14 vs 5.30).
  */
 export type GazeSkill = { firstLookSec: number; glanceRate: number; glanceSec: number; threatShare: number; driftDeg: number; turnRate: number; engageLeadM: number; spotAimedAt: number };
 /**
@@ -593,7 +594,7 @@ export const AIM_PARAMS: AimParams = {
 
 export const GAZE: GazeParams = {
   skill: {
-    easy: { firstLookSec: 0.6, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.2, driftDeg: 12, turnRate: 4, engageLeadM: 0, spotAimedAt: 0 },
+    easy: { firstLookSec: 0.6, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.2, driftDeg: 12, turnRate: 4, engageLeadM: 0, spotAimedAt: 0.5 },
     medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5, engageLeadM: 20, spotAimedAt: 1 },
     hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6, engageLeadM: 15, spotAimedAt: 1 },
     pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7, engageLeadM: 15, spotAimedAt: 1 },
