@@ -607,8 +607,13 @@ export class Bot {
         view.others.some((o) => !o.eliminated && o.id !== foe.id) &&
         (myNode < 0 || this.nav.nodeAt(foe.pos) !== myNode);
     }
+    // "About to shoot": eyes go on them engageLeadM before they come into my shooting distance, so the turn is done
+    // by the time they're worth a shot.
+    const soon = foeDist - this.P.gaze.skill[this.difficulty].engageLeadM;
+    const soonOk = !(scratch && soon > WEAPONS[me.equipped].falloff.end * this.P.drive.fireRangeMult) &&
+      !(across && soon > this.P.drive.crossFire[this.difficulty]) && soon <= WEAPONS[best].range * 0.95;
     const engaged = this.gaze.engaged(now, !!foe && (this.gaze.threat(now, me, foe, this.mem.lastHurtBy, this.mem.lastHurtAt) ||
-      (hook?.why === 'yank' && hook.target === foe.id) || (!scratch && !across && foeDist <= WEAPONS[best].range * 0.95)));
+      (hook?.why === 'yank' && hook.target === foe.id) || soonOk));
     // Not engaging someone in sight: no eyes on them, but I know they're there (their sighting clock keeps running).
     if (foe && !engaged) this.aim.notice(now, foe.id);
     if (act.shootAt && act.shootFirst && me.breakoutUntil !== null) {

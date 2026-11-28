@@ -301,8 +301,9 @@ export type AimParams = { feel: Record<Difficulty, AimFeel>; commitSec: number; 
  * - threatShare: share of glances that check an enemy (in sight or last seen) rather than just looking around.
  * - driftDeg: how far the calm view wanders off the path (SD, degrees).
  * - turnRate: calm turn speed cap (rad/s); engaging uses the aim hand's full speed.
+ * - engageLeadM: eyes go on an enemy this many metres before they come into shooting distance (about to shoot).
  */
-export type GazeSkill = { firstLookSec: number; glanceRate: number; glanceSec: number; threatShare: number; driftDeg: number; turnRate: number };
+export type GazeSkill = { firstLookSec: number; glanceRate: number; glanceSec: number; threatShare: number; driftDeg: number; turnRate: number; engageLeadM: number };
 /**
  * - engageHoldSec: keep my eyes on the enemy I engaged this long after I'd stop shooting (no flicking away mid-fight).
  * - threatSec: an enemy who hit me within this long is a threat: eyes on them (or where they were).
@@ -540,10 +541,10 @@ export const AIM_PARAMS: AimParams = {
 
 export const GAZE: GazeParams = {
   skill: {
-    easy: { firstLookSec: 1.3, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.35, driftDeg: 12, turnRate: 4 },
-    medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5 },
-    hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6 },
-    pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7 },
+    easy: { firstLookSec: 1.3, glanceRate: 0.06, glanceSec: 1.1, threatShare: 0.35, driftDeg: 12, turnRate: 4, engageLeadM: 3 },
+    medium: { firstLookSec: 1, glanceRate: 0.045, glanceSec: 0.9, threatShare: 0.5, driftDeg: 8, turnRate: 5, engageLeadM: 5 },
+    hard: { firstLookSec: 0.7, glanceRate: 0.035, glanceSec: 0.8, threatShare: 0.65, driftDeg: 6, turnRate: 6, engageLeadM: 8 },
+    pro: { firstLookSec: 0.5, glanceRate: 0.03, glanceSec: 0.7, threatShare: 0.8, driftDeg: 4, turnRate: 7, engageLeadM: 10 },
   },
   engageHoldSec: 1.2, threatSec: 2.5, aimedAtDeg: 6, aimedAtM: 35, resightSec: 10, firstLookM: 50,
 };
@@ -669,7 +670,7 @@ const RANGE_RULES: [string, [number, number]][] = [
   ['aim.feel.*.spring', [6, 45]], ['aim.feel.*.damping', [0.55, 1.2]], ['aim.feel.*.maxAccel', [40, 600]],
   ['aim.feel.*.driftHz', [0.5, 8]], ['aim.feel.*.holdSec', [0, 2]], ['aim.commitSec', [0, 2]], ['aim.switchRatio', [0.3, 1]],
   ['gaze.skill.*.firstLookSec', [0.1, 2.5]], ['gaze.skill.*.glanceRate', [0, 0.6]], ['gaze.skill.*.glanceSec', [0.2, 2.5]], ['gaze.skill.*.threatShare', [0, 1]],
-  ['gaze.skill.*.driftDeg', [0, 25]], ['gaze.skill.*.turnRate', [2, 12]], ['gaze.engageHoldSec', [0.2, 4]], ['gaze.threatSec', [0.5, 6]], ['gaze.aimedAtDeg', [0, 20]], ['gaze.aimedAtM', [0, 80]], ['gaze.resightSec', [1, 30]], ['gaze.firstLookM', [10, 120]],
+  ['gaze.skill.*.driftDeg', [0, 25]], ['gaze.skill.*.turnRate', [2, 12]], ['gaze.skill.*.engageLeadM', [0, 25]], ['gaze.engageHoldSec', [0.2, 4]], ['gaze.threatSec', [0.5, 6]], ['gaze.aimedAtDeg', [0, 20]], ['gaze.aimedAtM', [0, 80]], ['gaze.resightSec', [1, 30]], ['gaze.firstLookM', [10, 120]],
   ['gunSkill.*.recoilComp', [0, 1]], ['gunSkill.*.burstShots', [2, 30]], ['gunSkill.*.burstPause', [0.1, 0.8]], ['gunSkill.*.sprayRange', [5, 40]],
   ['team.focus', [0, 1.5]], ['team.groupPush', [0, 1]], ['team.assistM', [15, 90]], ['team.assistSec', [1, 10]],
   ['team.assistScore', [0.3, 1.5]], ['team.regroupM', [6, 30]], ['team.regroupScore', [0.3, 1.6]], ['team.defendMin', [2, 5]], ['team.defendBias', [0, 1]],
