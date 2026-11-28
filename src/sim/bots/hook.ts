@@ -59,6 +59,34 @@ export function escapeFrom(view: BotView, P: HookParams, from: Vec3, nodeAt: (p:
   return best && { why: 'escape', to: best.to, node: best.node, note: `Nearly dead: hooking away (${Math.round(best.d)} m)` };
 }
 
+/**
+ * On my own elastic rope (movement.ts stepPull): let go now (jump) and fling the rest of the way? Only within
+ * P.releaseDist of the anchor, moving toward it, and when the fling (my velocity, capped like any release) comes
+ * down on solid ground at about the anchor's level, not far past it. Null = ride it in (the arrival lands me).
+ */
+export function ropeRelease(view: BotView, P: HookParams, rope: { x: number; y: number; z: number }): string | null {
+  const me = view.self;
+  const d = dist(me.pos, rope);
+  if (P.releaseDist <= 0 || d > P.releaseDist || d < GRAPPLE.arriveDist + 0.4) return null;
+  // Sagged below the ledge (gravity on a long rope): ride it in, the rope hauls me up the face; a fling would hit it.
+  if (me.pos.y < rope.y - 0.2) return null;
+  const sp = Math.hypot(me.vel.x, me.vel.y, me.vel.z);
+  if (sp < 4 || (me.vel.x * (rope.x - me.pos.x) + me.vel.y * (rope.y - me.pos.y) + me.vel.z * (rope.z - me.pos.z)) / (sp * d) < 0.5) return null;
+  const k = Math.min(1, GRAPPLE.flingMax / sp);
+  let x = me.pos.x, y = me.pos.y, z = me.pos.z, vy = me.vel.y * k;
+  const vx = me.vel.x * k, vz = me.vel.z * k, dt = 1 / 30;
+  for (let i = 0; i < 60; i++) {
+    x += vx * dt; z += vz * dt; vy -= PLAYER.gravity * dt; y += vy * dt;
+    if (y < view.waterY) return null;
+    const g = view.groundAt(x, z);
+    if (g !== null && y <= g && vy < 0) {
+      const ok = g > rope.y - 1.5 && dist2D(v3(x, g, z), rope) < 8;
+      return ok ? `Letting go of the rope ${d.toFixed(1)} m out: flinging onto the ledge` : null;
+    }
+  }
+  return null;
+}
+
 /** Is yanking this enemy worth it now (and why)? `gun`: what I'd fight them with. */
 export function yankReason(view: BotView, P: HookParams, e: PlayerState, d: number, gun: WeaponKind): string | null {
   const me = view.self;

@@ -66,7 +66,7 @@ describe('rope pull (movement.ts, shared with client prediction)', () => {
     expect(m.mv.pull).toBeUndefined();
     expect(m.pos.z).toBeLessThan(-17);
     expect(m.vel.y).toBeGreaterThan(0); // the little pop up onto the ledge
-    expect(Math.abs(m.vel.z)).toBeLessThan(GRAPPLE.pullSpeed * 0.5);
+    expect(Math.abs(m.vel.z)).toBeLessThan(GRAPPLE.ropeMaxSpeed * 0.3);
     expect(landed).toBe(0);
   });
 
@@ -150,7 +150,7 @@ describe('grappling hook in a match', () => {
     s = m.tick(inp());
     expect(me(s).hook).toBeUndefined();
     expect(me(s).mv?.pull).toBeUndefined();
-    expect(Math.hypot(me(s).vel.x, me(s).vel.z)).toBeGreaterThan(speed * 0.6);
+    expect(Math.hypot(me(s).vel.x, me(s).vel.z)).toBeGreaterThan(Math.min(speed, GRAPPLE.flingMax) * 0.9); // kept (capped at the fling limit)
   });
 
   test('a miss into the sky or water spends nothing', async () => {

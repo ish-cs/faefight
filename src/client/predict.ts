@@ -1,6 +1,6 @@
 import { speedMult } from '../sim/potions';
 import { adsMoveCmd, adsSpeed } from '../sim/gunplay';
-import { DT } from '../sim/constants';
+import { DT, GRAPPLE } from '../sim/constants';
 import type { MapDef } from '../sim/map';
 import { newMoveState, stepMove, type MoveCmd, type MoveState, type Mover } from '../sim/movement';
 import { Physics } from '../sim/physics';
@@ -36,6 +36,13 @@ export class Predictor {
   private docksGone = 0;
   private others = new Set<number>();
   private alive = false;
+  /**
+   * My own hook flying at the world (snapshot hook st 0): it bites at sim time `at`, and the rope's pull (movement.ts)
+   * starts on the step that reaches it, as the sim's tickGrapple does, so a latch doesn't wait a round trip and pop.
+   * `clock`: sim time of the predicted state (one DT per step after the snapshot's).
+   */
+  private latch: { at: number; x: number; y: number; z: number } | null = null;
+  private clock = 0;
   /** Stats for debugging/tests. */
   readonly stats = { reconciles: 0, snaps: 0, lastError: 0, maxReplay: 0 };
 
@@ -64,14 +71,25 @@ export class Predictor {
     this.syncWorld(snap);
     const me = snap.players.find((p) => p.id === this.humanId);
     if (me) { this.aim = { ads: me.ads, equipped: me.equipped }; this.speedMult = speedMult(me, snap.time) * adsSpeed(this.aim); }
-    if (me) this.reconcile(me);
+    if (me) this.reconcile(me, snap);
   }
 
   /** One fixed client step (1/30 s) with a new command; the same command must go to the sim. */
   step(cmd: MoveCmd) {
     this.history.push(cmd);
     if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);
-    if (this.state && this.alive) this.apply(this.state, cmd, DT);
+    if (this.state && this.alive) this.advance(this.state, cmd);
+  }
+
+  /** One committed step: the predicted latch (if due), then the move. */
+  private advance(m: Mover, cmd: MoveCmd) {
+    this.clock += DT;
+    const h = this.latch;
+    if (h && this.clock >= h.at - 1e-9) {
+      this.latch = null;
+      if (!m.mv.pull) m.mv.pull = { x: h.x, y: h.y, z: h.z, left: GRAPPLE.pullSec };
+    }
+    this.apply(m, cmd, DT);
   }
 
   /**
@@ -96,7 +114,7 @@ export class Predictor {
     stepMove(m, adsMoveCmd(this.aim, cmd), dt, { movePlayer: (d) => this.physics.movePlayer(this.humanId, d) }, this.speedMult);
   }
 
-  private reconcile(me: PlayerState) {
+  private reconcile(me: PlayerState, snap: Snapshot) {
     const mv: MoveState = me.mv ? { ...me.mv } : newMoveState();
     const ack = mv.ack;
     let drop = 0;
@@ -111,7 +129,11 @@ export class Predictor {
     if (!this.physics.hasPlayer(this.humanId)) this.physics.addPlayer(this.humanId, me.pos);
     else this.physics.setPlayerPos(this.humanId, me.pos);
     const m: Mover = { pos: { ...me.pos }, vel: { ...me.vel }, mv };
-    for (const c of this.history) this.apply(m, c, DT);
+    const h = me.hook;
+    this.latch = h && h.st === 0 && h.tgt === undefined && !mv.pull && (h.pc === undefined || snap.pieces.some((x) => x.id === h.pc))
+      ? { at: h.at, x: h.x, y: h.y, z: h.z } : null;
+    this.clock = snap.time;
+    for (const c of this.history) this.advance(m, c);
     this.state = m;
     this.stats.reconciles++;
     this.stats.maxReplay = Math.max(this.stats.maxReplay, this.history.length);
