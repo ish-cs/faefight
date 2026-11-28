@@ -129,17 +129,24 @@ export const GRENADE = { price: 100, dmg: 100, radius: 4, fuseSec: 2.5, throwSpe
 export const MEDKIT = { price: 75, heal: 50, useSec: 2 };
 /**
  * Grappling hook (sim/grapple.ts, movement.ts). One buy = `uses` hooks; a use is spent only when the hook
- * latches. Range (m) from the eye; the hook flies at `tipSpeed`. Hooking the world reels you in toward the
- * point at up to `pullSpeed` (reaching it over ~1/`pullResponse` s), for at most `pullSec`; within
- * `arriveDist` you let go keeping `arriveKeep` of your speed plus a little `arrivePop` up, so you land on the ledge. Jump lets go early. Hooking a
+ * latches. Range (m) from the eye; the hook flies at `tipSpeed` (160, was 90: a snappier throw, the user's call
+ * 2026-11-27). Hooking the world ropes you to the point with an elastic rope (spring `ropeK` /s², damping `ropeDamp`
+ * /s on the stretch rate, pull capped at `tensionMax` m/s², slack when shorter than its rest length) that reels in at
+ * `reelSpeed` m/s; gravity always applies (you swing under the anchor), speed is capped at `ropeMaxSpeed`, strafe
+ * pushes the swing (`swingSteer` m/s²) and holding back holds the length (slack still taken up at `slackTake`
+ * m/s). At most `pullSec` on the rope; within
+ * `arriveDist` you let go keeping `arriveKeep` of your speed plus a little `arrivePop` up, so you land on the ledge.
+ * Jump (or fire) lets go early keeping your velocity, capped at `flingMax` (the reach rule holds). Hooking a
  * player yanks them toward you at `yankSpeed` for at most `yankSec` (their own movement is off meanwhile),
  * stopping `yankStop` m short of you. `cooldownSec` after the hook comes back (a miss: `missCooldownSec`).
  * Cooldowns 0.5 s / 0.2 s (were 1.5 / 0.6): the user's call, 2026-11-22.
  */
 export const GRAPPLE = {
   /** range: the most a hook ever reaches; a map's own reach is grappleRange(islands) (≤ this). gapMargin: see there. */
-  price: 90, uses: 3, range: 26, gapMargin: 8, tipSpeed: 90,
-  pullSpeed: 22, pullResponse: 7, pullSec: 2.4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.3,
+  price: 90, uses: 3, range: 26, gapMargin: 8, tipSpeed: 160,
+  pullSec: 4, arriveDist: 1.6, arrivePop: 4.5, arriveKeep: 0.25,
+  /** The elastic rope (movement.ts stepPull): see the comment above. */
+  reelSpeed: 26, ropeK: 80, ropeDamp: 6, tensionMax: 140, ropeMaxSpeed: 30, ropeMinLen: 0.5, slackTake: 8, swingSteer: 6, flingMax: 15,
   yankSpeed: 15, yankSec: 0.75, yankStop: 2.2, yankKeep: 0.3,
   cooldownSec: 0.5, missCooldownSec: 0.2, minDist: 2.5, yankCreditSec: 5,
 };

@@ -25,7 +25,7 @@ export type SoundId =
   /** Drawing a weapon (kind = WeaponKind); pushing off the ground (kind = Surface); a UI button click. */
   | 'equip' | 'jump' | 'click'
   // Hooks for round-11 features (playSfx in api.ts). kind = Surface where it says so.
-  | 'grappleFire' | 'grappleAttach' | 'grappleReel' | 'grappleRelease'
+  | 'grappleFire' | 'grappleAttach' | 'grappleReel' | 'grappleRelease' | 'grappleSnap' | 'grappleCreak'
   | 'spikeArm' | 'spikeTrigger'
   | 'shellCasing' | 'ragdollThud'
   | 'dockCreak' | 'dockBreak'
@@ -262,6 +262,10 @@ export class SoundDirector {
             const h = s.players.find((p) => p.id === d.by)?.hook as { x?: number; y?: number; z?: number } | undefined;
             const hp = h && h.x !== undefined ? { x: h.x, y: h.y ?? 0, z: h.z ?? 0 } : pos;
             out.push({ sound: 'grappleAttach', pos: hp, gain: own ? 0.7 : 0.6, own });
+          } else if (phase === 'snap') {
+            // The piece it bit broke: the rope parts with a crack where the hook was.
+            const hp = typeof d.x === 'number' ? { x: d.x, y: Number(d.y), z: Number(d.z) } : pos;
+            out.push({ sound: 'grappleSnap', pos: own ? null : hp, gain: own ? 0.8 : 0.65, own });
           } else out.push({ sound: 'grappleRelease', pos, gain: own ? 0.6 : 0.5, own });
           break;
         }
@@ -351,6 +355,9 @@ export class SoundDirector {
       this.reelAt.set(p.id, s.time);
       const own = p.id === this.humanId;
       out.push({ sound: 'grappleReel', pos: own ? null : { ...p.pos }, gain: own ? 0.5 : 0.45, own });
+      // Stretched well past its rest length: the rope creaks under the load.
+      const h = p.hook, stretch = h.len !== undefined ? Math.hypot(h.x - p.pos.x, h.y - p.pos.y, h.z - p.pos.z) - h.len : 0;
+      if (stretch > 0.8) out.push({ sound: 'grappleCreak', pos: own ? null : { ...p.pos }, gain: Math.min(0.6, 0.25 + stretch * 0.1), own });
     }
     // Pier planks stressed by a blast (newly scorched sections): a creak where they stand.
     for (const id of s.dockHurt ?? []) {
