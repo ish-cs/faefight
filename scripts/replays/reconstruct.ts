@@ -18,7 +18,7 @@
  */
 import { pathToFileURL } from 'node:url';
 import { Bot } from '../../src/sim/bots/bot';
-import { TICK_HZ, WEAPONS } from '../../src/sim/constants';
+import { LIFECYCLE, TICK_HZ, WEAPONS } from '../../src/sim/constants';
 import { Match, type MatchOptions } from '../../src/sim/match';
 import type { Replay, SecondSummary } from '../../src/sim/replay/format';
 import type { Difficulty, Inventory, PieceKind, PlayerState, Snapshot, WeaponKind } from '../../src/sim/types';
@@ -81,6 +81,24 @@ export async function reconstruct(r: Replay, tick: number, makeBot: NonNullable<
   }
   const mi = m as unknown as Internals;
   mi.s.time = at.s.t;
+  // Dead / eliminated players first: killing a dead player after their bunker's pieces are back would read as
+  // "died while sealed" and eliminate them for good. Respawn timer restored from their last recorded death.
+  const lastDeath = new Map<number, number>();
+  for (const [t, type, d] of r.events) {
+    if (t > at.s.tick) break;
+    if (type === 'kill') lastDeath.set(Number(d.victim), t);
+  }
+  for (const row of at.s.p) {
+    const id = Number(row[C.id]);
+    const p = mi.s.players.get(id);
+    if (!p) continue;
+    if (Number(row[C.elim])) m.debugEliminate(id);
+    else if (Number(row[C.alive]) === 0) {
+      m.debugKill(id);
+      const dt = lastDeath.get(id);
+      if (dt !== undefined && p.respawnAt !== null) p.respawnAt = Math.max(at.s.t, at.s.t - (at.s.tick - dt) / TICK_HZ + LIFECYCLE.respawnSec);
+    }
+  }
   // Pieces standing at that second.
   const live = new Map<number, { kind: PieceKind; pos: { x: number; y: number; z: number }; rotY: number; owner: number }>();
   for (const [t, type, d] of r.events) {
@@ -99,8 +117,7 @@ export async function reconstruct(r: Replay, tick: number, makeBot: NonNullable<
       const id = Number(row[C.id]);
       const p = mi.s.players.get(id);
       if (!p) continue;
-      if (Number(row[C.elim])) { m.debugEliminate(id); continue; }
-      if (Number(row[C.alive]) === 0) { m.debugKill(id); continue; }
+      if (Number(row[C.elim]) || Number(row[C.alive]) === 0) continue; // handled above
       m.debugTeleport(id, { x: Number(row[C.x]), y: Number(row[C.y]), z: Number(row[C.z]) });
       m.debugSetHp(id, Math.max(1, Number(row[C.hp])));
       m.debugSetShield(id, Math.max(0, Number(row[C.shield])));

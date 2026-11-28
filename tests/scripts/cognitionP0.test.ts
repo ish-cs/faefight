@@ -39,8 +39,13 @@ describe('UserProxy model', () => {
     const mid = { x: (map[0].center.x + map[1].center.x) / 2, z: (map[0].center.z + map[1].center.z) / 2 };
     expect(whereOf(map, 0, mid)).toBe(2); // centroid of the islands = the centre
     const x = features({ hp: 80, shield: 20, cash: 300, guns: ['rifle'], pos: map[0].center, island: 0, enemies: [{ x: map[0].center.x + 30, z: map[0].center.z }],
-      map, sealed: [0, 1], rivalIslands: [1], now: 120, hurtRecently: true });
-    expect(x).toEqual([100, 300, 3, 30, 0, 0, 1, 1, 2, 1]);
+      map, sealed: [0, 1], rivalIslands: [1], deadRivalIslands: [1], now: 120, hurtRecently: true });
+    const vd = Math.round(Math.hypot(map[0].vault.x - map[0].center.x, map[0].vault.z - map[0].center.z));
+    expect(x).toEqual([100, 300, 3, 30, 0, 0, 1, 1, 2, 1, 120, 120, vd]); // rival 1 sealed: no open bunker
+    const y = features({ hp: 80, shield: 20, cash: 300, guns: ['rifle'], pos: map[0].center, island: 0, enemies: [],
+      map, sealed: [0, 0], rivalIslands: [1], deadRivalIslands: [1], now: 120, hurtRecently: false });
+    const bd = Math.round(Math.min(120, Math.hypot(map[1].bunker.center.x - map[0].center.x, map[1].bunker.center.z - map[0].center.z)));
+    expect(y.slice(10)).toEqual([bd, bd, vd]);
   });
 
   it('predict walks the tree; goalBias favours only the predicted macro\'s goals', () => {
